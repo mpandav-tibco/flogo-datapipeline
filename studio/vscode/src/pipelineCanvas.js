@@ -879,6 +879,81 @@
     return cols.length ? cols : undefined
   }
 
+  // Fixed-width column grid: Name + Start + Length + Type per row
+  function renderFwColGrid(id, columns) {
+    var colTypes = ['string', 'int', 'float', 'bool', 'timestamp', 'bytes']
+    var cols = Array.isArray(columns) ? columns : []
+    var rows = cols.map(function (c) {
+      var name = typeof c === 'object' ? (c.name || '') : (typeof c === 'string' ? c : '')
+      var start = typeof c === 'object' ? (c.start || 1) : 1
+      var len = typeof c === 'object' ? (c.length || 10) : 10
+      var colType = typeof c === 'object' ? (c.type || 'string') : 'string'
+      var opts = colTypes.map(function (t) {
+        return '<option value="' + t + '"' + (t === colType ? ' selected' : '') + '>' + t + '</option>'
+      }).join('')
+      return '<div class="col-row fw-col-row">' +
+        '<input class="pp-input fw-col-name" type="text" value="' + esc(name) + '" placeholder="name"/>' +
+        '<input class="pp-input fw-col-start" type="number" min="1" value="' + esc(start) + '" title="Start byte"/>' +
+        '<input class="pp-input fw-col-len" type="number" min="1" value="' + esc(len) + '" title="Length"/>' +
+        '<select class="pp-input fw-col-type">' + opts + '</select>' +
+        '<button class="col-del-row" data-action="del-col-row" title="Remove">×</button>' +
+        '</div>'
+    }).join('')
+    return '<div class="mapper-toolbar"><span class="mapper-toolbar-label">Columns</span>' +
+      '<button class="btn-g" id="btn-add-col-row" style="font-size:11px;padding:2px 8px">+ Add</button></div>' +
+      '<div class="fwcols-grid-hdr"><span>Name</span><span>Start</span><span>Len</span><span>Type</span><span></span></div>' +
+      '<div class="fw-cols-grid" id="' + id + '">' + rows + '</div>'
+  }
+
+  function wireFwColEditor(editorId) {
+    var editor = byId(editorId)
+    var addBtn = byId('btn-add-col-row')
+    var colTypes = ['string', 'int', 'float', 'bool', 'timestamp', 'bytes']
+    if (editor) {
+      editor.addEventListener('click', function (e) {
+        if (tgt(e, '[data-action="del-col-row"]')) {
+          var row = tgt(e).closest('.col-row'); if (row) row.remove()
+        }
+      })
+    }
+    if (addBtn) {
+      addBtn.addEventListener('click', function () {
+        if (!editor) return
+        var opts = colTypes.map(function (t) {
+          return '<option value="' + t + '"' + (t === 'string' ? ' selected' : '') + '>' + t + '</option>'
+        }).join('')
+        var row = document.createElement('div')
+        row.className = 'col-row fw-col-row'
+        row.innerHTML =
+          '<input class="pp-input fw-col-name" type="text" value="" placeholder="name"/>' +
+          '<input class="pp-input fw-col-start" type="number" min="1" value="1"/>' +
+          '<input class="pp-input fw-col-len" type="number" min="1" value="10"/>' +
+          '<select class="pp-input fw-col-type">' + opts + '</select>' +
+          '<button class="col-del-row" data-action="del-col-row" title="Remove">×</button>'
+        editor.appendChild(row)
+        var inp = qs('.fw-col-name', row); if (inp) inp.focus()
+      })
+    }
+  }
+
+  function collectFwColRows(editorId) {
+    var editor = byId(editorId)
+    if (!editor) return undefined
+    var cols = []
+    qsa('.fw-col-row', editor).forEach(function (row) {
+      var nameEl = qs('.fw-col-name', row), startEl = qs('.fw-col-start', row)
+      var lenEl = qs('.fw-col-len', row), typeEl = qs('.fw-col-type', row)
+      var name = nameEl ? nameEl.value.trim() : ''
+      if (name) cols.push({
+        name: name,
+        start: parseInt(startEl ? startEl.value : 1) || 1,
+        length: parseInt(lenEl ? lenEl.value : 10) || 10,
+        type: typeEl ? typeEl.value : 'string'
+      })
+    })
+    return cols.length ? cols : undefined
+  }
+
   function pathField(label, id, value, placeholder, mode) {
     return ppField(label,
       '<div class="browse-wrap">' +
@@ -903,14 +978,14 @@
       html += ppField('Partitions', '<input class="pp-input" id="src-parts" type="number" min="1" max="64" value="' + esc(src.partitions || 1) + '"/>')
     } else if (type === 'parquet') {
       html += pathField('Path', 'src-path', src.path || '', 's3://bucket/prefix/*.parquet', 'any')
-      html += ppField('Columns (JSON array, optional)', '<textarea class="pp-textarea" id="src-cols" rows="3" placeholder=\'["col1","col2"]\'>' + esc(src.columns ? JSON.stringify(src.columns) : '') + '</textarea>')
+      html += renderColGrid('src-cols-editor', src.columns)
       html += ppField('Row Group Parallelism (1–8)', '<input class="pp-input" id="src-rgp" type="number" min="1" max="8" value="' + esc(src.rowGroupParallelism || 4) + '"/>')
     } else if (type === 'fixedwidth') {
       html += pathField('Path', 'src-path', src.path || '', '/mnt/mainframe/file.dat', 'file')
       html += ppField('Encoding', ppSelect('src-enc', ['utf-8', 'ebcdic-037', 'ebcdic-500'], src.encoding || 'utf-8'))
       html += ppField('Record Length', '<input class="pp-input" id="src-reclen" type="number" min="1" value="' + esc(src.recordLength || 80) + '"/>')
       html += ppField('Skip Lines', '<input class="pp-input" id="src-skip" type="number" min="0" value="' + esc(src.skipLines || 0) + '"/>')
-      html += ppField('Columns (JSON)', '<textarea class="pp-textarea" id="src-cols" rows="5" placeholder=\'[{"name":"id","start":1,"length":10,"type":"string"}]\'>' + esc(src.columns ? JSON.stringify(src.columns, null, 2) : '') + '</textarea>')
+      html += renderFwColGrid('src-cols-editor', src.columns)
     } else if (type === 'xml') {
       html += pathField('Path', 'src-path', src.path || '', '/data/records.xml', 'file')
       html += ppField('Record Element', '<input class="pp-input" id="src-recel" type="text" value="' + esc(src.recordElement || '') + '" placeholder="record"/>')
@@ -923,10 +998,12 @@
       html += ppField('Brokers (comma-separated)', '<input class="pp-input" id="src-brokers" type="text" value="' + esc(brokersVal) + '" placeholder="kafka:9092"/>')
       html += ppField('Topic', '<input class="pp-input" id="src-topic" type="text" value="' + esc(src.topic || '') + '"/>')
       html += ppField('Group ID', '<input class="pp-input" id="src-groupid" type="text" value="' + esc(src.groupId || '') + '" placeholder="my-pipeline-consumer"/>')
-      html += ppField('SASL', ppCheck('src-sasl', !!src.sasl))
-      html += ppField('SCRAM Algorithm', ppSelect('src-scram', ['SHA-256', 'SHA-512'], src.scram || 'SHA-256'))
-      html += ppField('Username Env Var', '<input class="pp-input" id="src-uenv" type="text" value="' + esc(src.usernameEnv || '') + '" placeholder="KAFKA_USERNAME"/>')
-      html += ppField('Password Env Var', '<input class="pp-input" id="src-penv" type="text" value="' + esc(src.passwordEnv || '') + '" placeholder="KAFKA_PASSWORD"/>')
+      html += ppField('SASL Authentication', ppCheck('src-sasl', !!src.sasl))
+      html += '<div class="sasl-auth-section" id="src-sasl-auth"' + (!src.sasl ? ' style="display:none"' : '') + '>' +
+        ppField('SCRAM Algorithm', ppSelect('src-scram', ['SHA-256', 'SHA-512'], src.scram || 'SHA-256')) +
+        ppField('Username Env Var', '<input class="pp-input" id="src-uenv" type="text" value="' + esc(src.usernameEnv || '') + '" placeholder="KAFKA_USERNAME"/>') +
+        ppField('Password Env Var', '<input class="pp-input" id="src-penv" type="text" value="' + esc(src.passwordEnv || '') + '" placeholder="KAFKA_PASSWORD"/>') +
+        '</div>'
     } else if (type === 'objstore') {
       html += ppField('Provider', ppSelect('src-provider', ['s3', 'gcs', 'adls', 'azure-blob'], src.provider || 's3'))
       html += ppField('Bucket', '<input class="pp-input" id="src-bucket" type="text" value="' + esc(src.bucket || '') + '"/>')
@@ -938,8 +1015,17 @@
   }
 
   function wireSourceFields(type, src) {
-    if (type === 'csv' || type === 'tsv' || type === 'xml' || type === 'jsonlines' || type === 'ndjson') {
+    if (type === 'csv' || type === 'tsv' || type === 'xml' || type === 'jsonlines' || type === 'ndjson' || type === 'parquet') {
       wireColEditor('src-cols-editor')
+    } else if (type === 'fixedwidth') {
+      wireFwColEditor('src-cols-editor')
+    } else if (type === 'kafka') {
+      var saslChk = byId('src-sasl'); var saslAuth = byId('src-sasl-auth')
+      if (saslChk && saslAuth) {
+        saslChk.addEventListener('change', function () {
+          saslAuth.style.display = saslChk.checked ? '' : 'none'
+        })
+      }
     }
   }
 
@@ -970,14 +1056,14 @@
       s.partitions = parseInt(v('src-parts')) || 1
     } else if (type === 'parquet') {
       s.path = v('src-path')
-      var pcols = jsonParse('src-cols'); if (pcols !== undefined) s.columns = pcols
+      var pcols = collectColRows('src-cols-editor'); if (pcols !== undefined) s.columns = pcols
       s.rowGroupParallelism = parseInt(v('src-rgp')) || 4
     } else if (type === 'fixedwidth') {
       s.path = v('src-path')
       s.encoding = v('src-enc')
       s.recordLength = parseInt(v('src-reclen')) || 80
       s.skipLines = parseInt(v('src-skip')) || 0
-      var fcols = jsonParse('src-cols'); if (fcols !== undefined) s.columns = fcols
+      var fcols = collectFwColRows('src-cols-editor'); if (fcols !== undefined) s.columns = fcols
     } else if (type === 'xml') {
       s.path = v('src-path')
       s.recordElement = v('src-recel')
@@ -1021,16 +1107,19 @@
 
     pp.innerHTML = html
 
-    // DQ threshold slider — wired synchronously after innerHTML is set
-    if (type === 'dq') {
-      var dqSl = byId('tr-dqthr'); var dqVl = byId('tr-dqthr-val')
-      if (dqSl && dqVl) dqSl.addEventListener('input', function () { dqVl.textContent = dqSl.value })
-    }
-
     wireHdrButtons(function () { saveTransformProps(idx) })
 
     if (type === 'filter') wireFilterEditor()
     if (type === 'map' || type === 'mapper') wireMapEditor(tr)
+    if (type === 'validate') wireRuleBuilder('tr-rule-rows', 'btn-add-rule', 'tr-onviolation', 'tr-errsinkt-wrap')
+    if (type === 'dq') {
+      var dqSl = byId('tr-dqthr'); var dqVl = byId('tr-dqthr-val')
+      if (dqSl && dqVl) dqSl.addEventListener('input', function () { dqVl.textContent = dqSl.value })
+      wireRuleBuilder('tr-dq-rows', 'btn-add-expect')
+    }
+    if (type === 'schemadrift') wireSchemaDriftCards()
+    if (type === 'hwm') wireHwmBackend()
+    if (type === 'lookup') wireLookupOutputFields()
   }
 
   // Wire operator insert buttons and field chips for the Filter transform.
@@ -1049,6 +1138,106 @@
     qsa('.fld-chip').forEach(function (btn) {
       btn.addEventListener('mousedown', function (ev) { ev.preventDefault(); insertAt(btn.dataset.field || '') })
     })
+  }
+
+  // Wire the rule/expectation row builder (validate + dq).
+  // rowsId: container div, addBtnId: "+ Add" button,
+  // violationId/errwrapId: optional for validate "route" show/hide.
+  function wireRuleBuilder(rowsId, addBtnId, violationId, errwrapId) {
+    var rows = byId(rowsId)
+    var addBtn = byId(addBtnId)
+    if (rows) {
+      rows.addEventListener('click', function (e) {
+        if (tgt(e, '[data-action="del-rule-row"]')) {
+          var row = tgt(e).closest('.rule-row'); if (row) row.remove()
+        }
+      })
+    }
+    if (addBtn) {
+      addBtn.addEventListener('click', function () {
+        if (!rows) return
+        var row = document.createElement('div')
+        row.className = 'rule-row'
+        row.innerHTML =
+          '<input class="pp-input rule-field" type="text" value="" placeholder="field_name"/>' +
+          '<label class="rule-chk-lbl"><input type="checkbox" class="rule-notnull"> Not Null</label>' +
+          '<label class="rule-chk-lbl">Pattern<input class="pp-input rule-pat" type="text" value="" placeholder="regex"/></label>' +
+          '<label class="rule-chk-lbl">Min<input class="pp-input rule-num rule-min-val" type="number" value=""/></label>' +
+          '<label class="rule-chk-lbl">Max<input class="pp-input rule-num rule-max-val" type="number" value=""/></label>' +
+          '<button class="rule-del" data-action="del-rule-row" title="Remove">×</button>'
+        rows.appendChild(row)
+        var inp = qs('.rule-field', row); if (inp) inp.focus()
+      })
+    }
+    if (violationId && errwrapId) {
+      var vsel = byId(violationId); var ew = byId(errwrapId)
+      if (vsel && ew) {
+        vsel.addEventListener('change', function () {
+          ew.style.display = vsel.value === 'route' ? '' : 'none'
+        })
+      }
+    }
+  }
+
+  // Wire the schema drift policy card selector.
+  function wireSchemaDriftCards() {
+    var cards = byId('sdrift-cards'); var hidden = byId('tr-sdpol')
+    if (!cards || !hidden) return
+    cards.addEventListener('click', function (e) {
+      var card = e.target.closest('.sdrift-card'); if (!card) return
+      qsa('.sdrift-card', cards).forEach(function (c) { c.classList.remove('active') })
+      card.classList.add('active')
+      hidden.value = card.dataset.policy || ''
+    })
+  }
+
+  // Wire HWM column chips (click-to-fill) and backend-specific config toggle.
+  function wireHwmBackend() {
+    var beSelect = byId('tr-hwmbe')
+    qsa('.hwm-col-chip').forEach(function (btn) {
+      btn.addEventListener('mousedown', function (ev) {
+        ev.preventDefault()
+        var inp = byId('tr-hwmcol'); if (inp) { inp.value = btn.dataset.field || ''; inp.focus() }
+      })
+    })
+    if (beSelect) {
+      var showBe = function (be) {
+        qsa('.hwm-be-cfg').forEach(function (el) { el.style.display = 'none' })
+        var el = byId('hwm-cfg-' + be); if (el) el.style.display = ''
+      }
+      beSelect.addEventListener('change', function () { showBe(beSelect.value) })
+    }
+  }
+
+  // Wire the lookup output-field chip editor.
+  function wireLookupOutputFields() {
+    var chipsWrap = byId('tr-outfields-chips')
+    var addInput = byId('tr-outfield-new')
+    var addBtn = byId('btn-add-outfield')
+    function addChip(name) {
+      name = name ? name.trim() : ''; if (!name) return
+      if (chipsWrap && chipsWrap.querySelector('[data-field="' + name.replace(/"/g, '\\"') + '"]')) return
+      var span = document.createElement('span')
+      span.className = 'out-chip'
+      span.innerHTML = esc(name) + '<button class="out-chip-del" data-field="' + esc(name) + '">&times;</button>'
+      if (chipsWrap) chipsWrap.appendChild(span)
+    }
+    if (chipsWrap) {
+      chipsWrap.addEventListener('click', function (e) {
+        var btn = e.target.closest('.out-chip-del')
+        if (btn) { var chip = btn.closest('.out-chip'); if (chip) chip.remove() }
+      })
+    }
+    if (addInput) {
+      addInput.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') { addChip(addInput.value); addInput.value = ''; e.preventDefault() }
+      })
+    }
+    if (addBtn) {
+      addBtn.addEventListener('click', function () {
+        addChip(addInput ? addInput.value : ''); if (addInput) addInput.value = ''
+      })
+    }
   }
 
   function renderTransformTypeFields(type, tr, trIdx) {
@@ -1188,26 +1377,105 @@
         '</div>' +
       '</div>'
     } else if (type === 'validate') {
-      html += ppField('Rules (JSON)', '<textarea class="pp-textarea" id="tr-rules" rows="5" placeholder=\'[{"field":"id","notNull":true}]\'>' + esc(tr.rules ? JSON.stringify(tr.rules, null, 2) : '') + '</textarea>')
+      // Visual rule builder — each row is one field rule
+      var valRules = Array.isArray(tr.rules) ? tr.rules : []
+      var ruleRowsHtml = valRules.map(function (r) {
+        return '<div class="rule-row">' +
+          '<input class="pp-input rule-field" type="text" value="' + esc(r.field || '') + '" placeholder="field_name"/>' +
+          '<label class="rule-chk-lbl"><input type="checkbox" class="rule-notnull"' + (r.notNull ? ' checked' : '') + '> Not Null</label>' +
+          '<label class="rule-chk-lbl">Pattern<input class="pp-input rule-pat" type="text" value="' + esc(r.pattern || '') + '" placeholder="regex"/></label>' +
+          '<label class="rule-chk-lbl">Min<input class="pp-input rule-num rule-min-val" type="number" value="' + (r.min != null ? esc(r.min) : '') + '"/></label>' +
+          '<label class="rule-chk-lbl">Max<input class="pp-input rule-num rule-max-val" type="number" value="' + (r.max != null ? esc(r.max) : '') + '"/></label>' +
+          '<button class="rule-del" data-action="del-rule-row" title="Remove">×</button>' +
+          '</div>'
+      }).join('')
+      html += '<div class="rule-builder" id="tr-rule-rows">' + ruleRowsHtml + '</div>' +
+        '<button class="btn-g rule-add-btn" id="btn-add-rule">+ Add Rule</button>'
       html += ppField('On Violation', ppSelect('tr-onviolation', ['route', 'drop', 'fail'], tr.onViolation || 'drop'))
-      html += '<div id="tr-errsinkt-wrap">' + ppField('Error Sink Type', '<input class="pp-input" id="tr-errsinktype" type="text" value="' + esc(tr.errorSinkType || '') + '" placeholder="jdbc"/>') + '</div>'
+      html += '<div id="tr-errsinkt-wrap"' + (tr.onViolation !== 'route' ? ' style="display:none"' : '') + '>' +
+        ppField('Error Sink Type', '<input class="pp-input" id="tr-errsinktype" type="text" value="' + esc(tr.errorSinkType || '') + '" placeholder="jdbc"/>') +
+        '</div>'
     } else if (type === 'lookup') {
-      html += ppField('URL', '<input class="pp-input" id="tr-url" type="text" value="' + esc(tr.url || '') + '" placeholder="http://service/lookup"/>')
+      // Organized sections: Endpoint → Output Fields (chips) → Performance
+      html += '<div class="lookup-sec-hdr" style="border-top:none;padding-top:0">Endpoint</div>'
+      html += ppField('URL', '<input class="pp-input" id="tr-url" type="text" value="' + esc(tr.url || '') + '" placeholder="http://service/lookup?key={value}"/>')
       html += ppField('Key Field', '<input class="pp-input" id="tr-keyfield" type="text" value="' + esc(tr.keyField || '') + '"/>')
-      html += ppField('Output Fields (comma-separated)', '<input class="pp-input" id="tr-outfields" type="text" value="' + esc(Array.isArray(tr.outputFields) ? tr.outputFields.join(', ') : (tr.outputFields || '')) + '"/>')
+      var outFs = Array.isArray(tr.outputFields) ? tr.outputFields : []
+      var outChipsHtml = outFs.map(function (f) {
+        return '<span class="out-chip">' + esc(f) + '<button class="out-chip-del" data-field="' + esc(f) + '">&times;</button></span>'
+      }).join('')
+      html += '<div class="lookup-sec-hdr">Output Fields</div>'
+      html += '<div class="pp-field">' +
+        '<div class="out-chips-wrap" id="tr-outfields-chips">' + outChipsHtml + '</div>' +
+        '<div class="out-field-add">' +
+        '<input class="pp-input" id="tr-outfield-new" type="text" placeholder="field name" autocomplete="off"/>' +
+        '<button class="btn-g" id="btn-add-outfield" style="font-size:11px;padding:2px 8px">+</button>' +
+        '</div></div>'
+      html += '<div class="lookup-sec-hdr">Performance</div>'
       html += ppField('Concurrency', '<input class="pp-input" id="tr-concur" type="number" min="1" max="128" value="' + esc(tr.concurrency || 8) + '"/>')
-      html += ppField('Cache Size', '<input class="pp-input" id="tr-cache" type="number" min="0" value="' + esc(tr.cacheSize || 1000) + '"/>')
+      html += ppField('Cache Size', '<input class="pp-input" id="tr-cache" type="number" min="0" value="' + esc(tr.cacheSize != null ? tr.cacheSize : 1000) + '"/>')
       html += ppField('Timeout (ms)', '<input class="pp-input" id="tr-timeout" type="number" min="0" value="' + esc(tr.timeoutMs || 5000) + '"/>')
       html += ppField('On Error', ppSelect('tr-onerr', ['null', 'skip', 'fail'], tr.onError || 'null'))
     } else if (type === 'hwm') {
-      html += ppField('HWM Column', '<input class="pp-input" id="tr-hwmcol" type="text" value="' + esc(tr.column || '') + '" placeholder="updated_at"/>')
+      // Column with clickable source-field chips, then backend-specific config
+      var doc2 = state.doc || {}
+      var hwmCols = (doc2.source && Array.isArray(doc2.source.columns)) ? doc2.source.columns : []
+      var hwmChipsHtml = hwmCols.map(function (c) {
+        var n = typeof c === 'string' ? c : (c.name || ''); if (!n) return ''
+        return '<button class="hwm-col-chip" data-field="' + esc(n) + '">' + esc(n) + '</button>'
+      }).join('')
+      html += ppField('HWM Column',
+        '<div class="hwm-col-wrap">' +
+        '<input class="pp-input" id="tr-hwmcol" type="text" value="' + esc(tr.column || '') + '" placeholder="updated_at"/>' +
+        (hwmChipsHtml ? '<div class="hwm-chips">' + hwmChipsHtml + '</div>' : '') +
+        '</div>')
       html += ppField('Backend', ppSelect('tr-hwmbe', ['file', 'redis', 'postgres'], tr.backend || 'file'))
-      html += ppField('Backend Config (JSON)', '<textarea class="pp-textarea" id="tr-hwmcfg" rows="3" placeholder=\'{"path":"/var/flogo/hwm"}\'>' + esc(tr.backendConfig ? JSON.stringify(tr.backendConfig, null, 2) : '') + '</textarea>')
+      var hwmBe = tr.backend || 'file'; var hwmCfg = tr.backendConfig || {}
+      html += '<div class="hwm-be-cfg" id="hwm-cfg-file"' + (hwmBe !== 'file' ? ' style="display:none"' : '') + '>' +
+        ppField('State File Path', '<input class="pp-input" id="tr-hwmfile" type="text" value="' + esc(hwmCfg.path || '') + '" placeholder="/var/flogo/hwm"/>') +
+        '</div>'
+      html += '<div class="hwm-be-cfg" id="hwm-cfg-redis"' + (hwmBe !== 'redis' ? ' style="display:none"' : '') + '>' +
+        ppField('Redis Host', '<input class="pp-input" id="tr-hwmredishost" type="text" value="' + esc(hwmCfg.host || '') + '" placeholder="localhost"/>') +
+        ppField('Redis Port', '<input class="pp-input" id="tr-hwmredisport" type="number" value="' + esc(hwmCfg.port || 6379) + '"/>') +
+        ppField('Password Env Var', '<input class="pp-input" id="tr-hwmredispenv" type="text" value="' + esc(hwmCfg.passwordEnv || '') + '" placeholder="REDIS_PASSWORD"/>') +
+        '</div>'
+      html += '<div class="hwm-be-cfg" id="hwm-cfg-postgres"' + (hwmBe !== 'postgres' ? ' style="display:none"' : '') + '>' +
+        ppField('DSN', '<input class="pp-input" id="tr-hwmpgdsn" type="text" value="' + esc(hwmCfg.dsn || '') + '" placeholder="host=localhost dbname=mydb user=u password=p"/>') +
+        '</div>'
     } else if (type === 'schemadrift') {
-      html += ppField('Policy', ppSelect('tr-sdpol', ['additive', 'strict', 'drop', 'project'], tr.policy || 'additive'))
-      html += '<div class="pp-hint">additive: new columns added; strict: reject drift; drop: silently drop rows with drift; project: strip unknown columns.</div>'
+      // Visual policy cards — click one to select
+      var sdPolicies = [
+        { key: 'additive', icon: '+', name: 'Additive', desc: 'Accept new columns; pass existing rows through unchanged' },
+        { key: 'strict',   icon: '!', name: 'Strict',   desc: 'Reject any row where the schema does not match exactly' },
+        { key: 'drop',     icon: '⌀', name: 'Drop', desc: 'Silently discard rows that contain unexpected columns' },
+        { key: 'project',  icon: '→', name: 'Project', desc: 'Strip unknown columns; keep only the expected fields' },
+      ]
+      var sdCurrent = tr.policy || 'additive'
+      var sdCardsHtml = sdPolicies.map(function (p) {
+        return '<button class="sdrift-card' + (p.key === sdCurrent ? ' active' : '') + '" data-policy="' + p.key + '">' +
+          '<span class="sdrift-card-icon">' + p.icon + '</span>' +
+          '<span class="sdrift-card-name">' + p.name + '</span>' +
+          '<span class="sdrift-card-desc">' + esc(p.desc) + '</span>' +
+          '</button>'
+      }).join('')
+      html += '<input type="hidden" id="tr-sdpol" value="' + esc(sdCurrent) + '"/>' +
+        '<div class="sdrift-cards" id="sdrift-cards">' + sdCardsHtml + '</div>'
     } else if (type === 'dq') {
-      html += ppField('Expectations (JSON)', '<textarea class="pp-textarea" id="tr-dqexp" rows="5" placeholder=\'[{"field":"id","notNull":true,"pattern":"^[A-Z0-9]+$"}]\'>' + esc(tr.expectations ? JSON.stringify(tr.expectations, null, 2) : '') + '</textarea>')
+      // Visual expectation builder — same row layout as validate
+      var dqExps = Array.isArray(tr.expectations) ? tr.expectations : []
+      var expRowsHtml = dqExps.map(function (r) {
+        return '<div class="rule-row">' +
+          '<input class="pp-input rule-field" type="text" value="' + esc(r.field || '') + '" placeholder="field_name"/>' +
+          '<label class="rule-chk-lbl"><input type="checkbox" class="rule-notnull"' + (r.notNull ? ' checked' : '') + '> Not Null</label>' +
+          '<label class="rule-chk-lbl">Pattern<input class="pp-input rule-pat" type="text" value="' + esc(r.pattern || '') + '" placeholder="regex"/></label>' +
+          '<label class="rule-chk-lbl">Min<input class="pp-input rule-num rule-min-val" type="number" value="' + (r.min != null ? esc(r.min) : '') + '"/></label>' +
+          '<label class="rule-chk-lbl">Max<input class="pp-input rule-num rule-max-val" type="number" value="' + (r.max != null ? esc(r.max) : '') + '"/></label>' +
+          '<button class="rule-del" data-action="del-rule-row" title="Remove">×</button>' +
+          '</div>'
+      }).join('')
+      html += '<div class="rule-blk-hdr">Expectations</div>' +
+        '<div class="rule-builder" id="tr-dq-rows">' + expRowsHtml + '</div>' +
+        '<button class="btn-g rule-add-btn" id="btn-add-expect">+ Add Expectation</button>'
       html += ppField('Threshold (0–1)', '<div style="display:flex;align-items:center;gap:8px"><input type="range" id="tr-dqthr" min="0" max="1" step="0.01" value="' + esc(tr.threshold != null ? tr.threshold : 0.95) + '" style="flex:1"/><span id="tr-dqthr-val">' + esc(tr.threshold != null ? tr.threshold : 0.95) + '</span></div>')
       html += ppField('On Fail', ppSelect('tr-dqfail', ['abort', 'report', 'pass'], tr.onFail || 'report'))
     }
@@ -1513,15 +1781,30 @@
     } else if (type === 'map' || type === 'mapper') {
       tr.fields = collectMapFields()
     } else if (type === 'validate') {
-      var rules = jsonParse('tr-rules'); if (rules !== undefined) tr.rules = rules
+      var ruleRows = byId('tr-rule-rows'); var rules = []
+      if (ruleRows) {
+        qsa('.rule-row', ruleRows).forEach(function (row) {
+          var fldEl = qs('.rule-field', row); var fld = fldEl ? fldEl.value.trim() : ''; if (!fld) return
+          var rule = { field: fld }
+          var nnEl = qs('.rule-notnull', row); if (nnEl && nnEl.checked) rule.notNull = true
+          var patEl = qs('.rule-pat', row); if (patEl && patEl.value.trim()) rule.pattern = patEl.value.trim()
+          var minEl = qs('.rule-min-val', row); if (minEl && minEl.value !== '') rule.min = parseFloat(minEl.value)
+          var maxEl = qs('.rule-max-val', row); if (maxEl && maxEl.value !== '') rule.max = parseFloat(maxEl.value)
+          rules.push(rule)
+        })
+      }
+      tr.rules = rules
       tr.onViolation = v('tr-onviolation')
       if (tr.onViolation === 'route') tr.errorSinkType = v('tr-errsinktype') || undefined
       else delete tr.errorSinkType
     } else if (type === 'lookup') {
       tr.url = v('tr-url')
       tr.keyField = v('tr-keyfield')
-      var of2 = v('tr-outfields')
-      tr.outputFields = of2 ? of2.split(',').map(function (x) { return x.trim() }) : []
+      var chipsWrap = byId('tr-outfields-chips'); var outFields = []
+      if (chipsWrap) {
+        qsa('.out-chip-del', chipsWrap).forEach(function (btn) { if (btn.dataset.field) outFields.push(btn.dataset.field) })
+      }
+      tr.outputFields = outFields
       tr.concurrency = parseInt(v('tr-concur')) || 8
       tr.cacheSize = parseInt(v('tr-cache')) || 0
       tr.timeoutMs = parseInt(v('tr-timeout')) || 5000
@@ -1529,11 +1812,32 @@
     } else if (type === 'hwm') {
       tr.column = v('tr-hwmcol')
       tr.backend = v('tr-hwmbe')
-      var hwmcfg = jsonParse('tr-hwmcfg'); if (hwmcfg !== undefined) tr.backendConfig = hwmcfg
+      var hwmCfgObj = {}
+      if (tr.backend === 'file') { var fp = v('tr-hwmfile'); if (fp) hwmCfgObj.path = fp }
+      else if (tr.backend === 'redis') {
+        var rh = v('tr-hwmredishost'); if (rh) hwmCfgObj.host = rh
+        var rp = v('tr-hwmredisport'); if (rp) hwmCfgObj.port = parseInt(rp)
+        var re = v('tr-hwmredispenv'); if (re) hwmCfgObj.passwordEnv = re
+      } else if (tr.backend === 'postgres') {
+        var pgd = v('tr-hwmpgdsn'); if (pgd) hwmCfgObj.dsn = pgd
+      }
+      tr.backendConfig = Object.keys(hwmCfgObj).length ? hwmCfgObj : undefined
     } else if (type === 'schemadrift') {
       tr.policy = v('tr-sdpol')
     } else if (type === 'dq') {
-      var dqexp = jsonParse('tr-dqexp'); if (dqexp !== undefined) tr.expectations = dqexp
+      var dqRows = byId('tr-dq-rows'); var expectations = []
+      if (dqRows) {
+        qsa('.rule-row', dqRows).forEach(function (row) {
+          var fldEl = qs('.rule-field', row); var fld = fldEl ? fldEl.value.trim() : ''; if (!fld) return
+          var exp = { field: fld }
+          var nnEl = qs('.rule-notnull', row); if (nnEl && nnEl.checked) exp.notNull = true
+          var patEl = qs('.rule-pat', row); if (patEl && patEl.value.trim()) exp.pattern = patEl.value.trim()
+          var minEl = qs('.rule-min-val', row); if (minEl && minEl.value !== '') exp.min = parseFloat(minEl.value)
+          var maxEl = qs('.rule-max-val', row); if (maxEl && maxEl.value !== '') exp.max = parseFloat(maxEl.value)
+          expectations.push(exp)
+        })
+      }
+      tr.expectations = expectations
       var thrEl = byId('tr-dqthr'); if (thrEl) tr.threshold = parseFloat(thrEl.value)
       tr.onFail = v('tr-dqfail')
     }
@@ -1557,6 +1861,15 @@
     pp.innerHTML = html
 
     wireHdrButtons(saveSinkProps)
+
+    if (type === 'kafka') {
+      var saslChk = byId('sink-sasl'); var saslAuth = byId('sink-sasl-auth')
+      if (saslChk && saslAuth) {
+        saslChk.addEventListener('change', function () {
+          saslAuth.style.display = saslChk.checked ? '' : 'none'
+        })
+      }
+    }
   }
 
   function renderSinkTypeFields(type, sink) {
@@ -1580,10 +1893,12 @@
       var brokersVal = Array.isArray(sink.brokers) ? sink.brokers.join(', ') : (sink.brokers || '')
       html += ppField('Brokers (comma-separated)', '<input class="pp-input" id="sink-brokers" type="text" value="' + esc(brokersVal) + '" placeholder="kafka:9092"/>')
       html += ppField('Topic', '<input class="pp-input" id="sink-topic" type="text" value="' + esc(sink.topic || '') + '"/>')
-      html += ppField('SASL', ppCheck('sink-sasl', !!sink.sasl))
-      html += ppField('SCRAM Algorithm', ppSelect('sink-scram', ['SHA-256', 'SHA-512'], sink.scram || 'SHA-256'))
-      html += ppField('Username Env Var', '<input class="pp-input" id="sink-uenv" type="text" value="' + esc(sink.usernameEnv || '') + '"/>')
-      html += ppField('Password Env Var', '<input class="pp-input" id="sink-penv" type="text" value="' + esc(sink.passwordEnv || '') + '"/>')
+      html += ppField('SASL Authentication', ppCheck('sink-sasl', !!sink.sasl))
+      html += '<div class="sasl-auth-section" id="sink-sasl-auth"' + (!sink.sasl ? ' style="display:none"' : '') + '>' +
+        ppField('SCRAM Algorithm', ppSelect('sink-scram', ['SHA-256', 'SHA-512'], sink.scram || 'SHA-256')) +
+        ppField('Username Env Var', '<input class="pp-input" id="sink-uenv" type="text" value="' + esc(sink.usernameEnv || '') + '"/>') +
+        ppField('Password Env Var', '<input class="pp-input" id="sink-penv" type="text" value="' + esc(sink.passwordEnv || '') + '"/>') +
+        '</div>'
       html += ppField('Batch Size', '<input class="pp-input" id="sink-batch" type="number" min="1" value="' + esc(sink.batchSize || 500) + '"/>')
     } else if (type === 'dlq') {
       html += ppField('Inner Sink Type', ppSelect('sink-innertype', ['jdbc', 'parquet', 'objstore', 'kafka', 'null'], sink.innerType || 'jdbc'))

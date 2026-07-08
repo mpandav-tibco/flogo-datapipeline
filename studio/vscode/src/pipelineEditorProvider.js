@@ -997,6 +997,52 @@ body{background:var(--bg);color:var(--text);font-family:var(--vscode-font-family
   padding:0 6px;align-self:stretch;display:flex;align-items:center;
   border-left:1px solid var(--inbdr);text-transform:uppercase;letter-spacing:.04em;flex-shrink:0}
 .fld-no-cols{font-size:11px;color:var(--text2);font-style:italic;padding:6px 0;line-height:1.4}
+/* ── Rule / Expectation builder (validate + dq transforms) ─────────── */
+.rule-builder{display:flex;flex-direction:column;gap:3px;margin-bottom:4px}
+.rule-row{display:grid;grid-template-columns:1fr auto auto auto auto 18px;gap:4px;align-items:center;
+  padding:5px 7px;background:var(--bg1,var(--bg));border:1px solid var(--inbdr);border-radius:3px}
+.rule-field{font-family:'Cascadia Code','Fira Mono','Courier New',monospace;font-size:11px!important}
+.rule-chk-lbl{display:flex;align-items:center;gap:3px;font-size:10px;color:var(--text2);white-space:nowrap;cursor:pointer}
+.rule-chk-lbl input[type=number]{width:52px!important;text-align:right;font-size:10px!important;padding:2px 4px!important}
+.rule-chk-lbl input[type=text]{width:80px!important;font-size:10px!important;padding:2px 4px!important}
+.rule-del{background:none!important;border:none!important;color:var(--err,#c0392b)!important;cursor:pointer;font-size:14px;padding:0 2px!important;line-height:1}
+.rule-del:hover{opacity:.7}
+.rule-add-btn{align-self:flex-start;font-size:10px!important;padding:3px 8px!important;margin-top:2px}
+.rule-blk-hdr{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text2);margin-bottom:3px;padding-top:4px}
+/* ── Schema drift policy cards ──────────────────────────────────────── */
+.sdrift-cards{display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:4px 0}
+.sdrift-card{display:flex;flex-direction:column;gap:2px;padding:8px 10px;border:1px solid var(--inbdr);
+  border-radius:4px;cursor:pointer;text-align:left;background:var(--bg1,var(--bg));transition:border-color .15s}
+.sdrift-card:hover{border-color:var(--accent)}
+.sdrift-card.active{border-color:var(--accent);border-width:2px;padding:7px 9px}
+.sdrift-card-icon{font-size:15px;line-height:1;margin-bottom:2px}
+.sdrift-card-name{font-weight:700;font-size:11px;letter-spacing:.03em}
+.sdrift-card-desc{font-size:10px;color:var(--text2);line-height:1.3;margin-top:1px}
+/* ── HWM backend config ─────────────────────────────────────────────── */
+.hwm-col-wrap{display:flex;flex-direction:column;gap:4px}
+.hwm-chips{display:flex;flex-wrap:wrap;gap:3px;margin-top:2px}
+.hwm-col-chip{font-size:10px!important;font-family:'Cascadia Code','Fira Mono',monospace;padding:2px 7px!important;
+  border:1px solid var(--inbdr)!important;border-radius:3px;cursor:pointer;background:transparent!important;color:var(--text2)}
+.hwm-col-chip:hover{border-color:var(--accent)!important;color:var(--accent)}
+/* ── Lookup transform ───────────────────────────────────────────────── */
+.lookup-sec-hdr{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text2);
+  padding:7px 0 3px;border-top:1px solid var(--inbdr);margin-top:2px}
+.out-chips-wrap{display:flex;flex-wrap:wrap;gap:4px;min-height:28px;padding:4px;
+  border:1px solid var(--inbdr);border-radius:3px;background:var(--bg1,var(--bg))}
+.out-chip{display:inline-flex;align-items:center;gap:2px;font-family:'Cascadia Code','Fira Mono',monospace;
+  font-size:11px;padding:2px 5px;border-radius:3px;background:var(--bg3,var(--bg));border:1px solid var(--inbdr)}
+.out-chip-del{background:none!important;border:none!important;font-size:12px;cursor:pointer;
+  color:var(--text2);padding:0 1px!important;line-height:1}
+.out-chip-del:hover{color:var(--err,#c0392b)}
+.out-field-add{display:flex;gap:4px;margin-top:4px;align-items:center}
+/* ── Fixed-width column grid ─────────────────────────────────────────── */
+.fwcols-grid-hdr{display:grid;grid-template-columns:1fr 52px 52px 80px 20px;gap:4px;
+  font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text2);padding:2px 0 1px}
+.fw-cols-grid{display:flex;flex-direction:column;gap:3px}
+.fw-col-row{display:grid;grid-template-columns:1fr 52px 52px 80px 20px;gap:4px;align-items:center}
+.fw-col-row .pp-input{font-size:11px!important;padding:3px 4px!important}
+/* ── Kafka SASL collapsible section ─────────────────────────────────── */
+.sasl-auth-section{border-left:2px solid var(--accent);padding-left:10px;margin-top:2px}
 
 /* ── Form fields ── */
 .field{margin-bottom:12px}
