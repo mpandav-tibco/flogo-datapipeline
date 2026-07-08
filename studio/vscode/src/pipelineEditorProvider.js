@@ -702,15 +702,19 @@ body{background:var(--bg);color:var(--text);font-family:var(--vscode-font-family
 .pal-hint{margin-top:auto;border-top:1px solid var(--border);padding-top:10px;
   font-size:10px;color:var(--text2);text-align:center;line-height:1.5}
 
-/* ── Canvas wrapper ── */
+/* ── Canvas wrapper (flogo3 pattern) ── */
 .cwrap{flex:1;position:relative;overflow:hidden;background:var(--bg);cursor:default}
-.cwrap::before{content:'';position:absolute;inset:0;
+.cwrap::before{content:'';position:absolute;inset:0;z-index:0;
   background-image:radial-gradient(circle,rgba(255,255,255,.06) 1px,transparent 1px);
   background-size:24px 24px;pointer-events:none}
 .cwrap.panning{cursor:grabbing}
-#canvas{position:absolute;top:0;left:0;transform-origin:0 0}
-#esvg{position:absolute;top:0;left:0;width:6000px;height:4000px;pointer-events:none;overflow:visible}
-#nodes-layer{position:absolute;top:0;left:0}
+/* Scrollable canvas layer — overflow:auto lets nodes go anywhere (like flogo3 wi-diagram-container) */
+.canvas-scroll{position:absolute;inset:0;overflow:auto;z-index:1}
+/* #canvas is the positioning root for all nodes and SVG edges */
+#canvas{position:relative;min-width:1200px;min-height:600px;transform-origin:0 0}
+/* SVG edge layer — 1px intrinsic so it doesn't expand scroll; overflow:visible handles long edges */
+#esvg{position:absolute;top:0;left:0;width:1px;height:1px;pointer-events:none;overflow:visible}
+#nodes-layer{position:absolute;top:0;left:0;width:100%;height:100%}
 .zoom-lvl{position:absolute;right:12px;bottom:12px;font-size:10px;color:rgba(255,255,255,.22);
   pointer-events:none;user-select:none;font-variant-numeric:tabular-nums;letter-spacing:.04em;
   background:rgba(0,0,0,.25);padding:2px 6px;border-radius:4px}
@@ -746,16 +750,16 @@ body{background:var(--bg);color:var(--text);font-family:var(--vscode-font-family
 .nb-row:last-child{margin-bottom:0}
 .nb-k{color:var(--text2);flex-shrink:0;width:56px;text-align:right;font-size:10px;padding-top:1px}
 .nb-v{color:var(--text);font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-/* Drag-handle badge on transform nodes */
-.drag-handle{position:absolute;left:50%;top:-10px;transform:translateX(-50%);
-  font-size:9px;color:rgba(255,255,255,.25);letter-spacing:2px;cursor:grab;user-select:none}
-.node:hover .drag-handle{color:rgba(255,255,255,.55)}
-/* Node delete button */
-.node-del{position:absolute;right:5px;top:50%;transform:translateY(-50%);
-  background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.15);
-  color:rgba(255,255,255,.7);font-size:12px;cursor:pointer;padding:1px 5px;
-  border-radius:3px;line-height:1.4;z-index:10}
-.node-del:hover{color:#fff;background:rgba(244,135,113,.5);border-color:rgba(244,135,113,.6)}
+/* Delete button — top-right corner of card, hidden until hover (flogo-agent pattern) */
+.node-del-btn{position:absolute;top:5px;right:5px;width:18px;height:18px;border-radius:50%;
+  background:rgba(0,0,0,.3);border:1px solid transparent;
+  color:rgba(255,255,255,0);font-size:11px;line-height:1;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;padding:0;z-index:12;
+  transition:color .12s,border-color .12s,background .12s}
+.node:hover .node-del-btn{color:rgba(255,255,255,.55);border-color:rgba(255,255,255,.2)}
+.node-del-btn:hover{color:#fff!important;background:rgba(244,135,113,.8)!important;border-color:transparent!important}
+/* Cursor: grab when hovering idle node, grabbing while dragging */
+.node{cursor:grab}.node.dragging{cursor:grabbing}
 /* Connection ports */
 .port-out{position:absolute;right:-7px;top:50%;transform:translateY(-50%);
   width:13px;height:13px;border-radius:50%;border:2px solid rgba(78,201,176,.3);
@@ -821,10 +825,8 @@ textarea{resize:vertical;min-height:70px;line-height:1.5}
 input[type=range]{width:100%;accent-color:var(--accent);cursor:pointer}
 .check-row{display:flex;align-items:center;gap:7px;font-size:11px;color:var(--text2)}
 input[type=checkbox]{width:14px;height:14px;cursor:pointer;accent-color:var(--accent)}
-.range-row{display:flex;align-items:center;gap:8px}
-.range-row input[type=range]{flex:1}
-.range-val{min-width:44px;text-align:right;font-family:var(--vscode-editor-font-family,monospace);
-  font-size:11px;color:var(--text2)}
+.perf-num{width:120px!important;text-align:right;font-family:var(--vscode-editor-font-family,monospace);
+  font-size:12px;font-weight:600}
 
 /* ── Buttons ── */
 button{font-family:inherit;font-size:12px;cursor:pointer;border:none;border-radius:3px;padding:5px 12px}
@@ -1050,9 +1052,12 @@ input[type=radio]{accent-color:var(--accent)}
 
     <!-- Canvas area — pipeline flow visualization -->
     <div class="cwrap" id="cwrap">
-      <div id="canvas">
-        <svg id="esvg"></svg>
-        <div id="nodes-layer"></div>
+      <!-- Scrollable layer (flogo3 wi-diagram-container pattern) -->
+      <div class="canvas-scroll" id="canvas-scroll">
+        <div id="canvas">
+          <svg id="esvg"></svg>
+          <div id="nodes-layer"></div>
+        </div>
       </div>
       <div class="zoom-lvl" id="zoom-lvl">100%</div>
 
@@ -1098,19 +1103,13 @@ input[type=radio]{accent-color:var(--accent)}
 
       <div class="field">
         <label for="perf-batchsize">Batch size<span style="font-weight:400;margin-left:6px;font-size:10px;color:var(--text2)">— records per batch</span></label>
-        <div class="range-row">
-          <input type="range" id="perf-batchsize" min="100" max="50000" step="100" value="1000" aria-label="Batch size"/>
-          <span class="range-val" id="perf-batchsize-val">1000</span>
-        </div>
+        <input type="number" class="perf-num" id="perf-batchsize" min="100" max="50000" step="100" value="1000" aria-label="Batch size"/>
         <div class="field-hint">Larger batches improve throughput but increase memory usage. 1,000–5,000 is a good starting range.</div>
       </div>
 
       <div class="field">
         <label for="perf-workers">Parallel workers<span style="font-weight:400;margin-left:6px;font-size:10px;color:var(--text2)">— concurrent transform goroutines</span></label>
-        <div class="range-row">
-          <input type="range" id="perf-workers" min="1" max="32" step="1" value="4" aria-label="Workers"/>
-          <span class="range-val" id="perf-workers-val">4</span>
-        </div>
+        <input type="number" class="perf-num" id="perf-workers" min="1" max="32" step="1" value="4" aria-label="Workers"/>
         <div class="field-hint">Set to the number of available CPU cores for CPU-bound transforms. For I/O-bound workloads, a higher value may help.</div>
       </div>
     </div>
@@ -1120,10 +1119,7 @@ input[type=radio]{accent-color:var(--accent)}
 
       <div class="field">
         <label for="perf-memory">Memory limit (MB)<span style="font-weight:400;margin-left:6px;font-size:10px;color:var(--text2)">— soft RSS ceiling</span></label>
-        <div class="range-row">
-          <input type="range" id="perf-memory" min="128" max="8192" step="128" value="512" aria-label="Memory limit"/>
-          <span class="range-val" id="perf-memory-val">512 MB</span>
-        </div>
+        <input type="number" class="perf-num" id="perf-memory" min="128" max="65536" step="128" value="512" aria-label="Memory limit"/>
         <div class="field-hint">When RSS exceeds this value, the pipeline pauses ingestion and flushes the current batch to the sink before resuming.</div>
       </div>
     </div>
@@ -1133,19 +1129,13 @@ input[type=radio]{accent-color:var(--accent)}
 
       <div class="field">
         <label for="perf-src-buf">Source read-ahead buffer (batches)</label>
-        <div class="range-row">
-          <input type="range" id="perf-src-buf" min="1" max="20" step="1" value="4" aria-label="Source buffer"/>
-          <span class="range-val" id="perf-src-buf-val">4</span>
-        </div>
+        <input type="number" class="perf-num" id="perf-src-buf" min="1" max="64" step="1" value="4" aria-label="Source buffer"/>
         <div class="field-hint">How many batches to pre-fetch from the source while transforms are running. Higher values hide source latency.</div>
       </div>
 
       <div class="field">
         <label for="perf-snk-buf">Sink write-queue depth (batches)</label>
-        <div class="range-row">
-          <input type="range" id="perf-snk-buf" min="1" max="20" step="1" value="4" aria-label="Sink buffer"/>
-          <span class="range-val" id="perf-snk-buf-val">4</span>
-        </div>
+        <input type="number" class="perf-num" id="perf-snk-buf" min="1" max="64" step="1" value="4" aria-label="Sink buffer"/>
         <div class="field-hint">How many transformed batches to queue for the sink writer. Higher values hide sink commit latency.</div>
       </div>
     </div>
@@ -1184,10 +1174,7 @@ input[type=radio]{accent-color:var(--accent)}
       <div class="scale-title">Instance count (sharded / distributed)</div>
       <div class="field">
         <label for="scale-instance-count">Number of worker instances</label>
-        <div class="range-row">
-          <input type="range" id="scale-instance-count" min="2" max="64" step="1" value="4" aria-label="Instance count"/>
-          <span class="range-val" id="scale-instance-count-val">4</span>
-        </div>
+        <input type="number" class="perf-num" id="scale-instance-count" min="2" max="256" step="1" value="4" aria-label="Instance count"/>
         <div class="field-hint">Target number of concurrent worker instances. The scheduler will place them across available nodes.</div>
       </div>
     </div>
@@ -1210,10 +1197,7 @@ input[type=radio]{accent-color:var(--accent)}
       </div>
       <div class="field">
         <label for="scale-lease-seconds">Shard lease duration (seconds)</label>
-        <div class="range-row">
-          <input type="range" id="scale-lease-seconds" min="10" max="300" step="10" value="60" aria-label="Lease duration"/>
-          <span class="range-val" id="scale-lease-seconds-val">60 s</span>
-        </div>
+        <input type="number" class="perf-num" id="scale-lease-seconds" min="10" max="600" step="10" value="60" aria-label="Lease duration"/>
         <div class="field-hint">A worker that fails to renew its lease within this window will have its shard reassigned to another worker.</div>
       </div>
     </div>

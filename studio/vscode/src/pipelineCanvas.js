@@ -670,13 +670,20 @@
       state.propsSnapshot = trs[index] ? JSON.parse(JSON.stringify(trs[index])) : {}
     }
 
-    // Update static header title
+    // Update static header title — show kind + immutable type name
     var titleEl = byId('pp-hdr-title')
     if (titleEl) {
-      if (kind === 'source') titleEl.textContent = 'Source'
-      else if (kind === 'sink') titleEl.textContent = 'Sink'
-      else if (kind === 'dlq') titleEl.textContent = 'Dead Letter Queue'
-      else if (kind === 'transform') titleEl.textContent = 'Transform #' + (index + 1)
+      var doc2 = state.doc || {}
+      if (kind === 'source') {
+        titleEl.textContent = 'Source — ' + nodeLabel('source', (doc2.source || {}).type || '')
+      } else if (kind === 'sink') {
+        titleEl.textContent = 'Sink — ' + nodeLabel('sink', (doc2.sink || {}).type || '')
+      } else if (kind === 'dlq') {
+        titleEl.textContent = 'DLQ — ' + nodeLabel('dlq', (doc2.dlqSink || {}).type || '')
+      } else if (kind === 'transform') {
+        var trNode = ((doc2.transforms || [])[index] || {})
+        titleEl.textContent = 'Transform #' + (index + 1) + ' — ' + nodeLabel('transform', trNode.type || '')
+      }
     }
 
     var ppEl = byId('pp')
@@ -736,33 +743,12 @@
   }
 
   // ── Source props ──────────────────────────────────────────────────────────────
-  var SOURCE_TYPES = [
-    { value: 'csv',        label: 'CSV File' },
-    { value: 'tsv',        label: 'TSV File' },
-    { value: 'jdbc',       label: 'JDBC (Database)' },
-    { value: 'parquet',    label: 'Parquet' },
-    { value: 'fixedwidth', label: 'Fixed-Width / EBCDIC' },
-    { value: 'xml',        label: 'XML' },
-    { value: 'jsonlines',  label: 'JSON Lines' },
-    { value: 'kafka',      label: 'Kafka' },
-    { value: 'objstore',   label: 'Cloud Object Store' },
-  ]
-
   function renderSourceProps(pp) {
     var doc = state.doc || {}
     var src = doc.source || {}
     var type = src.type || 'csv'
 
-    var typeOpts = SOURCE_TYPES.map(function (t) {
-      return '<option value="' + t.value + '"' + (type === t.value ? ' selected' : '') + '>' + esc(t.label) + '</option>'
-    }).join('')
-
-    var html = '<div class="pp-fields-wrap">' +
-      '<div class="pp-field">' +
-      '<label class="pp-label">Type</label>' +
-      '<select id="src-type" class="pp-select">' + typeOpts + '</select>' +
-      '</div>'
-
+    var html = '<div class="pp-fields-wrap">'
     html += renderSourceTypeFields(type, src)
     html += '</div>'
 
@@ -771,16 +757,6 @@
       '<button class="btn-g" id="btn-src-discard">Discard</button>' +
       '</div>'
     pp.innerHTML = html
-
-    var typeSel = byId('src-type')
-    if (typeSel) {
-      typeSel.addEventListener('change', function () {
-        if (!state.doc) return
-        if (!state.doc.source) state.doc.source = {}
-        state.doc.source.type = typeSel.value
-        renderProps()
-      })
-    }
 
     wireSourceFields(type, src)
 
@@ -848,8 +824,7 @@
     if (!state.doc) return
     if (!state.doc.source) state.doc.source = {}
     var s = state.doc.source
-    var type = (byId('src-type') || {}).value || s.type || 'csv'
-    s.type = type
+    var type = s.type || 'csv'
 
     var v = function (id) { var el = byId(id); return el ? el.value : '' }
     var checked = function (id) { var el = byId(id); return el ? el.checked : false }
@@ -911,32 +886,13 @@
   }
 
   // ── Transform props ───────────────────────────────────────────────────────────
-  var TRANSFORM_TYPES = [
-    { value: 'filter',     label: 'Filter' },
-    { value: 'map',        label: 'Map / Mapper' },
-    { value: 'validate',   label: 'Validate' },
-    { value: 'lookup',     label: 'Lookup' },
-    { value: 'hwm',        label: 'Incremental / HWM' },
-    { value: 'schemadrift',label: 'Schema Drift' },
-    { value: 'dq',         label: 'Data Quality' },
-  ]
-
   function renderTransformProps(pp, idx) {
     var doc = state.doc || {}
     var transforms = Array.isArray(doc.transforms) ? doc.transforms : []
     var tr = transforms[idx] || {}
     var type = tr.type || 'filter'
 
-    var typeOpts = TRANSFORM_TYPES.map(function (t) {
-      return '<option value="' + t.value + '"' + (type === t.value ? ' selected' : '') + '>' + esc(t.label) + '</option>'
-    }).join('')
-
-    var html = '<div class="pp-fields-wrap">' +
-      '<div class="pp-field">' +
-      '<label class="pp-label">Type</label>' +
-      '<select id="tr-type" class="pp-select">' + typeOpts + '</select>' +
-      '</div>'
-
+    var html = '<div class="pp-fields-wrap">'
     html += renderTransformTypeFields(type, tr)
     html += '</div>'
 
@@ -947,16 +903,6 @@
       '</div>'
 
     pp.innerHTML = html
-
-    var typeSel = byId('tr-type')
-    if (typeSel) {
-      typeSel.addEventListener('change', function () {
-        if (!state.doc) return
-        var trs = state.doc.transforms || []
-        if (trs[idx]) trs[idx].type = typeSel.value
-        renderProps()
-      })
-    }
 
     var delBtn = byId('btn-tr-del')
     if (delBtn) delBtn.addEventListener('click', function () { deleteTransform(idx) })
@@ -1103,8 +1049,7 @@
       try { return JSON.parse(el.value) } catch (_) { showToast('Invalid JSON in ' + id); return undefined }
     }
 
-    var type = (byId('tr-type') || {}).value || tr.type || 'filter'
-    tr.type = type
+    var type = tr.type || 'filter'
 
     if (type === 'filter') {
       tr.expr = v('tr-expr')
@@ -1143,30 +1088,12 @@
   }
 
   // ── Sink props ────────────────────────────────────────────────────────────────
-  var SINK_TYPES = [
-    { value: 'jdbc',    label: 'JDBC (Database)' },
-    { value: 'parquet', label: 'Parquet' },
-    { value: 'objstore',label: 'Cloud Object Store' },
-    { value: 'kafka',   label: 'Kafka' },
-    { value: 'dlq',     label: 'Dead Letter Queue' },
-    { value: 'null',    label: 'Null (discard)' },
-  ]
-
   function renderSinkProps(pp) {
     var doc = state.doc || {}
     var sink = doc.sink || {}
     var type = sink.type || 'jdbc'
 
-    var typeOpts = SINK_TYPES.map(function (t) {
-      return '<option value="' + t.value + '"' + (type === t.value ? ' selected' : '') + '>' + esc(t.label) + '</option>'
-    }).join('')
-
-    var html = '<div class="pp-fields-wrap">' +
-      '<div class="pp-field">' +
-      '<label class="pp-label">Type</label>' +
-      '<select id="sink-type" class="pp-select">' + typeOpts + '</select>' +
-      '</div>'
-
+    var html = '<div class="pp-fields-wrap">'
     html += renderSinkTypeFields(type, sink)
     html += '</div>'
 
@@ -1176,16 +1103,6 @@
       '</div>'
 
     pp.innerHTML = html
-
-    var typeSel = byId('sink-type')
-    if (typeSel) {
-      typeSel.addEventListener('change', function () {
-        if (!state.doc) return
-        if (!state.doc.sink) state.doc.sink = {}
-        state.doc.sink.type = typeSel.value
-        renderProps()
-      })
-    }
 
     var saveBtn = byId('btn-sink-save')
     if (saveBtn) saveBtn.addEventListener('click', function () { saveSinkProps(); closePpPanel() })
@@ -1239,8 +1156,7 @@
       try { return JSON.parse(el.value) } catch (_) { showToast('Invalid JSON in ' + id); return undefined }
     }
 
-    var type = (byId('sink-type') || {}).value || s.type || 'jdbc'
-    s.type = type
+    var type = s.type || 'jdbc'
 
     if (type === 'jdbc') {
       s.driver = v('sink-driver')
@@ -1284,16 +1200,8 @@
     var dlq = doc.dlqSink || {}
     var type = dlq.type || 'jdbc'
 
-    var typeOpts = SINK_TYPES.map(function (t) {
-      return '<option value="' + t.value + '"' + (type === t.value ? ' selected' : '') + '>' + esc(t.label) + '</option>'
-    }).join('')
-
     var html = '<div class="pp-fields-wrap">' +
-      '<div class="pp-hint pp-field-full" style="margin-bottom:4px">Rows that fail validation or error in the sink are routed here.</div>' +
-      '<div class="pp-field">' +
-      '<label class="pp-label">Type</label>' +
-      '<select id="dlq-type" class="pp-select">' + typeOpts + '</select>' +
-      '</div>'
+      '<div class="pp-hint pp-field-full" style="margin-bottom:4px">Rows that fail validation or error in the sink are routed here.</div>'
 
     html += renderSinkTypeFields(type, dlq).replace(/id="sink-/g, 'id="dlq-').replace(/id="sink/g, 'id="dlq')
     html += '</div>'
@@ -1306,33 +1214,13 @@
 
     pp.innerHTML = html
 
-    var typeSel = byId('dlq-type')
-    if (typeSel) {
-      typeSel.addEventListener('change', function () {
-        if (!state.doc) return
-        if (!state.doc.dlqSink) state.doc.dlqSink = {}
-        state.doc.dlqSink.type = typeSel.value
-        renderProps()
-      })
-    }
-
     var saveBtn = byId('btn-dlq-save')
     if (saveBtn) saveBtn.addEventListener('click', function () { saveDlqProps(); closePpPanel() })
     var discardBtn = byId('btn-dlq-discard')
     if (discardBtn) discardBtn.addEventListener('click', discardProps)
 
     var removeBtn = byId('btn-dlq-remove')
-    if (removeBtn) removeBtn.addEventListener('click', function () {
-      if (!state.doc) return
-      delete state.doc.dlqSink
-      state.selected = null
-      state.propsSnapshot = null
-      setDirty(true)
-      render()
-      postUpdate()
-      var ppEl = byId('pp')
-      if (ppEl) ppEl.classList.remove('pp-open')
-    })
+    if (removeBtn) removeBtn.addEventListener('click', deleteDlq)
   }
 
   function saveDlqProps() {
@@ -1342,8 +1230,7 @@
     var v = function (id) { var el = byId(id); return el ? el.value : '' }
     var checked = function (id) { var el = byId(id); return el ? el.checked : false }
 
-    var type = (byId('dlq-type') || {}).value || s.type || 'jdbc'
-    s.type = type
+    var type = s.type || 'jdbc'
 
     if (type === 'jdbc') {
       s.driver = v('dlq-driver')
@@ -1393,41 +1280,29 @@
     var doc = state.doc || {}
     var perf = doc.performance || {}
 
-    // Map of slider IDs in the provider HTML → doc.performance keys
-    var sliderMap = [
-      { sliderId: 'perf-batchsize', valId: 'perf-batchsize-val', key: 'batchSize',
-        fmt: function (v) { return String(v) } },
-      { sliderId: 'perf-workers',   valId: 'perf-workers-val',   key: 'transformWorkers',
-        fmt: function (v) { return String(v) } },
-      { sliderId: 'perf-memory',    valId: 'perf-memory-val',    key: 'maxMemoryMB',
-        fmt: function (v) { return v + ' MB' } },
-      { sliderId: 'perf-src-buf',   valId: 'perf-src-buf-val',   key: 'sourceBufferBatches',
-        fmt: function (v) { return String(v) } },
-      { sliderId: 'perf-snk-buf',   valId: 'perf-snk-buf-val',   key: 'sinkBufferBatches',
-        fmt: function (v) { return String(v) } },
+    // number input ID → doc.performance key
+    var fieldMap = [
+      { id: 'perf-batchsize', key: 'batchSize' },
+      { id: 'perf-workers',   key: 'transformWorkers' },
+      { id: 'perf-memory',    key: 'maxMemoryMB' },
+      { id: 'perf-src-buf',   key: 'sourceBufferBatches' },
+      { id: 'perf-snk-buf',   key: 'sinkBufferBatches' },
     ]
 
-    sliderMap.forEach(function (s) {
-      var el = byId(s.sliderId)
-      var valEl = byId(s.valId)
-      if (!el || !valEl) return
-
+    fieldMap.forEach(function (f) {
+      var el = byId(f.id)
+      if (!el) return
       // Populate from doc
-      var docVal = perf[s.key]
-      if (docVal != null) {
-        el.value = String(docVal)
-        valEl.textContent = s.fmt(Number(docVal))
-      }
-
-      // Wire live update (guard against double-wiring with a data attribute flag)
+      if (perf[f.key] != null) el.value = String(perf[f.key])
+      // Wire live update once
       if (!el.dataset.wired) {
         el.dataset.wired = '1'
-        el.addEventListener('input', function () {
+        el.addEventListener('change', function () {
           var n = parseInt(el.value)
-          valEl.textContent = s.fmt(n)
+          if (isNaN(n)) return
           if (!state.doc) return
           if (!state.doc.performance) state.doc.performance = {}
-          state.doc.performance[s.key] = n
+          state.doc.performance[f.key] = n
           setDirty(true)
           postUpdate()
         })
@@ -1467,12 +1342,7 @@
 
     // Populate instance count
     var instEl = byId('scale-instance-count')
-    var instValEl = byId('scale-instance-count-val')
-    if (instEl) {
-      var instCnt = sc.instanceCount || 4
-      instEl.value = String(instCnt)
-      if (instValEl) instValEl.textContent = String(instCnt)
-    }
+    if (instEl) instEl.value = String(sc.instanceCount || 4)
 
     // Coordinator
     var coord = sc.coordinator || {}
@@ -1481,12 +1351,7 @@
     var coordDsnEl = byId('scale-coordinator-dsn')
     if (coordDsnEl) coordDsnEl.value = coord.dsn || ''
     var leaseEl = byId('scale-lease-seconds')
-    var leaseValEl = byId('scale-lease-seconds-val')
-    if (leaseEl) {
-      var leaseSec = coord.leaseSeconds || 60
-      leaseEl.value = String(leaseSec)
-      if (leaseValEl) leaseValEl.textContent = leaseSec + ' s'
-    }
+    if (leaseEl) leaseEl.value = String(coord.leaseSeconds || 60)
 
     // Wire event listeners (once)
     var scaleModeEl = byId('scale-mode')
@@ -1497,19 +1362,6 @@
         if (!m) return
         if (shEl) shEl.style.display = (m === 'sharded' || m === 'distributed') ? '' : 'none'
         if (dsEl) dsEl.style.display = m === 'distributed' ? '' : 'none'
-      })
-    }
-
-    if (instEl && !instEl.dataset.wired) {
-      instEl.dataset.wired = '1'
-      instEl.addEventListener('input', function () {
-        if (instValEl) instValEl.textContent = instEl.value
-      })
-    }
-    if (leaseEl && !leaseEl.dataset.wired) {
-      leaseEl.dataset.wired = '1'
-      leaseEl.addEventListener('input', function () {
-        if (leaseValEl) leaseValEl.textContent = leaseEl.value + ' s'
       })
     }
 
