@@ -770,13 +770,81 @@
     if (discardBtn) discardBtn.addEventListener('click', discardProps)
   }
 
+  function renderColGrid(id, columns) {
+    var colDefs = Array.isArray(columns) ? columns : []
+    var colTypes = ['string', 'int', 'float', 'bool', 'timestamp', 'bytes']
+    var rows = colDefs.map(function (c) {
+      var name = typeof c === 'string' ? c : (c.name || '')
+      var colType = typeof c === 'object' ? (c.type || 'string') : 'string'
+      var opts = colTypes.map(function (t) {
+        return '<option value="' + t + '"' + (t === colType ? ' selected' : '') + '>' + t + '</option>'
+      }).join('')
+      return '<div class="col-row">' +
+        '<input class="pp-input col-name" type="text" value="' + esc(name) + '" placeholder="column_name"/>' +
+        '<select class="pp-input col-type">' + opts + '</select>' +
+        '<button class="col-del-row" data-action="del-col-row" title="Remove">×</button>' +
+        '</div>'
+    }).join('')
+    return '<div class="mapper-toolbar"><span class="mapper-toolbar-label">Columns</span>' +
+      '<button class="btn-g" id="btn-add-col-row" style="font-size:11px;padding:2px 8px">+ Add column</button></div>' +
+      '<div class="cols-grid" id="' + id + '">' +
+        '<div class="mapper-col-hdr">Column Name</div>' +
+        '<div class="mapper-col-hdr">Type</div>' +
+        '<div></div>' +
+        rows +
+      '</div>'
+  }
+
+  function wireColEditor(editorId) {
+    var editor = byId(editorId)
+    var addBtn = byId('btn-add-col-row')
+    var colTypes = ['string', 'int', 'float', 'bool', 'timestamp', 'bytes']
+    if (editor) {
+      editor.addEventListener('click', function (e) {
+        if (tgt(e, '[data-action="del-col-row"]')) {
+          var row = tgt(e).closest('.col-row')
+          if (row) row.remove()
+        }
+      })
+    }
+    if (addBtn) {
+      addBtn.addEventListener('click', function () {
+        if (!editor) return
+        var opts = colTypes.map(function (t) {
+          return '<option value="' + t + '"' + (t === 'string' ? ' selected' : '') + '>' + t + '</option>'
+        }).join('')
+        var row = document.createElement('div')
+        row.className = 'col-row'
+        row.innerHTML =
+          '<input class="pp-input col-name" type="text" value="" placeholder="column_name"/>' +
+          '<select class="pp-input col-type">' + opts + '</select>' +
+          '<button class="col-del-row" data-action="del-col-row" title="Remove">×</button>'
+        editor.appendChild(row)
+        var inp = qs('.col-name', row); if (inp) inp.focus()
+      })
+    }
+  }
+
+  function collectColRows(editorId) {
+    var editor = byId(editorId)
+    if (!editor) return undefined
+    var cols = []
+    qsa('.col-row', editor).forEach(function (row) {
+      var nameEl = qs('.col-name', row), typeEl = qs('.col-type', row)
+      var name = nameEl ? nameEl.value.trim() : ''
+      var type = typeEl ? typeEl.value : 'string'
+      if (name) cols.push({ name: name, type: type })
+    })
+    return cols.length ? cols : undefined
+  }
+
   function renderSourceTypeFields(type, src) {
     var html = ''
     if (type === 'csv' || type === 'tsv') {
       html += ppField('Path', '<input class="pp-input" id="src-path" type="text" value="' + esc(src.path || '') + '" placeholder="/data/input.csv"/>')
       if (type === 'csv') html += ppField('Delimiter', '<input class="pp-input" id="src-delim" type="text" value="' + esc(src.delimiter || ',') + '" placeholder=","/>')
       html += ppField('Has Header', ppCheck('src-header', src.hasHeader !== false))
-      html += ppField('Columns (JSON)', '<textarea class="pp-textarea" id="src-cols" rows="4" placeholder=\'[{"name":"id","type":"string"}]\'>' + esc(src.columns ? JSON.stringify(src.columns, null, 2) : '') + '</textarea>')
+      html += renderColGrid('src-cols-editor', src.columns)
     } else if (type === 'jdbc') {
       html += ppField('Driver', ppSelect('src-driver', ['postgres', 'mysql', 'sqlite', 'mssql'], src.driver || 'postgres'))
       html += ppField('DSN / Connection String', '<input class="pp-input" id="src-dsn" type="text" value="' + esc(src.dsn || '') + '" placeholder="host=localhost dbname=mydb user=u password=p sslmode=disable"/>')
@@ -797,10 +865,10 @@
     } else if (type === 'xml') {
       html += ppField('Path', '<input class="pp-input" id="src-path" type="text" value="' + esc(src.path || '') + '" placeholder="/data/records.xml"/>')
       html += ppField('Record Element', '<input class="pp-input" id="src-recel" type="text" value="' + esc(src.recordElement || '') + '" placeholder="record"/>')
-      html += ppField('Columns (JSON)', '<textarea class="pp-textarea" id="src-cols" rows="4" placeholder=\'[{"name":"id","type":"string"}]\'>' + esc(src.columns ? JSON.stringify(src.columns, null, 2) : '') + '</textarea>')
+      html += renderColGrid('src-cols-editor', src.columns)
     } else if (type === 'jsonlines' || type === 'ndjson') {
       html += ppField('Path', '<input class="pp-input" id="src-path" type="text" value="' + esc(src.path || '') + '" placeholder="/data/records.ndjson"/>')
-      html += ppField('Columns (JSON, optional)', '<textarea class="pp-textarea" id="src-cols" rows="4" placeholder=\'[{"name":"id","type":"string"}]\'>' + esc(src.columns ? JSON.stringify(src.columns, null, 2) : '') + '</textarea>')
+      html += renderColGrid('src-cols-editor', src.columns)
     } else if (type === 'kafka') {
       var brokersVal = Array.isArray(src.brokers) ? src.brokers.join(', ') : (src.brokers || '')
       html += ppField('Brokers (comma-separated)', '<input class="pp-input" id="src-brokers" type="text" value="' + esc(brokersVal) + '" placeholder="kafka:9092"/>')
@@ -821,7 +889,9 @@
   }
 
   function wireSourceFields(type, src) {
-    // All source fields auto-save on blur — only btn-src-save commits to doc
+    if (type === 'csv' || type === 'tsv' || type === 'xml' || type === 'jsonlines' || type === 'ndjson') {
+      wireColEditor('src-cols-editor')
+    }
   }
 
   function saveSourceProps() {
@@ -841,7 +911,7 @@
       s.path = v('src-path')
       if (type === 'csv') s.delimiter = v('src-delim') || ','
       s.hasHeader = checked('src-header')
-      var cols = jsonParse('src-cols'); if (cols !== undefined) s.columns = cols
+      var cols = collectColRows('src-cols-editor'); if (cols !== undefined) s.columns = cols
     } else if (type === 'jdbc') {
       s.driver = v('src-driver')
       s.dsn = v('src-dsn')
@@ -862,10 +932,10 @@
     } else if (type === 'xml') {
       s.path = v('src-path')
       s.recordElement = v('src-recel')
-      var xcols = jsonParse('src-cols'); if (xcols !== undefined) s.columns = xcols
+      var xcols = collectColRows('src-cols-editor'); if (xcols !== undefined) s.columns = xcols
     } else if (type === 'jsonlines' || type === 'ndjson') {
       s.path = v('src-path')
-      var jcols = jsonParse('src-cols'); if (jcols !== undefined) s.columns = jcols
+      var jcols = collectColRows('src-cols-editor'); if (jcols !== undefined) s.columns = jcols
     } else if (type === 'kafka') {
       var bv = v('src-brokers')
       s.brokers = bv ? bv.split(',').map(function (x) { return x.trim() }) : []
@@ -926,9 +996,14 @@
       html += ppField('Expression', '<textarea class="pp-textarea" id="tr-expr" rows="4" placeholder="quantity > 0 AND status != \'CANCELLED\'">' + esc(tr.expr || '') + '</textarea>')
       html += '<div class="pp-hint">Supported: field op value, AND / OR, IS NULL, IN (...), comparison operators (=, !=, &lt;, &gt;, &lt;=, &gt;=).</div>'
     } else if (type === 'map' || type === 'mapper') {
-      html += '<div class="pp-label" style="margin-bottom:6px">Field Mappings <span style="font-size:10px;color:var(--text2)">(output field → expression)</span></div>'
-      html += '<div id="map-fields-editor" class="map-fields-editor">' + renderMapFieldRows(tr.fields || {}) + '</div>'
-      html += '<button class="btn-g" id="btn-add-map-row" style="margin-top:6px;font-size:11px">+ Add field</button>'
+      html += '<div class="mapper-toolbar"><span class="mapper-toolbar-label">Field Mappings</span>' +
+        '<button class="btn-g" id="btn-add-map-row" style="font-size:11px;padding:2px 8px">+ Add mapping</button></div>' +
+        '<div class="mapper-grid" id="map-fields-editor">' +
+          '<div class="mapper-col-hdr">Output Field</div>' +
+          '<div class="mapper-col-hdr">Expression</div>' +
+          '<div></div>' +
+          renderMapFieldRows(tr.fields || {}) +
+        '</div>'
     } else if (type === 'validate') {
       html += ppField('Rules (JSON)', '<textarea class="pp-textarea" id="tr-rules" rows="5" placeholder=\'[{"field":"id","notNull":true}]\'>' + esc(tr.rules ? JSON.stringify(tr.rules, null, 2) : '') + '</textarea>')
       html += ppField('On Violation', ppSelect('tr-onviolation', ['route', 'drop', 'fail'], tr.onViolation || 'drop'))
@@ -964,15 +1039,24 @@
 
   function renderMapFieldRows(fields) {
     var html = ''
-    Object.keys(fields).forEach(function (k, i) {
-      html += '<div class="map-row" data-ridx="' + i + '">' +
+    Object.keys(fields).forEach(function (k) {
+      html += '<div class="map-row">' +
         '<input class="pp-input map-out" type="text" value="' + esc(k) + '" placeholder="output_field"/>' +
-        '<span class="map-arrow">→</span>' +
         '<input class="pp-input map-expr" type="text" value="' + esc(fields[k]) + '" placeholder="=$source_field or =expr(...)"/>' +
-        '<button class="map-del-row btn-g" data-action="del-map-row">×</button>' +
+        '<button class="map-del-row" data-action="del-map-row" title="Remove">×</button>' +
         '</div>'
     })
     return html
+  }
+
+  function makeMapRow() {
+    var div = document.createElement('div')
+    div.className = 'map-row'
+    div.innerHTML =
+      '<input class="pp-input map-out" type="text" value="" placeholder="output_field"/>' +
+      '<input class="pp-input map-expr" type="text" value="" placeholder="=$source_field or =expr(...)"/>' +
+      '<button class="map-del-row" data-action="del-map-row" title="Remove">×</button>'
+    return div
   }
 
   function wireMapEditor(tr) {
@@ -989,14 +1073,9 @@
     if (addBtn) {
       addBtn.addEventListener('click', function () {
         if (!editor) return
-        var div = document.createElement('div')
-        div.className = 'map-row'
-        div.innerHTML = '<input class="pp-input map-out" type="text" value="" placeholder="output_field"/>' +
-          '<span class="map-arrow">→</span>' +
-          '<input class="pp-input map-expr" type="text" value="" placeholder="=$source_field or =expr(...)"/>' +
-          '<button class="map-del-row btn-g" data-action="del-map-row">×</button>'
-        editor.appendChild(div)
-        var inp = qs('.map-out', div); if (inp) inp.focus()
+        var row = makeMapRow()
+        editor.appendChild(row)
+        var inp = qs('.map-out', row); if (inp) inp.focus()
       })
     }
   }
@@ -1006,8 +1085,8 @@
     if (!editor) return {}
     var fields = {}
     qsa('.map-row', editor).forEach(function (row) {
-      var k = (qs('.map-out', row) || {}).value || ''
-      var v = (qs('.map-expr', row) || {}).value || ''
+      var kEl = qs('.map-out', row), vEl = qs('.map-expr', row)
+      var k = kEl ? kEl.value : '', v = vEl ? vEl.value : ''
       if (k.trim()) fields[k.trim()] = v
     })
     return fields

@@ -936,6 +936,26 @@ button{font-family:inherit;font-size:12px;cursor:pointer;border:none;border-radi
 .val-btn.val-warn{color:var(--warn);border-color:rgba(210,153,34,.55)}
 .val-btn.val-err{color:var(--err);border-color:rgba(248,81,73,.55)}
 
+/* ── Mapper grid (Map transform + Source columns) ── */
+.mapper-toolbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:4px}
+.mapper-toolbar-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--text2)}
+/* Full-width within pp-fields-wrap flex container */
+.mapper-toolbar,.mapper-grid,.cols-grid{flex:0 0 100%;max-width:100%}
+/* Grid with 3 columns: field/name | value/expr | delete — grows by auto-flow rows */
+.mapper-grid{display:grid;grid-template-columns:1fr 2fr 26px;gap:3px 6px;align-items:center}
+.cols-grid{display:grid;grid-template-columns:1fr 110px 26px;gap:3px 6px;align-items:center}
+/* display:contents makes .map-row / .col-row transparent to the grid (no visual box) */
+.map-row,.col-row{display:contents}
+.mapper-col-hdr{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;
+  color:var(--text2);padding-bottom:3px;border-bottom:1px solid var(--border);margin-bottom:2px}
+/* Expression input — monospace to match Flogo expression language */
+.mapper-grid .map-expr{font-family:var(--vscode-editor-font-family,monospace);font-size:11px}
+/* Compact ×delete button — sits in the narrow 3rd column */
+.map-del-row,.col-del-row{width:22px;height:22px;padding:0!important;font-size:13px;line-height:1;
+  text-align:center;border:1px solid transparent;border-radius:3px;background:transparent;
+  color:var(--text2);cursor:pointer;display:flex;align-items:center;justify-content:center}
+.map-del-row:hover,.col-del-row:hover{border-color:var(--danger);color:var(--danger)}
+
 /* ── Performance tab ── */
 .perf-wrap{flex:1;overflow-y:auto;padding:24px;max-width:640px;display:flex;flex-direction:column;gap:20px}
 .perf-section{background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:16px}
