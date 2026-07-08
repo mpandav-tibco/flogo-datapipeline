@@ -396,7 +396,7 @@
     div.setAttribute('data-idx', String(idx))
     if (kind === 'dlq') div.classList.add('node-dlq-card')
 
-    // Check if selected
+    // Selected state
     var sel = state.selected
     if (sel && sel.kind === kind && (kind === 'source' || kind === 'sink' || kind === 'dlq' ? true : sel.index === idx)) {
       div.classList.add('selected')
@@ -409,15 +409,25 @@
       (summary ? '<div class="node-summary">' + esc(summary) + '</div>' : '') +
       '<div class="node-port node-port-' + (kind === 'source' ? 'out' : kind === 'sink' || kind === 'dlq' ? 'in' : 'in-out') + '"></div>'
 
-    // Drag handle for transforms
-    if (kind === 'transform') {
-      var handle = document.createElement('div')
-      handle.className = 'node-drag-handle'
-      handle.title = 'Drag to reorder'
-      handle.textContent = '⠿'
-      div.insertBefore(handle, div.firstChild)
-      div.addEventListener('mousedown', function (e) { onTransformDragStart(e, idx) })
+    // Delete button — transforms and DLQ only (source/sink are required)
+    if (kind === 'transform' || kind === 'dlq') {
+      var delBtn = document.createElement('button')
+      delBtn.className = 'node-del-btn'
+      delBtn.title = 'Delete'
+      delBtn.innerHTML = '&#10005;'
+      delBtn.addEventListener('click', function (e) {
+        e.stopPropagation()
+        if (kind === 'transform') {
+          deleteTransform(idx)
+        } else if (kind === 'dlq') {
+          deleteDlq()
+        }
+      })
+      div.appendChild(delBtn)
     }
+
+    // Universal drag — every node type is freely draggable (flogo3 pattern)
+    div.addEventListener('mousedown', function (e) { onNodeDragStart(e, div, kind, idx) })
 
     div.addEventListener('click', function (e) {
       e.stopPropagation()
@@ -427,64 +437,139 @@
     return div
   }
 
-  function layoutNodes(layer, mode, transformCount, hasDlq) {
-    var nodes = qsa('.node', layer)
-    var CARD_W = 160, CARD_H = 96, GAP = 24
-    var CANVAS_PAD_TOP = 40
+  // ── Universal free-form node drag (flogo3: absolute position backed by doc.ui) ──
+  function onNodeDragStart(e, div, kind, idx) {
+    // Don't start drag from interactive elements or the delete button
+    var tag = e.target.tagName
+    if (tag === 'INPUT' || tag === 'BUTTON' || tag === 'TEXTAREA' || tag === 'SELECT' || tag === 'OPTION') return
+    if (e.target.classList && e.target.classList.contains('node-del-btn')) return
 
-    // Columns: source | transforms | sink [+ dlq below sink]
+    var startX = e.clientX
+    var startY = e.clientY
+    var startLeft = parseInt(div.style.left, 10) || 0
+    var startTop  = parseInt(div.style.top, 10) || 0
+    var dragging = false
+
+    function onMove(ev) {
+      var dx = ev.clientX - startX
+      var dy = ev.clientY - startY
+      if (!dragging && Math.sqrt(dx * dx + dy * dy) > 5) {
+        dragging = true
+        div.classList.add('dragging')
+        e.preventDefault()
+      }
+      if (!dragging) return
+      var newX = Math.max(0, startLeft + dx)
+      var newY = Math.max(0, startTop  + dy)
+      div.style.left = newX + 'px'
+      div.style.top  = newY + 'px'
+      // Expand canvas if node is near the edge
+      var canvas = byId('canvas')
+      if (canvas) {
+        canvas.style.minWidth  = Math.max(parseInt(canvas.style.minWidth, 10)  || 0, newX + CARD_W + 60) + 'px'
+        canvas.style.minHeight = Math.max(parseInt(canvas.style.minHeight, 10) || 0, newY + CARD_H + 60) + 'px'
+      }
+      requestAnimationFrame(drawAllEdges)
+    }
+
+    function onUp(ev) {
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+      if (!dragging) return  // was a click; click event fires selectNode
+      div.classList.remove('dragging')
+      var finalX = parseInt(div.style.left, 10) || 0
+      var finalY = parseInt(div.style.top, 10) || 0
+      setNodeUiPos(kind, idx, finalX, finalY)
+      setDirty(true)
+      postUpdate()
+      drawAllEdges()
+    }
+
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }
+
+  // ── UI position helpers (flogo3 pattern: positions live in doc.ui, separate from pipeline config) ──
+  var CARD_W = 160, CARD_H = 100, CARD_GAP = 28
+
+  function getNodeUiPos(kind, idx) {
+    var ui = (state.doc && state.doc.ui) || {}
+    if (kind === 'source') return ui.source || null
+    if (kind === 'sink') return ui.sink || null
+    if (kind === 'dlq') return ui.dlqSink || null
+    if (kind === 'transform') { var trs = ui.transforms || []; return trs[idx] || null }
+    return null
+  }
+
+  function setNodeUiPos(kind, idx, x, y) {
+    if (!state.doc) return
+    if (!state.doc.ui) state.doc.ui = {}
+    var ui = state.doc.ui
+    var pos = { x: Math.round(x), y: Math.round(y) }
+    if (kind === 'source') ui.source = pos
+    else if (kind === 'sink') ui.sink = pos
+    else if (kind === 'dlq') ui.dlqSink = pos
+    else if (kind === 'transform') {
+      if (!ui.transforms) ui.transforms = []
+      while (ui.transforms.length <= idx) ui.transforms.push(null)
+      ui.transforms[idx] = pos
+    }
+  }
+
+  function layoutNodes(layer, mode, transformCount, hasDlq) {
+    var CANVAS_PAD = 40
+    var colSrc = CANVAS_PAD
+    var colTr  = CANVAS_PAD + CARD_W + 80
+    var colSink = colTr + (transformCount > 0 ? CARD_W + 80 : 0)
+
     var srcNodes = qsa('.node-source', layer)
-    var trNodes = qsa('.node-transform', layer)
+    var trNodes  = qsa('.node-transform', layer)
     var sinkNodes = qsa('.node-sink', layer)
     var dlqNodes = qsa('.node-dlq-card', layer)
 
-    var colSrc = 40
-    var colSink = 40 + CARD_W + 80 + (transformCount > 0 ? CARD_W + 80 : 0)
-    var colTr = 40 + CARD_W + 80
+    // Ensure doc.ui exists so default positions are persisted
+    if (!state.doc) return
+    if (!state.doc.ui) state.doc.ui = {}
+    var ui = state.doc.ui
 
-    // Position source
-    srcNodes.forEach(function (n) {
+    function applyPos(n, x, y) {
       n.style.position = 'absolute'
-      n.style.left = colSrc + 'px'
-      n.style.top = CANVAS_PAD_TOP + 'px'
+      n.style.left = x + 'px'
+      n.style.top  = y + 'px'
       n.style.width = CARD_W + 'px'
-    })
+    }
 
-    // Position transforms
-    var trTotal = trNodes.length * CARD_H + Math.max(0, trNodes.length - 1) * GAP
-    var trStartY = CANVAS_PAD_TOP
+    // Source
+    if (!ui.source) ui.source = { x: colSrc, y: CANVAS_PAD }
+    srcNodes.forEach(function (n) { applyPos(n, ui.source.x, ui.source.y) })
+
+    // Transforms — default to a vertical stack in the middle column
+    if (!ui.transforms) ui.transforms = []
     trNodes.forEach(function (n, i) {
-      n.style.position = 'absolute'
-      n.style.left = colTr + 'px'
-      n.style.top = (trStartY + i * (CARD_H + GAP)) + 'px'
-      n.style.width = CARD_W + 'px'
+      if (!ui.transforms[i]) ui.transforms[i] = { x: colTr, y: CANVAS_PAD + i * (CARD_H + CARD_GAP) }
+      applyPos(n, ui.transforms[i].x, ui.transforms[i].y)
     })
 
-    // Position sink
-    sinkNodes.forEach(function (n) {
-      n.style.position = 'absolute'
-      n.style.left = colSink + 'px'
-      n.style.top = CANVAS_PAD_TOP + 'px'
-      n.style.width = CARD_W + 'px'
-    })
+    // Sink
+    if (!ui.sink) ui.sink = { x: colSink, y: CANVAS_PAD }
+    sinkNodes.forEach(function (n) { applyPos(n, ui.sink.x, ui.sink.y) })
 
-    // Position DLQ below sink
-    dlqNodes.forEach(function (n) {
-      n.style.position = 'absolute'
-      n.style.left = colSink + 'px'
-      n.style.top = (CANVAS_PAD_TOP + CARD_H + 40) + 'px'
-      n.style.width = CARD_W + 'px'
-    })
+    // DLQ — default below sink
+    if (hasDlq && !ui.dlqSink) ui.dlqSink = { x: colSink, y: CANVAS_PAD + CARD_H + 44 }
+    dlqNodes.forEach(function (n) { if (ui.dlqSink) applyPos(n, ui.dlqSink.x, ui.dlqSink.y) })
 
-    // Compute canvas height
-    var maxH = CARD_H + CANVAS_PAD_TOP * 2
-    if (trNodes.length) maxH = Math.max(maxH, trTotal + CANVAS_PAD_TOP * 2)
-    if (hasDlq) maxH = Math.max(maxH, CANVAS_PAD_TOP + CARD_H * 2 + 40 + 60)
+    // Expand canvas to fit all nodes (for scroll)
+    var allPos = [ui.source, ui.sink]
+    ;(ui.transforms || []).forEach(function (p) { if (p) allPos.push(p) })
+    if (hasDlq && ui.dlqSink) allPos.push(ui.dlqSink)
+    var maxX = 0, maxY = 0
+    allPos.forEach(function (p) {
+      if (p) { maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y) }
+    })
     var canvas = byId('canvas')
     if (canvas) {
-      canvas.style.minHeight = maxH + 'px'
-      var totalW = colSink + CARD_W + 40
-      canvas.style.minWidth = totalW + 'px'
+      canvas.style.minWidth  = (maxX + CARD_W + 60) + 'px'
+      canvas.style.minHeight = (maxY + CARD_H + 60) + 'px'
     }
   }
 
@@ -624,80 +709,6 @@
     if (ppEl) ppEl.classList.remove('pp-open')
     var pp = byId('pp-content')
     if (pp) pp.innerHTML = '<div class="pp-empty" id="pp-empty"><span class="pp-empty-ico">&#9670;</span><span>Select a node to configure it</span></div>'
-  }
-
-  // ── Transform drag-to-reorder ─────────────────────────────────────────────────
-  // Dragging works from anywhere on the transform card (not just the ⠿ handle).
-  // A 5-pixel movement threshold distinguishes a drag from a plain click so the
-  // click-to-select handler still fires normally when the mouse barely moves.
-  function onTransformDragStart(e, idx) {
-    // Don't initiate drag from interactive elements inside the card
-    var tag = e.target.tagName
-    if (tag === 'INPUT' || tag === 'BUTTON' || tag === 'TEXTAREA' || tag === 'SELECT' || tag === 'OPTION') return
-
-    var doc = state.doc || {}
-    var transforms = Array.isArray(doc.transforms) ? doc.transforms : []
-    if (!transforms[idx]) return
-
-    var startX = e.clientX
-    var startY = e.clientY
-    var ghost = null
-    var dragging = false
-
-    function onMove(ev) {
-      var dx = ev.clientX - startX
-      var dy = ev.clientY - startY
-      if (!dragging && Math.sqrt(dx * dx + dy * dy) > 5) {
-        dragging = true
-        e.preventDefault()
-        ghost = document.createElement('div')
-        ghost.className = 'drag-ghost'
-        ghost.textContent = nodeLabel('transform', transforms[idx].type) + ' (dragging…)'
-        ghost.style.cssText = 'position:fixed;z-index:9999;opacity:0.8;background:var(--bg3,#333);' +
-          'color:var(--text,#ccc);padding:6px 14px;border-radius:6px;pointer-events:none;font-size:12px;' +
-          'border:1px solid var(--border,#555);box-shadow:0 4px 12px rgba(0,0,0,.5)'
-        document.body.appendChild(ghost)
-        state.dragState = { idx: idx, ghost: ghost }
-      }
-      if (ghost) {
-        ghost.style.left = (ev.clientX + 14) + 'px'
-        ghost.style.top = (ev.clientY + 10) + 'px'
-      }
-    }
-
-    function onUp(ev) {
-      document.removeEventListener('mousemove', onMove)
-      document.removeEventListener('mouseup', onUp)
-      if (ghost) ghost.remove()
-
-      if (!dragging) {
-        state.dragState = null
-        return  // plain click — the click handler will fire selectNode
-      }
-
-      // Find target index by mouse Y vs transform node midpoints
-      var trEls = qsa('.node-transform')
-      var targetIdx = transforms.length - 1
-      var my = ev.clientY
-      for (var i = 0; i < trEls.length; i++) {
-        var r = trEls[i].getBoundingClientRect()
-        if (my < r.top + r.height / 2) { targetIdx = i; break }
-      }
-      if (targetIdx !== idx) {
-        var arr = transforms.slice()
-        var item = arr.splice(idx, 1)[0]
-        arr.splice(targetIdx, 0, item)
-        doc.transforms = arr
-        state.selected = { kind: 'transform', index: targetIdx }
-        setDirty(true)
-        render()
-        postUpdate()
-      }
-      state.dragState = null
-    }
-
-    document.addEventListener('mousemove', onMove)
-    document.addEventListener('mouseup', onUp)
   }
 
   // ── Properties panel ─────────────────────────────────────────────────────────
@@ -1048,11 +1059,26 @@
     var transforms = state.doc.transforms || []
     transforms.splice(idx, 1)
     state.doc.transforms = transforms
-    state.selected = null
+    // Remove stored UI position for this transform and re-index remaining
+    if (state.doc.ui && Array.isArray(state.doc.ui.transforms)) {
+      state.doc.ui.transforms.splice(idx, 1)
+    }
+    closePpPanel()
     setDirty(true)
     render()
     postUpdate()
     showToast('Transform removed')
+  }
+
+  function deleteDlq() {
+    if (!state.doc) return
+    delete state.doc.dlqSink
+    if (state.doc.ui) delete state.doc.ui.dlqSink
+    closePpPanel()
+    setDirty(true)
+    render()
+    postUpdate()
+    showToast('Dead Letter Queue removed')
   }
 
   function saveTransformProps(idx) {
