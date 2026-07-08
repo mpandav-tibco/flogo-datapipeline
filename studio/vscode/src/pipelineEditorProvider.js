@@ -341,10 +341,11 @@ class PipelineEditorProvider {
               const ch = this._manager.channel
               ch.show(true)
               ch.appendLine('\n══ Build the binary ══════════════════════════════')
-              ch.appendLine('  cd ' + path.dirname(path.dirname(document.uri.fsPath)))
+              ch.appendLine('  # Run from the flogo-datapipeline repo root:')
               ch.appendLine('  ' + buildCmd)
               ch.appendLine('')
-              ch.appendLine('Then set "flogoDataPipelineStudio.binaryPath" to the output path in VS Code settings.')
+              ch.appendLine('  # Or point directly to your existing binary:')
+              ch.appendLine('  # VS Code → Settings → flogoDataPipelineStudio.binaryPath')
               ch.appendLine('═════════════════════════════════════════════════\n')
             } else if (choice === 'Open Settings') {
               vscode.commands.executeCommand('workbench.action.openSettings', 'flogoDataPipelineStudio.binaryPath')
