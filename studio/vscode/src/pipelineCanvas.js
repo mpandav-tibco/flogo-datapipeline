@@ -714,6 +714,22 @@
   }
 
   // Close the properties panel without saving (user was just reviewing)
+  // Show header Save/Discard/Remove buttons and wire them for the active panel.
+  // saveFn: called on Save click before closing; showRemove: shows the "Remove DLQ" button.
+  function wireHdrButtons(saveFn, showRemove) {
+    var actions = byId('pp-hdr-actions')
+    if (actions) actions.classList.remove('hidden')
+    var saveBtn = byId('btn-pp-save')
+    var discardBtn = byId('btn-pp-discard')
+    var removeBtn = byId('btn-pp-remove')
+    if (saveBtn) saveBtn.onclick = function () { saveFn(); closePpPanel() }
+    if (discardBtn) discardBtn.onclick = discardProps
+    if (removeBtn) {
+      if (showRemove) removeBtn.classList.remove('hidden')
+      else removeBtn.classList.add('hidden')
+    }
+  }
+
   function closePpPanel() {
     state.selected = null
     state.propsSnapshot = null
@@ -727,6 +743,8 @@
     }
     var titleEl = byId('pp-hdr-title')
     if (titleEl) titleEl.textContent = 'Properties'
+    var actions = byId('pp-hdr-actions')
+    if (actions) actions.classList.add('hidden')
     var pp = byId('pp-content')
     if (pp) pp.innerHTML = '<div class="pp-empty" id="pp-empty"><span class="pp-empty-ico">&#9670;</span><span>Select a node to configure it</span></div>'
   }
@@ -787,19 +805,10 @@
     var html = '<div class="pp-fields-wrap">'
     html += renderSourceTypeFields(type, src)
     html += '</div>'
-
-    html += '<div class="pp-action-bar">' +
-      '<button class="btn-p" id="btn-src-save">Save</button>' +
-      '<button class="btn-g" id="btn-src-discard">Discard</button>' +
-      '</div>'
     pp.innerHTML = html
 
     wireSourceFields(type, src)
-
-    var saveBtn = byId('btn-src-save')
-    if (saveBtn) saveBtn.addEventListener('click', function () { saveSourceProps(); closePpPanel() })
-    var discardBtn = byId('btn-src-discard')
-    if (discardBtn) discardBtn.addEventListener('click', discardProps)
+    wireHdrButtons(saveSourceProps)
   }
 
   function renderColGrid(id, columns) {
@@ -1010,11 +1019,6 @@
     html += renderTransformTypeFields(type, tr, idx)
     html += '</div>'
 
-    html += '<div class="pp-action-bar">' +
-      '<button class="btn-p" id="btn-tr-save">Save</button>' +
-      '<button class="btn-g" id="btn-tr-discard">Discard</button>' +
-      '</div>'
-
     pp.innerHTML = html
 
     // DQ threshold slider — wired synchronously after innerHTML is set
@@ -1023,10 +1027,7 @@
       if (dqSl && dqVl) dqSl.addEventListener('input', function () { dqVl.textContent = dqSl.value })
     }
 
-    var saveBtn = byId('btn-tr-save')
-    if (saveBtn) saveBtn.addEventListener('click', function () { saveTransformProps(idx); closePpPanel() })
-    var discardBtn = byId('btn-tr-discard')
-    if (discardBtn) discardBtn.addEventListener('click', discardProps)
+    wireHdrButtons(function () { saveTransformProps(idx) })
 
     // Map field editor wiring
     if (type === 'map' || type === 'mapper') wireMapEditor(tr)
@@ -1496,17 +1497,9 @@
     html += renderSinkTypeFields(type, sink)
     html += '</div>'
 
-    html += '<div class="pp-action-bar">' +
-      '<button class="btn-p" id="btn-sink-save">Save</button>' +
-      '<button class="btn-g" id="btn-sink-discard">Discard</button>' +
-      '</div>'
-
     pp.innerHTML = html
 
-    var saveBtn = byId('btn-sink-save')
-    if (saveBtn) saveBtn.addEventListener('click', function () { saveSinkProps(); closePpPanel() })
-    var discardBtn = byId('btn-sink-discard')
-    if (discardBtn) discardBtn.addEventListener('click', discardProps)
+    wireHdrButtons(saveSinkProps)
   }
 
   function renderSinkTypeFields(type, sink) {
@@ -1607,21 +1600,11 @@
       .replace(/data-target="sink-/g, 'data-target="dlq-')
     html += '</div>'
 
-    html += '<div class="pp-action-bar">' +
-      '<button class="btn-p" id="btn-dlq-save">Save</button>' +
-      '<button class="btn-g" id="btn-dlq-discard">Discard</button>' +
-      '<button class="btn-d" id="btn-dlq-remove" style="margin-left:auto">Remove DLQ</button>' +
-      '</div>'
-
     pp.innerHTML = html
 
-    var saveBtn = byId('btn-dlq-save')
-    if (saveBtn) saveBtn.addEventListener('click', function () { saveDlqProps(); closePpPanel() })
-    var discardBtn = byId('btn-dlq-discard')
-    if (discardBtn) discardBtn.addEventListener('click', discardProps)
-
-    var removeBtn = byId('btn-dlq-remove')
-    if (removeBtn) removeBtn.addEventListener('click', deleteDlq)
+    wireHdrButtons(saveDlqProps, true)
+    var removeBtn = byId('btn-pp-remove')
+    if (removeBtn) removeBtn.onclick = deleteDlq
   }
 
   function saveDlqProps() {

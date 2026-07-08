@@ -933,11 +933,24 @@ body{background:var(--bg);color:var(--text);font-family:var(--vscode-font-family
 .pp-resize{position:absolute;top:0;left:0;right:0;height:5px;cursor:ns-resize;z-index:26;
   background:transparent;transition:background .12s}
 .pp-resize:hover,.pp-resize.dragging{background:var(--accent);opacity:.4}
-/* Static header bar: title + close button */
-.pp-hdr-bar{display:flex;align-items:center;gap:8px;padding:0 10px 0 14px;height:36px;
+/* Static header bar: title + Save/Discard + close button */
+.pp-hdr-bar{display:flex;align-items:center;gap:6px;padding:0 10px 0 14px;height:36px;
   border-bottom:1px solid var(--border);flex-shrink:0;background:var(--bg2)}
 .pp-hdr-title{font-size:11px;font-weight:700;flex:1;white-space:nowrap;overflow:hidden;
   text-overflow:ellipsis;text-transform:uppercase;letter-spacing:.06em;color:var(--text2)}
+.pp-hdr-actions{display:flex;align-items:center;gap:5px;flex-shrink:0}
+.pp-hdr-save{font-size:10px;padding:3px 10px;height:22px;border-radius:3px;cursor:pointer;
+  font-family:inherit;border:none;background:var(--accent);color:#fff;font-weight:600;
+  white-space:nowrap;letter-spacing:.02em}
+.pp-hdr-save:hover{filter:brightness(1.1)}
+.pp-hdr-discard{font-size:10px;padding:3px 10px;height:22px;border-radius:3px;cursor:pointer;
+  font-family:inherit;border:1px solid var(--inbdr);background:var(--bg3);color:var(--text);
+  white-space:nowrap}
+.pp-hdr-discard:hover{background:var(--bg4,var(--bg2));border-color:var(--text2)}
+.pp-hdr-remove{font-size:10px;padding:3px 10px;height:22px;border-radius:3px;cursor:pointer;
+  font-family:inherit;border:1px solid var(--err,#c0392b);background:transparent;
+  color:var(--err,#c0392b);white-space:nowrap}
+.pp-hdr-remove:hover{background:var(--err,#c0392b);color:#fff}
 .pp-close-btn{background:transparent;border:1px solid transparent;color:var(--text2);
   width:24px;height:24px;font-size:18px;line-height:1;border-radius:3px;cursor:pointer;
   font-family:inherit;display:flex;align-items:center;justify-content:center;flex-shrink:0;padding:0}
@@ -948,9 +961,6 @@ body{background:var(--bg);color:var(--text);font-family:var(--vscode-font-family
 .pp-fields-wrap{display:flex;flex-wrap:wrap;gap:8px 20px;align-items:flex-start;align-content:flex-start}
 .pp-field{flex:1;min-width:200px;max-width:320px}
 .pp-field-full{flex:0 0 100%;max-width:100%}
-/* Action bar (Save / Discard / Delete) at the bottom of the form */
-.pp-action-bar{display:flex;align-items:center;gap:8px;padding-top:10px;margin-top:4px;
-  border-top:1px solid var(--border);flex-shrink:0;flex-wrap:wrap}
 .pp-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;
   width:100%;color:var(--text2);font-size:11px;text-align:center;gap:8px}
 .pp-empty-ico{font-size:2rem;opacity:.35}
@@ -1331,6 +1341,11 @@ input[type=radio]{accent-color:var(--accent)}
         <div class="pp-resize" id="pp-resize"></div>
         <div class="pp-hdr-bar">
           <span class="pp-hdr-title" id="pp-hdr-title">Properties</span>
+          <div class="pp-hdr-actions hidden" id="pp-hdr-actions">
+            <button class="pp-hdr-remove hidden" id="btn-pp-remove">Remove DLQ</button>
+            <button class="pp-hdr-save" id="btn-pp-save">Save</button>
+            <button class="pp-hdr-discard" id="btn-pp-discard">Discard</button>
+          </div>
           <button class="pp-close-btn" id="btn-pp-close" title="Close">&#10005;</button>
         </div>
         <div id="pp-content">
