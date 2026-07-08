@@ -701,7 +701,12 @@
     state.propsSnapshot = null
     qsa('.node').forEach(function (n) { n.classList.remove('selected') })
     var ppEl = byId('pp')
-    if (ppEl) ppEl.classList.remove('pp-open')
+    if (ppEl) {
+      ppEl.style.height = ''  // clear resize-drag inline style so CSS class controls height
+      ppEl.classList.remove('pp-open')
+    }
+    var titleEl = byId('pp-hdr-title')
+    if (titleEl) titleEl.textContent = 'Properties'
     var pp = byId('pp-content')
     if (pp) pp.innerHTML = '<div class="pp-empty" id="pp-empty"><span class="pp-empty-ico">&#9670;</span><span>Select a node to configure it</span></div>'
   }
@@ -726,7 +731,12 @@
     state.propsSnapshot = null
     qsa('.node').forEach(function (n) { n.classList.remove('selected') })
     var ppEl = byId('pp')
-    if (ppEl) ppEl.classList.remove('pp-open')
+    if (ppEl) {
+      ppEl.style.height = ''
+      ppEl.classList.remove('pp-open')
+    }
+    var titleEl = byId('pp-hdr-title')
+    if (titleEl) titleEl.textContent = 'Properties'
     var pp = byId('pp-content')
     if (pp) pp.innerHTML = '<div class="pp-empty" id="pp-empty"><span class="pp-empty-ico">&#9670;</span><span>Select a node to configure it</span></div>'
   }
@@ -967,7 +977,7 @@
     var type = tr.type || 'filter'
 
     var html = '<div class="pp-fields-wrap">'
-    html += renderTransformTypeFields(type, tr)
+    html += renderTransformTypeFields(type, tr, idx)
     html += '</div>'
 
     html += '<div class="pp-action-bar">' +
@@ -990,20 +1000,58 @@
     if (type === 'map' || type === 'mapper') wireMapEditor(tr)
   }
 
-  function renderTransformTypeFields(type, tr) {
+  function renderTransformTypeFields(type, tr, trIdx) {
     var html = ''
     if (type === 'filter') {
       html += ppField('Expression', '<textarea class="pp-textarea" id="tr-expr" rows="4" placeholder="quantity > 0 AND status != \'CANCELLED\'">' + esc(tr.expr || '') + '</textarea>')
       html += '<div class="pp-hint">Supported: field op value, AND / OR, IS NULL, IN (...), comparison operators (=, !=, &lt;, &gt;, &lt;=, &gt;=).</div>'
     } else if (type === 'map' || type === 'mapper') {
-      html += '<div class="mapper-toolbar"><span class="mapper-toolbar-label">Field Mappings</span>' +
-        '<button class="btn-g" id="btn-add-map-row" style="font-size:11px;padding:2px 8px">+ Add mapping</button></div>' +
-        '<div class="mapper-grid" id="map-fields-editor">' +
-          '<div class="mapper-col-hdr">Output Field</div>' +
-          '<div class="mapper-col-hdr">Expression</div>' +
-          '<div></div>' +
-          renderMapFieldRows(tr.fields || {}) +
-        '</div>'
+      // Build available-fields list from source columns + upstream transforms
+      var doc2 = state.doc || {}
+      var srcCols = (doc2.source && Array.isArray(doc2.source.columns)) ? doc2.source.columns : []
+      var availHtml = ''
+      if (srcCols.length) {
+        availHtml += '<div class="avail-section">Source</div>'
+        srcCols.forEach(function (c) {
+          var n = typeof c === 'string' ? c : (c.name || '')
+          var t = typeof c === 'object' ? (c.type || 'any') : 'any'
+          if (n) availHtml += '<div class="avail-field" data-field="' + esc(n) + '" title="' + esc(t) + '">' +
+            '<span class="avail-type">' + esc(t.substring(0,3)) + '</span>' +
+            '<span class="avail-name">$' + esc(n) + '</span>' +
+            '</div>'
+        })
+      }
+      // Also show any output fields from preceding lookup transforms
+      var transforms = Array.isArray(doc2.transforms) ? doc2.transforms : []
+      transforms.slice(0, trIdx || 0).forEach(function (prev) {
+        if (prev.type === 'lookup' && Array.isArray(prev.outputFields) && prev.outputFields.length) {
+          availHtml += '<div class="avail-section">Lookup</div>'
+          prev.outputFields.forEach(function (f) {
+            availHtml += '<div class="avail-field" data-field="' + esc(f) + '" title="string">' +
+              '<span class="avail-type">str</span>' +
+              '<span class="avail-name">$' + esc(f) + '</span>' +
+              '</div>'
+          })
+        }
+      })
+      if (!availHtml) availHtml = '<div class="avail-empty">No schema defined on Source</div>'
+
+      html += '<div class="mapper-host">' +
+        '<div class="mapper-avail">' +
+          '<div class="mapper-panel-hdr">Available Fields</div>' +
+          '<div class="avail-list" id="avail-list">' + availHtml + '</div>' +
+        '</div>' +
+        '<div class="mapper-main">' +
+          '<div class="mapper-toolbar"><span class="mapper-toolbar-label">Mappings</span>' +
+            '<button class="btn-g" id="btn-add-map-row" style="font-size:11px;padding:2px 8px">+ Add</button></div>' +
+          '<div class="mapper-grid" id="map-fields-editor">' +
+            '<div class="mapper-col-hdr">Output Field</div>' +
+            '<div class="mapper-col-hdr">Expression</div>' +
+            '<div></div>' +
+            renderMapFieldRows(tr.fields || {}) +
+          '</div>' +
+        '</div>' +
+      '</div>'
     } else if (type === 'validate') {
       html += ppField('Rules (JSON)', '<textarea class="pp-textarea" id="tr-rules" rows="5" placeholder=\'[{"field":"id","notNull":true}]\'>' + esc(tr.rules ? JSON.stringify(tr.rules, null, 2) : '') + '</textarea>')
       html += ppField('On Violation', ppSelect('tr-onviolation', ['route', 'drop', 'fail'], tr.onViolation || 'drop'))
@@ -1062,6 +1110,9 @@
   function wireMapEditor(tr) {
     var editor = byId('map-fields-editor')
     var addBtn = byId('btn-add-map-row')
+    var availList = byId('avail-list')
+    var lastFocusedExpr = null  // track which expr input last had focus
+
     if (editor) {
       editor.addEventListener('click', function (e) {
         if (tgt(e, '[data-action="del-map-row"]')) {
@@ -1069,13 +1120,48 @@
           if (row) row.remove()
         }
       })
+      // Track last focused expression input for available-field insertion
+      editor.addEventListener('focusin', function (e) {
+        if (e.target && e.target.classList.contains('map-expr')) {
+          lastFocusedExpr = e.target
+        }
+      })
     }
+
     if (addBtn) {
       addBtn.addEventListener('click', function () {
         if (!editor) return
         var row = makeMapRow()
         editor.appendChild(row)
         var inp = qs('.map-out', row); if (inp) inp.focus()
+      })
+    }
+
+    // Clicking an available field: if an expression input is focused, append/set;
+    // otherwise add a new row pre-filled with the field reference.
+    if (availList) {
+      availList.addEventListener('click', function (e) {
+        var el = tgt(e, '.avail-field')
+        if (!el) return
+        var field = el.dataset.field
+        if (!field) return
+        var ref = '=$' + field
+        if (lastFocusedExpr && document.contains(lastFocusedExpr)) {
+          // Append at cursor or replace selection
+          var start = lastFocusedExpr.selectionStart
+          var end = lastFocusedExpr.selectionEnd
+          var cur = lastFocusedExpr.value
+          lastFocusedExpr.value = cur.substring(0, start) + ref + cur.substring(end)
+          lastFocusedExpr.selectionStart = lastFocusedExpr.selectionEnd = start + ref.length
+          lastFocusedExpr.focus()
+        } else {
+          // Add a new mapping row pre-filled with this field
+          var row = makeMapRow()
+          qs('.map-out', row).value = field
+          qs('.map-expr', row).value = ref
+          editor.appendChild(row)
+          qs('.map-expr', row).focus()
+        }
       })
     }
   }

@@ -940,7 +940,28 @@ button{font-family:inherit;font-size:12px;cursor:pointer;border:none;border-radi
 .mapper-toolbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:4px}
 .mapper-toolbar-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--text2)}
 /* Full-width within pp-fields-wrap flex container */
-.mapper-toolbar,.mapper-grid,.cols-grid{flex:0 0 100%;max-width:100%}
+.mapper-toolbar,.mapper-grid,.cols-grid,.mapper-host{flex:0 0 100%;max-width:100%}
+/* 2-panel mapper host: Available Fields (left) + Mapping Grid (right) */
+.mapper-host{display:flex;gap:0;border:1px solid var(--border);border-radius:4px;overflow:hidden;min-height:160px;max-height:220px}
+.mapper-avail{width:160px;flex-shrink:0;border-right:1px solid var(--border);display:flex;flex-direction:column;background:var(--bg3)}
+.mapper-main{flex:1;display:flex;flex-direction:column;padding:8px;gap:6px;overflow:hidden;min-width:0}
+/* The grid itself scrolls when rows overflow the panel height */
+.mapper-main .mapper-grid{overflow-y:auto;flex:1}
+.mapper-panel-hdr{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;
+  color:var(--text2);padding:6px 8px;border-bottom:1px solid var(--border);flex-shrink:0}
+/* Available fields list */
+.avail-list{flex:1;overflow-y:auto;padding:4px 0}
+.avail-section{font-size:9px;text-transform:uppercase;letter-spacing:.06em;color:var(--text2);
+  padding:4px 8px 2px;opacity:.7}
+.avail-field{display:flex;align-items:center;gap:5px;padding:3px 8px;cursor:pointer;
+  font-size:11px;color:var(--text);border-left:2px solid transparent}
+.avail-field:hover{background:var(--bg2);border-left-color:var(--accent)}
+.avail-type{font-size:9px;font-family:var(--vscode-editor-font-family,monospace);
+  color:var(--text2);background:var(--bg2);border:1px solid var(--border);
+  border-radius:2px;padding:0 3px;min-width:24px;text-align:center;flex-shrink:0}
+.avail-name{font-family:var(--vscode-editor-font-family,monospace);font-size:11px;
+  color:var(--accent);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.avail-empty{font-size:10px;color:var(--text2);padding:8px;font-style:italic}
 /* Grid with 3 columns: field/name | value/expr | delete — grows by auto-flow rows */
 .mapper-grid{display:grid;grid-template-columns:1fr 2fr 26px;gap:3px 6px;align-items:center}
 .cols-grid{display:grid;grid-template-columns:1fr 110px 26px;gap:3px 6px;align-items:center}
