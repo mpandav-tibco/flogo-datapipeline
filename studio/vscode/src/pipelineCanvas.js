@@ -987,13 +987,9 @@
     html += '<div class="pp-action-bar">' +
       '<button class="btn-p" id="btn-tr-save">Save</button>' +
       '<button class="btn-g" id="btn-tr-discard">Discard</button>' +
-      '<button class="btn-d" id="btn-tr-del" title="Delete this transform" style="margin-left:auto">Delete</button>' +
       '</div>'
 
     pp.innerHTML = html
-
-    var delBtn = byId('btn-tr-del')
-    if (delBtn) delBtn.addEventListener('click', function () { deleteTransform(idx) })
 
     var saveBtn = byId('btn-tr-save')
     if (saveBtn) saveBtn.addEventListener('click', function () { saveTransformProps(idx); closePpPanel() })
@@ -1010,43 +1006,54 @@
       html += ppField('Expression', '<textarea class="pp-textarea" id="tr-expr" rows="4" placeholder="quantity > 0 AND status != \'CANCELLED\'">' + esc(tr.expr || '') + '</textarea>')
       html += '<div class="pp-hint">Supported: field op value, AND / OR, IS NULL, IN (...), comparison operators (=, !=, &lt;, &gt;, &lt;=, &gt;=).</div>'
     } else if (type === 'map' || type === 'mapper') {
-      // Panel 1: available fields from source columns + upstream transforms
+      // Panel 1: collapsible tree of available fields (source + upstream transforms)
       var doc2 = state.doc || {}
       var srcCols = (doc2.source && Array.isArray(doc2.source.columns)) ? doc2.source.columns : []
       var availHtml = ''
       if (srcCols.length) {
-        availHtml += '<div class="avail-section">Source</div>'
-        srcCols.forEach(function (c) {
+        var srcItems = srcCols.map(function (c) {
           var n = typeof c === 'string' ? c : (c.name || '')
           var t = typeof c === 'object' ? (c.type || 'any') : 'any'
-          if (n) availHtml += '<div class="avail-field" draggable="true" data-field="' + esc(n) + '" title="' + esc(t) + '">' +
+          if (!n) return ''
+          return '<div class="avail-field" draggable="true" data-field="' + esc(n) + '" title="' + esc(t) + '">' +
             '<span class="avail-type">' + esc(t.substring(0, 3)) + '</span>' +
             '<span class="avail-name">$' + esc(n) + '</span>' +
             '</div>'
-        })
+        }).join('')
+        if (srcItems) {
+          availHtml += '<details class="avail-tree-node" open>' +
+            '<summary class="avail-tree-hdr">Source</summary>' +
+            '<div class="avail-tree-children">' + srcItems + '</div>' +
+            '</details>'
+        }
       }
       var allTransforms = Array.isArray(doc2.transforms) ? doc2.transforms : []
       allTransforms.slice(0, trIdx || 0).forEach(function (prev, pi) {
-        var prevFields = []
+        var nodeLabel = ''
+        var nodeItems = ''
         if ((prev.type === 'map' || prev.type === 'mapper') && prev.fields) {
-          prevFields = Object.keys(prev.fields)
+          var prevFields = Object.keys(prev.fields)
           if (prevFields.length) {
-            availHtml += '<div class="avail-section">Map ' + (pi + 1) + '</div>'
-            prevFields.forEach(function (f) {
-              availHtml += '<div class="avail-field" draggable="true" data-field="' + esc(f) + '" title="string">' +
-                '<span class="avail-type">str</span>' +
-                '<span class="avail-name">$' + esc(f) + '</span>' +
+            nodeLabel = 'Map ' + (pi + 1)
+            nodeItems = prevFields.map(function (f) {
+              return '<div class="avail-field" draggable="true" data-field="' + esc(f) + '" title="string">' +
+                '<span class="avail-type">str</span><span class="avail-name">$' + esc(f) + '</span>' +
                 '</div>'
-            })
+            }).join('')
           }
         } else if (prev.type === 'lookup' && Array.isArray(prev.outputFields) && prev.outputFields.length) {
-          availHtml += '<div class="avail-section">Lookup ' + (pi + 1) + '</div>'
-          prev.outputFields.forEach(function (f) {
-            availHtml += '<div class="avail-field" draggable="true" data-field="' + esc(f) + '" title="string">' +
-              '<span class="avail-type">str</span>' +
-              '<span class="avail-name">$' + esc(f) + '</span>' +
+          nodeLabel = 'Lookup ' + (pi + 1)
+          nodeItems = prev.outputFields.map(function (f) {
+            return '<div class="avail-field" draggable="true" data-field="' + esc(f) + '" title="string">' +
+              '<span class="avail-type">str</span><span class="avail-name">$' + esc(f) + '</span>' +
               '</div>'
-          })
+          }).join('')
+        }
+        if (nodeLabel && nodeItems) {
+          availHtml += '<details class="avail-tree-node" open>' +
+            '<summary class="avail-tree-hdr">' + esc(nodeLabel) + '</summary>' +
+            '<div class="avail-tree-children">' + nodeItems + '</div>' +
+            '</details>'
         }
       })
       if (!availHtml) availHtml = '<div class="avail-empty">No schema defined on Source</div>'
@@ -1076,11 +1083,16 @@
           '</div>' +
         '</div>' +
         '<div class="mapper-expr-panel" id="mapper-expr-panel">' +
-          '<div class="mapper-panel-hdr" id="expr-panel-hdr">Select a field to map</div>' +
-          '<div class="fn-strip fn-strip-disabled" id="fn-strip"></div>' +
+          '<div class="expr-field-hdr">' +
+            '<span id="expr-panel-hdr" class="expr-field-name">Select a field</span>' +
+            '<div class="fn-menu-wrap">' +
+              '<button class="fn-menu-btn fn-menu-disabled" id="fn-menu-btn">Functions &#9662;</button>' +
+              '<div class="fn-dropdown" id="fn-dropdown"></div>' +
+            '</div>' +
+          '</div>' +
           '<div class="expr-editor-wrap">' +
-            '<textarea class="pp-input map-expr3" id="map-expr-input" rows="4" placeholder="=$field or =function(...)" disabled></textarea>' +
-            '<div class="expr-hint">Click a field in Output Fields, then drag from Available Fields or use function shortcuts.</div>' +
+            '<textarea class="pp-input map-expr3" id="map-expr-input" placeholder="$field or function(...)" disabled></textarea>' +
+            '<div class="expr-hint">Click a field to map, then drag from Available Fields or use Functions.</div>' +
           '</div>' +
         '</div>' +
       '</div>'
@@ -1127,25 +1139,45 @@
     var newOutputInput = byId('new-output-name')
     var exprInput = byId('map-expr-input')
     var exprPanelHdr = byId('expr-panel-hdr')
-    var fnStrip = byId('fn-strip')
+    var fnMenuBtn = byId('fn-menu-btn')
+    var fnDropdown = byId('fn-dropdown')
     var dragField = null
 
-    var FNS = [
-      { label: 'coalesce',  tpl: '=coalesce($field, "")' },
-      { label: 'concat',    tpl: '=string.concat($a, $b)' },
-      { label: 'trim',      tpl: '=string.trim($field)' },
-      { label: 'upper',     tpl: '=string.toUpper($field)' },
-      { label: 'lower',     tpl: '=string.toLower($field)' },
-      { label: 'parseInt',  tpl: '=integer.parseInt($field)' },
-      { label: 'toString',  tpl: '=string.toString($field)' },
-      { label: 'now',       tpl: '=util.now()' },
-      { label: 'length',    tpl: '=string.length($field)' }
+    // ── Build grouped Functions dropdown ──
+    var FN_GROUPS = [
+      { label: 'General', fns: [
+        { label: 'coalesce',  tpl: 'coalesce($field, "")' }
+      ]},
+      { label: 'String', fns: [
+        { label: 'concat',    tpl: 'string.concat($a, $b)' },
+        { label: 'trim',      tpl: 'string.trim($field)' },
+        { label: 'upper',     tpl: 'string.toUpper($field)' },
+        { label: 'lower',     tpl: 'string.toLower($field)' },
+        { label: 'toString',  tpl: 'string.toString($field)' },
+        { label: 'length',    tpl: 'string.length($field)' }
+      ]},
+      { label: 'Number', fns: [
+        { label: 'parseInt',  tpl: 'integer.parseInt($field)' }
+      ]},
+      { label: 'Date', fns: [
+        { label: 'now',       tpl: 'util.now()' }
+      ]}
     ]
 
-    if (fnStrip) {
-      fnStrip.innerHTML = FNS.map(function (fn) {
-        return '<button class="fn-btn" data-tpl="' + esc(fn.tpl) + '">' + esc(fn.label) + '</button>'
+    if (fnDropdown) {
+      fnDropdown.innerHTML = FN_GROUPS.map(function (grp) {
+        var btnHtml = grp.fns.map(function (fn) {
+          return '<button class="fn-item" data-tpl="' + esc(fn.tpl) + '">' + esc(fn.label) + '</button>'
+        }).join('')
+        return '<div class="fn-group"><div class="fn-group-hdr">' + esc(grp.label) + '</div>' +
+          '<div class="fn-group-items">' + btnHtml + '</div></div>'
       }).join('')
+    }
+
+    // ── Helper: save display value back to exprMap with implicit = prefix ──
+    function saveExpr(val) {
+      if (!state.mapperActiveField) return
+      state.mapperExprMap[state.mapperActiveField] = val ? (val.startsWith('=') ? val : '=' + val) : ''
     }
 
     function updateDot(fieldName) {
@@ -1167,11 +1199,12 @@
       }
       if (exprPanelHdr) exprPanelHdr.textContent = fieldName
       if (exprInput) {
-        exprInput.value = state.mapperExprMap[fieldName] || ''
+        // Display without leading = (implicit)
+        exprInput.value = (state.mapperExprMap[fieldName] || '').replace(/^=/, '')
         exprInput.disabled = false
         exprInput.focus()
       }
-      if (fnStrip) fnStrip.classList.remove('fn-strip-disabled')
+      if (fnMenuBtn) fnMenuBtn.classList.remove('fn-menu-disabled')
     }
 
     // Initialize dots for pre-existing mapped fields
@@ -1185,15 +1218,14 @@
       })
     }
 
-    // Panel 3: expression textarea input → save to exprMap + refresh dot
+    // Panel 3: expression textarea → save with implicit = + refresh dot
     if (exprInput) {
       exprInput.addEventListener('input', function () {
-        if (!state.mapperActiveField) return
-        state.mapperExprMap[state.mapperActiveField] = exprInput.value
+        saveExpr(exprInput.value)
         updateDot(state.mapperActiveField)
       })
 
-      // Drop field reference at cursor from Panel 1 drag
+      // Drop field reference at cursor
       exprInput.addEventListener('dragover', function (e) {
         if (!dragField) return
         e.preventDefault()
@@ -1207,39 +1239,48 @@
         e.preventDefault()
         exprInput.classList.remove('drop-over')
         if (!dragField || !state.mapperActiveField) return
-        var ref = '=$' + dragField
+        var ref = '$' + dragField  // = is implicit
         var start = exprInput.selectionStart
         var end = exprInput.selectionEnd
         var val = exprInput.value
         exprInput.value = val.substring(0, start) + ref + val.substring(end)
-        var pos = start + ref.length
-        exprInput.setSelectionRange(pos, pos)
-        state.mapperExprMap[state.mapperActiveField] = exprInput.value
+        exprInput.setSelectionRange(start + ref.length, start + ref.length)
+        saveExpr(exprInput.value)
         updateDot(state.mapperActiveField)
         exprInput.focus()
         dragField = null
       })
     }
 
-    // Function strip: insert template at cursor
-    if (fnStrip) {
-      fnStrip.addEventListener('click', function (e) {
-        var btn = e.target.closest('.fn-btn')
+    // Functions dropdown toggle
+    if (fnMenuBtn && fnDropdown) {
+      fnMenuBtn.addEventListener('click', function (e) {
+        e.stopPropagation()
+        var open = fnDropdown.classList.toggle('fn-dropdown-open')
+        fnMenuBtn.classList.toggle('fn-menu-active', open)
+      })
+
+      fnDropdown.addEventListener('click', function (e) {
+        var btn = e.target.closest('.fn-item')
         if (!btn || !state.mapperActiveField || !exprInput) return
         var tmpl = btn.dataset.tpl
         var start = exprInput.selectionStart
         var end = exprInput.selectionEnd
         var val = exprInput.value
-        if (!val.trim()) {
-          exprInput.value = tmpl
-        } else {
-          exprInput.value = val.substring(0, start) + tmpl + val.substring(end)
-        }
+        var inserted = val.trim() ? val.substring(0, start) + tmpl + val.substring(end) : tmpl
+        exprInput.value = inserted
         var pos = val.trim() ? start + tmpl.length : tmpl.length
         exprInput.setSelectionRange(pos, pos)
-        state.mapperExprMap[state.mapperActiveField] = exprInput.value
+        saveExpr(exprInput.value)
         updateDot(state.mapperActiveField)
+        fnDropdown.classList.remove('fn-dropdown-open')
+        fnMenuBtn.classList.remove('fn-menu-active')
         exprInput.focus()
+      })
+
+      document.addEventListener('click', function closeFnDropdown() {
+        fnDropdown.classList.remove('fn-dropdown-open')
+        fnMenuBtn.classList.remove('fn-menu-active')
       })
     }
 
@@ -1276,7 +1317,7 @@
         var el = e.target.closest('.avail-field')
         if (!el) { e.preventDefault(); return }
         dragField = el.dataset.field
-        e.dataTransfer.setData('text/plain', '=$' + dragField)
+        e.dataTransfer.setData('text/plain', '$' + dragField)
         e.dataTransfer.effectAllowed = 'copy'
         el.classList.add('af-dragging')
       })

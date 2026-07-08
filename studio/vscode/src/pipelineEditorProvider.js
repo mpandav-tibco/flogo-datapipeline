@@ -965,6 +965,7 @@ button{font-family:inherit;font-size:12px;cursor:pointer;border:none;border-radi
   font-size:11px;color:var(--text);border-left:2px solid transparent;user-select:none}
 .avail-field:hover{background:var(--bg2);border-left-color:var(--accent)}
 .avail-field:active{cursor:grabbing}
+/* Available-field draggable items */
 .avail-field.af-dragging{opacity:.35}
 .avail-type{font-size:9px;font-family:var(--vscode-editor-font-family,monospace);
   color:var(--text2);background:var(--bg2);border:1px solid var(--border);
@@ -972,6 +973,17 @@ button{font-family:inherit;font-size:12px;cursor:pointer;border:none;border-radi
 .avail-name{font-family:var(--vscode-editor-font-family,monospace);font-size:11px;
   color:var(--accent);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .avail-empty{font-size:10px;color:var(--text2);padding:8px;font-style:italic}
+/* Collapsible tree nodes in Panel 1 */
+.avail-tree-node{border-bottom:1px solid var(--border)}
+.avail-tree-node:last-child{border-bottom:none}
+.avail-tree-hdr{font-size:9px;text-transform:uppercase;letter-spacing:.06em;
+  color:var(--text2);padding:4px 8px;cursor:pointer;user-select:none;
+  list-style:none;display:flex;align-items:center;gap:4px}
+.avail-tree-hdr::-webkit-details-marker{display:none}
+.avail-tree-hdr::before{content:"\25B6";font-size:8px;color:var(--text2);
+  transition:transform .15s;flex-shrink:0;display:inline-block}
+details[open]>.avail-tree-hdr::before{transform:rotate(90deg)}
+.avail-tree-children{padding:0}
 
 /* Panel 2: Output Fields */
 .mapper-outputs{width:155px;flex-shrink:0;border-right:1px solid var(--border);
@@ -990,12 +1002,32 @@ button{font-family:inherit;font-size:12px;cursor:pointer;border:none;border-radi
 
 /* Panel 3: Expression Editor */
 .mapper-expr-panel{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0}
-.fn-strip{display:flex;flex-wrap:wrap;gap:3px;padding:4px 6px;border-bottom:1px solid var(--border);
-  flex-shrink:0;background:var(--bg3)}
-.fn-strip-disabled .fn-btn{opacity:.4;pointer-events:none}
-.fn-btn{font-size:10px;padding:2px 6px;border:1px solid var(--border);border-radius:3px;
+/* Header row: field name + Functions button */
+.expr-field-hdr{display:flex;align-items:center;justify-content:space-between;
+  padding:5px 8px;border-bottom:1px solid var(--border);flex-shrink:0;background:var(--bg3);gap:6px}
+.expr-field-name{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;
+  color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+/* Functions dropdown toggle button */
+.fn-menu-wrap{position:relative;flex-shrink:0}
+.fn-menu-btn{font-size:10px;padding:2px 7px;border:1px solid var(--border);border-radius:3px;
   background:var(--bg2);color:var(--text);cursor:pointer;white-space:nowrap;line-height:1.4}
-.fn-btn:hover{border-color:var(--accent);color:var(--accent);background:rgba(0,120,212,.08)}
+.fn-menu-btn:hover{border-color:var(--accent);color:var(--accent)}
+.fn-menu-btn.fn-menu-active{border-color:var(--accent);color:var(--accent);background:rgba(0,120,212,.08)}
+.fn-menu-disabled.fn-menu-btn{opacity:.45;pointer-events:none}
+/* Dropdown panel */
+.fn-dropdown{display:none;position:absolute;right:0;top:calc(100% + 3px);
+  background:var(--bg2);border:1px solid var(--border);border-radius:4px;
+  min-width:160px;z-index:50;box-shadow:0 4px 12px rgba(0,0,0,.25);padding:4px 0}
+.fn-dropdown.fn-dropdown-open{display:block}
+.fn-group{padding:4px 0}
+.fn-group+.fn-group{border-top:1px solid var(--border)}
+.fn-group-hdr{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;
+  color:var(--text2);padding:2px 10px;opacity:.7}
+.fn-group-items{display:flex;flex-wrap:wrap;gap:2px;padding:3px 8px}
+.fn-item{font-size:10px;padding:2px 7px;border:1px solid var(--border);border-radius:3px;
+  background:transparent;color:var(--text);cursor:pointer;white-space:nowrap}
+.fn-item:hover{border-color:var(--accent);color:var(--accent);background:rgba(0,120,212,.08)}
+/* Expression textarea */
 .expr-editor-wrap{flex:1;display:flex;flex-direction:column;padding:6px;gap:4px;overflow:hidden}
 .map-expr3{flex:1;resize:none;font-family:var(--vscode-editor-font-family,monospace);font-size:11px;
   min-height:0;transition:border-color .15s}
