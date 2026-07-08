@@ -1,0 +1,40 @@
+{
+  "name": "checkpoint-resume",
+  "description": "Demonstrates checkpoint/resume: a 5000-row CSV is filtered (value > 50) and discarded via the null sink. A file-based checkpoint is written every 1000 rows and every 10 seconds. Interrupt the run mid-flight with interrupt.sh, then re-run with resume.sh — the engine reads the checkpoint token, calls Skip(rowsProcessed) on the source, and continues exactly where it stopped with zero row loss.",
+  "version": "1.0.0",
+  "mode": "etl",
+  "source": {
+    "type": "csv",
+    "path": "./data/big_file.csv",
+    "delimiter": ",",
+    "hasHeader": true,
+    "columns": [
+      { "name": "id",    "type": "int"    },
+      { "name": "data",  "type": "string" },
+      { "name": "value", "type": "int"    }
+    ]
+  },
+  "transforms": [
+    {
+      "type": "filter",
+      "expr": "value > 50"
+    }
+  ],
+  "sink": {
+    "type": "null"
+  },
+  "performance": {
+    "batchSize": 500,
+    "maxMemoryMB": 256
+  },
+  "scaling": {
+    "mode": "single"
+  },
+  "checkpoint": {
+    "type": "file",
+    "path": "./checkpoints",
+    "intervalRows": 1000,
+    "intervalSeconds": 10,
+    "deleteOnSuccess": false
+  }
+}

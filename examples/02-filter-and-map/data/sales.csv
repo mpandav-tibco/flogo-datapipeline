@@ -1,0 +1,31 @@
+id,region,product,amount,status,sale_date
+1,us-east,Widget Pro,14999,COMPLETED,2024-01-03
+2,eu-west,Gadget Lite,8500,CANCELLED,2024-01-04
+3,ap-south,Widget Pro,22000,COMPLETED,2024-01-05
+4,us-west,SuperTool,75,PENDING,2024-01-06
+5,eu-central,Gadget Lite,12300,COMPLETED,2024-01-07
+6,us-east,SuperTool,100,CANCELLED,2024-01-08
+7,ap-northeast,Widget Pro,19800,COMPLETED,2024-01-09
+8,us-west,DataSync,31500,PENDING,2024-01-10
+9,eu-west,SuperTool,250,COMPLETED,2024-01-11
+10,ap-south,DataSync,0,CANCELLED,2024-01-12
+11,us-east,Gadget Lite,11750,COMPLETED,2024-01-13
+12,eu-central,Widget Pro,28900,COMPLETED,2024-01-14
+13,us-west,SuperTool,9950,CANCELLED,2024-01-15
+14,ap-northeast,Gadget Lite,5500,PENDING,2024-01-16
+15,us-east,DataSync,41200,COMPLETED,2024-01-17
+16,eu-west,Widget Pro,50,PENDING,2024-01-18
+17,ap-south,Gadget Lite,13800,COMPLETED,2024-01-19
+18,us-west,Widget Pro,62400,COMPLETED,2024-01-20
+19,eu-central,DataSync,18750,CANCELLED,2024-01-21
+20,us-east,SuperTool,3200,COMPLETED,2024-01-22
+21,ap-northeast,Widget Pro,99,PENDING,2024-01-23
+22,eu-west,DataSync,27600,COMPLETED,2024-01-24
+23,ap-south,SuperTool,15400,COMPLETED,2024-01-25
+24,us-west,Gadget Lite,6800,CANCELLED,2024-01-26
+25,eu-central,Widget Pro,33100,COMPLETED,2024-01-27
+26,us-east,DataSync,47500,COMPLETED,2024-01-28
+27,ap-northeast,Gadget Lite,9200,PENDING,2024-01-29
+28,eu-west,SuperTool,82100,COMPLETED,2024-01-30
+29,ap-south,Widget Pro,1,PENDING,2024-01-31
+30,us-west,DataSync,55750,COMPLETED,2024-02-01

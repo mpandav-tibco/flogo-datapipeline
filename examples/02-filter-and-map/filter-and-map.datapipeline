@@ -1,0 +1,50 @@
+{
+  "name": "filter-and-map",
+  "description": "Reads sales.csv, drops rows that are CANCELLED or have an amount <= 100 cents, then re-shapes each surviving row into a clean output schema with uppercased region codes and amounts converted from cents to dollars.",
+  "version": "1.0.0",
+  "mode": "etl",
+  "source": {
+    "type": "csv",
+    "path": "./data/sales.csv",
+    "delimiter": ",",
+    "hasHeader": true,
+    "columns": [
+      { "name": "id",        "type": "int"    },
+      { "name": "region",    "type": "string" },
+      { "name": "product",   "type": "string" },
+      { "name": "amount",    "type": "float"  },
+      { "name": "status",    "type": "string" },
+      { "name": "sale_date", "type": "string" }
+    ]
+  },
+  "transforms": [
+    {
+      "type": "filter",
+      "expr": "amount > 100 AND status != 'CANCELLED'"
+    },
+    {
+      "type": "map",
+      "fieldOrder": ["sale_id", "region_code", "product_name", "amount_usd", "processed_date"],
+      "fields": {
+        "sale_id":        "=$id",
+        "region_code":    "=upper($.region)",
+        "product_name":   "=$product",
+        "amount_usd":     "=divide($.amount, 100)",
+        "processed_date": "=$sale_date"
+      }
+    }
+  ],
+  "sink": {
+    "type": "null"
+  },
+  "performance": {
+    "batchSize": 500,
+    "maxMemoryMB": 256
+  },
+  "scaling": {
+    "mode": "single"
+  },
+  "checkpoint": {
+    "type": "none"
+  }
+}

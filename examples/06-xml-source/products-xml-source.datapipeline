@@ -1,0 +1,38 @@
+{
+  "name": "products-xml-source",
+  "description": "SAX-stream a large XML file in O(1) memory. Extracts <product> records by element name, reads child elements and stock quantity attribute via XPath, then filters to in-stock products priced above $10.",
+  "version": "1.0.0",
+  "mode": "etl",
+  "source": {
+    "type": "xml",
+    "path": "./data/products.xml",
+    "recordElement": "product",
+    "columns": [
+      { "name": "id",       "xpath": "id",              "type": "string" },
+      { "name": "name",     "xpath": "name",             "type": "string" },
+      { "name": "category", "xpath": "category",         "type": "string" },
+      { "name": "price",    "xpath": "price",            "type": "float"  },
+      { "name": "stock",    "xpath": "stock/@quantity",  "type": "int"    },
+      { "name": "sku",      "xpath": "sku",              "type": "string" }
+    ]
+  },
+  "transforms": [
+    {
+      "type": "filter",
+      "expr": "price > 10.0 AND stock > 0"
+    }
+  ],
+  "sink": {
+    "type": "null"
+  },
+  "performance": {
+    "batchSize": 5000,
+    "maxMemoryMB": 512
+  },
+  "scaling": {
+    "mode": "single"
+  },
+  "checkpoint": {
+    "type": "none"
+  }
+}

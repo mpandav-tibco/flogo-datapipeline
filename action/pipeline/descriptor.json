@@ -1,0 +1,104 @@
+{
+  "name": "flogo-datapipeline-action",
+  "type": "flogo:action",
+  "version": "1.0.0",
+  "title": "DataPipelineAction",
+  "description": "Multi-format ETL/ELT data pipeline as a first-class Flogo action — a peer of flow/stream/rules/agent. Reads from a pluggable source (CSV, Parquet, fixed-width, XML, JSON-lines, JDBC), applies a declarative transform chain (filter, map, enrich, validate, aggregate), and writes to a pluggable sink (JDBC, Parquet, CSV, Kafka). Supports file-level and distributed checkpointing for restart safety, and multi-instance horizontal scaling via static sharding or a shared work queue.",
+  "ref": "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+  "display": {
+    "description": "ETL/ELT data pipeline as a first-class Flogo action. Configure source, transforms, sink, and scaling in a 'pipeline:' resource; reference it here via pipelineRef.",
+    "category": "DataPipeline",
+    "visible": true,
+    "smallIcon": "icons/pipeline-action.svg",
+    "largeIcon": "icons/pipeline-action.svg"
+  },
+  "settings": [
+    {
+      "name": "pipelineRef",
+      "type": "string",
+      "required": true,
+      "display": {
+        "name": "Pipeline Resource Reference",
+        "description": "Reference to the pipeline: resource that contains the pipeline definition (source, transforms, sink, checkpoint, scaling). Format: res://pipeline:<id>  e.g. res://pipeline:daily-transactions",
+        "appPropertySupport": true
+      },
+      "value": "res://pipeline:main"
+    }
+  ],
+  "input": [
+    {
+      "name": "inputPath",
+      "type": "string",
+      "display": {
+        "name": "Input Path Override",
+        "description": "Optional: override the source path declared in the pipeline resource. Useful when the trigger carries the file path (e.g. S3 event, file watcher trigger). Ignored if empty — the resource definition path is used."
+      }
+    },
+    {
+      "name": "runId",
+      "type": "string",
+      "display": {
+        "name": "Run ID",
+        "description": "Optional: a unique identifier for this pipeline run. Used as the checkpoint partition key when the source does not produce natural partition IDs (e.g. a single CSV file). Defaults to a UUID if not provided."
+      }
+    },
+    {
+      "name": "params",
+      "type": "object",
+      "display": {
+        "name": "Runtime Parameters",
+        "description": "Optional: a map of key/value pairs substituted into the pipeline definition at runtime. Reference as ${paramName} in source path, filter expressions, and field mappings."
+      }
+    }
+  ],
+  "output": [
+    {
+      "name": "rowsProcessed",
+      "type": "integer",
+      "display": {
+        "name": "Rows Processed",
+        "description": "Total number of rows read from the source and passed through the transform chain."
+      }
+    },
+    {
+      "name": "rowsWritten",
+      "type": "integer",
+      "display": {
+        "name": "Rows Written",
+        "description": "Total number of rows successfully written to the sink."
+      }
+    },
+    {
+      "name": "rowsFailed",
+      "type": "integer",
+      "display": {
+        "name": "Rows Failed",
+        "description": "Number of rows routed to the dead-letter sink (validate transform violations) or dropped due to write errors."
+      }
+    },
+    {
+      "name": "durationMs",
+      "type": "integer",
+      "display": {
+        "name": "Duration (ms)",
+        "description": "Wall-clock time in milliseconds from pipeline start to completion."
+      }
+    },
+    {
+      "name": "status",
+      "type": "string",
+      "display": {
+        "name": "Status",
+        "description": "Execution outcome: 'completed' | 'failed' | 'partial' (completed with some rows failed)."
+      }
+    },
+    {
+      "name": "error",
+      "type": "string",
+      "display": {
+        "name": "Error",
+        "description": "Error message if status is 'failed'. Empty otherwise."
+      }
+    }
+  ]
+}

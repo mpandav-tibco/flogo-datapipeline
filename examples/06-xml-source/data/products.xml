@@ -1,0 +1,154 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<catalog>
+
+  <!-- price > 10 AND stock > 0 → PASSES filter -->
+  <product>
+    <id>P001</id>
+    <name>Wireless Keyboard</name>
+    <category>Electronics</category>
+    <price>49.99</price>
+    <stock quantity="120"/>
+    <sku>ELEC-WKB-001</sku>
+  </product>
+
+  <!-- price <= 10 → FILTERED OUT -->
+  <product>
+    <id>P002</id>
+    <name>AAA Batteries (4-pack)</name>
+    <category>Electronics</category>
+    <price>5.99</price>
+    <stock quantity="500"/>
+    <sku>ELEC-BAT-002</sku>
+  </product>
+
+  <!-- price > 10 AND stock > 0 → PASSES filter -->
+  <product>
+    <id>P003</id>
+    <name>Ergonomic Mouse</name>
+    <category>Electronics</category>
+    <price>34.50</price>
+    <stock quantity="75"/>
+    <sku>ELEC-MSE-003</sku>
+  </product>
+
+  <!-- stock = 0 → FILTERED OUT -->
+  <product>
+    <id>P004</id>
+    <name>USB-C Hub (7-port)</name>
+    <category>Electronics</category>
+    <price>29.99</price>
+    <stock quantity="0"/>
+    <sku>ELEC-HUB-004</sku>
+  </product>
+
+  <!-- price > 10 AND stock > 0 → PASSES filter -->
+  <product>
+    <id>P005</id>
+    <name>Noise-Cancelling Headphones</name>
+    <category>Audio</category>
+    <price>149.00</price>
+    <stock quantity="40"/>
+    <sku>AUDI-NCH-005</sku>
+  </product>
+
+  <!-- price <= 10 → FILTERED OUT -->
+  <product>
+    <id>P006</id>
+    <name>Cable Tie Pack (100pc)</name>
+    <category>Accessories</category>
+    <price>3.49</price>
+    <stock quantity="1000"/>
+    <sku>ACCS-CTP-006</sku>
+  </product>
+
+  <!-- price > 10 AND stock > 0 → PASSES filter -->
+  <product>
+    <id>P007</id>
+    <name>Mechanical Keyboard</name>
+    <category>Electronics</category>
+    <price>89.95</price>
+    <stock quantity="30"/>
+    <sku>ELEC-MKB-007</sku>
+  </product>
+
+  <!-- stock = 0 → FILTERED OUT -->
+  <product>
+    <id>P008</id>
+    <name>Webcam HD 1080p</name>
+    <category>Electronics</category>
+    <price>65.00</price>
+    <stock quantity="0"/>
+    <sku>ELEC-CAM-008</sku>
+  </product>
+
+  <!-- price > 10 AND stock > 0 → PASSES filter -->
+  <product>
+    <id>P009</id>
+    <name>Monitor Stand Riser</name>
+    <category>Furniture</category>
+    <price>24.99</price>
+    <stock quantity="60"/>
+    <sku>FURN-MSR-009</sku>
+  </product>
+
+  <!-- price <= 10 → FILTERED OUT -->
+  <product>
+    <id>P010</id>
+    <name>Sticky Notes (3-pack)</name>
+    <category>Stationery</category>
+    <price>2.99</price>
+    <stock quantity="800"/>
+    <sku>STAT-SNP-010</sku>
+  </product>
+
+  <!-- price > 10 AND stock > 0 → PASSES filter -->
+  <product>
+    <id>P011</id>
+    <name>Laptop Stand Aluminium</name>
+    <category>Furniture</category>
+    <price>39.99</price>
+    <stock quantity="85"/>
+    <sku>FURN-LSA-011</sku>
+  </product>
+
+  <!-- stock = 0 → FILTERED OUT -->
+  <product>
+    <id>P012</id>
+    <name>Portable SSD 1TB</name>
+    <category>Storage</category>
+    <price>99.00</price>
+    <stock quantity="0"/>
+    <sku>STOR-SSD-012</sku>
+  </product>
+
+  <!-- price > 10 AND stock > 0 → PASSES filter -->
+  <product>
+    <id>P013</id>
+    <name>Desk Lamp LED</name>
+    <category>Furniture</category>
+    <price>22.50</price>
+    <stock quantity="110"/>
+    <sku>FURN-DLL-013</sku>
+  </product>
+
+  <!-- price exactly 10.0 → FILTERED OUT (expr is strictly >) -->
+  <product>
+    <id>P014</id>
+    <name>Screen Cleaning Kit</name>
+    <category>Accessories</category>
+    <price>10.00</price>
+    <stock quantity="300"/>
+    <sku>ACCS-SCK-014</sku>
+  </product>
+
+  <!-- price > 10 AND stock > 0 → PASSES filter -->
+  <product>
+    <id>P015</id>
+    <name>4K USB Monitor 27in</name>
+    <category>Electronics</category>
+    <price>349.99</price>
+    <stock quantity="15"/>
+    <sku>ELEC-MON-015</sku>
+  </product>
+
+</catalog>

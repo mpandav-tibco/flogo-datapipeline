@@ -1,0 +1,63 @@
+{
+  "name": "csv-to-sqlite",
+  "description": "Classic ETL pipeline: read a customer CSV, validate fields, map to target schema, and upsert to SQLite.",
+  "version": "1.0.0",
+  "mode": "etl",
+  "source": {
+    "type": "csv",
+    "path": "./data/customers.csv",
+    "delimiter": ",",
+    "hasHeader": true,
+    "columns": [
+      { "name": "customer_id",    "type": "string" },
+      { "name": "first_name",     "type": "string" },
+      { "name": "last_name",      "type": "string" },
+      { "name": "email",          "type": "string" },
+      { "name": "country",        "type": "string" },
+      { "name": "annual_revenue", "type": "float"  },
+      { "name": "account_tier",   "type": "string" }
+    ]
+  },
+  "transforms": [
+    {
+      "type": "validate",
+      "rules": [
+        { "field": "customer_id",    "notNull": true },
+        { "field": "email",          "notNull": true, "pattern": "^[^@]+@[^@]+\\.[^@]+$" },
+        { "field": "annual_revenue", "min": 0 },
+        { "field": "account_tier",   "in": ["BRONZE", "SILVER", "GOLD", "PLATINUM"] }
+      ],
+      "onViolation": "drop"
+    },
+    {
+      "type": "map",
+      "fields": {
+        "id":          "=$customer_id",
+        "full_name":   "=concat($.first_name, ' ', $.last_name)",
+        "email":       "=$email",
+        "country":     "=upper($.country)",
+        "revenue_usd": "=$annual_revenue",
+        "tier":        "=$account_tier"
+      }
+    }
+  ],
+  "sink": {
+    "type": "jdbc",
+    "driver": "sqlite",
+    "dsn": "./data/output.db",
+    "table": "customers_enriched",
+    "batchSize": 100,
+    "onConflict": "upsert",
+    "conflictKey": ["id"]
+  },
+  "performance": {
+    "batchSize": 5000,
+    "maxMemoryMB": 512
+  },
+  "scaling": {
+    "mode": "single"
+  },
+  "checkpoint": {
+    "type": "none"
+  }
+}

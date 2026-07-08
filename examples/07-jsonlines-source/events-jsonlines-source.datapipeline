@@ -1,0 +1,46 @@
+{
+  "name": "events-jsonlines-source",
+  "description": "Read newline-delimited JSON (NDJSON) event records with schema-on-read column mapping. Flattens the nested 'properties.amount' field into a top-level column, then filters to purchase and refund events before passing them to the null sink.",
+  "version": "1.0.0",
+  "mode": "etl",
+  "source": {
+    "type": "jsonlines",
+    "path": "./data/events.jsonl",
+    "columns": [
+      { "name": "event_id",          "type": "string" },
+      { "name": "user_id",           "type": "int"    },
+      { "name": "event_type",        "type": "string" },
+      { "name": "properties_amount", "type": "float"  },
+      { "name": "timestamp",         "type": "string" }
+    ]
+  },
+  "transforms": [
+    {
+      "type": "filter",
+      "expr": "event_type = 'purchase' OR event_type = 'refund'"
+    },
+    {
+      "type": "map",
+      "fields": {
+        "id":     "=$event_id",
+        "user":   "=$user_id",
+        "type":   "=$event_type",
+        "amount": "=$properties_amount",
+        "ts":     "=$timestamp"
+      }
+    }
+  ],
+  "sink": {
+    "type": "null"
+  },
+  "performance": {
+    "batchSize": 5000,
+    "maxMemoryMB": 512
+  },
+  "scaling": {
+    "mode": "single"
+  },
+  "checkpoint": {
+    "type": "none"
+  }
+}

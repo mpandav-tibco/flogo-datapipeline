@@ -1,0 +1,99 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Flogo Data Pipeline",
+  "scopeName": "source.flogo-datapipeline",
+  "fileTypes": ["datapipeline"],
+  "patterns": [
+    { "include": "#pipeline-keywords" },
+    { "include": "#source-types" },
+    { "include": "#transform-types" },
+    { "include": "#sink-types" },
+    { "include": "#mode-values" },
+    { "include": "#json-base" }
+  ],
+  "repository": {
+
+    "pipeline-keywords": {
+      "comment": "Top-level pipeline structure keys — highlighted as keywords.",
+      "match": "\"(name|description|version|mode|source|transforms|sink|dlqSink|performance|scaling|checkpoint)\"\\s*:",
+      "captures": {
+        "1": { "name": "keyword.control.pipeline.flogo-datapipeline" }
+      }
+    },
+
+    "source-types": {
+      "comment": "Known source connector type values.",
+      "match": "\"(csv|jdbc|parquet|fixedwidth|xml|jsonlines|kafka|objstore)\"",
+      "name": "support.type.source.flogo-datapipeline"
+    },
+
+    "transform-types": {
+      "comment": "Known transform stage type values.",
+      "match": "\"(filter|map|mapper|validate|lookup|hwm|schemadrift|dq)\"",
+      "name": "support.type.transform.flogo-datapipeline"
+    },
+
+    "sink-types": {
+      "comment": "Known sink connector type values (superset of source — dlq and null are sink-only).",
+      "match": "\"(dlq|null)\"",
+      "name": "support.type.sink.flogo-datapipeline"
+    },
+
+    "mode-values": {
+      "comment": "Pipeline mode enum values.",
+      "match": "\"(etl|elt|el)\"",
+      "name": "constant.language.mode.flogo-datapipeline"
+    },
+
+    "json-base": {
+      "comment": "Fall-through JSON patterns so unrecognised tokens still get basic syntax colouring.",
+      "patterns": [
+        { "include": "#json-string" },
+        { "include": "#json-number" },
+        { "include": "#json-boolean-null" },
+        { "include": "#json-object" },
+        { "include": "#json-array" }
+      ]
+    },
+
+    "json-string": {
+      "name": "string.quoted.double.json",
+      "begin": "\"",
+      "end": "\"",
+      "beginCaptures": { "0": { "name": "punctuation.definition.string.begin.json" } },
+      "endCaptures":   { "0": { "name": "punctuation.definition.string.end.json" } },
+      "patterns": [
+        {
+          "name": "constant.character.escape.json",
+          "match": "\\\\(?:[\"\\\\/bfnrt]|u[0-9A-Fa-f]{4})"
+        }
+      ]
+    },
+
+    "json-number": {
+      "name": "constant.numeric.json",
+      "match": "-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?"
+    },
+
+    "json-boolean-null": {
+      "name": "constant.language.json",
+      "match": "\\b(?:true|false|null)\\b"
+    },
+
+    "json-object": {
+      "begin": "\\{",
+      "end": "\\}",
+      "beginCaptures": { "0": { "name": "punctuation.definition.dictionary.begin.json" } },
+      "endCaptures":   { "0": { "name": "punctuation.definition.dictionary.end.json" } },
+      "patterns": [{ "include": "$self" }]
+    },
+
+    "json-array": {
+      "begin": "\\[",
+      "end": "\\]",
+      "beginCaptures": { "0": { "name": "punctuation.definition.array.begin.json" } },
+      "endCaptures":   { "0": { "name": "punctuation.definition.array.end.json" } },
+      "patterns": [{ "include": "$self" }]
+    }
+  }
+}

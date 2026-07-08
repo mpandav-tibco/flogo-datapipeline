@@ -1,0 +1,68 @@
+{
+  "name": "data-quality",
+  "description": "Measures data quality across a financial records CSV using five DQ expectations (not_null, range, in_set). The pipeline scores each row fractionally, computes a dataset-level quality ratio, and emits a quality report when the ratio falls below the 0.95 threshold. All rows are forwarded to the null sink — the DQ transform is a measurement gate, not a row-level filter.",
+  "version": "1.0.0",
+  "mode": "etl",
+  "source": {
+    "type": "csv",
+    "path": "./data/financial_records.csv",
+    "delimiter": ",",
+    "hasHeader": true,
+    "columns": [
+      { "name": "record_id",          "type": "string" },
+      { "name": "account_id",         "type": "string" },
+      { "name": "transaction_amount", "type": "float"  },
+      { "name": "currency",           "type": "string" },
+      { "name": "txn_date",           "type": "string" },
+      { "name": "category",           "type": "string" }
+    ]
+  },
+  "transforms": [
+    {
+      "type": "dq",
+      "expectations": [
+        {
+          "column": "record_id",
+          "check":  "not_null",
+          "value":  null
+        },
+        {
+          "column": "transaction_amount",
+          "check":  "range",
+          "value":  { "min": 0.01, "max": 1000000 }
+        },
+        {
+          "column": "currency",
+          "check":  "in_set",
+          "value":  ["USD", "EUR", "GBP", "JPY", "CAD"]
+        },
+        {
+          "column": "account_id",
+          "check":  "not_null",
+          "value":  null
+        },
+        {
+          "column": "txn_date",
+          "check":  "not_null",
+          "value":  null
+        }
+      ],
+      "threshold":      0.95,
+      "onFail":         "report",
+      "reportSinkType": "null"
+    }
+  ],
+  "sink": {
+    "type": "null"
+  },
+  "performance": {
+    "batchSize":   5000,
+    "maxMemoryMB": 512
+  },
+  "scaling": {
+    "mode": "single"
+  },
+  "checkpoint": {
+    "type": "none"
+  }
+}

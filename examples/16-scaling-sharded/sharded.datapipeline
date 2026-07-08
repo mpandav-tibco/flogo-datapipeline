@@ -1,0 +1,44 @@
+{
+  "name": "sharded-orders",
+  "description": "Multi-instance sharding example: each instance reads one partition file determined by INSTANCE_INDEX. Set INSTANCE_INDEX (0-based) and INSTANCE_COUNT before launching. The engine resolves './data/partition_{index}.csv' where {index} = INSTANCE_INDEX. A filter removes low-value orders (value <= 10) before the null sink discards all remaining rows. No coordinator, no shared state, no Redis or Postgres required.",
+  "version": "1.0.0",
+  "mode": "etl",
+  "source": {
+    "type": "csv",
+    "path": "./data/partition_{index}.csv",
+    "delimiter": ",",
+    "hasHeader": true,
+    "columns": [
+      { "name": "id",          "type": "int"    },
+      { "name": "customer_id", "type": "string" },
+      { "name": "product_sku", "type": "string" },
+      { "name": "quantity",    "type": "int"    },
+      { "name": "unit_price",  "type": "float"  },
+      { "name": "value",       "type": "float"  },
+      { "name": "region",      "type": "string" },
+      { "name": "status",      "type": "string" },
+      { "name": "order_date",  "type": "string" }
+    ]
+  },
+  "transforms": [
+    {
+      "type": "filter",
+      "expr": "value > 10"
+    }
+  ],
+  "sink": {
+    "type": "null"
+  },
+  "performance": {
+    "batchSize": 5000,
+    "maxMemoryMB": 512
+  },
+  "scaling": {
+    "mode": "sharded",
+    "instanceIndex": 0,
+    "instanceCount": 3
+  },
+  "checkpoint": {
+    "type": "none"
+  }
+}

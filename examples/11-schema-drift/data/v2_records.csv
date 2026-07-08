@@ -1,0 +1,11 @@
+id,name,status,region,score
+1001,Alice Monroe,ACTIVE,EMEA,92.4
+1002,Brian Taft,INACTIVE,AMER,61.0
+1003,Clara Nguyen,ACTIVE,APAC,88.7
+1004,David Osei,PENDING,EMEA,74.3
+1005,Elena Vasquez,ACTIVE,AMER,95.1
+1006,Frank Delacroix,INACTIVE,EMEA,55.8
+1007,Grace Okonkwo,ACTIVE,APAC,83.2
+1008,Hector Ramirez,PENDING,AMER,70.6
+1009,Irina Sokolova,ACTIVE,EMEA,97.0
+1010,James Whitfield,INACTIVE,AMER,48.9

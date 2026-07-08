@@ -1,0 +1,36 @@
+{
+  "name": "transactions-parquet-columnar",
+  "description": "Read a Parquet file with column pruning — only the four declared columns (txn_id, amount, currency, status) are read from disk. Row groups are processed in parallel with a parallelism of 2. A filter transform retains only COMPLETED transactions above 50.0 before rows are discarded by the null sink.",
+  "version": "1.0.0",
+  "mode": "etl",
+  "source": {
+    "type": "parquet",
+    "path": "./data/transactions.parquet",
+    "columns": [
+      { "name": "txn_id",   "type": "string" },
+      { "name": "amount",   "type": "float"  },
+      { "name": "currency", "type": "string" },
+      { "name": "status",   "type": "string" }
+    ],
+    "rowGroupParallelism": 2
+  },
+  "transforms": [
+    {
+      "type": "filter",
+      "expr": "status = 'COMPLETED' AND amount > 50.0"
+    }
+  ],
+  "sink": {
+    "type": "null"
+  },
+  "performance": {
+    "batchSize": 5000,
+    "maxMemoryMB": 512
+  },
+  "scaling": {
+    "mode": "single"
+  },
+  "checkpoint": {
+    "type": "none"
+  }
+}

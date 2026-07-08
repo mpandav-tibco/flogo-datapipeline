@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <!-- Source rectangle -->
+  <rect x="4" y="44" width="32" height="40" rx="5" ry="5" fill="#0064D6"/>
+  <!-- Arrow source -> transform -->
+  <line x1="36" y1="64" x2="48" y2="64" stroke="#0064D6" stroke-width="4" stroke-linecap="round"/>
+  <polygon points="46,58 56,64 46,70" fill="#0064D6"/>
+  <!-- Transform rectangle (slightly taller) -->
+  <rect x="48" y="36" width="32" height="56" rx="5" ry="5" fill="#0064D6"/>
+  <!-- Arrow transform -> sink -->
+  <line x1="80" y1="64" x2="92" y2="64" stroke="#0064D6" stroke-width="4" stroke-linecap="round"/>
+  <polygon points="90,58 100,64 90,70" fill="#0064D6"/>
+  <!-- Sink rectangle -->
+  <rect x="92" y="44" width="32" height="40" rx="5" ry="5" fill="#0064D6"/>
+  <!-- Inner detail lines on transform (ETL symbol) -->
+  <line x1="58" y1="52" x2="70" y2="52" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
+  <line x1="58" y1="60" x2="70" y2="60" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
+  <line x1="58" y1="68" x2="70" y2="68" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
+  <line x1="58" y1="76" x2="70" y2="76" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
+</svg>

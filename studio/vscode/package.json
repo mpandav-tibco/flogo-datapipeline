@@ -1,0 +1,266 @@
+{
+  "name": "flogo-datapipeline-studio",
+  "displayName": "Flogo Data Pipeline Studio",
+  "description": "Visual ETL/ELT/EL pipeline designer for flogo-datapipeline — drag-and-drop source, transform and sink stages with live run metrics.",
+  "version": "0.1.0",
+  "publisher": "tibco",
+  "icon": "resources/icon-128.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mpandav-tibco/flogo-datapipeline"
+  },
+  "engines": {
+    "vscode": "^1.83.0"
+  },
+  "main": "./src/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "flogo-datapipeline",
+        "aliases": [
+          "Flogo Data Pipeline",
+          "datapipeline"
+        ],
+        "extensions": [
+          ".datapipeline"
+        ],
+        "mimetypes": [
+          "application/vnd.flogo.datapipeline+json"
+        ],
+        "icon": {
+          "light": "resources/icon.svg",
+          "dark": "resources/icon.svg"
+        },
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "flogo-datapipeline",
+        "scopeName": "source.flogo-datapipeline",
+        "path": "./syntaxes/flogo-datapipeline.tmLanguage.json"
+      }
+    ],
+    "customEditors": [
+      {
+        "viewType": "flogoDataPipelineStudio.pipelineEditor",
+        "displayName": "Flogo Data Pipeline Editor",
+        "selector": [
+          {
+            "filenamePattern": "*.datapipeline"
+          }
+        ],
+        "priority": "default"
+      }
+    ],
+    "jsonValidation": [
+      {
+        "fileMatch": "*.datapipeline",
+        "url": "./schemas/datapipeline.schema.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "flogoDataPipelineStudio.runPipeline",
+        "title": "Run in Data Pipeline Studio",
+        "category": "Flogo",
+        "icon": {
+          "light": "resources/icon.svg",
+          "dark": "resources/icon.svg"
+        }
+      },
+      {
+        "command": "flogoDataPipelineStudio.stopPipeline",
+        "title": "Stop Pipeline",
+        "category": "Flogo",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "flogoDataPipelineStudio.newPipeline",
+        "title": "New Data Pipeline File…",
+        "category": "Flogo",
+        "icon": "$(new-file)"
+      },
+      {
+        "command": "flogoDataPipelineStudio.newFromTemplate",
+        "title": "New Pipeline from Template…",
+        "category": "Flogo",
+        "icon": "$(library)"
+      },
+      {
+        "command": "flogoDataPipelineStudio.build",
+        "title": "Build",
+        "category": "Flogo",
+        "icon": "$(package)"
+      },
+      {
+        "command": "flogoDataPipelineStudio.runWithOptions",
+        "title": "Configure and Run",
+        "category": "Flogo",
+        "icon": "$(debug-coverage)"
+      },
+      {
+        "command": "flogoDataPipelineStudio.configure",
+        "title": "Configure Build & Run",
+        "category": "Flogo",
+        "icon": "$(gear)"
+      }
+    ],
+    "views": {
+      "explorer": [
+        {
+          "id": "flogoDataPipelineStudio.pipelinesExplorer",
+          "name": "Flogo Data Pipelines",
+          "type": "tree",
+          "icon": "resources/icon.svg",
+          "contextualTitle": "Flogo Data Pipelines",
+          "when": "workbenchState != empty"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "flogoDataPipelineStudio.build",
+          "when": "view == flogoDataPipelineStudio.pipelinesExplorer",
+          "group": "navigation@0"
+        },
+        {
+          "command": "flogoDataPipelineStudio.newFromTemplate",
+          "when": "view == flogoDataPipelineStudio.pipelinesExplorer",
+          "group": "navigation@1"
+        },
+        {
+          "command": "flogoDataPipelineStudio.newPipeline",
+          "when": "view == flogoDataPipelineStudio.pipelinesExplorer",
+          "group": "navigation@2"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "flogoDataPipelineStudio.configure",
+          "when": "view == flogoDataPipelineStudio.pipelinesExplorer && viewItem == actionsTitle",
+          "group": "inline"
+        },
+        {
+          "command": "flogoDataPipelineStudio.build",
+          "when": "view == flogoDataPipelineStudio.pipelinesExplorer && viewItem == pipelineAction",
+          "group": "inline@0"
+        },
+        {
+          "command": "flogoDataPipelineStudio.runWithOptions",
+          "when": "view == flogoDataPipelineStudio.pipelinesExplorer && viewItem == pipelineAction",
+          "group": "inline@1"
+        },
+        {
+          "command": "flogoDataPipelineStudio.stopPipeline",
+          "when": "view == flogoDataPipelineStudio.pipelinesExplorer && viewItem == localPipeline",
+          "group": "inline"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "flogoDataPipelineStudio.newPipeline",
+          "when": "explorerResourceIsFolder",
+          "group": "navigation@30"
+        },
+        {
+          "command": "flogoDataPipelineStudio.newFromTemplate",
+          "when": "explorerResourceIsFolder",
+          "group": "navigation@31"
+        },
+        {
+          "command": "flogoDataPipelineStudio.runPipeline",
+          "when": "resourceExtname == .datapipeline",
+          "group": "flogo@1"
+        },
+        {
+          "command": "flogoDataPipelineStudio.build",
+          "when": "resourceExtname == .datapipeline",
+          "group": "flogo@2"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "flogoDataPipelineStudio.runPipeline",
+          "when": "resourceExtname == .datapipeline",
+          "group": "navigation@1"
+        },
+        {
+          "command": "flogoDataPipelineStudio.build",
+          "when": "resourceExtname == .datapipeline",
+          "group": "navigation@2"
+        }
+      ],
+      "editor/title/context": [
+        {
+          "command": "flogoDataPipelineStudio.runPipeline",
+          "when": "resourceExtname == .datapipeline",
+          "group": "flogo@1"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "flogoDataPipelineStudio.runPipeline",
+          "when": "resourceExtname == .datapipeline"
+        },
+        {
+          "command": "flogoDataPipelineStudio.build",
+          "when": "resourceExtname == .datapipeline"
+        },
+        {
+          "command": "flogoDataPipelineStudio.runWithOptions",
+          "when": "resourceExtname == .datapipeline"
+        },
+        {
+          "command": "flogoDataPipelineStudio.configure",
+          "when": "true"
+        },
+        {
+          "command": "flogoDataPipelineStudio.stopPipeline",
+          "when": "true"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Flogo Data Pipeline Studio",
+      "properties": {
+        "flogoDataPipelineStudio.binaryPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the flogo-datapipeline binary. Defaults to bin/flogo-datapipeline[.exe] inside the extension directory."
+        },
+        "flogoDataPipelineStudio.apiPort": {
+          "type": "number",
+          "default": 9080,
+          "description": "Starting port for the Flogo Data Pipeline REST API. Auto-increments if the port is in use."
+        },
+        "flogoDataPipelineStudio.sourcePath": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path to the flogo-datapipeline Go module root (the directory containing go.mod). When set, clicking 'Run Pipeline' rebuilds the binary from source before starting the engine — pick up Go source changes without reinstalling the VSIX. Leave empty to use the pre-built binary."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "generate-icon": "node scripts/generate-icon.js",
+    "package": "bash scripts/package.sh",
+    "build:binaries": "bash scripts/build-binaries.sh",
+    "rebuild": "bash scripts/rebuild-and-install.sh",
+    "lint": "eslint src scripts eslint.config.js",
+    "typecheck": "tsc -p jsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.4",
+    "@resvg/resvg-js": "^2.6.2",
+    "@types/node": "^18.19.0",
+    "@types/vscode": "^1.83.0",
+    "eslint": "^9.39.4",
+    "globals": "^17.7.0",
+    "typescript": "^5.6.3"
+  }
+}

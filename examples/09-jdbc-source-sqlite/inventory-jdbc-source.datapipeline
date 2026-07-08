@@ -1,0 +1,29 @@
+{
+  "name": "inventory-jdbc-source",
+  "description": "Read all rows from a SQLite products table using keyset pagination and partition-aware reads. Demonstrates the JDBC source with zero external dependencies — SQLite is a single file on disk.",
+  "version": "1.0.0",
+  "mode": "el",
+  "source": {
+    "type": "jdbc",
+    "driver": "sqlite",
+    "dsn": "./data/inventory.db",
+    "table": "products",
+    "keyColumn": "product_id",
+    "batchSize": 100,
+    "partitions": 2
+  },
+  "transforms": [],
+  "sink": {
+    "type": "null"
+  },
+  "performance": {
+    "batchSize": 100,
+    "maxMemoryMB": 256
+  },
+  "scaling": {
+    "mode": "single"
+  },
+  "checkpoint": {
+    "type": "none"
+  }
+}

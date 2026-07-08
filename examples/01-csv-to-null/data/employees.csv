@@ -1,0 +1,21 @@
+id,name,department,salary,hire_date
+1,Alice Nguyen,Engineering,95000.00,2019-03-12
+2,Bob Ramirez,Marketing,72000.00,2020-07-01
+3,Carol Smith,Engineering,105000.00,2017-11-05
+4,David Chen,Sales,68000.00,2021-02-15
+5,Eva Kowalski,HR,61000.00,2018-09-20
+6,Frank Okonkwo,Engineering,98000.00,2016-06-30
+7,Grace Liu,Finance,87000.00,2020-01-10
+8,Henry Patel,Sales,71000.00,2019-08-22
+9,Isabelle Martin,Marketing,75000.00,2022-04-03
+10,James Thornton,Engineering,112000.00,2015-12-14
+11,Keiko Yamamoto,HR,63000.00,2021-10-07
+12,Liam O'Brien,Finance,91000.00,2018-03-29
+13,Maya Goldstein,Engineering,99000.00,2017-05-18
+14,Noah Williams,Sales,66000.00,2023-01-25
+15,Olivia Fernandez,Marketing,78000.00,2020-11-11
+16,Patrick Dubois,Finance,84000.00,2019-06-04
+17,Quinn Harrison,Engineering,103000.00,2016-09-08
+18,Rachel Kim,HR,59000.00,2022-08-30
+19,Samuel Torres,Sales,73000.00,2020-03-17
+20,Teresa Novak,Engineering,96000.00,2018-12-01

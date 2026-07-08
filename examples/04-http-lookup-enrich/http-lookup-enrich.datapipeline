@@ -1,0 +1,54 @@
+{
+  "name": "http-lookup-enrich",
+  "description": "Enrich each row with data from an HTTP API, with an LRU cache to avoid re-fetching duplicates.",
+  "version": "1.0.0",
+  "mode": "etl",
+  "source": {
+    "type": "csv",
+    "path": "./data/users.csv",
+    "delimiter": ",",
+    "hasHeader": true,
+    "columns": [
+      { "name": "user_id",   "type": "int"    },
+      { "name": "name",      "type": "string" },
+      { "name": "plan_type", "type": "string" },
+      { "name": "amount",    "type": "float"  }
+    ]
+  },
+  "transforms": [
+    {
+      "type": "lookup",
+      "url": "https://jsonplaceholder.typicode.com/users/{user_id}",
+      "method": "GET",
+      "keyField": "user_id",
+      "outputFields": ["username", "email", "phone", "website"],
+      "concurrency": 5,
+      "cacheSize": 100,
+      "timeoutMs": 3000,
+      "onError": "null"
+    },
+    {
+      "type": "map",
+      "fields": {
+        "user_id":  "=$user_id",
+        "name":     "=$name",
+        "username": "=coalesce($.username, $.name)",
+        "email":    "=coalesce($.email, 'unknown@example.com')",
+        "plan":     "=$plan_type"
+      }
+    }
+  ],
+  "sink": {
+    "type": "null"
+  },
+  "performance": {
+    "batchSize": 5000,
+    "maxMemoryMB": 512
+  },
+  "scaling": {
+    "mode": "single"
+  },
+  "checkpoint": {
+    "type": "none"
+  }
+}

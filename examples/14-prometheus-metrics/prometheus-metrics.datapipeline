@@ -1,0 +1,51 @@
+{
+  "name": "prometheus-metrics",
+  "description": "Demonstrates the Prometheus metrics backend. Reads a 500-row CSV, applies a filter (value > 0) and a map transform, then discards rows via the null sink. A Prometheus scrape endpoint is exposed on :2112/metrics throughout the run so you can observe per-batch throughput, error rates, and duration histograms in real time.",
+  "version": "1.0.0",
+  "mode": "etl",
+  "source": {
+    "type": "csv",
+    "path": "./data/large_dataset.csv",
+    "delimiter": ",",
+    "hasHeader": true,
+    "columns": [
+      { "name": "id",       "type": "int"    },
+      { "name": "value",    "type": "float"  },
+      { "name": "label",    "type": "string" },
+      { "name": "category", "type": "string" },
+      { "name": "ts",       "type": "string" }
+    ]
+  },
+  "transforms": [
+    {
+      "type": "filter",
+      "expr": "value > 0"
+    },
+    {
+      "type": "map",
+      "fields": {
+        "id":    "=$id",
+        "val":   "=$value",
+        "label": "=upper($.label)"
+      }
+    }
+  ],
+  "sink": {
+    "type": "null"
+  },
+  "metrics": {
+    "type": "prometheus",
+    "addr": ":2112",
+    "path": "/metrics"
+  },
+  "performance": {
+    "batchSize": 50,
+    "maxMemoryMB": 256
+  },
+  "scaling": {
+    "mode": "single"
+  },
+  "checkpoint": {
+    "type": "none"
+  }
+}

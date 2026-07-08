@@ -1,0 +1,37 @@
+{
+  "name": "incremental-hwm",
+  "description": "Incremental load using a high-water mark (HWM). Only rows with a created_at timestamp newer than the last recorded watermark are processed. The watermark is persisted to a local file so each pipeline run resumes exactly where the previous run stopped.",
+  "version": "1.0.0",
+  "mode": "etl",
+  "source": {
+    "type": "jdbc",
+    "driver": "sqlite",
+    "dsn": "./data/events.db",
+    "table": "raw_events",
+    "keyColumn": "event_id",
+    "batchSize": 200
+  },
+  "transforms": [
+    {
+      "type": "hwm",
+      "column": "created_at",
+      "backend": "file",
+      "backendConfig": {
+        "path": "./watermarks/events.hwm"
+      }
+    }
+  ],
+  "sink": {
+    "type": "null"
+  },
+  "performance": {
+    "batchSize": 5000,
+    "maxMemoryMB": 512
+  },
+  "scaling": {
+    "mode": "single"
+  },
+  "checkpoint": {
+    "type": "none"
+  }
+}

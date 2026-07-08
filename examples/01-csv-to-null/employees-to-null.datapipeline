@@ -1,0 +1,33 @@
+{
+  "name": "employees-to-null",
+  "description": "Hello World pipeline: reads employees.csv and discards all rows via the null sink. Verifies the engine starts and can read a CSV file.",
+  "version": "1.0.0",
+  "mode": "el",
+  "source": {
+    "type": "csv",
+    "path": "./data/employees.csv",
+    "delimiter": ",",
+    "hasHeader": true,
+    "columns": [
+      { "name": "id",         "type": "int"    },
+      { "name": "name",       "type": "string" },
+      { "name": "department", "type": "string" },
+      { "name": "salary",     "type": "float"  },
+      { "name": "hire_date",  "type": "string" }
+    ]
+  },
+  "transforms": [],
+  "sink": {
+    "type": "null"
+  },
+  "performance": {
+    "batchSize": 1000,
+    "maxMemoryMB": 512
+  },
+  "scaling": {
+    "mode": "single"
+  },
+  "checkpoint": {
+    "type": "none"
+  }
+}
