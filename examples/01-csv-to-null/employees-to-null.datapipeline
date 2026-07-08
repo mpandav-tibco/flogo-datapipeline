@@ -79,6 +79,17 @@
         },
         "checkpoint": {
           "type": "none"
+        },
+        "ui": {
+          "source": {
+            "x": 40,
+            "y": 40
+          },
+          "transforms": [],
+          "sink": {
+            "x": 443,
+            "y": 60
+          }
         }
       }
     }

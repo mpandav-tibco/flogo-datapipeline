@@ -37,7 +37,7 @@
         "name": "http-lookup-enrich",
         "description": "Enrich each row with data from an HTTP API, with an LRU cache to avoid re-fetching duplicates.",
         "version": "1.0.0",
-        "mode": "elt",
+        "mode": "etl",
         "source": {
           "type": "csv",
           "path": "./data/users.csv",
@@ -110,12 +110,12 @@
           },
           "transforms": [
             {
-              "x": 295,
-              "y": 63
+              "x": 263,
+              "y": 126
             },
             {
-              "x": 259,
-              "y": 301
+              "x": 471,
+              "y": 262
             }
           ],
           "sink": {
