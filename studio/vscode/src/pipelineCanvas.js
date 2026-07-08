@@ -1015,7 +1015,7 @@
         srcCols.forEach(function (c) {
           var n = typeof c === 'string' ? c : (c.name || '')
           var t = typeof c === 'object' ? (c.type || 'any') : 'any'
-          if (n) availHtml += '<div class="avail-field" data-field="' + esc(n) + '" title="' + esc(t) + '">' +
+          if (n) availHtml += '<div class="avail-field" draggable="true" data-field="' + esc(n) + '" title="Drag to Expression — ' + esc(t) + '">' +
             '<span class="avail-type">' + esc(t.substring(0,3)) + '</span>' +
             '<span class="avail-name">$' + esc(n) + '</span>' +
             '</div>'
@@ -1027,7 +1027,7 @@
         if (prev.type === 'lookup' && Array.isArray(prev.outputFields) && prev.outputFields.length) {
           availHtml += '<div class="avail-section">Lookup</div>'
           prev.outputFields.forEach(function (f) {
-            availHtml += '<div class="avail-field" data-field="' + esc(f) + '" title="string">' +
+            availHtml += '<div class="avail-field" draggable="true" data-field="' + esc(f) + '" title="Drag to Expression — string">' +
               '<span class="avail-type">str</span>' +
               '<span class="avail-name">$' + esc(f) + '</span>' +
               '</div>'
@@ -1111,8 +1111,10 @@
     var editor = byId('map-fields-editor')
     var addBtn = byId('btn-add-map-row')
     var availList = byId('avail-list')
-    var lastFocusedExpr = null  // track which expr input last had focus
+    var mapperMain = editor ? editor.closest('.mapper-main') : null
+    var dragField = null  // field name being dragged; set on dragstart, cleared on dragend/drop
 
+    // ── Delete row ──
     if (editor) {
       editor.addEventListener('click', function (e) {
         if (tgt(e, '[data-action="del-map-row"]')) {
@@ -1120,14 +1122,9 @@
           if (row) row.remove()
         }
       })
-      // Track last focused expression input for available-field insertion
-      editor.addEventListener('focusin', function (e) {
-        if (e.target && e.target.classList.contains('map-expr')) {
-          lastFocusedExpr = e.target
-        }
-      })
     }
 
+    // ── Add empty row ──
     if (addBtn) {
       addBtn.addEventListener('click', function () {
         if (!editor) return
@@ -1137,30 +1134,82 @@
       })
     }
 
-    // Clicking an available field: if an expression input is focused, append/set;
-    // otherwise add a new row pre-filled with the field reference.
+    // ── Drag from Available Fields → Expression inputs ──
     if (availList) {
-      availList.addEventListener('click', function (e) {
-        var el = tgt(e, '.avail-field')
-        if (!el) return
-        var field = el.dataset.field
+      availList.addEventListener('dragstart', function (e) {
+        var el = e.target.closest('.avail-field')
+        if (!el) { e.preventDefault(); return }
+        dragField = el.dataset.field
+        e.dataTransfer.setData('text/plain', '=$' + dragField)
+        e.dataTransfer.effectAllowed = 'copy'
+        el.classList.add('af-dragging')
+        // Activate drop-zone styling on the mapping panel
+        if (mapperMain) mapperMain.classList.add('drop-active')
+        // Highlight every existing expression input as a potential target
+        qsa('.map-expr', editor).forEach(function (inp) { inp.classList.add('drop-ready') })
+      })
+
+      availList.addEventListener('dragend', function () {
+        dragField = null
+        qsa('.af-dragging', availList).forEach(function (el) { el.classList.remove('af-dragging') })
+        if (mapperMain) mapperMain.classList.remove('drop-active')
+        qsa('.map-expr', editor).forEach(function (inp) {
+          inp.classList.remove('drop-ready', 'drop-over')
+        })
+      })
+    }
+
+    // ── Drop targets: individual expression inputs ──
+    if (editor) {
+      editor.addEventListener('dragover', function (e) {
+        if (!dragField) return
+        var exprEl = e.target.classList && e.target.classList.contains('map-expr')
+          ? e.target : null
+        // Allow drop anywhere in the grid (on an expr input OR on empty space for new row)
+        e.preventDefault()
+        e.dataTransfer.dropEffect = 'copy'
+        // Highlight only the expr input being hovered
+        qsa('.map-expr', editor).forEach(function (inp) { inp.classList.remove('drop-over') })
+        if (exprEl) exprEl.classList.add('drop-over')
+      })
+
+      editor.addEventListener('dragleave', function (e) {
+        // Only clear when truly leaving the grid (not just moving between child elements)
+        if (!editor.contains(e.relatedTarget)) {
+          qsa('.map-expr', editor).forEach(function (inp) { inp.classList.remove('drop-over') })
+        }
+      })
+
+      editor.addEventListener('drop', function (e) {
+        e.preventDefault()
+        var field = dragField
+        dragField = null
+        qsa('.map-expr', editor).forEach(function (inp) {
+          inp.classList.remove('drop-ready', 'drop-over')
+        })
+        if (mapperMain) mapperMain.classList.remove('drop-active')
         if (!field) return
+
         var ref = '=$' + field
-        if (lastFocusedExpr && document.contains(lastFocusedExpr)) {
-          // Append at cursor or replace selection
-          var start = lastFocusedExpr.selectionStart
-          var end = lastFocusedExpr.selectionEnd
-          var cur = lastFocusedExpr.value
-          lastFocusedExpr.value = cur.substring(0, start) + ref + cur.substring(end)
-          lastFocusedExpr.selectionStart = lastFocusedExpr.selectionEnd = start + ref.length
-          lastFocusedExpr.focus()
+        var exprEl = e.target.classList && e.target.classList.contains('map-expr')
+          ? e.target : null
+
+        if (exprEl) {
+          // Drop ON an expression input → replace its value with the field reference
+          exprEl.value = ref
+          exprEl.focus()
         } else {
-          // Add a new mapping row pre-filled with this field
+          // Drop on empty grid area → add a new row pre-filled with field + expression
           var row = makeMapRow()
           qs('.map-out', row).value = field
           qs('.map-expr', row).value = ref
           editor.appendChild(row)
-          qs('.map-expr', row).focus()
+          // Highlight the new expression input briefly to confirm the drop
+          var newExpr = qs('.map-expr', row)
+          if (newExpr) { newExpr.classList.add('drop-confirm'); newExpr.focus() }
+          setTimeout(function () {
+            if (newExpr) newExpr.classList.remove('drop-confirm')
+          }, 600)
         }
       })
     }

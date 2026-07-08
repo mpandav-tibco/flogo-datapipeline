@@ -953,9 +953,22 @@ button{font-family:inherit;font-size:12px;cursor:pointer;border:none;border-radi
 .avail-list{flex:1;overflow-y:auto;padding:4px 0}
 .avail-section{font-size:9px;text-transform:uppercase;letter-spacing:.06em;color:var(--text2);
   padding:4px 8px 2px;opacity:.7}
-.avail-field{display:flex;align-items:center;gap:5px;padding:3px 8px;cursor:pointer;
-  font-size:11px;color:var(--text);border-left:2px solid transparent}
+.avail-field{display:flex;align-items:center;gap:5px;padding:3px 8px;cursor:grab;
+  font-size:11px;color:var(--text);border-left:2px solid transparent;user-select:none}
 .avail-field:hover{background:var(--bg2);border-left-color:var(--accent)}
+.avail-field:active{cursor:grabbing}
+/* dragging state — source item fades while ghost image is live */
+.avail-field.af-dragging{opacity:.35}
+/* drop-ready — all expr inputs glow while a field is being dragged */
+.map-expr.drop-ready{border-color:rgba(0,120,212,.5);background:rgba(0,120,212,.06)}
+/* drop-over — the specific expr input the cursor is hovering */
+.map-expr.drop-over{border-color:var(--accent)!important;background:rgba(0,120,212,.14)!important;
+  box-shadow:0 0 0 2px rgba(0,120,212,.25)}
+/* drop-confirm — flash the new expression input green after a successful drop */
+.map-expr.drop-confirm{border-color:var(--ok)!important;background:rgba(63,185,80,.14)!important;
+  transition:background .6s,border-color .6s}
+/* drop-active — dashed outline on mapper-main during any active drag */
+.mapper-main.drop-active{outline:1px dashed rgba(0,120,212,.4)}
 .avail-type{font-size:9px;font-family:var(--vscode-editor-font-family,monospace);
   color:var(--text2);background:var(--bg2);border:1px solid var(--border);
   border-radius:2px;padding:0 3px;min-width:24px;text-align:center;flex-shrink:0}
