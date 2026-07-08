@@ -242,6 +242,10 @@
         appendRunLog('[ERROR] ' + (m.message || 'Unknown error'))
         if (activeTopTab === 'run') renderRunTab()
         break
+      case 'browseResult':
+        var inp = byId(m.id)
+        if (inp) { inp.value = m.path; inp.dispatchEvent(new Event('input')) }
+        break
     }
   }
 
@@ -710,10 +714,6 @@
     state.propsSnapshot = null
     state.mapperExprMap = null
     state.mapperActiveField = null
-    if (state._closeFnDropdown) {
-      document.removeEventListener('click', state._closeFnDropdown)
-      state._closeFnDropdown = null
-    }
     qsa('.node').forEach(function (n) { n.classList.remove('selected') })
     var ppEl = byId('pp')
     if (ppEl) {
@@ -788,6 +788,12 @@
       '<button class="btn-g" id="btn-src-discard">Discard</button>' +
       '</div>'
     pp.innerHTML = html
+
+    pp.addEventListener('click', function (e) {
+      var btn = e.target.closest('.btn-browse')
+      if (!btn) return
+      send('browse', { id: btn.dataset.target, mode: btn.dataset.mode || 'file' })
+    })
 
     wireSourceFields(type, src)
 
@@ -865,10 +871,18 @@
     return cols.length ? cols : undefined
   }
 
+  function pathField(label, id, value, placeholder, mode) {
+    return ppField(label,
+      '<div class="browse-wrap">' +
+      '<input class="pp-input" id="' + id + '" type="text" value="' + esc(value) + '" placeholder="' + esc(placeholder) + '"/>' +
+      '<button class="btn-browse" data-target="' + id + '" data-mode="' + (mode || 'file') + '" title="Browse…">&#128193;</button>' +
+      '</div>')
+  }
+
   function renderSourceTypeFields(type, src) {
     var html = ''
     if (type === 'csv' || type === 'tsv') {
-      html += ppField('Path', '<input class="pp-input" id="src-path" type="text" value="' + esc(src.path || '') + '" placeholder="/data/input.csv"/>')
+      html += pathField('Path', 'src-path', src.path || '', '/data/input.csv', 'file')
       if (type === 'csv') html += ppField('Delimiter', '<input class="pp-input" id="src-delim" type="text" value="' + esc(src.delimiter || ',') + '" placeholder=","/>')
       html += ppField('Has Header', ppCheck('src-header', src.hasHeader !== false))
       html += renderColGrid('src-cols-editor', src.columns)
@@ -880,21 +894,21 @@
       html += ppField('Key Column', '<input class="pp-input" id="src-keycol" type="text" value="' + esc(src.keyColumn || '') + '" placeholder="id"/>')
       html += ppField('Partitions', '<input class="pp-input" id="src-parts" type="number" min="1" max="64" value="' + esc(src.partitions || 1) + '"/>')
     } else if (type === 'parquet') {
-      html += ppField('Path', '<input class="pp-input" id="src-path" type="text" value="' + esc(src.path || '') + '" placeholder="s3://bucket/prefix/*.parquet"/>')
+      html += pathField('Path', 'src-path', src.path || '', 's3://bucket/prefix/*.parquet', 'any')
       html += ppField('Columns (JSON array, optional)', '<textarea class="pp-textarea" id="src-cols" rows="3" placeholder=\'["col1","col2"]\'>' + esc(src.columns ? JSON.stringify(src.columns) : '') + '</textarea>')
       html += ppField('Row Group Parallelism (1–8)', '<input class="pp-input" id="src-rgp" type="number" min="1" max="8" value="' + esc(src.rowGroupParallelism || 4) + '"/>')
     } else if (type === 'fixedwidth') {
-      html += ppField('Path', '<input class="pp-input" id="src-path" type="text" value="' + esc(src.path || '') + '" placeholder="/mnt/mainframe/file.dat"/>')
+      html += pathField('Path', 'src-path', src.path || '', '/mnt/mainframe/file.dat', 'file')
       html += ppField('Encoding', ppSelect('src-enc', ['utf-8', 'ebcdic-037', 'ebcdic-500'], src.encoding || 'utf-8'))
       html += ppField('Record Length', '<input class="pp-input" id="src-reclen" type="number" min="1" value="' + esc(src.recordLength || 80) + '"/>')
       html += ppField('Skip Lines', '<input class="pp-input" id="src-skip" type="number" min="0" value="' + esc(src.skipLines || 0) + '"/>')
       html += ppField('Columns (JSON)', '<textarea class="pp-textarea" id="src-cols" rows="5" placeholder=\'[{"name":"id","start":1,"length":10,"type":"string"}]\'>' + esc(src.columns ? JSON.stringify(src.columns, null, 2) : '') + '</textarea>')
     } else if (type === 'xml') {
-      html += ppField('Path', '<input class="pp-input" id="src-path" type="text" value="' + esc(src.path || '') + '" placeholder="/data/records.xml"/>')
+      html += pathField('Path', 'src-path', src.path || '', '/data/records.xml', 'file')
       html += ppField('Record Element', '<input class="pp-input" id="src-recel" type="text" value="' + esc(src.recordElement || '') + '" placeholder="record"/>')
       html += renderColGrid('src-cols-editor', src.columns)
     } else if (type === 'jsonlines' || type === 'ndjson') {
-      html += ppField('Path', '<input class="pp-input" id="src-path" type="text" value="' + esc(src.path || '') + '" placeholder="/data/records.ndjson"/>')
+      html += pathField('Path', 'src-path', src.path || '', '/data/records.ndjson', 'file')
       html += renderColGrid('src-cols-editor', src.columns)
     } else if (type === 'kafka') {
       var brokersVal = Array.isArray(src.brokers) ? src.brokers.join(', ') : (src.brokers || '')
@@ -1082,7 +1096,7 @@
       }).join('')
       if (!outputFieldsHtml) outputFieldsHtml = '<div class="avail-empty" id="output-empty">No fields yet — add one below</div>'
 
-      html += '<div class="mapper-host3">' +
+      html += '<div class="mapper-host4">' +
         '<div class="mapper-avail">' +
           '<div class="mapper-panel-hdr">Available Fields</div>' +
           '<div class="avail-list" id="avail-list">' + availHtml + '</div>' +
@@ -1098,15 +1112,16 @@
         '<div class="mapper-expr-panel" id="mapper-expr-panel">' +
           '<div class="expr-field-hdr">' +
             '<span id="expr-panel-hdr" class="expr-field-name">Select a field</span>' +
-            '<div class="fn-menu-wrap">' +
-              '<button class="fn-menu-btn fn-menu-disabled" id="fn-menu-btn">Functions &#9662;</button>' +
-              '<div class="fn-dropdown" id="fn-dropdown"></div>' +
-            '</div>' +
           '</div>' +
           '<div class="expr-editor-wrap">' +
             '<textarea class="pp-input map-expr3" id="map-expr-input" placeholder="$field or function(...)" disabled></textarea>' +
-            '<div class="expr-hint">Click a field to map, then drag from Available Fields or use Functions.</div>' +
+            '<div class="expr-hint">Select an output field, then drag a source field or click a function.</div>' +
           '</div>' +
+        '</div>' +
+        '<div class="mapper-fn-lib">' +
+          '<div class="fn-lib-hdr">Functions</div>' +
+          '<input class="fn-search" id="fn-search" placeholder="Search…" autocomplete="off"/>' +
+          '<div class="fn-lib-body" id="fn-lib-body"></div>' +
         '</div>' +
       '</div>'
     } else if (type === 'validate') {
@@ -1152,40 +1167,71 @@
     var newOutputInput = byId('new-output-name')
     var exprInput = byId('map-expr-input')
     var exprPanelHdr = byId('expr-panel-hdr')
-    var fnMenuBtn = byId('fn-menu-btn')
-    var fnDropdown = byId('fn-dropdown')
+    var fnLibBody = byId('fn-lib-body')
+    var fnSearch = byId('fn-search')
     var dragField = null
 
-    // ── Build grouped Functions dropdown ──
+    // ── Function library — 6 categories, 40 functions ──
     var FN_GROUPS = [
-      { label: 'General', fns: [
-        { label: 'coalesce',  tpl: 'coalesce($field, "")' }
+      { cat: 'Conditional', fns: [
+        { name: 'coalesce',   sig: '(value, default)',         tpl: 'coalesce($field, "")' },
+        { name: 'iif',        sig: '(cond, then, else)',       tpl: 'iif($field != "", $field, "default")' },
+        { name: 'isEmpty',    sig: '(value) → bool',           tpl: 'isEmpty($field)' },
+        { name: 'isNull',     sig: '(value) → bool',           tpl: 'isNull($field)' },
       ]},
-      { label: 'String', fns: [
-        { label: 'concat',    tpl: 'string.concat($a, $b)' },
-        { label: 'trim',      tpl: 'string.trim($field)' },
-        { label: 'upper',     tpl: 'string.toUpper($field)' },
-        { label: 'lower',     tpl: 'string.toLower($field)' },
-        { label: 'toString',  tpl: 'string.toString($field)' },
-        { label: 'length',    tpl: 'string.length($field)' }
+      { cat: 'String', fns: [
+        { name: 'concat',     sig: '(a, b, …)',                tpl: 'string.concat($a, $b)' },
+        { name: 'trim',       sig: '(value)',                  tpl: 'string.trim($field)' },
+        { name: 'upper',      sig: '(value)',                  tpl: 'string.toUpper($field)' },
+        { name: 'lower',      sig: '(value)',                  tpl: 'string.toLower($field)' },
+        { name: 'length',     sig: '(value) → int',            tpl: 'string.length($field)' },
+        { name: 'substring',  sig: '(value, start, end)',      tpl: 'string.substring($field, 0, 5)' },
+        { name: 'replace',    sig: '(value, from, to)',        tpl: 'string.replace($field, "old", "new")' },
+        { name: 'indexOf',    sig: '(value, search) → int',   tpl: 'string.indexOf($field, "x")' },
+        { name: 'startsWith', sig: '(value, prefix) → bool',  tpl: 'string.startsWith($field, "A")' },
+        { name: 'endsWith',   sig: '(value, suffix) → bool',  tpl: 'string.endsWith($field, "Z")' },
+        { name: 'split',      sig: '(value, sep) → array',    tpl: 'string.split($field, ",")' },
+        { name: 'contains',   sig: '(value, search) → bool',  tpl: 'string.contains($field, "x")' },
+        { name: 'padLeft',    sig: '(value, len, char)',       tpl: 'string.padLeft($field, 5, "0")' },
+        { name: 'toString',   sig: '(value) → string',        tpl: 'string.toString($field)' },
       ]},
-      { label: 'Number', fns: [
-        { label: 'parseInt',  tpl: 'integer.parseInt($field)' }
+      { cat: 'Number', fns: [
+        { name: 'parseInt',   sig: '(value) → int',            tpl: 'integer.parseInt($field)' },
+        { name: 'parseFloat', sig: '(value) → float',          tpl: 'number.parseFloat($field)' },
+        { name: 'round',      sig: '(value, decimals)',        tpl: 'math.round($field, 2)' },
+        { name: 'floor',      sig: '(value) → int',            tpl: 'math.floor($field)' },
+        { name: 'ceil',       sig: '(value) → int',            tpl: 'math.ceil($field)' },
+        { name: 'abs',        sig: '(value)',                  tpl: 'math.abs($field)' },
+        { name: 'min',        sig: '(a, b)',                   tpl: 'math.min($a, $b)' },
+        { name: 'max',        sig: '(a, b)',                   tpl: 'math.max($a, $b)' },
+        { name: 'mod',        sig: '(value, divisor)',         tpl: 'math.mod($field, 2)' },
       ]},
-      { label: 'Date', fns: [
-        { label: 'now',       tpl: 'util.now()' }
-      ]}
+      { cat: 'Date', fns: [
+        { name: 'now',        sig: '() → datetime',            tpl: 'util.now()' },
+        { name: 'today',      sig: '() → date',                tpl: 'util.today()' },
+        { name: 'format',     sig: '(date, layout)',           tpl: 'datetime.format($field, "2006-01-02")' },
+        { name: 'parse',      sig: '(str, layout)',            tpl: 'datetime.parse($field, "2006-01-02")' },
+        { name: 'year',       sig: '(date) → int',             tpl: 'datetime.year($field)' },
+        { name: 'month',      sig: '(date) → int',             tpl: 'datetime.month($field)' },
+        { name: 'day',        sig: '(date) → int',             tpl: 'datetime.day($field)' },
+        { name: 'addDays',    sig: '(date, n)',                tpl: 'datetime.addDays($field, 1)' },
+        { name: 'dateDiff',   sig: '(a, b, unit)',             tpl: 'datetime.diff($a, $b, "days")' },
+      ]},
+      { cat: 'Conversion', fns: [
+        { name: 'toInt',      sig: '(value) → int',            tpl: 'coerce.toInt($field)' },
+        { name: 'toFloat',    sig: '(value) → float',          tpl: 'coerce.toFloat($field)' },
+        { name: 'toBool',     sig: '(value) → bool',           tpl: 'coerce.toBool($field)' },
+        { name: 'toDate',     sig: '(value, layout)',          tpl: 'coerce.toDate($field, "2006-01-02")' },
+      ]},
+      { cat: 'Encoding', fns: [
+        { name: 'urlEncode',  sig: '(value)',                  tpl: 'url.encode($field)' },
+        { name: 'urlDecode',  sig: '(value)',                  tpl: 'url.decode($field)' },
+        { name: 'base64Enc',  sig: '(value)',                  tpl: 'base64.encode($field)' },
+        { name: 'base64Dec',  sig: '(value)',                  tpl: 'base64.decode($field)' },
+        { name: 'jsonEncode', sig: '(value) → string',        tpl: 'json.encode($field)' },
+        { name: 'jsonDecode', sig: '(str) → object',          tpl: 'json.decode($field)' },
+      ]},
     ]
-
-    if (fnDropdown) {
-      fnDropdown.innerHTML = FN_GROUPS.map(function (grp) {
-        var btnHtml = grp.fns.map(function (fn) {
-          return '<button class="fn-item" data-tpl="' + esc(fn.tpl) + '">' + esc(fn.label) + '</button>'
-        }).join('')
-        return '<div class="fn-group"><div class="fn-group-hdr">' + esc(grp.label) + '</div>' +
-          '<div class="fn-group-items">' + btnHtml + '</div></div>'
-      }).join('')
-    }
 
     // ── Helper: save display value back to exprMap with implicit = prefix ──
     function saveExpr(val) {
@@ -1217,7 +1263,6 @@
         exprInput.disabled = false
         exprInput.focus()
       }
-      if (fnMenuBtn) fnMenuBtn.classList.remove('fn-menu-disabled')
     }
 
     // Initialize dots for pre-existing mapped fields
@@ -1265,40 +1310,54 @@
       })
     }
 
-    // Functions dropdown toggle
-    if (fnMenuBtn && fnDropdown) {
-      fnMenuBtn.addEventListener('click', function (e) {
-        e.stopPropagation()
-        var open = fnDropdown.classList.toggle('fn-dropdown-open')
-        fnMenuBtn.classList.toggle('fn-menu-active', open)
-      })
+    // Populate fn-lib-body from FN_GROUPS
+    if (fnLibBody) {
+      fnLibBody.innerHTML = FN_GROUPS.map(function (grp) {
+        return '<div class="fn-cat-hdr">' + esc(grp.cat) + '</div>' +
+          grp.fns.map(function (fn) {
+            return '<div class="fn-entry" data-tpl="' + esc(fn.tpl) + '">' +
+              '<span class="fn-entry-name">' + esc(fn.name) + '</span>' +
+              '<span class="fn-entry-sig">' + esc(fn.sig) + '</span>' +
+              '</div>'
+          }).join('')
+      }).join('')
+    }
 
-      fnDropdown.addEventListener('click', function (e) {
-        var btn = e.target.closest('.fn-item')
-        if (!btn || !state.mapperActiveField || !exprInput) return
-        var tmpl = btn.dataset.tpl
+    // Search filter
+    if (fnSearch && fnLibBody) {
+      fnSearch.addEventListener('input', function () {
+        var q = fnSearch.value.trim().toLowerCase()
+        qsa('.fn-entry', fnLibBody).forEach(function (el) {
+          el.classList.toggle('hidden', q !== '' && !el.querySelector('.fn-entry-name').textContent.toLowerCase().includes(q))
+        })
+        qsa('.fn-cat-hdr', fnLibBody).forEach(function (hdr) {
+          var next = hdr.nextElementSibling
+          var hasVisible = false
+          while (next && !next.classList.contains('fn-cat-hdr')) {
+            if (!next.classList.contains('hidden')) hasVisible = true
+            next = next.nextElementSibling
+          }
+          hdr.classList.toggle('hidden', !hasVisible && q !== '')
+        })
+      })
+    }
+
+    // Click to insert template at cursor
+    if (fnLibBody) {
+      fnLibBody.addEventListener('click', function (e) {
+        var entry = e.target.closest('.fn-entry')
+        if (!entry || !state.mapperActiveField || !exprInput) return
+        var tmpl = entry.dataset.tpl
         var start = exprInput.selectionStart
         var end = exprInput.selectionEnd
         var val = exprInput.value
-        var inserted = val.trim() ? val.substring(0, start) + tmpl + val.substring(end) : tmpl
-        exprInput.value = inserted
+        exprInput.value = val.trim() ? val.substring(0, start) + tmpl + val.substring(end) : tmpl
         var pos = val.trim() ? start + tmpl.length : tmpl.length
         exprInput.setSelectionRange(pos, pos)
         saveExpr(exprInput.value)
         updateDot(state.mapperActiveField)
-        fnDropdown.classList.remove('fn-dropdown-open')
-        fnMenuBtn.classList.remove('fn-menu-active')
         exprInput.focus()
       })
-
-      if (state._closeFnDropdown) {
-        document.removeEventListener('click', state._closeFnDropdown)
-      }
-      state._closeFnDropdown = function () {
-        fnDropdown.classList.remove('fn-dropdown-open')
-        fnMenuBtn.classList.remove('fn-menu-active')
-      }
-      document.addEventListener('click', state._closeFnDropdown)
     }
 
     // + Add output field button / Enter in name input
@@ -1445,6 +1504,12 @@
 
     pp.innerHTML = html
 
+    pp.addEventListener('click', function (e) {
+      var btn = e.target.closest('.btn-browse')
+      if (!btn) return
+      send('browse', { id: btn.dataset.target, mode: btn.dataset.mode || 'file' })
+    })
+
     var saveBtn = byId('btn-sink-save')
     if (saveBtn) saveBtn.addEventListener('click', function () { saveSinkProps(); closePpPanel() })
     var discardBtn = byId('btn-sink-discard')
@@ -1461,7 +1526,7 @@
       html += ppField('On Conflict', ppSelect('sink-conflict', ['insert', 'upsert', 'replace', 'ignore'], sink.onConflict || 'insert'))
       html += ppField('Conflict Key (comma-separated)', '<input class="pp-input" id="sink-confkey" type="text" value="' + esc(Array.isArray(sink.conflictKey) ? sink.conflictKey.join(', ') : (sink.conflictKey || '')) + '" placeholder="id"/>')
     } else if (type === 'parquet') {
-      html += ppField('Path', '<input class="pp-input" id="sink-path" type="text" value="' + esc(sink.path || '') + '" placeholder="/data/output/"/>')
+      html += pathField('Path', 'sink-path', sink.path || '', '/data/output/', 'folder')
       html += ppField('Row Group Size', '<input class="pp-input" id="sink-rgs" type="number" min="1000" value="' + esc(sink.rowGroupSize || 100000) + '"/>')
     } else if (type === 'objstore') {
       html += ppField('Provider', ppSelect('sink-provider', ['s3', 'gcs', 'adls', 'azure-blob'], sink.provider || 's3'))
@@ -1544,7 +1609,9 @@
     var html = '<div class="pp-fields-wrap">' +
       '<div class="pp-hint pp-field-full" style="margin-bottom:4px">Rows that fail validation or error in the sink are routed here.</div>'
 
-    html += renderSinkTypeFields(type, dlq).replace(/id="sink-/g, 'id="dlq-').replace(/id="sink/g, 'id="dlq')
+    html += renderSinkTypeFields(type, dlq)
+      .replace(/id="sink-/g, 'id="dlq-').replace(/id="sink/g, 'id="dlq')
+      .replace(/data-target="sink-/g, 'data-target="dlq-')
     html += '</div>'
 
     html += '<div class="pp-action-bar">' +
@@ -1554,6 +1621,12 @@
       '</div>'
 
     pp.innerHTML = html
+
+    pp.addEventListener('click', function (e) {
+      var btn = e.target.closest('.btn-browse')
+      if (!btn) return
+      send('browse', { id: btn.dataset.target, mode: btn.dataset.mode || 'file' })
+    })
 
     var saveBtn = byId('btn-dlq-save')
     if (saveBtn) saveBtn.addEventListener('click', function () { saveDlqProps(); closePpPanel() })

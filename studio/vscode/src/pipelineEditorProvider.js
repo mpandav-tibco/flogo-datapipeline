@@ -144,7 +144,7 @@ class PipelineEditorProvider {
 
   // ── Message handler ─────────────────────────────────────────────────────────
 
-  _onMessage(panel, doc, msg) {
+  async _onMessage(panel, doc, msg) {
     const post = m => { try { panel.webview.postMessage(m) } catch (_) { } }
 
     switch (msg.type) {
@@ -246,6 +246,20 @@ class PipelineEditorProvider {
       case 'copyText': {
         if (typeof msg.text === 'string' && msg.text) {
           vscode.env.clipboard.writeText(msg.text)
+        }
+        break
+      }
+
+      case 'browse': {
+        const browseMode = msg.mode || 'file'
+        const uris = await vscode.window.showOpenDialog({
+          canSelectFiles: browseMode !== 'folder',
+          canSelectFolders: browseMode !== 'file',
+          canSelectMany: false,
+          openLabel: 'Select',
+        })
+        if (uris && uris.length > 0) {
+          post({ type: 'browseResult', id: msg.id, path: uris[0].fsPath })
         }
         break
       }
@@ -939,7 +953,7 @@ button{font-family:inherit;font-size:12px;cursor:pointer;border:none;border-radi
 /* ── Source columns grid ── */
 .mapper-toolbar{display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
 .mapper-toolbar-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--text2)}
-.cols-grid,.mapper-host3{flex:0 0 100%;max-width:100%}
+.cols-grid,.mapper-host4{flex:0 0 100%;max-width:100%}
 .cols-grid{display:grid;grid-template-columns:1fr 110px 26px;gap:3px 6px;align-items:center}
 .col-row{display:contents}
 .col-del-row{width:22px;height:22px;padding:0!important;font-size:13px;line-height:1;
@@ -950,8 +964,8 @@ button{font-family:inherit;font-size:12px;cursor:pointer;border:none;border-radi
   color:var(--text2);padding-bottom:3px;border-bottom:1px solid var(--border);margin-bottom:2px;
   position:sticky;top:0;background:var(--bg2);z-index:1}
 
-/* ── 3-panel mapper host ── */
-.mapper-host3{display:flex;height:280px;border:1px solid var(--border);border-radius:4px;overflow:hidden}
+/* ── 4-panel mapper host ── */
+.mapper-host4{display:flex;height:300px;border:1px solid var(--border);border-radius:4px;overflow:hidden}
 
 /* Panel 1: Available Fields */
 .mapper-avail{width:140px;flex-shrink:0;border-right:1px solid var(--border);
@@ -1002,36 +1016,41 @@ details[open]>.avail-tree-hdr::before{transform:rotate(90deg)}
 
 /* Panel 3: Expression Editor */
 .mapper-expr-panel{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0}
-/* Header row: field name + Functions button */
-.expr-field-hdr{display:flex;align-items:center;justify-content:space-between;
-  padding:5px 8px;border-bottom:1px solid var(--border);flex-shrink:0;background:var(--bg3);gap:6px}
+/* Header row: field name only */
+.expr-field-hdr{display:flex;align-items:center;
+  padding:5px 8px;border-bottom:1px solid var(--border);flex-shrink:0;background:var(--bg3)}
 .expr-field-name{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;
-  color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
-/* Functions dropdown toggle button */
-.fn-menu-wrap{position:relative;flex-shrink:0}
-.fn-menu-btn{font-size:10px;padding:2px 7px;border:1px solid var(--border);border-radius:3px;
-  background:var(--bg2);color:var(--text);cursor:pointer;white-space:nowrap;line-height:1.4}
-.fn-menu-btn:hover{border-color:var(--accent);color:var(--accent)}
-.fn-menu-btn.fn-menu-active{border-color:var(--accent);color:var(--accent);background:rgba(0,120,212,.08)}
-.fn-menu-disabled.fn-menu-btn{opacity:.45;pointer-events:none}
-/* Dropdown panel */
-.fn-dropdown{display:none;position:absolute;right:0;top:calc(100% + 3px);
-  background:var(--bg2);border:1px solid var(--border);border-radius:4px;
-  min-width:160px;z-index:50;box-shadow:0 4px 12px rgba(0,0,0,.25);padding:4px 0}
-.fn-dropdown.fn-dropdown-open{display:block}
-.fn-group{padding:4px 0}
-.fn-group+.fn-group{border-top:1px solid var(--border)}
-.fn-group-hdr{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;
-  color:var(--text2);padding:2px 10px;opacity:.7}
-.fn-group-items{display:flex;flex-wrap:wrap;gap:2px;padding:3px 8px}
-.fn-item{font-size:10px;padding:2px 7px;border:1px solid var(--border);border-radius:3px;
-  background:transparent;color:var(--text);cursor:pointer;white-space:nowrap}
-.fn-item:hover{border-color:var(--accent);color:var(--accent);background:rgba(0,120,212,.08)}
+  color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* Panel 4: Function Library */
+.mapper-fn-lib{width:185px;flex-shrink:0;border-left:1px solid var(--border);
+  display:flex;flex-direction:column;background:var(--bg3);overflow:hidden}
+.fn-lib-hdr{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;
+  color:var(--text2);padding:5px 8px;border-bottom:1px solid var(--border);flex-shrink:0}
+.fn-search{width:100%;box-sizing:border-box;padding:4px 8px;font-size:11px;
+  border:none;border-bottom:1px solid var(--border);background:var(--bg2);color:var(--text);outline:none}
+.fn-search::placeholder{color:var(--text2)}
+.fn-lib-body{flex:1;overflow-y:auto;padding:2px 0}
+.fn-cat-hdr{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;
+  color:var(--text2);padding:5px 8px 2px;opacity:.7;position:sticky;top:0;background:var(--bg3)}
+.fn-cat-hdr.hidden{display:none}
+.fn-entry{display:flex;flex-direction:column;padding:4px 8px 3px;cursor:pointer;
+  border-left:2px solid transparent;transition:background .1s}
+.fn-entry:hover{background:var(--bg2);border-left-color:var(--accent)}
+.fn-entry-name{font-family:var(--vscode-editor-font-family,monospace);font-size:11px;color:var(--accent)}
+.fn-entry-sig{font-size:9px;color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fn-entry.hidden{display:none}
 /* Expression textarea */
 .expr-editor-wrap{flex:1;display:flex;flex-direction:column;padding:6px;gap:4px;overflow:hidden}
 .map-expr3{flex:1;resize:none;font-family:var(--vscode-editor-font-family,monospace);font-size:11px;
   min-height:0;transition:border-color .15s}
 .map-expr3.drop-over{border-color:var(--accent)!important;background:rgba(0,120,212,.08)!important}
+/* ── Browse file button ── */
+.browse-wrap{display:flex;gap:4px;align-items:center}
+.browse-wrap .pp-input{flex:1;min-width:0}
+.btn-browse{flex-shrink:0;padding:2px 8px;font-size:13px;border:1px solid var(--border);
+  border-radius:3px;background:var(--bg2);color:var(--text2);cursor:pointer;line-height:1.6;
+  transition:border-color .15s,color .15s}
+.btn-browse:hover{border-color:var(--accent);color:var(--accent)}
 .expr-hint{font-size:10px;color:var(--text2);font-style:italic;flex-shrink:0;line-height:1.4}
 
 /* ── Performance tab ── */
