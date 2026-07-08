@@ -966,6 +966,37 @@ body{background:var(--bg);color:var(--text);font-family:var(--vscode-font-family
 .pp-empty-ico{font-size:2rem;opacity:.35}
 .section{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--text2);
   padding-bottom:6px;border-bottom:1px solid var(--border);margin-bottom:12px}
+/* ── Filter transform — enterprise two-column layout ─────────────── */
+.filter-layout{display:flex;gap:16px;flex:0 0 100%;min-width:0;min-height:0}
+.filter-expr-col{flex:1;display:flex;flex-direction:column;gap:6px;min-width:0}
+.filter-fields-col{width:220px;flex-shrink:0;display:flex;flex-direction:column;gap:5px;min-height:0}
+.filter-blk-hdr{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;
+  color:var(--text2);padding-bottom:4px;border-bottom:1px solid var(--border);display:flex;
+  align-items:baseline;gap:6px}
+.filter-blk-hdr small{font-weight:400;text-transform:none;letter-spacing:0;font-size:9px;opacity:.75}
+.filter-expr-ta{font-family:'Cascadia Code','Fira Mono','Courier New',monospace;font-size:12px;
+  line-height:1.6;resize:vertical;min-height:80px;width:100%;box-sizing:border-box;
+  border:1px solid var(--inbdr);border-radius:3px;background:var(--bg1,var(--bg));
+  color:var(--text);padding:7px 10px}
+.filter-expr-ta:focus{outline:none;border-color:var(--accent)}
+.filter-ops{display:flex;flex-wrap:wrap;gap:3px}
+.fop{font-size:11px;padding:0 7px;height:22px;border-radius:3px;cursor:pointer;
+  font-family:'Cascadia Code','Fira Mono',monospace;border:1px solid var(--inbdr);
+  background:var(--bg3);color:var(--text);white-space:nowrap;display:inline-flex;align-items:center}
+.fop:hover{background:var(--accent);color:#fff;border-color:transparent}
+.fop.fop-kw{font-family:inherit;font-weight:700;letter-spacing:.02em}
+.filter-fields-list{display:flex;flex-direction:column;gap:2px;overflow-y:auto;flex:1;min-height:0}
+.fld-chip{display:flex;align-items:center;gap:0;padding:0;border-radius:3px;
+  border:1px solid var(--inbdr);background:var(--bg3);cursor:pointer;
+  width:100%;overflow:hidden;transition:border-color .1s}
+.fld-chip:hover{border-color:var(--accent)}
+.fld-chip:hover .fld-chip-name{color:var(--accent)}
+.fld-chip-name{font-size:11px;color:var(--text);font-family:'Cascadia Code','Fira Mono',monospace;
+  flex:1;text-align:left;padding:4px 7px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fld-chip-type{font-size:9px;color:var(--text2);background:var(--bg1,var(--bg));
+  padding:0 6px;align-self:stretch;display:flex;align-items:center;
+  border-left:1px solid var(--inbdr);text-transform:uppercase;letter-spacing:.04em;flex-shrink:0}
+.fld-no-cols{font-size:11px;color:var(--text2);font-style:italic;padding:6px 0;line-height:1.4}
 
 /* ── Form fields ── */
 .field{margin-bottom:12px}

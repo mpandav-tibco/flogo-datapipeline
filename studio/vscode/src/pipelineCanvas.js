@@ -1029,15 +1029,72 @@
 
     wireHdrButtons(function () { saveTransformProps(idx) })
 
-    // Map field editor wiring
+    if (type === 'filter') wireFilterEditor()
     if (type === 'map' || type === 'mapper') wireMapEditor(tr)
+  }
+
+  // Wire operator insert buttons and field chips for the Filter transform.
+  // Uses mousedown + preventDefault so the textarea never loses focus/selection.
+  function wireFilterEditor() {
+    var ta = byId('tr-expr')
+    if (!ta) return
+    function insertAt(text) {
+      var s = ta.selectionStart, e = ta.selectionEnd
+      ta.setRangeText(text, s, e, 'end')
+      ta.focus()
+    }
+    qsa('.fop').forEach(function (btn) {
+      btn.addEventListener('mousedown', function (ev) { ev.preventDefault(); insertAt(btn.dataset.op || '') })
+    })
+    qsa('.fld-chip').forEach(function (btn) {
+      btn.addEventListener('mousedown', function (ev) { ev.preventDefault(); insertAt(btn.dataset.field || '') })
+    })
   }
 
   function renderTransformTypeFields(type, tr, trIdx) {
     var html = ''
     if (type === 'filter') {
-      html += ppField('Expression', '<textarea class="pp-textarea" id="tr-expr" rows="4" placeholder="quantity > 0 AND status != \'CANCELLED\'">' + esc(tr.expr || '') + '</textarea>')
-      html += '<div class="pp-hint">Supported: field op value, AND / OR, IS NULL, IN (...), comparison operators (=, !=, &lt;, &gt;, &lt;=, &gt;=).</div>'
+      var doc2 = state.doc || {}
+      var srcCols = (doc2.source && Array.isArray(doc2.source.columns)) ? doc2.source.columns : []
+
+      var OPS = [
+        { op: ' = ', label: '=' }, { op: ' != ', label: '!=' },
+        { op: ' < ', label: '<' }, { op: ' > ', label: '>' },
+        { op: ' <= ', label: '<=' }, { op: ' >= ', label: '>=' },
+        { op: ' AND ', label: 'AND', kw: true }, { op: ' OR ', label: 'OR', kw: true },
+        { op: 'NOT ', label: 'NOT', kw: true },
+        { op: ' IS NULL', label: 'IS NULL', kw: true },
+        { op: ' IS NOT NULL', label: 'IS NOT NULL', kw: true },
+        { op: " IN ()", label: 'IN (…)', kw: true },
+        { op: " LIKE ''", label: 'LIKE', kw: true },
+      ]
+      var opsHtml = OPS.map(function (o) {
+        return '<button class="fop' + (o.kw ? ' fop-kw' : '') + '" data-op="' + esc(o.op) + '">' + esc(o.label) + '</button>'
+      }).join('')
+
+      var chipsHtml = srcCols.length
+        ? srcCols.map(function (c) {
+            var n = typeof c === 'string' ? c : (c.name || ''); if (!n) return ''
+            var t = typeof c === 'object' ? (c.type || 'str') : 'str'
+            return '<button class="fld-chip" data-field="' + esc(n) + '">' +
+              '<span class="fld-chip-name">' + esc(n) + '</span>' +
+              '<span class="fld-chip-type">' + esc(t) + '</span>' +
+              '</button>'
+          }).join('')
+        : '<div class="fld-no-cols">Define source columns to see available fields here.</div>'
+
+      html += '<div class="filter-layout">' +
+        '<div class="filter-expr-col">' +
+          '<div class="filter-blk-hdr">Expression</div>' +
+          '<textarea class="filter-expr-ta" id="tr-expr" spellcheck="false" ' +
+            'placeholder="amount > 100 AND status != \'CANCELLED\'">' + esc(tr.expr || '') + '</textarea>' +
+          '<div class="filter-ops">' + opsHtml + '</div>' +
+        '</div>' +
+        '<div class="filter-fields-col">' +
+          '<div class="filter-blk-hdr">Source Fields <small>click to insert</small></div>' +
+          '<div class="filter-fields-list">' + chipsHtml + '</div>' +
+        '</div>' +
+      '</div>'
     } else if (type === 'map' || type === 'mapper') {
       // Panel 1: collapsible tree of available fields (source + upstream transforms)
       var doc2 = state.doc || {}
