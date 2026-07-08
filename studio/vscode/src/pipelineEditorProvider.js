@@ -1057,7 +1057,7 @@ button{font-family:inherit;font-size:12px;cursor:pointer;border:none;border-radi
   color:var(--text2);padding:4px 8px;cursor:pointer;user-select:none;
   list-style:none;display:flex;align-items:center;gap:4px}
 .avail-tree-hdr::-webkit-details-marker{display:none}
-.avail-tree-hdr::before{content:"\25B6";font-size:8px;color:var(--text2);
+.avail-tree-hdr::before{content:"\\25B6";font-size:8px;color:var(--text2);
   transition:transform .15s;flex-shrink:0;display:inline-block}
 details[open]>.avail-tree-hdr::before{transform:rotate(90deg)}
 .avail-tree-children{padding:0}
