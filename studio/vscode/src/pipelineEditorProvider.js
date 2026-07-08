@@ -774,25 +774,35 @@ body{background:var(--bg);color:var(--text);font-family:var(--vscode-font-family
 .edge-flowing{animation:edgeFlow .6s linear infinite}
 @keyframes edgeFlow{to{stroke-dashoffset:-24}}
 
-/* ── Properties panel (right side, resizable) ── */
-.pp{width:0;flex-shrink:0;border-left:0 solid var(--border);background:var(--bg2);
-  display:flex;flex-direction:column;overflow:hidden;position:relative;
-  transition:width .18s ease,border-left-width 0s .18s}
-.pp.pp-open{width:320px;border-left-width:1px;transition:width .18s ease}
-.pp-resize{position:absolute;top:0;left:0;bottom:0;width:5px;cursor:ew-resize;z-index:20;
+/* ── Properties panel (bottom drawer, resizable) ── */
+.pp{position:absolute;left:0;right:0;bottom:0;height:0;border-top:0 solid var(--border);
+  background:var(--bg2);display:flex;flex-direction:column;overflow:hidden;z-index:25;
+  transition:height .18s ease,border-top-width 0s .18s}
+.pp.pp-open{height:300px;border-top-width:1px;transition:height .18s ease}
+/* Top-edge drag handle for height resize */
+.pp-resize{position:absolute;top:0;left:0;right:0;height:5px;cursor:ns-resize;z-index:26;
   background:transparent;transition:background .12s}
 .pp-resize:hover,.pp-resize.dragging{background:var(--accent);opacity:.4}
-#pp-content{display:flex;flex-direction:column;flex:1;overflow:hidden;min-width:0}
-.pp-hdr{display:flex;align-items:center;gap:6px;padding:0 8px 0 14px;height:44px;
+/* Static header bar: title + close button */
+.pp-hdr-bar{display:flex;align-items:center;gap:8px;padding:0 10px 0 14px;height:36px;
   border-bottom:1px solid var(--border);flex-shrink:0;background:var(--bg2)}
-.pp-title{font-size:12px;font-weight:700;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.pp-sub{font-size:10px;color:var(--text2);flex-shrink:0}
-.pp-icon-btn{background:transparent;border:1px solid transparent;color:var(--text2);
-  padding:3px 7px;font-size:13px;border-radius:3px;line-height:1;cursor:pointer;font-family:inherit}
-.pp-icon-btn:hover{color:var(--text);border-color:var(--inbdr);background:var(--bg3)}
-.pp-body{flex:1;overflow-y:auto;padding:14px;min-height:0}
+.pp-hdr-title{font-size:11px;font-weight:700;flex:1;white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis;text-transform:uppercase;letter-spacing:.06em;color:var(--text2)}
+.pp-close-btn{background:transparent;border:1px solid transparent;color:var(--text2);
+  width:24px;height:24px;font-size:18px;line-height:1;border-radius:3px;cursor:pointer;
+  font-family:inherit;display:flex;align-items:center;justify-content:center;flex-shrink:0;padding:0}
+.pp-close-btn:hover{color:var(--text);border-color:var(--inbdr);background:var(--bg3)}
+/* Scrollable form area */
+#pp-content{display:flex;flex-direction:column;flex:1;overflow-y:auto;min-height:0;padding:10px 14px 14px}
+/* Field grid — wraps horizontally inside the wide bottom drawer */
+.pp-fields-wrap{display:flex;flex-wrap:wrap;gap:8px 20px;align-items:flex-start;align-content:flex-start}
+.pp-field{flex:1;min-width:200px;max-width:320px}
+.pp-field-full{flex:0 0 100%;max-width:100%}
+/* Action bar (Save / Discard / Delete) at the bottom of the form */
+.pp-action-bar{display:flex;align-items:center;gap:8px;padding-top:10px;margin-top:4px;
+  border-top:1px solid var(--border);flex-shrink:0;flex-wrap:wrap}
 .pp-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;
-  height:100%;color:var(--text2);font-size:11px;text-align:center;gap:8px}
+  width:100%;color:var(--text2);font-size:11px;text-align:center;gap:8px}
 .pp-empty-ico{font-size:2rem;opacity:.35}
 .section{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--text2);
   padding-bottom:6px;border-bottom:1px solid var(--border);margin-bottom:12px}
@@ -1055,18 +1065,23 @@ input[type=radio]{accent-color:var(--accent)}
         </div>
         <div class="val-list" id="val-list"></div>
       </div>
-    </div><!-- #cwrap -->
 
-    <!-- Properties panel (right side, resizable) -->
-    <div class="pp" id="pp">
-      <div class="pp-resize" id="pp-resize"></div>
-      <div id="pp-content">
-        <div class="pp-empty" id="pp-empty">
-          <span class="pp-empty-ico">&#9670;</span>
-          <span>Select a node to configure it</span>
+      <!-- Properties panel — bottom drawer, slides up from canvas bottom -->
+      <div class="pp" id="pp">
+        <div class="pp-resize" id="pp-resize"></div>
+        <div class="pp-hdr-bar">
+          <span class="pp-hdr-title" id="pp-hdr-title">Properties</span>
+          <button class="pp-close-btn" id="btn-pp-close" title="Close">&#10005;</button>
+        </div>
+        <div id="pp-content">
+          <div class="pp-empty" id="pp-empty">
+            <span class="pp-empty-ico">&#9670;</span>
+            <span>Select a node to configure it</span>
+          </div>
         </div>
       </div>
-    </div>
+
+    </div><!-- #cwrap -->
 
   </div><!-- .ws-top -->
 </div><!-- .ws -->

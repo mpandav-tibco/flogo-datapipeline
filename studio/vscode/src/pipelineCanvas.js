@@ -33,6 +33,7 @@
     runPort: null,
     metricsInterval: null,
     dragState: null,  // for transform reorder drag
+    propsSnapshot: null, // deep-copy of the config section taken when panel opens (for Discard)
   }
 
   // Active top tab
@@ -237,13 +238,7 @@
       postUpdate()
       showToast('Saved')
     }
-    if (e.key === 'Escape') {
-      state.selected = null
-      qsa('.node').forEach(function (n) { n.classList.remove('selected') })
-      var ppEl = byId('pp')
-      if (ppEl) ppEl.classList.remove('pp-open')
-      renderProps()
-    }
+    if (e.key === 'Escape') { closePpPanel() }
   }
 
   // ── Full render ──────────────────────────────────────────────────────────────
@@ -570,9 +565,65 @@
           ? qs('.node-dlq-card')
           : qs('.node-transform[data-idx="' + index + '"]')
     if (sel) sel.classList.add('selected')
+
+    // Snapshot current config for Discard support
+    var doc = state.doc || {}
+    if (kind === 'source') state.propsSnapshot = JSON.parse(JSON.stringify(doc.source || {}))
+    else if (kind === 'sink') state.propsSnapshot = JSON.parse(JSON.stringify(doc.sink || {}))
+    else if (kind === 'dlq') state.propsSnapshot = JSON.parse(JSON.stringify(doc.dlqSink || {}))
+    else if (kind === 'transform') {
+      var trs = doc.transforms || []
+      state.propsSnapshot = trs[index] ? JSON.parse(JSON.stringify(trs[index])) : {}
+    }
+
+    // Update static header title
+    var titleEl = byId('pp-hdr-title')
+    if (titleEl) {
+      if (kind === 'source') titleEl.textContent = 'Source'
+      else if (kind === 'sink') titleEl.textContent = 'Sink'
+      else if (kind === 'dlq') titleEl.textContent = 'Dead Letter Queue'
+      else if (kind === 'transform') titleEl.textContent = 'Transform #' + (index + 1)
+    }
+
     var ppEl = byId('pp')
     if (ppEl) ppEl.classList.add('pp-open')
     renderProps()
+  }
+
+  // Close the properties panel without saving (user was just reviewing)
+  function closePpPanel() {
+    state.selected = null
+    state.propsSnapshot = null
+    qsa('.node').forEach(function (n) { n.classList.remove('selected') })
+    var ppEl = byId('pp')
+    if (ppEl) ppEl.classList.remove('pp-open')
+    var pp = byId('pp-content')
+    if (pp) pp.innerHTML = '<div class="pp-empty" id="pp-empty"><span class="pp-empty-ico">&#9670;</span><span>Select a node to configure it</span></div>'
+  }
+
+  // Discard edits — restore the snapshot taken when panel opened, then close
+  function discardProps() {
+    var sel = state.selected
+    var snap = state.propsSnapshot
+    if (sel && snap) {
+      var doc = state.doc || {}
+      if (sel.kind === 'source') doc.source = snap
+      else if (sel.kind === 'sink') doc.sink = snap
+      else if (sel.kind === 'dlq') doc.dlqSink = snap
+      else if (sel.kind === 'transform') {
+        var trs = doc.transforms || []
+        if (sel.index != null && trs[sel.index]) trs[sel.index] = snap
+      }
+      postUpdate()
+      renderPipeline()
+    }
+    state.selected = null
+    state.propsSnapshot = null
+    qsa('.node').forEach(function (n) { n.classList.remove('selected') })
+    var ppEl = byId('pp')
+    if (ppEl) ppEl.classList.remove('pp-open')
+    var pp = byId('pp-content')
+    if (pp) pp.innerHTML = '<div class="pp-empty" id="pp-empty"><span class="pp-empty-ico">&#9670;</span><span>Select a node to configure it</span></div>'
   }
 
   // ── Transform drag-to-reorder ─────────────────────────────────────────────────
@@ -686,15 +737,19 @@
       return '<option value="' + t.value + '"' + (type === t.value ? ' selected' : '') + '>' + esc(t.label) + '</option>'
     }).join('')
 
-    var html = '<div class="pp-header">Source</div>' +
+    var html = '<div class="pp-fields-wrap">' +
       '<div class="pp-field">' +
       '<label class="pp-label">Type</label>' +
       '<select id="src-type" class="pp-select">' + typeOpts + '</select>' +
       '</div>'
 
     html += renderSourceTypeFields(type, src)
+    html += '</div>'
 
-    html += '<div class="pp-actions"><button class="btn-p pp-save" id="btn-src-save">Apply</button></div>'
+    html += '<div class="pp-action-bar">' +
+      '<button class="btn-p" id="btn-src-save">Save</button>' +
+      '<button class="btn-g" id="btn-src-discard">Discard</button>' +
+      '</div>'
     pp.innerHTML = html
 
     var typeSel = byId('src-type')
@@ -710,7 +765,9 @@
     wireSourceFields(type, src)
 
     var saveBtn = byId('btn-src-save')
-    if (saveBtn) saveBtn.addEventListener('click', saveSourceProps)
+    if (saveBtn) saveBtn.addEventListener('click', function () { saveSourceProps(); closePpPanel() })
+    var discardBtn = byId('btn-src-discard')
+    if (discardBtn) discardBtn.addEventListener('click', discardProps)
   }
 
   function renderSourceTypeFields(type, src) {
@@ -854,15 +911,20 @@
       return '<option value="' + t.value + '"' + (type === t.value ? ' selected' : '') + '>' + esc(t.label) + '</option>'
     }).join('')
 
-    var html = '<div class="pp-header">Transform <span class="pp-idx">#' + (idx + 1) + '</span>' +
-      '<button class="pp-del-btn" id="btn-tr-del" title="Delete this transform">🗑</button></div>' +
+    var html = '<div class="pp-fields-wrap">' +
       '<div class="pp-field">' +
       '<label class="pp-label">Type</label>' +
       '<select id="tr-type" class="pp-select">' + typeOpts + '</select>' +
       '</div>'
 
     html += renderTransformTypeFields(type, tr)
-    html += '<div class="pp-actions"><button class="btn-p pp-save" id="btn-tr-save">Apply</button></div>'
+    html += '</div>'
+
+    html += '<div class="pp-action-bar">' +
+      '<button class="btn-p" id="btn-tr-save">Save</button>' +
+      '<button class="btn-g" id="btn-tr-discard">Discard</button>' +
+      '<button class="btn-d" id="btn-tr-del" title="Delete this transform" style="margin-left:auto">Delete</button>' +
+      '</div>'
 
     pp.innerHTML = html
 
@@ -880,7 +942,9 @@
     if (delBtn) delBtn.addEventListener('click', function () { deleteTransform(idx) })
 
     var saveBtn = byId('btn-tr-save')
-    if (saveBtn) saveBtn.addEventListener('click', function () { saveTransformProps(idx) })
+    if (saveBtn) saveBtn.addEventListener('click', function () { saveTransformProps(idx); closePpPanel() })
+    var discardBtn = byId('btn-tr-discard')
+    if (discardBtn) discardBtn.addEventListener('click', discardProps)
 
     // Map field editor wiring
     if (type === 'map' || type === 'mapper') wireMapEditor(tr)
@@ -1062,14 +1126,19 @@
       return '<option value="' + t.value + '"' + (type === t.value ? ' selected' : '') + '>' + esc(t.label) + '</option>'
     }).join('')
 
-    var html = '<div class="pp-header">Sink</div>' +
+    var html = '<div class="pp-fields-wrap">' +
       '<div class="pp-field">' +
       '<label class="pp-label">Type</label>' +
       '<select id="sink-type" class="pp-select">' + typeOpts + '</select>' +
       '</div>'
 
     html += renderSinkTypeFields(type, sink)
-    html += '<div class="pp-actions"><button class="btn-p pp-save" id="btn-sink-save">Apply</button></div>'
+    html += '</div>'
+
+    html += '<div class="pp-action-bar">' +
+      '<button class="btn-p" id="btn-sink-save">Save</button>' +
+      '<button class="btn-g" id="btn-sink-discard">Discard</button>' +
+      '</div>'
 
     pp.innerHTML = html
 
@@ -1084,7 +1153,9 @@
     }
 
     var saveBtn = byId('btn-sink-save')
-    if (saveBtn) saveBtn.addEventListener('click', saveSinkProps)
+    if (saveBtn) saveBtn.addEventListener('click', function () { saveSinkProps(); closePpPanel() })
+    var discardBtn = byId('btn-sink-discard')
+    if (discardBtn) discardBtn.addEventListener('click', discardProps)
   }
 
   function renderSinkTypeFields(type, sink) {
@@ -1182,17 +1253,20 @@
       return '<option value="' + t.value + '"' + (type === t.value ? ' selected' : '') + '>' + esc(t.label) + '</option>'
     }).join('')
 
-    var html = '<div class="pp-header">Dead Letter Queue Sink</div>' +
-      '<div class="pp-hint" style="margin-bottom:8px">Rows that fail validation or error in the sink are routed here.</div>' +
+    var html = '<div class="pp-fields-wrap">' +
+      '<div class="pp-hint pp-field-full" style="margin-bottom:4px">Rows that fail validation or error in the sink are routed here.</div>' +
       '<div class="pp-field">' +
       '<label class="pp-label">Type</label>' +
       '<select id="dlq-type" class="pp-select">' + typeOpts + '</select>' +
       '</div>'
 
     html += renderSinkTypeFields(type, dlq).replace(/id="sink-/g, 'id="dlq-').replace(/id="sink/g, 'id="dlq')
-    html += '<div class="pp-actions">' +
-      '<button class="btn-p pp-save" id="btn-dlq-save">Apply</button>' +
-      '<button class="btn-g" id="btn-dlq-remove" style="margin-left:8px">Remove DLQ</button>' +
+    html += '</div>'
+
+    html += '<div class="pp-action-bar">' +
+      '<button class="btn-p" id="btn-dlq-save">Save</button>' +
+      '<button class="btn-g" id="btn-dlq-discard">Discard</button>' +
+      '<button class="btn-d" id="btn-dlq-remove" style="margin-left:auto">Remove DLQ</button>' +
       '</div>'
 
     pp.innerHTML = html
@@ -1208,16 +1282,21 @@
     }
 
     var saveBtn = byId('btn-dlq-save')
-    if (saveBtn) saveBtn.addEventListener('click', saveDlqProps)
+    if (saveBtn) saveBtn.addEventListener('click', function () { saveDlqProps(); closePpPanel() })
+    var discardBtn = byId('btn-dlq-discard')
+    if (discardBtn) discardBtn.addEventListener('click', discardProps)
 
     var removeBtn = byId('btn-dlq-remove')
     if (removeBtn) removeBtn.addEventListener('click', function () {
       if (!state.doc) return
       delete state.doc.dlqSink
       state.selected = null
+      state.propsSnapshot = null
       setDirty(true)
       render()
       postUpdate()
+      var ppEl = byId('pp')
+      if (ppEl) ppEl.classList.remove('pp-open')
     })
   }
 
@@ -1804,17 +1883,13 @@
     if (canvas) {
       canvas.addEventListener('click', function (e) {
         if (e.target === canvas || e.target.id === 'nodes-layer' || e.target.id === 'esvg') {
-          state.selected = null
-          qsa('.node').forEach(function (n) { n.classList.remove('selected') })
-          var ppEl = byId('pp')
-          if (ppEl) ppEl.classList.remove('pp-open')
-          renderProps()
+          closePpPanel()
         }
       })
     }
   }
 
-  // ── Properties panel resize ────────────────────────────────────────────────────
+  // ── Properties panel resize (drag top edge to change height) ──────────────────
   function wirePpResize() {
     var resizeEl = byId('pp-resize')
     var ppEl = byId('pp')
@@ -1822,13 +1897,14 @@
 
     resizeEl.addEventListener('mousedown', function (e) {
       e.preventDefault()
-      var startX = e.clientX
-      var startW = ppEl.getBoundingClientRect().width
+      var startY = e.clientY
+      var startH = ppEl.getBoundingClientRect().height
       resizeEl.classList.add('dragging')
 
       function onMove(ev) {
-        var newW = Math.max(240, Math.min(600, startW - (ev.clientX - startX)))
-        ppEl.style.width = newW + 'px'
+        // Dragging up increases height; dragging down decreases it
+        var newH = Math.max(160, Math.min(600, startH - (ev.clientY - startY)))
+        ppEl.style.height = newH + 'px'
       }
       function onUp() {
         document.removeEventListener('mousemove', onMove)
@@ -1847,6 +1923,10 @@
     wireCanvasDeselect()
     wirePpResize()
     wireRunTab()
+
+    // Properties panel header close button (X) — just closes, no save/discard
+    var ppCloseBtn = byId('btn-pp-close')
+    if (ppCloseBtn) ppCloseBtn.addEventListener('click', closePpPanel)
 
     // "Run Pipeline" button in the meta bar (id="btn-run") switches to Run tab and starts
     var runBtn = byId('btn-run')
