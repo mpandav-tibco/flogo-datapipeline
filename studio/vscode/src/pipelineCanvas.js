@@ -402,12 +402,21 @@
       div.classList.add('selected')
     }
 
+    var kindLabel = kind === 'source' ? 'Source' : kind === 'sink' ? 'Sink' : kind === 'dlq' ? 'DLQ' : 'Transform'
+    var nhClass   = kind === 'source' ? 'nh-src' : kind === 'transform' ? 'nh-xform' : kind === 'sink' ? 'nh-sink' : 'nh-dlq'
+    // Port dots: source gets right-side out, sink/dlq get left-side in, transforms get both
+    var portsHtml = kind === 'source' ? '<div class="port-out"></div>'
+      : (kind === 'sink' || kind === 'dlq') ? '<div class="port-in"></div>'
+      : '<div class="port-in"></div><div class="port-out"></div>'
+
     div.innerHTML =
-      '<div class="node-icon">' + icon + '</div>' +
-      '<div class="node-label">' + esc(kind === 'source' ? 'Source' : kind === 'sink' ? 'Sink' : kind === 'dlq' ? 'DLQ' : 'Transform') + '</div>' +
-      '<div class="node-type">' + esc(label) + '</div>' +
-      (summary ? '<div class="node-summary">' + esc(summary) + '</div>' : '') +
-      '<div class="node-port node-port-' + (kind === 'source' ? 'out' : kind === 'sink' || kind === 'dlq' ? 'in' : 'in-out') + '"></div>'
+      '<div class="nh ' + nhClass + '">' +
+        '<span class="nh-ico">' + icon + '</span>' +
+        '<span class="nh-lbl">' + esc(kindLabel) + '</span>' +
+        '<span class="nh-typ">' + esc(label) + '</span>' +
+      '</div>' +
+      (summary ? '<div class="nb"><div class="nb-row"><span class="nb-v" title="' + esc(summary) + '">' + esc(summary) + '</span></div></div>' : '') +
+      portsHtml
 
     // Delete button — transforms and DLQ only (source/sink are required)
     if (kind === 'transform' || kind === 'dlq') {
