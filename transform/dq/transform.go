@@ -101,6 +101,7 @@ type dqTransform struct {
 	scoreColumn      string  // optional; appends _dq_score to passing rows when non-empty
 	errorSink        sink.Sink
 	reportSink       reportSinkWriter // nil when no reportSinkType is configured
+	pipelineRef      string           // set by SetPipelineRef; stamped on every report
 
 	mu         sync.Mutex
 	lastReport *DQReport
@@ -317,15 +318,12 @@ func (d *dqTransform) Apply(in *record.RecordBatch) (*record.RecordBatch, error)
 			}
 		} else {
 			rowsFailed++
-			// "route": route bad rows to error sink.
-			// "warn":  pass all rows downstream (no routing).
-			// (passedGate=true means we're in warn or route mode here.)
-			if d.onFail == "route" || (d.onFail == "warn" && !passedGate) {
-				if d.onFail == "route" {
-					badRows = append(badRows, in.Rows[i])
-				}
-			} else if d.onFail == "warn" {
-				// warn: include failing row in output too
+			switch d.onFail {
+			case "route":
+				// Route failing rows to the error sink; exclude from goodBatch.
+				badRows = append(badRows, in.Rows[i])
+			case "warn":
+				// Pass failing rows downstream with a warning; include in goodBatch.
 				row := in.Rows[i]
 				if addScoreCol {
 					extended := make([]interface{}, len(row)+1)
@@ -335,6 +333,7 @@ func (d *dqTransform) Apply(in *record.RecordBatch) (*record.RecordBatch, error)
 				} else {
 					goodBatch.Rows = append(goodBatch.Rows, row)
 				}
+			// default ("fail"): rows are dropped; gate failure already handled above.
 			}
 		}
 	}
@@ -421,6 +420,7 @@ func (d *dqTransform) Close() error {
 // after the pipeline builds the transform). Protected by the dqTransform mutex.
 func (d *dqTransform) storeReport(r *DQReport) {
 	d.mu.Lock()
+	r.PipelineRef = d.pipelineRef
 	d.lastReport = r
 	d.mu.Unlock()
 }
@@ -429,6 +429,7 @@ func (d *dqTransform) storeReport(r *DQReport) {
 // Called by the engine after it locates the DQGateProvider stage.
 func (d *dqTransform) SetPipelineRef(ref string) {
 	d.mu.Lock()
+	d.pipelineRef = ref
 	if d.lastReport != nil {
 		d.lastReport.PipelineRef = ref
 	}

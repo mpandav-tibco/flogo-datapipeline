@@ -53,6 +53,7 @@ func newRedisStore(cfg map[string]interface{}) (watermark.Store, error) {
 		Password: password,
 	})
 	if err := client.Ping(context.Background()).Err(); err != nil {
+		_ = client.Close()
 		return nil, fmt.Errorf("redis watermark: ping failed: %w", err)
 	}
 

@@ -449,7 +449,7 @@ func (q *PostgresQueue) Stats(ctx context.Context) (map[string]int, error) {
 	return counts, rows.Err()
 }
 
-func (q *PostgresQueue) Close() error { return nil }
+func (q *PostgresQueue) Close() error { return q.db.Close() }
 
 // EnqueueWithLock is the leader-election-aware variant of Enqueue for
 // distributed deployments. It uses a Postgres transaction-level advisory lock

@@ -203,8 +203,6 @@ func newKafkaSource(cfg map[string]interface{}) (source.Source, error) {
 				}
 				klog.Errorf("kafka source: consumer group error (will retry): %v", err)
 			}
-			// Re-arm the ready signal after each rebalance cycle.
-			handler.readyOnce = sync.Once{}
 		}
 	}()
 
@@ -374,12 +372,19 @@ func (ks *kafkaSource) Close() error {
 		return nil
 	}
 	ks.cancelCg()
-	// Drain the channel so blocked ConsumeClaim senders can exit.
+	// Wait for consumer group goroutine to finish, then close msgCh so the
+	// drain goroutine below can exit. Closing before cgDone would race with
+	// ConsumeClaim senders that are still running.
+	<-ks.cgDone
+	close(ks.handler.msgCh)
+	// Drain any messages buffered before close so ConsumeClaim senders don't block.
+	drainDone := make(chan struct{})
 	go func() {
+		defer close(drainDone)
 		for range ks.handler.msgCh {
 		}
 	}()
-	<-ks.cgDone
+	<-drainDone
 	return ks.cg.Close()
 }
 

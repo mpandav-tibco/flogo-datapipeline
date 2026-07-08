@@ -421,7 +421,7 @@ func (a *DataPipelineAction) executePipeline(ctx context.Context, in *Input, run
 				if err := snk.Flush(); err != nil {
 					return out, fmt.Errorf("sink flush (checkpoint): %w", err)
 				}
-				saveCheckpoint(runLog, ckpt, runID, def.Source.Type, out.RowsProcessed)
+				saveCheckpoint(runLog, ckpt, runID, def.Source.Type, out.RowsProcessed, src)
 				a.recorder.CheckpointSaved(a.ref)
 				saveWatermark(runLog, wmStore, hwmProvider, def, a.ref)
 				rowsSinceCkpt = 0
@@ -441,7 +441,7 @@ func (a *DataPipelineAction) executePipeline(ctx context.Context, in *Input, run
 	if def.Checkpoint.DeleteOnSuccess {
 		_ = ckpt.Delete(runID)
 	} else {
-		saveCheckpoint(runLog, ckpt, runID, def.Source.Type, out.RowsProcessed)
+		saveCheckpoint(runLog, ckpt, runID, def.Source.Type, out.RowsProcessed, src)
 		a.recorder.CheckpointSaved(a.ref)
 	}
 
@@ -516,8 +516,12 @@ func openCheckpoint(def *Definition) (checkpoint.Checkpoint, error) {
 	return checkpoint.New(cd.Type, cfg)
 }
 
-func saveCheckpoint(runLog corelog.Logger, ckpt checkpoint.Checkpoint, runID, format string, rowsProcessed int64) {
-	t := &checkpoint.Token{Format: format, RowsProcessed: rowsProcessed}
+func saveCheckpoint(runLog corelog.Logger, ckpt checkpoint.Checkpoint, runID, format string, rowsProcessed int64, src source.Source) {
+	var cp checkpoint.CursorProvider
+	if p, ok := src.(checkpoint.CursorProvider); ok {
+		cp = p
+	}
+	t := checkpoint.NewToken(format, rowsProcessed, cp)
 	if err := ckpt.Save(runID, t); err != nil {
 		runLog.Warnf("checkpoint save failed (continuing): %v", err)
 	}

@@ -117,6 +117,11 @@ func compare(left interface{}, op string, right interface{}) bool {
 		}
 		return false
 	}
+	// A NULL left operand never satisfies ordering or equality comparisons
+	// against a non-NULL right operand (SQL three-valued logic).
+	if left == nil {
+		return false
+	}
 	// Numeric comparison.
 	lf, lOk := toFloat(left)
 	rf, rOk := toFloat(right)

@@ -40,6 +40,7 @@ class BinaryManager {
     this._crashCb = null
     this._externalStop = null  // teardown for an attached external engine
     this._channel = vscode.window.createOutputChannel('Flogo Data Pipeline')
+    this._startingPromise = null  // in-flight start() deduplicator
   }
 
   get port() { return this._port }
@@ -57,6 +58,17 @@ class BinaryManager {
   async start(pipelineFile, startPort) {
     if (this._externalStop) this.stop()   // tear down any attached external engine first
     if (this._process) return this._port  // already running
+    if (this._startingPromise) return this._startingPromise  // concurrent start() — share the in-flight promise
+    this._startingPromise = this._doStart(pipelineFile, startPort)
+    try {
+      return await this._startingPromise
+    } finally {
+      this._startingPromise = null
+    }
+  }
+
+  /** @returns {Promise<number>} */
+  async _doStart(pipelineFile, startPort) {
 
     const binary = this._resolveBinary()
     this._channel.show(true)
@@ -169,6 +181,37 @@ class BinaryManager {
     this._port = port
     this._channel.appendLine(`[manager] engine running in terminal "${name}" on port ${port}`)
     return port
+  }
+
+  // Build the flogo-datapipeline binary for a specific platform.
+  // Runs `go build` in the source directory and writes the binary to `out`.
+  /** @returns {Promise<void>} */
+  buildBinary({ sourcePath, out, goos, goarch, pipelinePath }) {
+    return new Promise((resolve, reject) => {
+      if (!sourcePath) {
+        return reject(new Error('buildBinary: sourcePath is required'))
+      }
+      if (!out) {
+        return reject(new Error('buildBinary: out (output path) is required'))
+      }
+      const env = {
+        ...process.env,
+        GOOS: goos || process.platform.replace('win32', 'windows'),
+        GOARCH: goarch || (process.arch === 'x64' ? 'amd64' : process.arch),
+        CGO_ENABLED: '0',
+      }
+      const cmd = `go build -o "${out}" ./cmd/flogo-datapipeline/`
+      this._channel.appendLine(`[build] ${cmd} (cwd: ${sourcePath})`)
+      exec(cmd, { cwd: sourcePath, env }, (err, stdout, stderr) => {
+        if (stdout) this._channel.append(stdout)
+        if (stderr) this._channel.append(stderr)
+        if (err) {
+          return reject(new Error(`go build failed: ${stderr || err.message}`))
+        }
+        this._channel.appendLine(`[build] binary written to ${out}`)
+        resolve()
+      })
+    })
   }
 
   // Returns the build command string for display (tooltips / setup screens).

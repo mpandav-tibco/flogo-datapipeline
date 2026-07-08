@@ -6,6 +6,7 @@
 package transform
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 
@@ -55,26 +56,33 @@ func (p *Pipeline) Apply(in *record.RecordBatch) (*record.RecordBatch, error) {
 	cur := in
 	for _, t := range p.stages {
 		if cur == nil || cur.Len() == 0 {
+			if cur != nil && cur != in {
+				record.Put(cur)
+			}
 			return nil, nil
 		}
 		out, err := t.Apply(cur)
 		if err != nil {
 			return nil, fmt.Errorf("transform %s: %w", t.Name(), err)
 		}
+		// Return intermediate batch to pool; never recycle the caller-owned input.
+		if cur != in {
+			record.Put(cur)
+		}
 		cur = out
 	}
 	return cur, nil
 }
 
-// Close closes all stages in reverse order.
+// Close closes all stages in reverse order, accumulating all errors.
 func (p *Pipeline) Close() error {
-	var last error
+	var errs []error
 	for i := len(p.stages) - 1; i >= 0; i-- {
 		if err := p.stages[i].Close(); err != nil {
-			last = err
+			errs = append(errs, fmt.Errorf("transform %s close: %w", p.stages[i].Name(), err))
 		}
 	}
-	return last
+	return errors.Join(errs...)
 }
 
 // Factory constructs a Transform from a generic config map.

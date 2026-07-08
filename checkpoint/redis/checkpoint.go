@@ -52,6 +52,7 @@ func newRedisCheckpoint(cfg map[string]interface{}) (checkpoint.Checkpoint, erro
 		Password: password,
 	})
 	if err := client.Ping(context.Background()).Err(); err != nil {
+		_ = client.Close()
 		return nil, fmt.Errorf("redis checkpoint: ping failed: %w", err)
 	}
 

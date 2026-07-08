@@ -15,9 +15,9 @@ import (
 func QuoteIdent(name, driver string) string {
 	switch driver {
 	case "mysql":
-		return "`" + name + "`"
+		return "`" + strings.ReplaceAll(name, "`", "``") + "`"
 	default: // postgres, sqlite3
-		return `"` + name + `"`
+		return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
 	}
 }
 

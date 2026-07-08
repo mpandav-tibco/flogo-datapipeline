@@ -122,11 +122,6 @@ class PipelineEditorProvider {
       if (e.webviewPanel.active) this._setActive(document.uri)
     })
 
-    // If the engine is already running, inform this freshly-opened canvas.
-    if (this._manager && this._manager.port) {
-      webviewPanel.webview.postMessage({ type: 'runStarted', port: this._manager.port })
-    }
-
     // Push fresh content when the file changes externally (git checkout, raw edit, etc.).
     const changeSub = vscode.workspace.onDidChangeTextDocument(e => {
       if (e.document.uri.toString() === document.uri.toString()) {
@@ -158,6 +153,11 @@ class PipelineEditorProvider {
         let appDoc = {}
         try { appDoc = JSON.parse(doc.getText()) } catch (_) { }
         post({ type: 'init', doc: this._extractPipelineData(appDoc), nonce: this._nonce() })
+        // Inform the canvas if the engine is already running — must be after init
+        // so the canvas message handler is registered before we send runStarted.
+        if (this._manager && this._manager.port) {
+          post({ type: 'runStarted', port: this._manager.port })
+        }
         break
       }
 
@@ -261,7 +261,7 @@ class PipelineEditorProvider {
   async _runPipeline(document, webviewPanel) {
     if (!this._manager) return
     if (this._runInFlight) {
-      try { webviewPanel.webview.postMessage({ type: 'error', message: 'Another pipeline is already starting.' }) } catch (_) { }
+      try { webviewPanel.webview.postMessage({ type: 'runError', message: 'Another pipeline is already starting.' }) } catch (_) { }
       return
     }
     this._runInFlight = true
@@ -1114,6 +1114,12 @@ input[type=radio]{accent-color:var(--accent)}
   *,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;
     transition-duration:.001ms!important;scroll-behavior:auto!important}
 }
+/* ── Toast notification ── */
+.toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%) translateY(60px);
+  background:var(--vscode-notificationCenterHeader-background,#333);color:var(--vscode-notificationCenterHeader-foreground,#ccc);
+  padding:6px 16px;border-radius:4px;font-size:12px;opacity:0;pointer-events:none;
+  transition:opacity .2s,transform .2s;z-index:9999}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
 </style>
 </head>
 <body>
@@ -1436,6 +1442,8 @@ input[type=radio]{accent-color:var(--accent)}
 
   </div>
 </div><!-- #ttab-run -->
+
+<div class="toast" id="toast"></div>
 
 <!-- External canvas script — loaded via webview.asWebviewUri, allowed by nonce CSP. -->
 <script nonce="${nonce}" src="${scriptUri}"></script>

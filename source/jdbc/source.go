@@ -74,6 +74,7 @@ type jdbcSource struct {
 	partLimit  int64       // 0 means "no limit" (top-level source)
 	keyLo      interface{} // keyset lower bound (exclusive), nil = no lower bound
 	keyHi      interface{} // keyset upper bound (inclusive), nil = no upper bound
+	sharedDB   bool        // true when db is borrowed from parent; Close() must not call db.Close()
 }
 
 // jdbcPartitionToken is the serialised form stored in source.Partition.Token.
@@ -440,6 +441,7 @@ func (s *jdbcSource) buildOffsetQuery() string {
 }
 
 // Close releases the database connection and any open cursor.
+// Partition children share the parent's *sql.DB pool; only the parent closes it.
 func (s *jdbcSource) Close() error {
 	if s.closed {
 		return nil
@@ -448,6 +450,9 @@ func (s *jdbcSource) Close() error {
 	if s.rows != nil {
 		s.rows.Close()
 		s.rows = nil
+	}
+	if s.sharedDB {
+		return nil
 	}
 	return s.db.Close()
 }
@@ -643,6 +648,7 @@ func (s *jdbcSource) OpenPartition(p source.Partition) (source.Source, error) {
 		partLimit:  tok.Limit,
 		keyLo:      tok.KeyLo,
 		keyHi:      tok.KeyHi,
+		sharedDB:   true, // do not close the shared pool when this partition is closed
 	}
 
 	return child, nil

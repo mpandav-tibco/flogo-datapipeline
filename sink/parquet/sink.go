@@ -14,6 +14,7 @@
 package parquet
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -146,13 +147,12 @@ func (s *parquetSink) Flush() error {
 }
 
 func (s *parquetSink) Close() error {
+	var wErr, fErr error
 	if s.writer != nil {
-		if err := s.writer.Close(); err != nil {
-			return err
-		}
+		wErr = s.writer.Close()
 	}
 	if s.file != nil {
-		return s.file.Close()
+		fErr = s.file.Close()
 	}
-	return nil
+	return errors.Join(wErr, fErr)
 }

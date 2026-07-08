@@ -57,7 +57,7 @@ func (b *RecordBatch) ColIndex(name string) int {
 // Value returns the value of the named column in row i, or nil.
 func (b *RecordBatch) Value(row int, col string) interface{} {
 	idx := b.ColIndex(col)
-	if idx < 0 || row >= len(b.Rows) {
+	if idx < 0 || row >= len(b.Rows) || idx >= len(b.Rows[row]) {
 		return nil
 	}
 	return b.Rows[row][idx]

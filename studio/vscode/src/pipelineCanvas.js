@@ -200,6 +200,15 @@
         // External file change (git checkout, raw edit) — refresh canvas with updated pipeline data
         if (m.doc) { state.doc = m.doc; setDirty(false); render() }
         break
+      case 'run':
+        // Extension host asked the canvas to trigger a pipeline run.
+        postUpdate()
+        vscodeApi.postMessage({ type: 'run' })
+        break
+      case 'runStarting':
+        updateRunStatus('starting')
+        if (activeTopTab === 'run') renderRunTab()
+        break
       case 'runStarted':
         state.running = true
         state.runPort = m.port || null
@@ -701,6 +710,10 @@
     state.propsSnapshot = null
     state.mapperExprMap = null
     state.mapperActiveField = null
+    if (state._closeFnDropdown) {
+      document.removeEventListener('click', state._closeFnDropdown)
+      state._closeFnDropdown = null
+    }
     qsa('.node').forEach(function (n) { n.classList.remove('selected') })
     var ppEl = byId('pp')
     if (ppEl) {
@@ -1278,10 +1291,14 @@
         exprInput.focus()
       })
 
-      document.addEventListener('click', function closeFnDropdown() {
+      if (state._closeFnDropdown) {
+        document.removeEventListener('click', state._closeFnDropdown)
+      }
+      state._closeFnDropdown = function () {
         fnDropdown.classList.remove('fn-dropdown-open')
         fnMenuBtn.classList.remove('fn-menu-active')
-      })
+      }
+      document.addEventListener('click', state._closeFnDropdown)
     }
 
     // + Add output field button / Enter in name input

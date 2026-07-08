@@ -132,8 +132,17 @@ func (s *Server) handleRunPipeline(w http.ResponseWriter, r *http.Request, ref s
 
 	async := strings.EqualFold(r.URL.Query().Get("async"), "true")
 
-	// Build a cancellable child context so the run can be aborted via DELETE.
-	runCtx, cancel := context.WithCancel(r.Context())
+	// Build a cancellable context for this run.
+	// Async runs must use context.Background() as the parent — net/http cancels
+	// r.Context() as soon as the handler returns (immediately after the 202), which
+	// would kill the goroutine before it processes a single row.
+	var runCtx context.Context
+	var cancel context.CancelFunc
+	if async {
+		runCtx, cancel = context.WithCancel(context.Background())
+	} else {
+		runCtx, cancel = context.WithCancel(r.Context())
+	}
 	s.cancels.Store(req.RunID, &cancelEntry{cancel: cancel, ref: ref})
 
 	startedAt := time.Now().UTC()
@@ -149,6 +158,7 @@ func (s *Server) handleRunPipeline(w http.ResponseWriter, r *http.Request, ref s
 		writeJSON(w, http.StatusAccepted, resp)
 
 		go func() {
+			defer cancel()
 			defer func() { s.cancels.Delete(req.RunID) }()
 			out, _ := act.RunDirect(runCtx, in)
 			resp := mapOutputToRunResponse(req.RunID, startedAt, out)
@@ -159,6 +169,7 @@ func (s *Server) handleRunPipeline(w http.ResponseWriter, r *http.Request, ref s
 	}
 
 	// Synchronous: block until completion.
+	defer cancel()
 	defer func() { s.cancels.Delete(req.RunID) }()
 	out, _ := act.RunDirect(runCtx, in)
 	resp := mapOutputToRunResponse(req.RunID, startedAt, out)

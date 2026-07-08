@@ -63,10 +63,13 @@ func (f *Factory) New(cfg *action.Config) (action.Action, error) {
 		return nil, fmt.Errorf("pipeline factory: pipelineRef is required")
 	}
 
-	f.mu.RLock()
+	// Hold the write lock for the entire check-then-create sequence to prevent
+	// two concurrent New() calls for the same ref from both creating a metrics
+	// backend (which would try to bind the same port twice) and leaking the first.
+	f.mu.Lock()
 	existing, ok := f.actions[s.PipelineRef]
-	f.mu.RUnlock()
 	if ok {
+		f.mu.Unlock()
 		return existing, nil
 	}
 
@@ -97,7 +100,6 @@ func (f *Factory) New(cfg *action.Config) (action.Action, error) {
 		recorder: rec,
 	}
 
-	f.mu.Lock()
 	f.actions[s.PipelineRef] = act
 	f.mu.Unlock()
 

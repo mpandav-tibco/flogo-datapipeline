@@ -69,7 +69,11 @@ func (f *fileCheckpoint) Save(partitionID string, t *checkpoint.Token) error {
 	if err := os.WriteFile(tmp, data, 0644); err != nil {
 		return fmt.Errorf("file checkpoint: write temp: %w", err)
 	}
-	return os.Rename(tmp, f.path(partitionID))
+	if err := os.Rename(tmp, f.path(partitionID)); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("file checkpoint: rename: %w", err)
+	}
+	return nil
 }
 
 func (f *fileCheckpoint) Load(partitionID string) (*checkpoint.Token, error) {
