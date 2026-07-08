@@ -130,7 +130,9 @@ class PipelineEditorProvider {
     // Push fresh content when the file changes externally (git checkout, raw edit, etc.).
     const changeSub = vscode.workspace.onDidChangeTextDocument(e => {
       if (e.document.uri.toString() === document.uri.toString()) {
-        webviewPanel.webview.postMessage({ type: 'update', text: e.document.getText() })
+        let appDoc = {}
+        try { appDoc = JSON.parse(e.document.getText()) } catch (_) { }
+        webviewPanel.webview.postMessage({ type: 'update', doc: this._extractPipelineData(appDoc) })
       }
     })
 
@@ -153,14 +155,35 @@ class PipelineEditorProvider {
     switch (msg.type) {
 
       case 'ready': {
-        let parsed = {}
-        try { parsed = JSON.parse(doc.getText()) } catch (_) { }
-        post({ type: 'init', doc: parsed, nonce: this._nonce() })
+        let appDoc = {}
+        try { appDoc = JSON.parse(doc.getText()) } catch (_) { }
+        post({ type: 'init', doc: this._extractPipelineData(appDoc), nonce: this._nonce() })
         break
       }
 
       case 'update': {
-        if (typeof msg.text === 'string') this._applyEdit(doc, msg.text)
+        if (typeof msg.text !== 'string') break
+        let appDoc = {}
+        try { appDoc = JSON.parse(doc.getText()) } catch (_) { }
+        let pd = {}
+        try { pd = JSON.parse(msg.text) } catch (_) { break }
+        if (appDoc.type === 'flogo:app' && Array.isArray(appDoc.resources) && appDoc.resources[0]) {
+          // Update resources[0].data in-place; keep resource id in sync with pipeline name
+          appDoc.resources[0].data = pd
+          if (pd.name) {
+            appDoc.name = pd.name
+            const newId = 'pipeline:' + pd.name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '')
+            if (appDoc.resources[0].id !== newId) {
+              appDoc.resources[0].id = newId
+              const h = appDoc.triggers && appDoc.triggers[0] && appDoc.triggers[0].handlers && appDoc.triggers[0].handlers[0]
+              if (h && h.action && h.action.settings) h.action.settings.pipelineRef = 'res://' + newId
+            }
+          }
+          this._applyEdit(doc, JSON.stringify(appDoc, null, 2))
+        } else {
+          // Auto-migrate old flat format to flogo:app on first save
+          this._applyEdit(doc, JSON.stringify(this._wrapInAppJson(pd), null, 2))
+        }
         break
       }
 
@@ -272,14 +295,59 @@ class PipelineEditorProvider {
     try { webviewPanel.webview.postMessage({ type: 'stopped' }) } catch (_) { }
   }
 
+  // ── flogo:app wrap / unwrap helpers ─────────────────────────────────────────
+
+  // Extract the pipeline data (resources[0].data) from a flogo:app JSON.
+  // Falls back to the whole object for old flat-format files (auto-migration on next save).
+  _extractPipelineData(appDoc) {
+    if (appDoc && appDoc.type === 'flogo:app') {
+      const res = Array.isArray(appDoc.resources) ? appDoc.resources[0] : null
+      return (res && res.data) || {}
+    }
+    return appDoc || {}
+  }
+
+  // Wrap a pipeline data object into a complete flogo:app JSON.
+  // Mirrors the pattern from flogo-agent: the .datapipeline file IS the flogo:app.
+  _wrapInAppJson(pd) {
+    const name = pd.name || 'untitled-pipeline'
+    const safeId = name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '')
+    const resourceId = 'pipeline:' + safeId
+    return {
+      name,
+      type: 'flogo:app',
+      version: pd.version || '1.0.0',
+      description: pd.description || '',
+      appModel: '1.1.1',
+      imports: [
+        'github.com/mpandav-tibco/flogo-datapipeline/action/pipeline',
+        'github.com/project-flogo/contrib/trigger/timer'
+      ],
+      triggers: [{
+        id: 'pipeline-timer',
+        ref: 'github.com/project-flogo/contrib/trigger/timer',
+        settings: { repeating: true, startDelay: 0, interval: 86400000 },
+        handlers: [{
+          settings: {},
+          action: {
+            ref: 'github.com/mpandav-tibco/flogo-datapipeline/action/pipeline',
+            settings: { pipelineRef: 'res://' + resourceId }
+          }
+        }]
+      }],
+      resources: [{ id: resourceId, data: pd }]
+    }
+  }
+
   // ── Validation ──────────────────────────────────────────────────────────────
 
   _validate(document) {
     const issues = []
-    let doc = {}
-    try { doc = JSON.parse(document.getText()) } catch (_) {
+    let appDoc = {}
+    try { appDoc = JSON.parse(document.getText()) } catch (_) {
       return [{ sev: 'error', label: 'JSON', msg: 'Pipeline file contains invalid JSON.', anchor: null }]
     }
+    const doc = this._extractPipelineData(appDoc)
 
     const source = doc.source || {}
     const sink = doc.sink || {}

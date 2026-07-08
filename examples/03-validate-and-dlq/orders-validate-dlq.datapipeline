@@ -1,70 +1,128 @@
 {
   "name": "orders-validate-dlq",
-  "description": "Validates order rows against five field rules. Rows that violate any rule are routed to a dead-letter CSV file; rows that pass every rule continue to the main (null) sink.",
+  "type": "flogo:app",
   "version": "1.0.0",
-  "mode": "etl",
-  "source": {
-    "type": "csv",
-    "path": "./data/orders.csv",
-    "delimiter": ",",
-    "hasHeader": true,
-    "columns": [
-      { "name": "order_id",    "type": "string" },
-      { "name": "customer_id", "type": "string" },
-      { "name": "amount",      "type": "float"  },
-      { "name": "status",      "type": "string" },
-      { "name": "email",       "type": "string" }
-    ]
-  },
-  "transforms": [
+  "description": "Validates order rows against five field rules. Rows that violate any rule are routed to a dead-letter CSV file; rows that pass every rule continue to the main (null) sink.",
+  "appModel": "1.1.1",
+  "imports": [
+    "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+    "github.com/project-flogo/contrib/trigger/timer"
+  ],
+  "triggers": [
     {
-      "type": "validate",
-      "rules": [
+      "id": "pipeline-timer",
+      "ref": "github.com/project-flogo/contrib/trigger/timer",
+      "settings": {
+        "repeating": true,
+        "startDelay": 0,
+        "interval": 86400000
+      },
+      "handlers": [
         {
-          "field":   "order_id",
-          "notNull": true,
-          "pattern": "^ORD-[0-9]{6}$"
-        },
-        {
-          "field":   "customer_id",
-          "notNull": true
-        },
-        {
-          "field":   "amount",
-          "notNull": true,
-          "min":     0.01,
-          "max":     99999.99
-        },
-        {
-          "field": "status",
-          "in":    ["PENDING", "SHIPPED", "DELIVERED", "CANCELLED"]
-        },
-        {
-          "field":   "email",
-          "pattern": "^[^@]+@[^@]+\\.[^@]+$"
+          "settings": {},
+          "action": {
+            "ref": "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+            "settings": {
+              "pipelineRef": "res://pipeline:orders-validate-dlq"
+            }
+          }
         }
-      ],
-      "onViolation":     "route",
-      "errorSinkType":   "null",
-      "errorSinkConfig": {}
+      ]
     }
   ],
-  "sink": {
-    "type": "null"
-  },
-  "dlqSink": {
-    "type": "csv",
-    "path": "./data/orders_dlq.csv",
-    "includeViolationReason": true
-  },
-  "performance": {
-    "batchSize": 5000,
-    "maxMemoryMB": 512
-  },
-  "scaling": {
-    "mode": "single"
-  },
-  "checkpoint": {
-    "type": "none"
-  }
+  "resources": [
+    {
+      "id": "pipeline:orders-validate-dlq",
+      "data": {
+        "name": "orders-validate-dlq",
+        "description": "Validates order rows against five field rules. Rows that violate any rule are routed to a dead-letter CSV file; rows that pass every rule continue to the main (null) sink.",
+        "version": "1.0.0",
+        "mode": "etl",
+        "source": {
+          "type": "csv",
+          "path": "./data/orders.csv",
+          "delimiter": ",",
+          "hasHeader": true,
+          "columns": [
+            {
+              "name": "order_id",
+              "type": "string"
+            },
+            {
+              "name": "customer_id",
+              "type": "string"
+            },
+            {
+              "name": "amount",
+              "type": "float"
+            },
+            {
+              "name": "status",
+              "type": "string"
+            },
+            {
+              "name": "email",
+              "type": "string"
+            }
+          ]
+        },
+        "transforms": [
+          {
+            "type": "validate",
+            "rules": [
+              {
+                "field": "order_id",
+                "notNull": true,
+                "pattern": "^ORD-[0-9]{6}$"
+              },
+              {
+                "field": "customer_id",
+                "notNull": true
+              },
+              {
+                "field": "amount",
+                "notNull": true,
+                "min": 0.01,
+                "max": 99999.99
+              },
+              {
+                "field": "status",
+                "in": [
+                  "PENDING",
+                  "SHIPPED",
+                  "DELIVERED",
+                  "CANCELLED"
+                ]
+              },
+              {
+                "field": "email",
+                "pattern": "^[^@]+@[^@]+\\.[^@]+$"
+              }
+            ],
+            "onViolation": "route",
+            "errorSinkType": "null",
+            "errorSinkConfig": {}
+          }
+        ],
+        "sink": {
+          "type": "null"
+        },
+        "dlqSink": {
+          "type": "csv",
+          "path": "./data/orders_dlq.csv",
+          "includeViolationReason": true
+        },
+        "performance": {
+          "batchSize": 5000,
+          "maxMemoryMB": 512
+        },
+        "scaling": {
+          "mode": "single"
+        },
+        "checkpoint": {
+          "type": "none"
+        }
+      }
+    }
+  ]
 }

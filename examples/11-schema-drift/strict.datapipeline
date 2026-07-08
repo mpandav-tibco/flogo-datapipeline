@@ -1,36 +1,83 @@
 {
   "name": "schema-drift-strict",
-  "description": "Schema drift example — strict policy. When v2_records.csv arrives with two extra columns (region, score) that are not declared in the source schema, the pipeline fails fast with a schema mismatch error. Use this policy when unexpected columns indicate a data-contract violation.",
+  "type": "flogo:app",
   "version": "1.0.0",
-  "mode": "etl",
-  "source": {
-    "type": "csv",
-    "path": "./data/v2_records.csv",
-    "delimiter": ",",
-    "hasHeader": true,
-    "columns": [
-      { "name": "id",     "type": "string" },
-      { "name": "name",   "type": "string" },
-      { "name": "status", "type": "string" }
-    ]
-  },
-  "transforms": [
+  "description": "Schema drift example — strict policy. When v2_records.csv arrives with two extra columns (region, score) that are not declared in the source schema, the pipeline fails fast with a schema mismatch error. Use this policy when unexpected columns indicate a data-contract violation.",
+  "appModel": "1.1.1",
+  "imports": [
+    "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+    "github.com/project-flogo/contrib/trigger/timer"
+  ],
+  "triggers": [
     {
-      "type": "schemadrift",
-      "policy": "strict"
+      "id": "pipeline-timer",
+      "ref": "github.com/project-flogo/contrib/trigger/timer",
+      "settings": {
+        "repeating": true,
+        "startDelay": 0,
+        "interval": 86400000
+      },
+      "handlers": [
+        {
+          "settings": {},
+          "action": {
+            "ref": "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+            "settings": {
+              "pipelineRef": "res://pipeline:schema-drift-strict"
+            }
+          }
+        }
+      ]
     }
   ],
-  "sink": {
-    "type": "null"
-  },
-  "performance": {
-    "batchSize": 5000,
-    "maxMemoryMB": 512
-  },
-  "scaling": {
-    "mode": "single"
-  },
-  "checkpoint": {
-    "type": "none"
-  }
+  "resources": [
+    {
+      "id": "pipeline:schema-drift-strict",
+      "data": {
+        "name": "schema-drift-strict",
+        "description": "Schema drift example — strict policy. When v2_records.csv arrives with two extra columns (region, score) that are not declared in the source schema, the pipeline fails fast with a schema mismatch error. Use this policy when unexpected columns indicate a data-contract violation.",
+        "version": "1.0.0",
+        "mode": "etl",
+        "source": {
+          "type": "csv",
+          "path": "./data/v2_records.csv",
+          "delimiter": ",",
+          "hasHeader": true,
+          "columns": [
+            {
+              "name": "id",
+              "type": "string"
+            },
+            {
+              "name": "name",
+              "type": "string"
+            },
+            {
+              "name": "status",
+              "type": "string"
+            }
+          ]
+        },
+        "transforms": [
+          {
+            "type": "schemadrift",
+            "policy": "strict"
+          }
+        ],
+        "sink": {
+          "type": "null"
+        },
+        "performance": {
+          "batchSize": 5000,
+          "maxMemoryMB": 512
+        },
+        "scaling": {
+          "mode": "single"
+        },
+        "checkpoint": {
+          "type": "none"
+        }
+      }
+    }
+  ]
 }

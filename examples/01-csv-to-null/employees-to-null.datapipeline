@@ -1,33 +1,86 @@
 {
   "name": "employees-to-null",
-  "description": "Hello World pipeline: reads employees.csv and discards all rows via the null sink. Verifies the engine starts and can read a CSV file.",
+  "type": "flogo:app",
   "version": "1.0.0",
-  "mode": "el",
-  "source": {
-    "type": "csv",
-    "path": "./data/employees.csv",
-    "delimiter": ",",
-    "hasHeader": true,
-    "columns": [
-      { "name": "id",         "type": "int"    },
-      { "name": "name",       "type": "string" },
-      { "name": "department", "type": "string" },
-      { "name": "salary",     "type": "float"  },
-      { "name": "hire_date",  "type": "string" }
-    ]
-  },
-  "transforms": [],
-  "sink": {
-    "type": "null"
-  },
-  "performance": {
-    "batchSize": 1000,
-    "maxMemoryMB": 512
-  },
-  "scaling": {
-    "mode": "single"
-  },
-  "checkpoint": {
-    "type": "none"
-  }
+  "description": "Hello World pipeline: reads employees.csv and discards all rows via the null sink. Verifies the engine starts and can read a CSV file.",
+  "appModel": "1.1.1",
+  "imports": [
+    "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+    "github.com/project-flogo/contrib/trigger/timer"
+  ],
+  "triggers": [
+    {
+      "id": "pipeline-timer",
+      "ref": "github.com/project-flogo/contrib/trigger/timer",
+      "settings": {
+        "repeating": true,
+        "startDelay": 0,
+        "interval": 86400000
+      },
+      "handlers": [
+        {
+          "settings": {},
+          "action": {
+            "ref": "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+            "settings": {
+              "pipelineRef": "res://pipeline:employees-to-null"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "resources": [
+    {
+      "id": "pipeline:employees-to-null",
+      "data": {
+        "name": "employees-to-null",
+        "description": "Hello World pipeline: reads employees.csv and discards all rows via the null sink. Verifies the engine starts and can read a CSV file.",
+        "version": "1.0.0",
+        "mode": "el",
+        "source": {
+          "type": "csv",
+          "path": "./data/employees.csv",
+          "delimiter": ",",
+          "hasHeader": true,
+          "columns": [
+            {
+              "name": "id",
+              "type": "int"
+            },
+            {
+              "name": "name",
+              "type": "string"
+            },
+            {
+              "name": "department",
+              "type": "string"
+            },
+            {
+              "name": "salary",
+              "type": "float"
+            },
+            {
+              "name": "hire_date",
+              "type": "string"
+            }
+          ]
+        },
+        "transforms": [],
+        "sink": {
+          "type": "null"
+        },
+        "performance": {
+          "batchSize": 1000,
+          "maxMemoryMB": 512
+        },
+        "scaling": {
+          "mode": "single"
+        },
+        "checkpoint": {
+          "type": "none"
+        }
+      }
+    }
+  ]
 }

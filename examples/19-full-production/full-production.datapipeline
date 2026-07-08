@@ -1,119 +1,170 @@
 {
   "name": "full-production",
-  "description": "Insurance claims ETL reference architecture. Reads raw claims from a SQLite JDBC source, applies incremental high-water mark filtering, validates claim IDs and amounts, measures dataset quality, enriches with policyholder data via HTTP lookup, maps to a canonical output schema, and upserts into a processed claims table. Invalid claims are routed to a dead-letter sink. A file checkpoint enables mid-run resume after failure.",
+  "type": "flogo:app",
   "version": "1.0.0",
-  "mode": "etl",
-  "source": {
-    "type": "jdbc",
-    "driver": "sqlite",
-    "dsn": "./data/claims.db",
-    "table": "raw_claims",
-    "keyColumn": "claim_id",
-    "batchSize": 500
-  },
-  "transforms": [
+  "description": "Insurance claims ETL reference architecture. Reads raw claims from a SQLite JDBC source, applies incremental high-water mark filtering, validates claim IDs and amounts, measures dataset quality, enriches with policyholder data via HTTP lookup, maps to a canonical output schema, and upserts into a processed claims table. Invalid claims are routed to a dead-letter sink. A file checkpoint enables mid-run resume after failure.",
+  "appModel": "1.1.1",
+  "imports": [
+    "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+    "github.com/project-flogo/contrib/trigger/timer"
+  ],
+  "triggers": [
     {
-      "type": "hwm",
-      "column": "submitted_at",
-      "backend": "file",
-      "backendConfig": {
-        "path": "./watermarks"
-      }
-    },
-    {
-      "type": "validate",
-      "rules": [
+      "id": "pipeline-timer",
+      "ref": "github.com/project-flogo/contrib/trigger/timer",
+      "settings": {
+        "repeating": true,
+        "startDelay": 0,
+        "interval": 86400000
+      },
+      "handlers": [
         {
-          "field": "claim_id",
-          "notNull": true,
-          "pattern": "^CLM-[0-9]{8}$"
-        },
-        {
-          "field": "policy_id",
-          "notNull": true
-        },
-        {
-          "field": "amount",
-          "notNull": true,
-          "min": 1,
-          "max": 10000000
-        },
-        {
-          "field": "status",
-          "in": ["PENDING", "APPROVED", "REJECTED", "UNDER_REVIEW"]
+          "settings": {},
+          "action": {
+            "ref": "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+            "settings": {
+              "pipelineRef": "res://pipeline:full-production"
+            }
+          }
         }
-      ],
-      "onViolation": "route",
-      "errorSinkType": "null",
-      "errorSinkConfig": {}
-    },
-    {
-      "type": "dq",
-      "expectations": [
-        {
-          "column": "claim_id",
-          "check": "not_null",
-          "value": null
-        },
-        {
-          "column": "amount",
-          "check": "range",
-          "value": { "min": 1, "max": 10000000 }
-        }
-      ],
-      "threshold": 0.98,
-      "onFail": "report",
-      "reportSinkType": "null"
-    },
-    {
-      "type": "lookup",
-      "url": "https://jsonplaceholder.typicode.com/users/{policy_id}",
-      "method": "GET",
-      "keyField": "policy_id",
-      "outputFields": ["name", "email"],
-      "concurrency": 10,
-      "cacheSize": 5000,
-      "timeoutMs": 3000,
-      "onError": "null"
-    },
-    {
-      "type": "map",
-      "fields": {
-        "claim_id": "=$claim_id",
-        "policy_id": "=$policy_id",
-        "amount_usd": "=divide($.amount,100)",
-        "claimant_name": "=coalesce($.name,'UNKNOWN')",
-        "claimant_email": "=coalesce($.email,'UNKNOWN')",
-        "status": "=$status",
-        "processed_at": "=$submitted_at"
-      }
+      ]
     }
   ],
-  "sink": {
-    "type": "jdbc",
-    "driver": "sqlite",
-    "dsn": "./data/claims_enriched.db",
-    "table": "claims_processed",
-    "batchSize": 200,
-    "onConflict": "upsert",
-    "conflictKey": ["claim_id"]
-  },
-  "dlqSink": {
-    "type": "null"
-  },
-  "performance": {
-    "batchSize": 500,
-    "maxMemoryMB": 256,
-    "transformWorkers": 2
-  },
-  "scaling": {
-    "mode": "single"
-  },
-  "checkpoint": {
-    "type": "file",
-    "path": "./checkpoints",
-    "intervalRows": 500,
-    "intervalSeconds": 30,
-    "deleteOnSuccess": false
-  }
+  "resources": [
+    {
+      "id": "pipeline:full-production",
+      "data": {
+        "name": "full-production",
+        "description": "Insurance claims ETL reference architecture. Reads raw claims from a SQLite JDBC source, applies incremental high-water mark filtering, validates claim IDs and amounts, measures dataset quality, enriches with policyholder data via HTTP lookup, maps to a canonical output schema, and upserts into a processed claims table. Invalid claims are routed to a dead-letter sink. A file checkpoint enables mid-run resume after failure.",
+        "version": "1.0.0",
+        "mode": "etl",
+        "source": {
+          "type": "jdbc",
+          "driver": "sqlite",
+          "dsn": "./data/claims.db",
+          "table": "raw_claims",
+          "keyColumn": "claim_id",
+          "batchSize": 500
+        },
+        "transforms": [
+          {
+            "type": "hwm",
+            "column": "submitted_at",
+            "backend": "file",
+            "backendConfig": {
+              "path": "./watermarks"
+            }
+          },
+          {
+            "type": "validate",
+            "rules": [
+              {
+                "field": "claim_id",
+                "notNull": true,
+                "pattern": "^CLM-[0-9]{8}$"
+              },
+              {
+                "field": "policy_id",
+                "notNull": true
+              },
+              {
+                "field": "amount",
+                "notNull": true,
+                "min": 1,
+                "max": 10000000
+              },
+              {
+                "field": "status",
+                "in": [
+                  "PENDING",
+                  "APPROVED",
+                  "REJECTED",
+                  "UNDER_REVIEW"
+                ]
+              }
+            ],
+            "onViolation": "route",
+            "errorSinkType": "null",
+            "errorSinkConfig": {}
+          },
+          {
+            "type": "dq",
+            "expectations": [
+              {
+                "column": "claim_id",
+                "check": "not_null",
+                "value": null
+              },
+              {
+                "column": "amount",
+                "check": "range",
+                "value": {
+                  "min": 1,
+                  "max": 10000000
+                }
+              }
+            ],
+            "threshold": 0.98,
+            "onFail": "report",
+            "reportSinkType": "null"
+          },
+          {
+            "type": "lookup",
+            "url": "https://jsonplaceholder.typicode.com/users/{policy_id}",
+            "method": "GET",
+            "keyField": "policy_id",
+            "outputFields": [
+              "name",
+              "email"
+            ],
+            "concurrency": 10,
+            "cacheSize": 5000,
+            "timeoutMs": 3000,
+            "onError": "null"
+          },
+          {
+            "type": "map",
+            "fields": {
+              "claim_id": "=$claim_id",
+              "policy_id": "=$policy_id",
+              "amount_usd": "=divide($.amount,100)",
+              "claimant_name": "=coalesce($.name,'UNKNOWN')",
+              "claimant_email": "=coalesce($.email,'UNKNOWN')",
+              "status": "=$status",
+              "processed_at": "=$submitted_at"
+            }
+          }
+        ],
+        "sink": {
+          "type": "jdbc",
+          "driver": "sqlite",
+          "dsn": "./data/claims_enriched.db",
+          "table": "claims_processed",
+          "batchSize": 200,
+          "onConflict": "upsert",
+          "conflictKey": [
+            "claim_id"
+          ]
+        },
+        "dlqSink": {
+          "type": "null"
+        },
+        "performance": {
+          "batchSize": 500,
+          "maxMemoryMB": 256,
+          "transformWorkers": 2
+        },
+        "scaling": {
+          "mode": "single"
+        },
+        "checkpoint": {
+          "type": "file",
+          "path": "./checkpoints",
+          "intervalRows": 500,
+          "intervalSeconds": 30,
+          "deleteOnSuccess": false
+        }
+      }
+    }
+  ]
 }

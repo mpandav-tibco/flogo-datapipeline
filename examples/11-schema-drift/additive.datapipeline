@@ -1,36 +1,83 @@
 {
   "name": "schema-drift-additive",
-  "description": "Schema drift example — additive policy. When v2_records.csv arrives with two extra columns (region, score), the pipeline accepts and forwards them. Rows from v1 files (missing those columns) are padded with nulls. No pipeline modification required.",
+  "type": "flogo:app",
   "version": "1.0.0",
-  "mode": "etl",
-  "source": {
-    "type": "csv",
-    "path": "./data/v2_records.csv",
-    "delimiter": ",",
-    "hasHeader": true,
-    "columns": [
-      { "name": "id",     "type": "string" },
-      { "name": "name",   "type": "string" },
-      { "name": "status", "type": "string" }
-    ]
-  },
-  "transforms": [
+  "description": "Schema drift example — additive policy. When v2_records.csv arrives with two extra columns (region, score), the pipeline accepts and forwards them. Rows from v1 files (missing those columns) are padded with nulls. No pipeline modification required.",
+  "appModel": "1.1.1",
+  "imports": [
+    "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+    "github.com/project-flogo/contrib/trigger/timer"
+  ],
+  "triggers": [
     {
-      "type": "schemadrift",
-      "policy": "additive"
+      "id": "pipeline-timer",
+      "ref": "github.com/project-flogo/contrib/trigger/timer",
+      "settings": {
+        "repeating": true,
+        "startDelay": 0,
+        "interval": 86400000
+      },
+      "handlers": [
+        {
+          "settings": {},
+          "action": {
+            "ref": "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+            "settings": {
+              "pipelineRef": "res://pipeline:schema-drift-additive"
+            }
+          }
+        }
+      ]
     }
   ],
-  "sink": {
-    "type": "null"
-  },
-  "performance": {
-    "batchSize": 5000,
-    "maxMemoryMB": 512
-  },
-  "scaling": {
-    "mode": "single"
-  },
-  "checkpoint": {
-    "type": "none"
-  }
+  "resources": [
+    {
+      "id": "pipeline:schema-drift-additive",
+      "data": {
+        "name": "schema-drift-additive",
+        "description": "Schema drift example — additive policy. When v2_records.csv arrives with two extra columns (region, score), the pipeline accepts and forwards them. Rows from v1 files (missing those columns) are padded with nulls. No pipeline modification required.",
+        "version": "1.0.0",
+        "mode": "etl",
+        "source": {
+          "type": "csv",
+          "path": "./data/v2_records.csv",
+          "delimiter": ",",
+          "hasHeader": true,
+          "columns": [
+            {
+              "name": "id",
+              "type": "string"
+            },
+            {
+              "name": "name",
+              "type": "string"
+            },
+            {
+              "name": "status",
+              "type": "string"
+            }
+          ]
+        },
+        "transforms": [
+          {
+            "type": "schemadrift",
+            "policy": "additive"
+          }
+        ],
+        "sink": {
+          "type": "null"
+        },
+        "performance": {
+          "batchSize": 5000,
+          "maxMemoryMB": 512
+        },
+        "scaling": {
+          "mode": "single"
+        },
+        "checkpoint": {
+          "type": "none"
+        }
+      }
+    }
+  ]
 }

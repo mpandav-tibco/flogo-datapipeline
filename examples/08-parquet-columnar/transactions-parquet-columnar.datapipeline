@@ -1,36 +1,86 @@
 {
   "name": "transactions-parquet-columnar",
-  "description": "Read a Parquet file with column pruning — only the four declared columns (txn_id, amount, currency, status) are read from disk. Row groups are processed in parallel with a parallelism of 2. A filter transform retains only COMPLETED transactions above 50.0 before rows are discarded by the null sink.",
+  "type": "flogo:app",
   "version": "1.0.0",
-  "mode": "etl",
-  "source": {
-    "type": "parquet",
-    "path": "./data/transactions.parquet",
-    "columns": [
-      { "name": "txn_id",   "type": "string" },
-      { "name": "amount",   "type": "float"  },
-      { "name": "currency", "type": "string" },
-      { "name": "status",   "type": "string" }
-    ],
-    "rowGroupParallelism": 2
-  },
-  "transforms": [
+  "description": "Read a Parquet file with column pruning — only the four declared columns (txn_id, amount, currency, status) are read from disk. Row groups are processed in parallel with a parallelism of 2. A filter transform retains only COMPLETED transactions above 50.0 before rows are discarded by the null sink.",
+  "appModel": "1.1.1",
+  "imports": [
+    "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+    "github.com/project-flogo/contrib/trigger/timer"
+  ],
+  "triggers": [
     {
-      "type": "filter",
-      "expr": "status = 'COMPLETED' AND amount > 50.0"
+      "id": "pipeline-timer",
+      "ref": "github.com/project-flogo/contrib/trigger/timer",
+      "settings": {
+        "repeating": true,
+        "startDelay": 0,
+        "interval": 86400000
+      },
+      "handlers": [
+        {
+          "settings": {},
+          "action": {
+            "ref": "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+            "settings": {
+              "pipelineRef": "res://pipeline:transactions-parquet-columnar"
+            }
+          }
+        }
+      ]
     }
   ],
-  "sink": {
-    "type": "null"
-  },
-  "performance": {
-    "batchSize": 5000,
-    "maxMemoryMB": 512
-  },
-  "scaling": {
-    "mode": "single"
-  },
-  "checkpoint": {
-    "type": "none"
-  }
+  "resources": [
+    {
+      "id": "pipeline:transactions-parquet-columnar",
+      "data": {
+        "name": "transactions-parquet-columnar",
+        "description": "Read a Parquet file with column pruning — only the four declared columns (txn_id, amount, currency, status) are read from disk. Row groups are processed in parallel with a parallelism of 2. A filter transform retains only COMPLETED transactions above 50.0 before rows are discarded by the null sink.",
+        "version": "1.0.0",
+        "mode": "etl",
+        "source": {
+          "type": "parquet",
+          "path": "./data/transactions.parquet",
+          "columns": [
+            {
+              "name": "txn_id",
+              "type": "string"
+            },
+            {
+              "name": "amount",
+              "type": "float"
+            },
+            {
+              "name": "currency",
+              "type": "string"
+            },
+            {
+              "name": "status",
+              "type": "string"
+            }
+          ],
+          "rowGroupParallelism": 2
+        },
+        "transforms": [
+          {
+            "type": "filter",
+            "expr": "status = 'COMPLETED' AND amount > 50.0"
+          }
+        ],
+        "sink": {
+          "type": "null"
+        },
+        "performance": {
+          "batchSize": 5000,
+          "maxMemoryMB": 512
+        },
+        "scaling": {
+          "mode": "single"
+        },
+        "checkpoint": {
+          "type": "none"
+        }
+      }
+    }
+  ]
 }

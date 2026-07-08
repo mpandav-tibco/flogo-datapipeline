@@ -1,40 +1,112 @@
 {
   "name": "sensor-readings-ebcdic",
-  "description": "Read a mainframe-style fixed-width EBCDIC-037 flat file of sensor readings, filter for quality flag G (good), and discard output via the null sink. Demonstrates fixed-width source, EBCDIC-037 encoding, and implied-decimal parsing.",
+  "type": "flogo:app",
   "version": "1.0.0",
-  "mode": "etl",
-  "source": {
-    "type": "fixedwidth",
-    "path": "./data/sensor_readings.dat",
-    "encoding": "ebcdic-037",
-    "recordLength": 60,
-    "skipLines": 0,
-    "columns": [
-      { "name": "sensor_id",    "type": "string",  "start": 1,  "length": 8,  "trim": true  },
-      { "name": "timestamp",    "type": "string",  "start": 9,  "length": 14                },
-      { "name": "temperature",  "type": "decimal", "start": 23, "length": 8,  "impliedDecimal": 3 },
-      { "name": "humidity",     "type": "decimal", "start": 31, "length": 6,  "impliedDecimal": 2 },
-      { "name": "pressure",     "type": "decimal", "start": 37, "length": 8,  "impliedDecimal": 2 },
-      { "name": "quality_flag", "type": "string",  "start": 45, "length": 1                }
-    ]
-  },
-  "transforms": [
+  "description": "Read a mainframe-style fixed-width EBCDIC-037 flat file of sensor readings, filter for quality flag G (good), and discard output via the null sink. Demonstrates fixed-width source, EBCDIC-037 encoding, and implied-decimal parsing.",
+  "appModel": "1.1.1",
+  "imports": [
+    "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+    "github.com/project-flogo/contrib/trigger/timer"
+  ],
+  "triggers": [
     {
-      "type": "filter",
-      "expr": "quality_flag = 'G'"
+      "id": "pipeline-timer",
+      "ref": "github.com/project-flogo/contrib/trigger/timer",
+      "settings": {
+        "repeating": true,
+        "startDelay": 0,
+        "interval": 86400000
+      },
+      "handlers": [
+        {
+          "settings": {},
+          "action": {
+            "ref": "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+            "settings": {
+              "pipelineRef": "res://pipeline:sensor-readings-ebcdic"
+            }
+          }
+        }
+      ]
     }
   ],
-  "sink": {
-    "type": "null"
-  },
-  "performance": {
-    "batchSize": 5000,
-    "maxMemoryMB": 512
-  },
-  "scaling": {
-    "mode": "single"
-  },
-  "checkpoint": {
-    "type": "none"
-  }
+  "resources": [
+    {
+      "id": "pipeline:sensor-readings-ebcdic",
+      "data": {
+        "name": "sensor-readings-ebcdic",
+        "description": "Read a mainframe-style fixed-width EBCDIC-037 flat file of sensor readings, filter for quality flag G (good), and discard output via the null sink. Demonstrates fixed-width source, EBCDIC-037 encoding, and implied-decimal parsing.",
+        "version": "1.0.0",
+        "mode": "etl",
+        "source": {
+          "type": "fixedwidth",
+          "path": "./data/sensor_readings.dat",
+          "encoding": "ebcdic-037",
+          "recordLength": 60,
+          "skipLines": 0,
+          "columns": [
+            {
+              "name": "sensor_id",
+              "type": "string",
+              "start": 1,
+              "length": 8,
+              "trim": true
+            },
+            {
+              "name": "timestamp",
+              "type": "string",
+              "start": 9,
+              "length": 14
+            },
+            {
+              "name": "temperature",
+              "type": "decimal",
+              "start": 23,
+              "length": 8,
+              "impliedDecimal": 3
+            },
+            {
+              "name": "humidity",
+              "type": "decimal",
+              "start": 31,
+              "length": 6,
+              "impliedDecimal": 2
+            },
+            {
+              "name": "pressure",
+              "type": "decimal",
+              "start": 37,
+              "length": 8,
+              "impliedDecimal": 2
+            },
+            {
+              "name": "quality_flag",
+              "type": "string",
+              "start": 45,
+              "length": 1
+            }
+          ]
+        },
+        "transforms": [
+          {
+            "type": "filter",
+            "expr": "quality_flag = 'G'"
+          }
+        ],
+        "sink": {
+          "type": "null"
+        },
+        "performance": {
+          "batchSize": 5000,
+          "maxMemoryMB": 512
+        },
+        "scaling": {
+          "mode": "single"
+        },
+        "checkpoint": {
+          "type": "none"
+        }
+      }
+    }
+  ]
 }

@@ -1,46 +1,91 @@
 {
   "name": "kafka-streaming",
-  "description": "Streaming ETL: consume JSON messages from a Kafka topic (sensor-data), apply a temperature range filter and field-level validation, then write surviving rows in micro-batches to a SQLite database. Demonstrates the Kafka source (consumer group, timed poll, optional SASL/SCRAM-SHA-512) and how to chain streaming data into a JDBC sink without an intermediate file.",
+  "type": "flogo:app",
   "version": "1.0.0",
-  "mode": "etl",
-  "source": {
-    "type": "kafka",
-    "brokers": "localhost:9092",
-    "topic": "sensor-data",
-    "groupId": "pipeline-consumer-1",
-    "sasl": false,
-    "pollTimeoutMs": 5000
-  },
-  "transforms": [
+  "description": "Streaming ETL: consume JSON messages from a Kafka topic (sensor-data), apply a temperature range filter and field-level validation, then write surviving rows in micro-batches to a SQLite database. Demonstrates the Kafka source (consumer group, timed poll, optional SASL/SCRAM-SHA-512) and how to chain streaming data into a JDBC sink without an intermediate file.",
+  "appModel": "1.1.1",
+  "imports": [
+    "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+    "github.com/project-flogo/contrib/trigger/timer"
+  ],
+  "triggers": [
     {
-      "type": "filter",
-      "expr": "temperature > 0"
-    },
-    {
-      "type": "validate",
-      "rules": [
-        { "field": "sensor_id",   "notNull": true },
-        { "field": "temperature", "min": -100, "max": 200 }
-      ],
-      "onViolation": "drop"
+      "id": "pipeline-timer",
+      "ref": "github.com/project-flogo/contrib/trigger/timer",
+      "settings": {
+        "repeating": true,
+        "startDelay": 0,
+        "interval": 86400000
+      },
+      "handlers": [
+        {
+          "settings": {},
+          "action": {
+            "ref": "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+            "settings": {
+              "pipelineRef": "res://pipeline:kafka-streaming"
+            }
+          }
+        }
+      ]
     }
   ],
-  "sink": {
-    "type": "jdbc",
-    "driver": "sqlite",
-    "dsn": "./data/sensors.db",
-    "table": "sensor_readings",
-    "batchSize": 100,
-    "onConflict": "insert"
-  },
-  "performance": {
-    "batchSize": 500,
-    "maxMemoryMB": 256
-  },
-  "scaling": {
-    "mode": "single"
-  },
-  "checkpoint": {
-    "type": "none"
-  }
+  "resources": [
+    {
+      "id": "pipeline:kafka-streaming",
+      "data": {
+        "name": "kafka-streaming",
+        "description": "Streaming ETL: consume JSON messages from a Kafka topic (sensor-data), apply a temperature range filter and field-level validation, then write surviving rows in micro-batches to a SQLite database. Demonstrates the Kafka source (consumer group, timed poll, optional SASL/SCRAM-SHA-512) and how to chain streaming data into a JDBC sink without an intermediate file.",
+        "version": "1.0.0",
+        "mode": "etl",
+        "source": {
+          "type": "kafka",
+          "brokers": "localhost:9092",
+          "topic": "sensor-data",
+          "groupId": "pipeline-consumer-1",
+          "sasl": false,
+          "pollTimeoutMs": 5000
+        },
+        "transforms": [
+          {
+            "type": "filter",
+            "expr": "temperature > 0"
+          },
+          {
+            "type": "validate",
+            "rules": [
+              {
+                "field": "sensor_id",
+                "notNull": true
+              },
+              {
+                "field": "temperature",
+                "min": -100,
+                "max": 200
+              }
+            ],
+            "onViolation": "drop"
+          }
+        ],
+        "sink": {
+          "type": "jdbc",
+          "driver": "sqlite",
+          "dsn": "./data/sensors.db",
+          "table": "sensor_readings",
+          "batchSize": 100,
+          "onConflict": "insert"
+        },
+        "performance": {
+          "batchSize": 500,
+          "maxMemoryMB": 256
+        },
+        "scaling": {
+          "mode": "single"
+        },
+        "checkpoint": {
+          "type": "none"
+        }
+      }
+    }
+  ]
 }

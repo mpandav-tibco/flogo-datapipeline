@@ -1,46 +1,99 @@
 {
   "name": "events-jsonlines-source",
-  "description": "Read newline-delimited JSON (NDJSON) event records with schema-on-read column mapping. Flattens the nested 'properties.amount' field into a top-level column, then filters to purchase and refund events before passing them to the null sink.",
+  "type": "flogo:app",
   "version": "1.0.0",
-  "mode": "etl",
-  "source": {
-    "type": "jsonlines",
-    "path": "./data/events.jsonl",
-    "columns": [
-      { "name": "event_id",          "type": "string" },
-      { "name": "user_id",           "type": "int"    },
-      { "name": "event_type",        "type": "string" },
-      { "name": "properties_amount", "type": "float"  },
-      { "name": "timestamp",         "type": "string" }
-    ]
-  },
-  "transforms": [
+  "description": "Read newline-delimited JSON (NDJSON) event records with schema-on-read column mapping. Flattens the nested 'properties.amount' field into a top-level column, then filters to purchase and refund events before passing them to the null sink.",
+  "appModel": "1.1.1",
+  "imports": [
+    "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+    "github.com/project-flogo/contrib/trigger/timer"
+  ],
+  "triggers": [
     {
-      "type": "filter",
-      "expr": "event_type = 'purchase' OR event_type = 'refund'"
-    },
-    {
-      "type": "map",
-      "fields": {
-        "id":     "=$event_id",
-        "user":   "=$user_id",
-        "type":   "=$event_type",
-        "amount": "=$properties_amount",
-        "ts":     "=$timestamp"
-      }
+      "id": "pipeline-timer",
+      "ref": "github.com/project-flogo/contrib/trigger/timer",
+      "settings": {
+        "repeating": true,
+        "startDelay": 0,
+        "interval": 86400000
+      },
+      "handlers": [
+        {
+          "settings": {},
+          "action": {
+            "ref": "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+            "settings": {
+              "pipelineRef": "res://pipeline:events-jsonlines-source"
+            }
+          }
+        }
+      ]
     }
   ],
-  "sink": {
-    "type": "null"
-  },
-  "performance": {
-    "batchSize": 5000,
-    "maxMemoryMB": 512
-  },
-  "scaling": {
-    "mode": "single"
-  },
-  "checkpoint": {
-    "type": "none"
-  }
+  "resources": [
+    {
+      "id": "pipeline:events-jsonlines-source",
+      "data": {
+        "name": "events-jsonlines-source",
+        "description": "Read newline-delimited JSON (NDJSON) event records with schema-on-read column mapping. Flattens the nested 'properties.amount' field into a top-level column, then filters to purchase and refund events before passing them to the null sink.",
+        "version": "1.0.0",
+        "mode": "etl",
+        "source": {
+          "type": "jsonlines",
+          "path": "./data/events.jsonl",
+          "columns": [
+            {
+              "name": "event_id",
+              "type": "string"
+            },
+            {
+              "name": "user_id",
+              "type": "int"
+            },
+            {
+              "name": "event_type",
+              "type": "string"
+            },
+            {
+              "name": "properties_amount",
+              "type": "float"
+            },
+            {
+              "name": "timestamp",
+              "type": "string"
+            }
+          ]
+        },
+        "transforms": [
+          {
+            "type": "filter",
+            "expr": "event_type = 'purchase' OR event_type = 'refund'"
+          },
+          {
+            "type": "map",
+            "fields": {
+              "id": "=$event_id",
+              "user": "=$user_id",
+              "type": "=$event_type",
+              "amount": "=$properties_amount",
+              "ts": "=$timestamp"
+            }
+          }
+        ],
+        "sink": {
+          "type": "null"
+        },
+        "performance": {
+          "batchSize": 5000,
+          "maxMemoryMB": 512
+        },
+        "scaling": {
+          "mode": "single"
+        },
+        "checkpoint": {
+          "type": "none"
+        }
+      }
+    }
+  ]
 }

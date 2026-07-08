@@ -196,6 +196,10 @@
         setDirty(false)
         render()
         break
+      case 'update':
+        // External file change (git checkout, raw edit) — refresh canvas with updated pipeline data
+        if (m.doc) { state.doc = m.doc; setDirty(false); render() }
+        break
       case 'runStarted':
         state.running = true
         state.runPort = m.port || null
