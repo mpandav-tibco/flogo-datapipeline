@@ -282,7 +282,7 @@ class PipelineEditorProvider {
         post({ type: 'runStarted', port })
       } catch (err) {
         if (this._hooks.onStopped) this._hooks.onStopped()
-        post({ type: 'error', message: err && err.message ? err.message : String(err) })
+        post({ type: 'runError', message: err && err.message ? err.message : String(err) })
       }
     } finally {
       this._runInFlight = false

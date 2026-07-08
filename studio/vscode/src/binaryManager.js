@@ -11,7 +11,7 @@ const vscode = require('vscode')
 // Readiness probe: the pipeline engine exposes /health on the same port it is
 // bound to. start() waits ~300 ms for early crashes before polling, so a 200
 // here means the process survived config load and the pipeline started.
-const HEALTH_ENDPOINT = '/health'
+const HEALTH_ENDPOINT = '/v1/health'
 const POLL_INTERVAL_MS = 500
 const STARTUP_TIMEOUT_S = 15
 const PORT_RETRY_MAX = 10
