@@ -699,10 +699,12 @@
   function closePpPanel() {
     state.selected = null
     state.propsSnapshot = null
+    state.mapperExprMap = null
+    state.mapperActiveField = null
     qsa('.node').forEach(function (n) { n.classList.remove('selected') })
     var ppEl = byId('pp')
     if (ppEl) {
-      ppEl.style.height = ''  // clear resize-drag inline style so CSS class controls height
+      ppEl.style.height = ''
       ppEl.classList.remove('pp-open')
     }
     var titleEl = byId('pp-hdr-title')
@@ -729,6 +731,8 @@
     }
     state.selected = null
     state.propsSnapshot = null
+    state.mapperExprMap = null
+    state.mapperActiveField = null
     qsa('.node').forEach(function (n) { n.classList.remove('selected') })
     var ppEl = byId('pp')
     if (ppEl) {
@@ -1006,7 +1010,7 @@
       html += ppField('Expression', '<textarea class="pp-textarea" id="tr-expr" rows="4" placeholder="quantity > 0 AND status != \'CANCELLED\'">' + esc(tr.expr || '') + '</textarea>')
       html += '<div class="pp-hint">Supported: field op value, AND / OR, IS NULL, IN (...), comparison operators (=, !=, &lt;, &gt;, &lt;=, &gt;=).</div>'
     } else if (type === 'map' || type === 'mapper') {
-      // Build available-fields list from source columns + upstream transforms
+      // Panel 1: available fields from source columns + upstream transforms
       var doc2 = state.doc || {}
       var srcCols = (doc2.source && Array.isArray(doc2.source.columns)) ? doc2.source.columns : []
       var availHtml = ''
@@ -1015,19 +1019,30 @@
         srcCols.forEach(function (c) {
           var n = typeof c === 'string' ? c : (c.name || '')
           var t = typeof c === 'object' ? (c.type || 'any') : 'any'
-          if (n) availHtml += '<div class="avail-field" draggable="true" data-field="' + esc(n) + '" title="Drag to Expression — ' + esc(t) + '">' +
-            '<span class="avail-type">' + esc(t.substring(0,3)) + '</span>' +
+          if (n) availHtml += '<div class="avail-field" draggable="true" data-field="' + esc(n) + '" title="' + esc(t) + '">' +
+            '<span class="avail-type">' + esc(t.substring(0, 3)) + '</span>' +
             '<span class="avail-name">$' + esc(n) + '</span>' +
             '</div>'
         })
       }
-      // Also show any output fields from preceding lookup transforms
-      var transforms = Array.isArray(doc2.transforms) ? doc2.transforms : []
-      transforms.slice(0, trIdx || 0).forEach(function (prev) {
-        if (prev.type === 'lookup' && Array.isArray(prev.outputFields) && prev.outputFields.length) {
-          availHtml += '<div class="avail-section">Lookup</div>'
+      var allTransforms = Array.isArray(doc2.transforms) ? doc2.transforms : []
+      allTransforms.slice(0, trIdx || 0).forEach(function (prev, pi) {
+        var prevFields = []
+        if ((prev.type === 'map' || prev.type === 'mapper') && prev.fields) {
+          prevFields = Object.keys(prev.fields)
+          if (prevFields.length) {
+            availHtml += '<div class="avail-section">Map ' + (pi + 1) + '</div>'
+            prevFields.forEach(function (f) {
+              availHtml += '<div class="avail-field" draggable="true" data-field="' + esc(f) + '" title="string">' +
+                '<span class="avail-type">str</span>' +
+                '<span class="avail-name">$' + esc(f) + '</span>' +
+                '</div>'
+            })
+          }
+        } else if (prev.type === 'lookup' && Array.isArray(prev.outputFields) && prev.outputFields.length) {
+          availHtml += '<div class="avail-section">Lookup ' + (pi + 1) + '</div>'
           prev.outputFields.forEach(function (f) {
-            availHtml += '<div class="avail-field" draggable="true" data-field="' + esc(f) + '" title="Drag to Expression — string">' +
+            availHtml += '<div class="avail-field" draggable="true" data-field="' + esc(f) + '" title="string">' +
               '<span class="avail-type">str</span>' +
               '<span class="avail-name">$' + esc(f) + '</span>' +
               '</div>'
@@ -1036,19 +1051,36 @@
       })
       if (!availHtml) availHtml = '<div class="avail-empty">No schema defined on Source</div>'
 
-      html += '<div class="mapper-host">' +
+      // Panel 2: current transform output fields (non-editable, clickable)
+      var existingFields = tr.fields || {}
+      var outputFieldsHtml = Object.keys(existingFields).map(function (k) {
+        var hasMapped = !!(existingFields[k] && existingFields[k].trim())
+        return '<div class="output-field" data-field="' + esc(k) + '">' +
+          '<span class="of-dot' + (hasMapped ? ' mapped' : '') + '"></span>' +
+          '<span class="of-name">' + esc(k) + '</span>' +
+          '</div>'
+      }).join('')
+      if (!outputFieldsHtml) outputFieldsHtml = '<div class="avail-empty" id="output-empty">No fields yet — add one below</div>'
+
+      html += '<div class="mapper-host3">' +
         '<div class="mapper-avail">' +
           '<div class="mapper-panel-hdr">Available Fields</div>' +
           '<div class="avail-list" id="avail-list">' + availHtml + '</div>' +
         '</div>' +
-        '<div class="mapper-main">' +
-          '<div class="mapper-toolbar"><span class="mapper-toolbar-label">Mappings</span>' +
-            '<button class="btn-g" id="btn-add-map-row" style="font-size:11px;padding:2px 8px">+ Add</button></div>' +
-          '<div class="mapper-grid" id="map-fields-editor">' +
-            '<div class="mapper-col-hdr">Output Field</div>' +
-            '<div class="mapper-col-hdr">Expression</div>' +
-            '<div></div>' +
-            renderMapFieldRows(tr.fields || {}) +
+        '<div class="mapper-outputs">' +
+          '<div class="mapper-panel-hdr">Output Fields</div>' +
+          '<div class="output-list" id="output-list">' + outputFieldsHtml + '</div>' +
+          '<div class="new-output-row">' +
+            '<input class="pp-input" type="text" id="new-output-name" placeholder="field name"/>' +
+            '<button class="btn-g" id="btn-add-output" style="font-size:11px;padding:2px 6px">+</button>' +
+          '</div>' +
+        '</div>' +
+        '<div class="mapper-expr-panel" id="mapper-expr-panel">' +
+          '<div class="mapper-panel-hdr" id="expr-panel-hdr">Select a field to map</div>' +
+          '<div class="fn-strip fn-strip-disabled" id="fn-strip"></div>' +
+          '<div class="expr-editor-wrap">' +
+            '<textarea class="pp-input map-expr3" id="map-expr-input" rows="4" placeholder="=$field or =function(...)" disabled></textarea>' +
+            '<div class="expr-hint">Click a field in Output Fields, then drag from Available Fields or use function shortcuts.</div>' +
           '</div>' +
         '</div>' +
       '</div>'
@@ -1085,56 +1117,160 @@
     return html
   }
 
-  function renderMapFieldRows(fields) {
-    var html = ''
-    Object.keys(fields).forEach(function (k) {
-      html += '<div class="map-row">' +
-        '<input class="pp-input map-out" type="text" value="' + esc(k) + '" placeholder="output_field"/>' +
-        '<input class="pp-input map-expr" type="text" value="' + esc(fields[k]) + '" placeholder="=$source_field or =expr(...)"/>' +
-        '<button class="map-del-row" data-action="del-map-row" title="Remove">×</button>' +
-        '</div>'
-    })
-    return html
-  }
-
-  function makeMapRow() {
-    var div = document.createElement('div')
-    div.className = 'map-row'
-    div.innerHTML =
-      '<input class="pp-input map-out" type="text" value="" placeholder="output_field"/>' +
-      '<input class="pp-input map-expr" type="text" value="" placeholder="=$source_field or =expr(...)"/>' +
-      '<button class="map-del-row" data-action="del-map-row" title="Remove">×</button>'
-    return div
-  }
-
   function wireMapEditor(tr) {
-    var editor = byId('map-fields-editor')
-    var addBtn = byId('btn-add-map-row')
+    state.mapperExprMap = Object.assign({}, tr.fields || {})
+    state.mapperActiveField = null
+
     var availList = byId('avail-list')
-    var mapperMain = editor ? editor.closest('.mapper-main') : null
-    var dragField = null  // field name being dragged; set on dragstart, cleared on dragend/drop
+    var outputList = byId('output-list')
+    var addOutputBtn = byId('btn-add-output')
+    var newOutputInput = byId('new-output-name')
+    var exprInput = byId('map-expr-input')
+    var exprPanelHdr = byId('expr-panel-hdr')
+    var fnStrip = byId('fn-strip')
+    var dragField = null
 
-    // ── Delete row ──
-    if (editor) {
-      editor.addEventListener('click', function (e) {
-        if (tgt(e, '[data-action="del-map-row"]')) {
-          var row = tgt(e).closest('.map-row')
-          if (row) row.remove()
+    var FNS = [
+      { label: 'coalesce',  tpl: '=coalesce($field, "")' },
+      { label: 'concat',    tpl: '=string.concat($a, $b)' },
+      { label: 'trim',      tpl: '=string.trim($field)' },
+      { label: 'upper',     tpl: '=string.toUpper($field)' },
+      { label: 'lower',     tpl: '=string.toLower($field)' },
+      { label: 'parseInt',  tpl: '=integer.parseInt($field)' },
+      { label: 'toString',  tpl: '=string.toString($field)' },
+      { label: 'now',       tpl: '=util.now()' },
+      { label: 'length',    tpl: '=string.length($field)' }
+    ]
+
+    if (fnStrip) {
+      fnStrip.innerHTML = FNS.map(function (fn) {
+        return '<button class="fn-btn" data-tpl="' + esc(fn.tpl) + '">' + esc(fn.label) + '</button>'
+      }).join('')
+    }
+
+    function updateDot(fieldName) {
+      if (!outputList) return
+      var el = outputList.querySelector('.output-field[data-field="' + fieldName.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"]')
+      if (!el) return
+      var dot = el.querySelector('.of-dot')
+      if (dot) dot.classList.toggle('mapped', !!(state.mapperExprMap[fieldName] && state.mapperExprMap[fieldName].trim()))
+    }
+
+    function selectOutputField(fieldName) {
+      state.mapperActiveField = fieldName
+      if (outputList) {
+        qsa('.output-field', outputList).forEach(function (el) {
+          el.classList.toggle('selected', el.dataset.field === fieldName)
+        })
+        var emptyMsg = byId('output-empty')
+        if (emptyMsg) emptyMsg.remove()
+      }
+      if (exprPanelHdr) exprPanelHdr.textContent = fieldName
+      if (exprInput) {
+        exprInput.value = state.mapperExprMap[fieldName] || ''
+        exprInput.disabled = false
+        exprInput.focus()
+      }
+      if (fnStrip) fnStrip.classList.remove('fn-strip-disabled')
+    }
+
+    // Initialize dots for pre-existing mapped fields
+    Object.keys(state.mapperExprMap).forEach(updateDot)
+
+    // Panel 2: click to select output field
+    if (outputList) {
+      outputList.addEventListener('click', function (e) {
+        var el = e.target.closest('.output-field')
+        if (el) selectOutputField(el.dataset.field)
+      })
+    }
+
+    // Panel 3: expression textarea input → save to exprMap + refresh dot
+    if (exprInput) {
+      exprInput.addEventListener('input', function () {
+        if (!state.mapperActiveField) return
+        state.mapperExprMap[state.mapperActiveField] = exprInput.value
+        updateDot(state.mapperActiveField)
+      })
+
+      // Drop field reference at cursor from Panel 1 drag
+      exprInput.addEventListener('dragover', function (e) {
+        if (!dragField) return
+        e.preventDefault()
+        e.dataTransfer.dropEffect = 'copy'
+        exprInput.classList.add('drop-over')
+      })
+      exprInput.addEventListener('dragleave', function () {
+        exprInput.classList.remove('drop-over')
+      })
+      exprInput.addEventListener('drop', function (e) {
+        e.preventDefault()
+        exprInput.classList.remove('drop-over')
+        if (!dragField || !state.mapperActiveField) return
+        var ref = '=$' + dragField
+        var start = exprInput.selectionStart
+        var end = exprInput.selectionEnd
+        var val = exprInput.value
+        exprInput.value = val.substring(0, start) + ref + val.substring(end)
+        var pos = start + ref.length
+        exprInput.setSelectionRange(pos, pos)
+        state.mapperExprMap[state.mapperActiveField] = exprInput.value
+        updateDot(state.mapperActiveField)
+        exprInput.focus()
+        dragField = null
+      })
+    }
+
+    // Function strip: insert template at cursor
+    if (fnStrip) {
+      fnStrip.addEventListener('click', function (e) {
+        var btn = e.target.closest('.fn-btn')
+        if (!btn || !state.mapperActiveField || !exprInput) return
+        var tmpl = btn.dataset.tpl
+        var start = exprInput.selectionStart
+        var end = exprInput.selectionEnd
+        var val = exprInput.value
+        if (!val.trim()) {
+          exprInput.value = tmpl
+        } else {
+          exprInput.value = val.substring(0, start) + tmpl + val.substring(end)
         }
+        var pos = val.trim() ? start + tmpl.length : tmpl.length
+        exprInput.setSelectionRange(pos, pos)
+        state.mapperExprMap[state.mapperActiveField] = exprInput.value
+        updateDot(state.mapperActiveField)
+        exprInput.focus()
       })
     }
 
-    // ── Add empty row ──
-    if (addBtn) {
-      addBtn.addEventListener('click', function () {
-        if (!editor) return
-        var row = makeMapRow()
-        editor.appendChild(row)
-        var inp = qs('.map-out', row); if (inp) inp.focus()
+    // + Add output field button / Enter in name input
+    function addOutputField(rawName) {
+      var fieldName = rawName.trim()
+      if (!fieldName) return false
+      var existing = outputList && outputList.querySelector('.output-field[data-field="' + fieldName.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"]')
+      if (existing) { selectOutputField(fieldName); return false }
+      if (!state.mapperExprMap.hasOwnProperty(fieldName)) state.mapperExprMap[fieldName] = ''
+      if (outputList) {
+        var div = document.createElement('div')
+        div.className = 'output-field'
+        div.dataset.field = fieldName
+        div.innerHTML = '<span class="of-dot"></span><span class="of-name">' + esc(fieldName) + '</span>'
+        outputList.appendChild(div)
+      }
+      selectOutputField(fieldName)
+      return true
+    }
+
+    if (addOutputBtn && newOutputInput) {
+      addOutputBtn.addEventListener('click', function () {
+        if (addOutputField(newOutputInput.value)) newOutputInput.value = ''
+      })
+      newOutputInput.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') { e.preventDefault(); if (addOutputField(newOutputInput.value)) newOutputInput.value = '' }
       })
     }
 
-    // ── Drag from Available Fields → Expression inputs ──
+    // Panel 1 drag start/end
     if (availList) {
       availList.addEventListener('dragstart', function (e) {
         var el = e.target.closest('.avail-field')
@@ -1143,88 +1279,17 @@
         e.dataTransfer.setData('text/plain', '=$' + dragField)
         e.dataTransfer.effectAllowed = 'copy'
         el.classList.add('af-dragging')
-        // Activate drop-zone styling on the mapping panel
-        if (mapperMain) mapperMain.classList.add('drop-active')
-        // Highlight every existing expression input as a potential target
-        qsa('.map-expr', editor).forEach(function (inp) { inp.classList.add('drop-ready') })
       })
-
       availList.addEventListener('dragend', function () {
         dragField = null
         qsa('.af-dragging', availList).forEach(function (el) { el.classList.remove('af-dragging') })
-        if (mapperMain) mapperMain.classList.remove('drop-active')
-        qsa('.map-expr', editor).forEach(function (inp) {
-          inp.classList.remove('drop-ready', 'drop-over')
-        })
-      })
-    }
-
-    // ── Drop targets: individual expression inputs ──
-    if (editor) {
-      editor.addEventListener('dragover', function (e) {
-        if (!dragField) return
-        var exprEl = e.target.classList && e.target.classList.contains('map-expr')
-          ? e.target : null
-        // Allow drop anywhere in the grid (on an expr input OR on empty space for new row)
-        e.preventDefault()
-        e.dataTransfer.dropEffect = 'copy'
-        // Highlight only the expr input being hovered
-        qsa('.map-expr', editor).forEach(function (inp) { inp.classList.remove('drop-over') })
-        if (exprEl) exprEl.classList.add('drop-over')
-      })
-
-      editor.addEventListener('dragleave', function (e) {
-        // Only clear when truly leaving the grid (not just moving between child elements)
-        if (!editor.contains(e.relatedTarget)) {
-          qsa('.map-expr', editor).forEach(function (inp) { inp.classList.remove('drop-over') })
-        }
-      })
-
-      editor.addEventListener('drop', function (e) {
-        e.preventDefault()
-        var field = dragField
-        dragField = null
-        qsa('.map-expr', editor).forEach(function (inp) {
-          inp.classList.remove('drop-ready', 'drop-over')
-        })
-        if (mapperMain) mapperMain.classList.remove('drop-active')
-        if (!field) return
-
-        var ref = '=$' + field
-        var exprEl = e.target.classList && e.target.classList.contains('map-expr')
-          ? e.target : null
-
-        if (exprEl) {
-          // Drop ON an expression input → replace its value with the field reference
-          exprEl.value = ref
-          exprEl.focus()
-        } else {
-          // Drop on empty grid area → add a new row pre-filled with field + expression
-          var row = makeMapRow()
-          qs('.map-out', row).value = field
-          qs('.map-expr', row).value = ref
-          editor.appendChild(row)
-          // Highlight the new expression input briefly to confirm the drop
-          var newExpr = qs('.map-expr', row)
-          if (newExpr) { newExpr.classList.add('drop-confirm'); newExpr.focus() }
-          setTimeout(function () {
-            if (newExpr) newExpr.classList.remove('drop-confirm')
-          }, 600)
-        }
+        if (exprInput) exprInput.classList.remove('drop-over')
       })
     }
   }
 
   function collectMapFields() {
-    var editor = byId('map-fields-editor')
-    if (!editor) return {}
-    var fields = {}
-    qsa('.map-row', editor).forEach(function (row) {
-      var kEl = qs('.map-out', row), vEl = qs('.map-expr', row)
-      var k = kEl ? kEl.value : '', v = vEl ? vEl.value : ''
-      if (k.trim()) fields[k.trim()] = v
-    })
-    return fields
+    return state.mapperExprMap || {}
   }
 
   function deleteTransform(idx) {
