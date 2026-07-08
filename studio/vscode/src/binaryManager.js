@@ -42,6 +42,7 @@ class BinaryManager {
     this._channel = vscode.window.createOutputChannel('Flogo Data Pipeline')
     this._startingPromise = null  // in-flight start() deduplicator
     this._overrideBinaryPath = null
+    this._logCb = null  // optional real-time log forwarder (set by callers)
   }
 
   get port() { return this._port }
@@ -52,6 +53,10 @@ class BinaryManager {
 
   // Callback invoked if the binary exits unexpectedly after a successful start.
   onCrash(cb) { this._crashCb = cb }
+
+  // Register a callback that receives each stdout/stderr line in real-time.
+  // Pass null to remove. Used by the Run tab to stream binary output to the canvas.
+  onLog(cb) { this._logCb = cb }
 
   // ── Public API ────────────────────────────────────────────────────────────
 
@@ -74,8 +79,9 @@ class BinaryManager {
   /** @returns {Promise<number>} */
   async _doStart(pipelineFile, startPort) {
 
-    const binary = this._resolveBinary()
+    // Open the output channel first so any error (including NO_BINARY) is visible there.
     this._channel.show(true)
+    const binary = this._resolveBinary()
 
     const basePort = startPort || DEFAULT_PORT
     let port = basePort
@@ -308,8 +314,16 @@ class BinaryManager {
     // as an uncaught exception that would crash the extension host.
     proc.once('error', err =>
       this._channel.appendLine('[manager] engine process error: ' + err.message))
-    proc.stdout.on('data', d => this._channel.append(d.toString()))
-    proc.stderr.on('data', d => this._channel.append(d.toString()))
+    proc.stdout.on('data', d => {
+      const text = d.toString()
+      this._channel.append(text)
+      if (this._logCb) this._logCb(text)
+    })
+    proc.stderr.on('data', d => {
+      const text = d.toString()
+      this._channel.append(text)
+      if (this._logCb) this._logCb(text)
+    })
     return proc
   }
 

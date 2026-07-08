@@ -309,14 +309,50 @@ class PipelineEditorProvider {
       post({ type: 'runStarting' })
       if (this._hooks.onStarting) this._hooks.onStarting()
 
+      // Forward binary stdout/stderr to the canvas Run Log in real-time.
+      this._manager.onLog(text => {
+        text.split(/\r?\n/).forEach(line => {
+          if (line.trim()) post({ type: 'runLog', line })
+        })
+      })
+
+      post({ type: 'runLog', line: `[engine] Starting flogo-datapipeline on port ${startPort}…` })
+
       try {
         this._manager.stop()
         const port = await this._manager.start(document.uri.fsPath, startPort)
+        post({ type: 'runLog', line: `[engine] Ready on port ${port}` })
         if (this._hooks.onRunning) this._hooks.onRunning(port, path.basename(document.uri.fsPath, '.datapipeline'))
         post({ type: 'runStarted', port })
       } catch (err) {
         if (this._hooks.onStopped) this._hooks.onStopped()
-        post({ type: 'runError', message: err && err.message ? err.message : String(err) })
+        const msg = err && err.message ? err.message : String(err)
+        post({ type: 'runError', message: msg })
+
+        // Binary not found: show an actionable dialog with build instructions.
+        if (err && err.code === 'NO_BINARY') {
+          const buildCmd = err.buildCmd || this._manager.buildCommand()
+          vscode.window.showErrorMessage(
+            'flogo-datapipeline binary not found. Build it or set the binary path in settings.',
+            'Show Build Command',
+            'Open Settings'
+          ).then(choice => {
+            if (choice === 'Show Build Command') {
+              const ch = this._manager.channel
+              ch.show(true)
+              ch.appendLine('\n══ Build the binary ══════════════════════════════')
+              ch.appendLine('  cd ' + path.dirname(path.dirname(document.uri.fsPath)))
+              ch.appendLine('  ' + buildCmd)
+              ch.appendLine('')
+              ch.appendLine('Then set "flogoDataPipelineStudio.binaryPath" to the output path in VS Code settings.')
+              ch.appendLine('═════════════════════════════════════════════════\n')
+            } else if (choice === 'Open Settings') {
+              vscode.commands.executeCommand('workbench.action.openSettings', 'flogoDataPipelineStudio.binaryPath')
+            }
+          })
+        }
+      } finally {
+        this._manager.onLog(null)
       }
     } finally {
       this._runInFlight = false
