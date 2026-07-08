@@ -12,6 +12,7 @@ import (
 	"github.com/project-flogo/core/action"
 	"github.com/project-flogo/core/app/resource"
 	"github.com/project-flogo/core/data/metadata"
+	corelog "github.com/project-flogo/core/support/log"
 
 	"github.com/mpandav-tibco/flogo-datapipeline/checkpoint"
 	"github.com/mpandav-tibco/flogo-datapipeline/metrics"
@@ -74,23 +75,51 @@ func (a *DataPipelineAction) SourceType() string { return a.def.Source.Type }
 // SinkType returns the sink type declared in the pipeline definition.
 func (a *DataPipelineAction) SinkType() string { return a.def.Sink.Type }
 
+// shortName strips the "res://pipeline:" prefix from a pipeline ref so the
+// structured log field is a clean name (e.g. "filter-and-map", not the full URI).
+func shortName(ref string) string {
+	return strings.TrimPrefix(ref, "res://pipeline:")
+}
+
+// newRunLog builds a per-run child logger that permanently binds the pipeline
+// name and run ID as structured fields — identical to the flogo-agent pattern
+// where every log line carries {"agent": "...", "session": "..."}.
+func newRunLog(pipelineRef, runID string) corelog.Logger {
+	return corelog.ChildLoggerWithFields(flog,
+		corelog.FieldString("pipeline", shortName(pipelineRef)),
+		corelog.FieldString("runId", runID),
+	)
+}
+
 // RunDirect executes the pipeline synchronously in the calling goroutine and
 // returns its Output. It is used by the REST API server for synchronous run
 // requests (async=false) and by the SDK inline Run() path.
 // ctx should carry a cancel function so the caller can abort the run.
 func (a *DataPipelineAction) RunDirect(ctx context.Context, in *Input) (*Output, error) {
+	runID := in.RunID
+	if runID == "" {
+		runID = newRunID()
+	}
+
+	runLog := newRunLog(a.ref, runID)
+	runLog.Infof("pipeline run started — source=%s sink=%s", a.def.Source.Type, a.def.Sink.Type)
+
 	start := time.Now()
-	out, runErr := a.executePipeline(ctx, in)
+	out, runErr := a.executePipeline(ctx, in, runLog, runID)
 	out.DurationMs = time.Since(start).Milliseconds()
 
 	if runErr != nil {
 		out.Status = "failed"
 		out.Error = runErr.Error()
+		runLog.Errorf("pipeline run failed after %dms: %v", out.DurationMs, runErr)
 	} else if out.RowsFailed > 0 {
 		out.Status = "partial"
 	} else {
 		out.Status = "completed"
 	}
+	runLog.Infof("pipeline run %s — processed=%d written=%d failed=%d dropped=%d duration=%dms",
+		out.Status, out.RowsProcessed, out.RowsWritten, out.RowsFailed, out.RowsDropped, out.DurationMs)
+
 	return out, runErr
 }
 
@@ -105,23 +134,34 @@ func (a *DataPipelineAction) Run(
 		return fmt.Errorf("pipeline: bad input: %w", err)
 	}
 
+	// Determine runID before spawning so the structured log fields are set from
+	// the very first log line — matching the flogo-agent pattern where session ID
+	// is bound to the logger before "chat request received" fires.
+	runID := in.RunID
+	if runID == "" {
+		runID = newRunID()
+	}
+
 	go func() {
+		runLog := newRunLog(a.ref, runID)
+		runLog.Infof("pipeline run started — source=%s sink=%s", a.def.Source.Type, a.def.Sink.Type)
+
 		start := time.Now()
-		out, runErr := a.executePipeline(ctx, in)
+		out, runErr := a.executePipeline(ctx, in, runLog, runID)
 		totalDur := time.Since(start)
 		out.DurationMs = totalDur.Milliseconds()
 
 		if runErr != nil {
 			out.Status = "failed"
 			out.Error = runErr.Error()
-			flog.Errorf("pipeline %s failed after %dms: %v", a.ref, out.DurationMs, runErr)
+			runLog.Errorf("pipeline run failed after %dms: %v", out.DurationMs, runErr)
 		} else if out.RowsFailed > 0 {
 			out.Status = "partial"
 		} else {
 			out.Status = "completed"
 		}
-		flog.Infof("pipeline %s %s — processed=%d written=%d failed=%d dropped=%d duration=%dms",
-			a.ref, out.Status, out.RowsProcessed, out.RowsWritten, out.RowsFailed, out.RowsDropped, out.DurationMs)
+		runLog.Infof("pipeline run %s — processed=%d written=%d failed=%d dropped=%d duration=%dms",
+			out.Status, out.RowsProcessed, out.RowsWritten, out.RowsFailed, out.RowsDropped, out.DurationMs)
 
 		// Emit end-of-run metric. Called regardless of success/failure so the
 		// "failed" status label is captured in the pipeline_runs counter.
@@ -151,12 +191,12 @@ func (a *DataPipelineAction) stallThreshold() time.Duration {
 // configured stallThreshold. Called once per batch stage (read/transform/write)
 // using time.Since(t0) — no goroutine or timer is needed; exactly one alert is
 // emitted per stalled batch regardless of how long the stall lasts.
-func (a *DataPipelineAction) checkStall(stage string, dur time.Duration) {
+func (a *DataPipelineAction) checkStall(runLog corelog.Logger, stage string, dur time.Duration) {
 	thresh := a.stallThreshold()
 	if thresh > 0 && dur > thresh {
 		a.recorder.Stall(a.ref, stage, dur)
-		flog.Warnf("pipeline %s: stall detected in stage %q — batch took %v (threshold %v)",
-			a.ref, stage, dur.Round(time.Millisecond), thresh)
+		runLog.Warnf("stall detected in stage %q — batch took %v (threshold %v)",
+			stage, dur.Round(time.Millisecond), thresh)
 	}
 }
 
@@ -169,15 +209,11 @@ func (a *DataPipelineAction) Shutdown(ctx context.Context) error {
 }
 
 // executePipeline runs the full source → transform → sink loop.
-// Called from the goroutine spawned by Run(); no concurrency within this func.
-func (a *DataPipelineAction) executePipeline(ctx context.Context, in *Input) (*Output, error) {
+// Called from the goroutine spawned by Run() and directly from RunDirect().
+// runLog carries the per-run structured fields {"pipeline": "...", "runId": "..."}.
+func (a *DataPipelineAction) executePipeline(ctx context.Context, in *Input, runLog corelog.Logger, runID string) (*Output, error) {
 	def := a.def
 	out := &Output{}
-
-	runID := in.RunID
-	if runID == "" {
-		runID = newRunID()
-	}
 
 	// --- checkpoint ---
 	ckpt, err := openCheckpoint(def)
@@ -213,10 +249,10 @@ func (a *DataPipelineAction) executePipeline(ctx context.Context, in *Input) (*O
 			}
 		}
 		if priorMark != nil {
-			flog.Infof("pipeline %s: incremental load — %s > %s (type: %s)",
-				a.ref, priorMark.Column, priorMark.Value, priorMark.ValueType)
+			runLog.Infof("incremental load — %s > %s (type: %s)",
+				priorMark.Column, priorMark.Value, priorMark.ValueType)
 		} else {
-			flog.Infof("pipeline %s: incremental load — no prior mark, performing full-table load", a.ref)
+			runLog.Infof("incremental load — no prior mark, performing full-table load")
 		}
 	}
 
@@ -243,7 +279,7 @@ func (a *DataPipelineAction) executePipeline(ctx context.Context, in *Input) (*O
 		return out, fmt.Errorf("checkpoint load: %w", err)
 	}
 	if token != nil && token.RowsProcessed > 0 {
-		flog.Infof("pipeline %s: resuming — skipping %d already-processed rows", a.ref, token.RowsProcessed)
+		runLog.Infof("resuming — skipping %d already-processed rows", token.RowsProcessed)
 		if skipErr := src.Skip(token.RowsProcessed); skipErr != nil {
 			return out, fmt.Errorf("source skip: %w", skipErr)
 		}
@@ -296,7 +332,7 @@ func (a *DataPipelineAction) executePipeline(ctx context.Context, in *Input) (*O
 
 	// --- DLQ sink (lazy: inner connection opened only on first bad row) ---
 	// dlq is nil when no DLQ is configured; rowLevelWrite handles nil safely.
-	dlq, err := openDLQ(def, a.ref, runID)
+	dlq, err := openDLQ(runLog, def, a.ref, runID)
 	if err != nil {
 		return out, fmt.Errorf("dlq open: %w", err)
 	}
@@ -333,7 +369,7 @@ func (a *DataPipelineAction) executePipeline(ctx context.Context, in *Input) (*O
 			// Note: readDur includes backpressure wait time in any future buffered
 			// pipeline design — this is intentional (wall-clock latency, not CPU time).
 			a.recorder.BatchRead(a.ref, def.Source.Type, int(batchLen), readDur)
-			a.checkStall("read", readDur)
+			a.checkStall(runLog, "read", readDur)
 
 			// --- transform ---
 			t1 := time.Now()
@@ -342,8 +378,7 @@ func (a *DataPipelineAction) executePipeline(ctx context.Context, in *Input) (*O
 			record.Put(batch)
 
 			if txErr != nil {
-				flog.Warnf("pipeline %s: transform error on batch of %d rows (routing to failed): %v",
-					a.ref, batchLen, txErr)
+				runLog.Warnf("transform error on batch of %d rows (routing to failed): %v", batchLen, txErr)
 				a.recorder.BatchFailed(a.ref, int(batchLen))
 				out.RowsFailed += batchLen
 			} else if transformed == nil {
@@ -352,16 +387,16 @@ func (a *DataPipelineAction) executePipeline(ctx context.Context, in *Input) (*O
 				// eliminated all rows). Track these rows as dropped rather than failed
 				// so callers can distinguish intentional drops from processing errors.
 				a.recorder.BatchTransformed(a.ref, int(batchLen), 0, txDur)
-				a.checkStall("transform", txDur)
+				a.checkStall(runLog, "transform", txDur)
 				out.RowsDropped += batchLen
 			} else if transformed.Len() > 0 {
 				txOut := int(transformed.Len())
 				a.recorder.BatchTransformed(a.ref, int(batchLen), txOut, txDur)
-				a.checkStall("transform", txDur)
+				a.checkStall(runLog, "transform", txDur)
 
 				// --- write (with per-row DLQ fallback) ---
 				t2 := time.Now()
-				written, writeErr := a.rowLevelWrite(snk, dlq, transformed, runID, out)
+				written, writeErr := a.rowLevelWrite(runLog, snk, dlq, transformed, runID, out)
 				writeDur := time.Since(t2)
 				record.Put(transformed)
 				if writeErr != nil {
@@ -372,12 +407,12 @@ func (a *DataPipelineAction) executePipeline(ctx context.Context, in *Input) (*O
 				}
 				out.RowsWritten += int64(written)
 				a.recorder.BatchWritten(a.ref, def.Sink.Type, written, writeDur)
-				a.checkStall("write", writeDur)
+				a.checkStall(runLog, "write", writeDur)
 			} else {
 				// transformed is non-nil but empty — all rows were filtered out and
 				// the transform returned an empty batch rather than nil.
 				a.recorder.BatchTransformed(a.ref, int(batchLen), 0, txDur)
-				a.checkStall("transform", txDur)
+				a.checkStall(runLog, "transform", txDur)
 				record.Put(transformed)
 			}
 
@@ -386,9 +421,9 @@ func (a *DataPipelineAction) executePipeline(ctx context.Context, in *Input) (*O
 				if err := snk.Flush(); err != nil {
 					return out, fmt.Errorf("sink flush (checkpoint): %w", err)
 				}
-				saveCheckpoint(ckpt, runID, def.Source.Type, out.RowsProcessed, a.ref)
+				saveCheckpoint(runLog, ckpt, runID, def.Source.Type, out.RowsProcessed)
 				a.recorder.CheckpointSaved(a.ref)
-				saveWatermark(wmStore, hwmProvider, def, a.ref)
+				saveWatermark(runLog, wmStore, hwmProvider, def, a.ref)
 				rowsSinceCkpt = 0
 			}
 		}
@@ -406,14 +441,14 @@ func (a *DataPipelineAction) executePipeline(ctx context.Context, in *Input) (*O
 	if def.Checkpoint.DeleteOnSuccess {
 		_ = ckpt.Delete(runID)
 	} else {
-		saveCheckpoint(ckpt, runID, def.Source.Type, out.RowsProcessed, a.ref)
+		saveCheckpoint(runLog, ckpt, runID, def.Source.Type, out.RowsProcessed)
 		a.recorder.CheckpointSaved(a.ref)
 	}
 
 	// Always persist the final high-water mark on successful completion,
 	// regardless of deleteOnSuccess — the watermark must survive a checkpoint
 	// reset so subsequent runs still load incrementally.
-	saveWatermark(wmStore, hwmProvider, def, a.ref)
+	saveWatermark(runLog, wmStore, hwmProvider, def, a.ref)
 
 	// Collect DQ gate report into Output.Metadata so downstream flows can
 	// inspect quality scores without parsing logs. The report is included
@@ -481,10 +516,10 @@ func openCheckpoint(def *Definition) (checkpoint.Checkpoint, error) {
 	return checkpoint.New(cd.Type, cfg)
 }
 
-func saveCheckpoint(ckpt checkpoint.Checkpoint, runID, format string, rowsProcessed int64, ref string) {
+func saveCheckpoint(runLog corelog.Logger, ckpt checkpoint.Checkpoint, runID, format string, rowsProcessed int64) {
 	t := &checkpoint.Token{Format: format, RowsProcessed: rowsProcessed}
 	if err := ckpt.Save(runID, t); err != nil {
-		flog.Warnf("pipeline %s: checkpoint save failed (continuing): %v", ref, err)
+		runLog.Warnf("checkpoint save failed (continuing): %v", err)
 	}
 }
 
@@ -520,6 +555,7 @@ func openWatermarkStore(def *Definition) (watermark.Store, error) {
 // Failures are logged as warnings — a missed watermark save means the next run
 // re-processes the last batch, but the jdbc sink's upsert mode makes that safe.
 func saveWatermark(
+	runLog corelog.Logger,
 	store watermark.Store,
 	provider hwmtransform.HWMProvider,
 	def *Definition,
@@ -549,9 +585,9 @@ func saveWatermark(
 		SavedAt:   time.Now().UTC(),
 	}
 	if err := store.Save(ref, m); err != nil {
-		flog.Warnf("pipeline %s: watermark save failed (continuing): %v", ref, err)
+		runLog.Warnf("watermark save failed (continuing): %v", err)
 	} else {
-		flog.Infof("pipeline %s: watermark saved — %s = %s", ref, m.Column, m.Value)
+		runLog.Infof("watermark saved — %s = %s", m.Column, m.Value)
 	}
 }
 
@@ -584,7 +620,7 @@ func findDQGateProvider(p *transform.Pipeline) dqtransform.DQGateProvider {
 // The inner sink connection is opened lazily (on first bad row) inside dlqSink
 // itself, so this call is cheap — it only validates config and builds the
 // wrapper struct.  Returns nil when no DLQ is configured.
-func openDLQ(def *Definition, pipelineRef, runID string) (dlqWriteSink, error) {
+func openDLQ(runLog corelog.Logger, def *Definition, pipelineRef, runID string) (dlqWriteSink, error) {
 	if def.DLQ.Type == "" {
 		return nil, nil
 	}
@@ -617,7 +653,7 @@ func openDLQ(def *Definition, pipelineRef, runID string) (dlqWriteSink, error) {
 		// The "dlq" type was registered by a different package that does not
 		// implement dlqWriteSink — fall back gracefully so the pipeline still runs
 		// but per-row error metadata is not injected.
-		flog.Warnf("pipeline %s: dlq sink does not implement dlqWriteSink — error envelopes will be omitted", pipelineRef)
+		runLog.Warnf("dlq sink does not implement dlqWriteSink — error envelopes will be omitted")
 		return &plainDLQAdapter{raw}, nil
 	}
 	ds.InjectContext(pipelineRef, runID)
@@ -656,6 +692,7 @@ func (p *plainDLQAdapter) InjectContext(_, _ string) {}
 // The caller must NOT call record.Put(batch) before rowLevelWrite returns; it
 // is safe to call record.Put immediately after.
 func (a *DataPipelineAction) rowLevelWrite(
+	runLog corelog.Logger,
 	snk sink.Sink,
 	dlq dlqWriteSink,
 	batch *record.RecordBatch,
@@ -666,8 +703,8 @@ func (a *DataPipelineAction) rowLevelWrite(
 	if batchErr := snk.WriteBatch(batch); batchErr == nil {
 		return batch.Len(), nil
 	} else {
-		flog.Warnf("pipeline %s: batch write failed (%d rows), falling back to per-row isolation: %v",
-			a.ref, batch.Len(), batchErr)
+		runLog.Warnf("batch write failed (%d rows), falling back to per-row isolation: %v",
+			batch.Len(), batchErr)
 	}
 
 	// --- per-row isolation fallback ---
@@ -688,7 +725,7 @@ func (a *DataPipelineAction) rowLevelWrite(
 		if rowErr := snk.WriteBatch(rowBatch); rowErr == nil {
 			goodBatch.Rows = append(goodBatch.Rows, row)
 		} else {
-			flog.Debugf("pipeline %s: row %d failed write (routing to DLQ): %v", a.ref, i, rowErr)
+			runLog.Debugf("row %d failed write (routing to DLQ): %v", i, rowErr)
 			badRows = append(badRows, row)
 			badErrs = append(badErrs, rowErr.Error())
 			out.RowsFailed++
@@ -706,8 +743,8 @@ func (a *DataPipelineAction) rowLevelWrite(
 		if flushErr := snk.WriteBatch(goodBatch); flushErr != nil {
 			// Even the good-rows consolidated write failed; treat them all as failed
 			// rather than masking the error, and route to DLQ with the consolidated msg.
-			flog.Warnf("pipeline %s: consolidated good-rows write failed (%d rows): %v",
-				a.ref, len(goodBatch.Rows), flushErr)
+			runLog.Warnf("consolidated good-rows write failed (%d rows): %v",
+				len(goodBatch.Rows), flushErr)
 			for _, r := range goodBatch.Rows {
 				badRows = append(badRows, r)
 				badErrs = append(badErrs, flushErr.Error())
@@ -734,9 +771,9 @@ func (a *DataPipelineAction) rowLevelWrite(
 			return written, fmt.Errorf("dlq write: %w", dlqErr)
 		}
 		record.Put(badBatch)
-		flog.Infof("pipeline %s: routed %d failed rows to DLQ", a.ref, len(badRows))
+		runLog.Infof("routed %d failed rows to DLQ", len(badRows))
 	} else if len(badRows) > 0 {
-		flog.Warnf("pipeline %s: %d rows failed write and no DLQ is configured — rows are lost", a.ref, len(badRows))
+		runLog.Warnf("%d rows failed write and no DLQ is configured — rows are lost", len(badRows))
 	}
 
 	return written, nil
