@@ -239,8 +239,10 @@
     }
     if (e.key === 'Escape') {
       state.selected = null
-      renderProps()
       qsa('.node').forEach(function (n) { n.classList.remove('selected') })
+      var ppEl = byId('pp')
+      if (ppEl) ppEl.classList.remove('pp-open')
+      renderProps()
     }
   }
 
@@ -568,34 +570,59 @@
           ? qs('.node-dlq-card')
           : qs('.node-transform[data-idx="' + index + '"]')
     if (sel) sel.classList.add('selected')
+    var ppEl = byId('pp')
+    if (ppEl) ppEl.classList.add('pp-open')
     renderProps()
   }
 
   // ── Transform drag-to-reorder ─────────────────────────────────────────────────
+  // Dragging works from anywhere on the transform card (not just the ⠿ handle).
+  // A 5-pixel movement threshold distinguishes a drag from a plain click so the
+  // click-to-select handler still fires normally when the mouse barely moves.
   function onTransformDragStart(e, idx) {
-    if (!e.target.classList.contains('node-drag-handle')) return
-    e.preventDefault()
+    // Don't initiate drag from interactive elements inside the card
+    var tag = e.target.tagName
+    if (tag === 'INPUT' || tag === 'BUTTON' || tag === 'TEXTAREA' || tag === 'SELECT' || tag === 'OPTION') return
+
     var doc = state.doc || {}
     var transforms = Array.isArray(doc.transforms) ? doc.transforms : []
     if (!transforms[idx]) return
 
+    var startX = e.clientX
     var startY = e.clientY
-    var ghost = document.createElement('div')
-    ghost.className = 'drag-ghost'
-    ghost.textContent = nodeLabel('transform', transforms[idx].type) + ' (dragging…)'
-    ghost.style.cssText = 'position:fixed;z-index:9999;opacity:0.7;background:var(--bg3,#333);color:var(--text);padding:6px 12px;border-radius:4px;pointer-events:none;font-size:12px'
-    document.body.appendChild(ghost)
-
-    state.dragState = { idx: idx, startY: startY, ghost: ghost }
+    var ghost = null
+    var dragging = false
 
     function onMove(ev) {
-      ghost.style.left = ev.clientX + 12 + 'px'
-      ghost.style.top = ev.clientY + 8 + 'px'
+      var dx = ev.clientX - startX
+      var dy = ev.clientY - startY
+      if (!dragging && Math.sqrt(dx * dx + dy * dy) > 5) {
+        dragging = true
+        e.preventDefault()
+        ghost = document.createElement('div')
+        ghost.className = 'drag-ghost'
+        ghost.textContent = nodeLabel('transform', transforms[idx].type) + ' (dragging…)'
+        ghost.style.cssText = 'position:fixed;z-index:9999;opacity:0.8;background:var(--bg3,#333);' +
+          'color:var(--text,#ccc);padding:6px 14px;border-radius:6px;pointer-events:none;font-size:12px;' +
+          'border:1px solid var(--border,#555);box-shadow:0 4px 12px rgba(0,0,0,.5)'
+        document.body.appendChild(ghost)
+        state.dragState = { idx: idx, ghost: ghost }
+      }
+      if (ghost) {
+        ghost.style.left = (ev.clientX + 14) + 'px'
+        ghost.style.top = (ev.clientY + 10) + 'px'
+      }
     }
+
     function onUp(ev) {
       document.removeEventListener('mousemove', onMove)
       document.removeEventListener('mouseup', onUp)
-      ghost.remove()
+      if (ghost) ghost.remove()
+
+      if (!dragging) {
+        state.dragState = null
+        return  // plain click — the click handler will fire selectNode
+      }
 
       // Find target index by mouse Y vs transform node midpoints
       var trEls = qsa('.node-transform')
@@ -617,6 +644,7 @@
       }
       state.dragState = null
     }
+
     document.addEventListener('mousemove', onMove)
     document.addEventListener('mouseup', onUp)
   }
@@ -1778,10 +1806,38 @@
         if (e.target === canvas || e.target.id === 'nodes-layer' || e.target.id === 'esvg') {
           state.selected = null
           qsa('.node').forEach(function (n) { n.classList.remove('selected') })
+          var ppEl = byId('pp')
+          if (ppEl) ppEl.classList.remove('pp-open')
           renderProps()
         }
       })
     }
+  }
+
+  // ── Properties panel resize ────────────────────────────────────────────────────
+  function wirePpResize() {
+    var resizeEl = byId('pp-resize')
+    var ppEl = byId('pp')
+    if (!resizeEl || !ppEl) return
+
+    resizeEl.addEventListener('mousedown', function (e) {
+      e.preventDefault()
+      var startX = e.clientX
+      var startW = ppEl.getBoundingClientRect().width
+      resizeEl.classList.add('dragging')
+
+      function onMove(ev) {
+        var newW = Math.max(240, Math.min(600, startW - (ev.clientX - startX)))
+        ppEl.style.width = newW + 'px'
+      }
+      function onUp() {
+        document.removeEventListener('mousemove', onMove)
+        document.removeEventListener('mouseup', onUp)
+        resizeEl.classList.remove('dragging')
+      }
+      document.addEventListener('mousemove', onMove)
+      document.addEventListener('mouseup', onUp)
+    })
   }
 
   // ── Wire all UI ───────────────────────────────────────────────────────────────
@@ -1789,6 +1845,7 @@
     renderPalette()
     wireValidateButton()
     wireCanvasDeselect()
+    wirePpResize()
     wireRunTab()
 
     // "Run Pipeline" button in the meta bar (id="btn-run") switches to Run tab and starts
