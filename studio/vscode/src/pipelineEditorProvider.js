@@ -19,6 +19,7 @@ class PipelineEditorProvider {
     this._panelByUri = new Map()        // document uri string -> webview panel
     this._docByUri = new Map()          // document uri string -> TextDocument
     this._activeUri = null              // the .datapipeline whose canvas is active
+    this._ignoreNextChange = false      // suppresses changeSub echo after _applyEdit
     // Diagnostics surfaced in the Problems panel, mirrored from canvas validation.
     this._diag = vscode.languages.createDiagnosticCollection('flogoDataPipeline')
     if (context && context.subscriptions) context.subscriptions.push(this._diag)
@@ -123,12 +124,13 @@ class PipelineEditorProvider {
     })
 
     // Push fresh content when the file changes externally (git checkout, raw edit, etc.).
+    // Skip self-originated edits from _applyEdit to prevent infinite echo loops.
     const changeSub = vscode.workspace.onDidChangeTextDocument(e => {
-      if (e.document.uri.toString() === document.uri.toString()) {
-        let appDoc = {}
-        try { appDoc = JSON.parse(e.document.getText()) } catch (_) { }
-        webviewPanel.webview.postMessage({ type: 'update', doc: this._extractPipelineData(appDoc) })
-      }
+      if (e.document.uri.toString() !== document.uri.toString()) return
+      if (this._ignoreNextChange) { this._ignoreNextChange = false; return }
+      let appDoc = {}
+      try { appDoc = JSON.parse(e.document.getText()) } catch (_) { }
+      webviewPanel.webview.postMessage({ type: 'update', doc: this._extractPipelineData(appDoc) })
     })
 
     webviewPanel.onDidDispose(() => {
@@ -137,9 +139,13 @@ class PipelineEditorProvider {
       this._docByUri.delete(uriKey)
       changeSub.dispose()
       if (this._diag) this._diag.delete(document.uri)
+      if (this._activeUri && this._activeUri.toString() === uriKey) this._activeUri = null
     })
 
-    webviewPanel.webview.onDidReceiveMessage(msg => this._onMessage(webviewPanel, document, msg))
+    webviewPanel.webview.onDidReceiveMessage(msg => {
+      this._onMessage(webviewPanel, document, msg).catch(err =>
+        console.error('[DataPipeline] _onMessage error:', err))
+    })
   }
 
   // ── Message handler ─────────────────────────────────────────────────────────
@@ -166,7 +172,10 @@ class PipelineEditorProvider {
         let appDoc = {}
         try { appDoc = JSON.parse(doc.getText()) } catch (_) { }
         let pd = {}
-        try { pd = JSON.parse(msg.text) } catch (_) { break }
+        try { pd = JSON.parse(msg.text) } catch (_) {
+          post({ type: 'showError', message: 'Pipeline JSON is malformed — file not saved.' })
+          break
+        }
         if (appDoc.type === 'flogo:app' && Array.isArray(appDoc.resources) && appDoc.resources[0]) {
           // Update resources[0].data in-place; keep resource id in sync with pipeline name
           appDoc.resources[0].data = pd
@@ -251,15 +260,22 @@ class PipelineEditorProvider {
       }
 
       case 'browse': {
-        const browseMode = msg.mode || 'file'
-        const uris = await vscode.window.showOpenDialog({
-          canSelectFiles: browseMode !== 'folder',
-          canSelectFolders: browseMode !== 'file',
-          canSelectMany: false,
-          openLabel: 'Select',
-        })
-        if (uris && uris.length > 0) {
-          post({ type: 'browseResult', id: msg.id, path: uris[0].fsPath })
+        try {
+          const browseMode = msg.mode || 'file'
+          const uris = await vscode.window.showOpenDialog({
+            canSelectFiles: browseMode !== 'folder',
+            canSelectFolders: browseMode !== 'file',
+            canSelectMany: false,
+            openLabel: 'Select',
+          })
+          if (uris && uris.length > 0) {
+            post({ type: 'browseResult', id: msg.id, path: uris[0].fsPath })
+          } else {
+            post({ type: 'browseCancelled', id: msg.id })
+          }
+        } catch (err) {
+          console.error('[DataPipeline] browse error:', err)
+          post({ type: 'browseCancelled', id: msg.id })
         }
         break
       }
@@ -273,18 +289,22 @@ class PipelineEditorProvider {
   // ── Engine lifecycle ────────────────────────────────────────────────────────
 
   async _runPipeline(document, webviewPanel) {
-    if (!this._manager) return
+    const post = m => { try { webviewPanel.webview.postMessage(m) } catch (_) { } }
+    if (!this._manager) {
+      post({ type: 'runError', message: 'Pipeline manager is not available.' })
+      return
+    }
     if (this._runInFlight) {
-      try { webviewPanel.webview.postMessage({ type: 'runError', message: 'Another pipeline is already starting.' }) } catch (_) { }
+      post({ type: 'runError', message: 'Another pipeline is already starting.' })
       return
     }
     this._runInFlight = true
-    const post = m => { try { webviewPanel.webview.postMessage(m) } catch (_) { } }
 
     try {
       const cfg = vscode.workspace.getConfiguration('flogoDataPipelineStudio')
       const startPort = cfg.get('apiPort') ?? 8888
       const binPath = cfg.get('binaryPath') ?? ''
+      if (binPath) this._manager.setOverrideBinaryPath(binPath)
 
       post({ type: 'runStarting' })
       if (this._hooks.onStarting) this._hooks.onStarting()
@@ -571,11 +591,16 @@ class PipelineEditorProvider {
   // ── Edit helpers ────────────────────────────────────────────────────────────
 
   _applyEdit(document, text) {
+    this._ignoreNextChange = true
     const edit = new vscode.WorkspaceEdit()
     edit.replace(document.uri, new vscode.Range(0, 0, document.lineCount, 0), text)
     vscode.workspace.applyEdit(edit).then(ok => {
-      if (!ok) vscode.window.showWarningMessage('Flogo Data Pipeline: edit could not be applied.')
+      if (!ok) {
+        this._ignoreNextChange = false
+        vscode.window.showWarningMessage('Flogo Data Pipeline: edit could not be applied.')
+      }
     }, err => {
+      this._ignoreNextChange = false
       vscode.window.showErrorMessage(`Flogo Data Pipeline: edit failed — ${err && err.message ? err.message : String(err)}`)
     })
   }
@@ -663,7 +688,8 @@ class PipelineEditorProvider {
       `style-src 'unsafe-inline' ${cspSrc}`,
       `script-src 'nonce-${nonce}' ${cspSrc}`,
       `img-src data: ${cspSrc}`,
-      `connect-src http://localhost:* http://127.0.0.1:*`,
+      `font-src ${cspSrc}`,
+      `connect-src http://localhost:* http://127.0.0.1:* https://localhost:* https://127.0.0.1:*`,
     ].join('; ')
 
     const docAttr = this._htmlAttr(docText)
@@ -697,6 +723,7 @@ class PipelineEditorProvider {
   --danger:#f48771;
 }
 *{box-sizing:border-box;margin:0;padding:0}
+.hidden{display:none!important}
 body{background:var(--bg);color:var(--text);font-family:var(--vscode-font-family,'Segoe UI',sans-serif);
   font-size:13px;height:100vh;display:flex;flex-direction:column;overflow:hidden;user-select:none}
 

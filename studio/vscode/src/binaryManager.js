@@ -41,10 +41,14 @@ class BinaryManager {
     this._externalStop = null  // teardown for an attached external engine
     this._channel = vscode.window.createOutputChannel('Flogo Data Pipeline')
     this._startingPromise = null  // in-flight start() deduplicator
+    this._overrideBinaryPath = null
   }
 
   get port() { return this._port }
   get channel() { return this._channel }
+
+  // Override the binary path (from the flogoDataPipelineStudio.binaryPath setting).
+  setOverrideBinaryPath(p) { this._overrideBinaryPath = p || null }
 
   // Callback invoked if the binary exits unexpectedly after a successful start.
   onCrash(cb) { this._crashCb = cb }
@@ -228,6 +232,11 @@ class BinaryManager {
   //   2. extensionPath/<platform-name>      (dev drop-in)
   //   3. PATH (system-installed build)
   _resolveBinary() {
+    // User-configured override path takes precedence over all auto-discovery
+    if (this._overrideBinaryPath && fs.existsSync(this._overrideBinaryPath)) {
+      return this._overrideBinaryPath
+    }
+
     const name = _platformBinaryName()
 
     const inBin = path.join(this._extensionPath, 'bin', name)

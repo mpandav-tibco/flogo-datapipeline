@@ -32,8 +32,9 @@
     running: false,
     runPort: null,
     metricsInterval: null,
-    dragState: null,  // for transform reorder drag
     propsSnapshot: null, // deep-copy of the config section taken when panel opens (for Discard)
+    mapperExprMap: null,
+    mapperActiveField: null,
   }
 
   // Active top tab
@@ -218,6 +219,7 @@
         break
       case 'stopped':
         state.running = false
+        state.runPort = null
         stopMetricsPoll()
         updateRunStatus('done')
         if (activeTopTab === 'run') renderRunTab()
@@ -237,6 +239,7 @@
         break
       case 'runError':
         state.running = false
+        state.runPort = null
         stopMetricsPoll()
         updateRunStatus('error')
         appendRunLog('[ERROR] ' + (m.message || 'Unknown error'))
@@ -244,7 +247,9 @@
         break
       case 'browseResult':
         var inp = byId(m.id)
-        if (inp) { inp.value = m.path; inp.dispatchEvent(new Event('input')) }
+        if (inp) { inp.value = m.path; setDirty(true) }
+        break
+      case 'browseCancelled':
         break
     }
   }
@@ -291,8 +296,7 @@
 
     function saveMetaName() {
       if (!state.doc) return
-      var v = nameEl ? nameEl.value.trim() : ''
-      if (v) state.doc.name = v
+      state.doc.name = nameEl ? nameEl.value.trim() : ''
       setDirty(true); postUpdate()
     }
     function saveMetaDesc() {
@@ -398,7 +402,7 @@
     layoutNodes(layer, mode, transforms.length, !!dlq)
 
     // Draw connectors (after layout so positions are set)
-    requestAnimationFrame(function () { drawAllEdges(mode, transforms.length, !!dlq) })
+    requestAnimationFrame(function () { drawAllEdges(mode) })
   }
 
   function makeNode(kind, idx, obj) {
@@ -495,7 +499,7 @@
         canvas.style.minWidth  = Math.max(parseInt(canvas.style.minWidth, 10)  || 0, newX + CARD_W + 60) + 'px'
         canvas.style.minHeight = Math.max(parseInt(canvas.style.minHeight, 10) || 0, newY + CARD_H + 60) + 'px'
       }
-      requestAnimationFrame(drawAllEdges)
+      requestAnimationFrame(function () { drawAllEdges(state.doc ? state.doc.mode : 'etl') })
     }
 
     function onUp(ev) {
@@ -599,7 +603,7 @@
     }
   }
 
-  function drawAllEdges(mode, transformCount, hasDlq) {
+  function drawAllEdges(mode) {
     var svg = byId('esvg')
     if (!svg) return
     svg.innerHTML = ''
@@ -667,14 +671,15 @@
   // ── Node selection ───────────────────────────────────────────────────────────
   function selectNode(kind, index) {
     state.selected = { kind: kind, index: index }
+    var layer = byId('nodes-layer')
     qsa('.node').forEach(function (n) { n.classList.remove('selected') })
     var sel = kind === 'source'
-      ? qs('.node-source')
+      ? qs('.node-source', layer)
       : kind === 'sink'
-        ? qs('.node-sink')
+        ? qs('.node-sink', layer)
         : kind === 'dlq'
-          ? qs('.node-dlq-card')
-          : qs('.node-transform[data-idx="' + index + '"]')
+          ? qs('.node-dlq-card', layer)
+          : qs('.node-transform[data-idx="' + index + '"]', layer)
     if (sel) sel.classList.add('selected')
 
     // Snapshot current config for Discard support
@@ -788,12 +793,6 @@
       '<button class="btn-g" id="btn-src-discard">Discard</button>' +
       '</div>'
     pp.innerHTML = html
-
-    pp.addEventListener('click', function (e) {
-      var btn = e.target.closest('.btn-browse')
-      if (!btn) return
-      send('browse', { id: btn.dataset.target, mode: btn.dataset.mode || 'file' })
-    })
 
     wireSourceFields(type, src)
 
@@ -1018,6 +1017,12 @@
 
     pp.innerHTML = html
 
+    // DQ threshold slider — wired synchronously after innerHTML is set
+    if (type === 'dq') {
+      var dqSl = byId('tr-dqthr'); var dqVl = byId('tr-dqthr-val')
+      if (dqSl && dqVl) dqSl.addEventListener('input', function () { dqVl.textContent = dqSl.value })
+    }
+
     var saveBtn = byId('btn-tr-save')
     if (saveBtn) saveBtn.addEventListener('click', function () { saveTransformProps(idx); closePpPanel() })
     var discardBtn = byId('btn-tr-discard')
@@ -1147,12 +1152,6 @@
       html += ppField('Expectations (JSON)', '<textarea class="pp-textarea" id="tr-dqexp" rows="5" placeholder=\'[{"field":"id","notNull":true,"pattern":"^[A-Z0-9]+$"}]\'>' + esc(tr.expectations ? JSON.stringify(tr.expectations, null, 2) : '') + '</textarea>')
       html += ppField('Threshold (0–1)', '<div style="display:flex;align-items:center;gap:8px"><input type="range" id="tr-dqthr" min="0" max="1" step="0.01" value="' + esc(tr.threshold != null ? tr.threshold : 0.95) + '" style="flex:1"/><span id="tr-dqthr-val">' + esc(tr.threshold != null ? tr.threshold : 0.95) + '</span></div>')
       html += ppField('On Fail', ppSelect('tr-dqfail', ['abort', 'report', 'pass'], tr.onFail || 'report'))
-
-      // Wire threshold slider live
-      setTimeout(function () {
-        var sl = byId('tr-dqthr'); var vl = byId('tr-dqthr-val')
-        if (sl && vl) sl.addEventListener('input', function () { vl.textContent = sl.value })
-      }, 0)
     }
     return html
   }
@@ -1406,7 +1405,7 @@
   }
 
   function collectMapFields() {
-    return state.mapperExprMap || {}
+    return state.mapperExprMap ? Object.assign({}, state.mapperExprMap) : {}
   }
 
   function deleteTransform(idx) {
@@ -1503,12 +1502,6 @@
       '</div>'
 
     pp.innerHTML = html
-
-    pp.addEventListener('click', function (e) {
-      var btn = e.target.closest('.btn-browse')
-      if (!btn) return
-      send('browse', { id: btn.dataset.target, mode: btn.dataset.mode || 'file' })
-    })
 
     var saveBtn = byId('btn-sink-save')
     if (saveBtn) saveBtn.addEventListener('click', function () { saveSinkProps(); closePpPanel() })
@@ -1622,12 +1615,6 @@
 
     pp.innerHTML = html
 
-    pp.addEventListener('click', function (e) {
-      var btn = e.target.closest('.btn-browse')
-      if (!btn) return
-      send('browse', { id: btn.dataset.target, mode: btn.dataset.mode || 'file' })
-    })
-
     var saveBtn = byId('btn-dlq-save')
     if (saveBtn) saveBtn.addEventListener('click', function () { saveDlqProps(); closePpPanel() })
     var discardBtn = byId('btn-dlq-discard')
@@ -1653,6 +1640,7 @@
       s.batchSize = parseInt(v('dlq-batch')) || 200
     } else if (type === 'parquet') {
       s.path = v('dlq-path')
+      s.rowGroupSize = parseInt(v('dlq-rgs')) || 100000
     } else if (type === 'objstore') {
       s.provider = v('dlq-provider')
       s.bucket = v('dlq-bucket')
@@ -1662,6 +1650,11 @@
       var bv = v('dlq-brokers')
       s.brokers = bv ? bv.split(',').map(function (x) { return x.trim() }) : []
       s.topic = v('dlq-topic')
+      s.sasl = checked('dlq-sasl')
+      s.scram = v('dlq-scram')
+      s.usernameEnv = v('dlq-uenv') || undefined
+      s.passwordEnv = v('dlq-penv') || undefined
+      s.batchSize = parseInt(v('dlq-batch')) || 500
     }
 
     setDirty(true)
@@ -1843,6 +1836,8 @@
     })
 
     if (clearBtn) clearBtn.addEventListener('click', function () {
+      stopMetricsPoll()
+      state.running = false
       runLog = []
       runMetrics = {}
       runStatus = 'idle'
@@ -1975,7 +1970,7 @@
     if (src.type === 'parquet' && !src.path) issues.push({ sev: 'error', msg: 'Source: path is required for Parquet source.' })
     if (src.type === 'fixedwidth' && !src.path) issues.push({ sev: 'error', msg: 'Source: path is required for Fixed-Width source.' })
     if (src.type === 'xml' && !src.path) issues.push({ sev: 'error', msg: 'Source: path is required for XML source.' })
-    if (src.type === 'jsonlines' && !src.path) issues.push({ sev: 'error', msg: 'Source: path is required for JSON Lines source.' })
+    if ((src.type === 'jsonlines' || src.type === 'ndjson') && !src.path) issues.push({ sev: 'error', msg: 'Source: path is required for JSON Lines / NDJSON source.' })
     if (src.type === 'jdbc' && (!src.dsn || !src.table)) issues.push({ sev: 'error', msg: 'Source: JDBC source requires DSN and table.' })
     if (src.type === 'kafka' && !src.groupId) issues.push({ sev: 'warn', msg: 'Source: Kafka source should have a groupId.' })
     if (src.type === 'kafka' && (!src.brokers || (Array.isArray(src.brokers) && !src.brokers.length))) issues.push({ sev: 'error', msg: 'Source: Kafka source requires at least one broker.' })
@@ -2100,7 +2095,8 @@
           handlePaletteAction('add-transform', t2)
         } else if (nodeType === 'sink') {
           var t3 = item.getAttribute('data-sink-type') || 'jdbc'
-          handlePaletteAction('set-sink', t3)
+          if (t3 === 'dlq') handlePaletteAction('add-dlq')
+          else handlePaletteAction('set-sink', t3)
         }
       })
 
@@ -2125,7 +2121,10 @@
           var data = JSON.parse(e.dataTransfer.getData('text/plain') || '{}')
           if (data.nodeType === 'source') handlePaletteAction('set-source', data.subType)
           else if (data.nodeType === 'transform') handlePaletteAction('add-transform', data.subType)
-          else if (data.nodeType === 'sink') handlePaletteAction('set-sink', data.subType)
+          else if (data.nodeType === 'sink') {
+            if (data.subType === 'dlq') handlePaletteAction('add-dlq')
+            else handlePaletteAction('set-sink', data.subType)
+          }
         } catch (_) { }
       })
     }
@@ -2183,7 +2182,8 @@
     var canvas = byId('canvas')
     if (canvas) {
       canvas.addEventListener('click', function (e) {
-        if (e.target === canvas || e.target.id === 'nodes-layer' || e.target.id === 'esvg') {
+        if (e.target === canvas || e.target.id === 'nodes-layer' || e.target.id === 'esvg' ||
+            (e.target.closest && e.target.closest('#esvg') !== null)) {
           closePpPanel()
         }
       })
@@ -2224,6 +2224,21 @@
     wireCanvasDeselect()
     wirePpResize()
     wireRunTab()
+
+    // Single delegated browse handler — avoids per-render listener accumulation
+    document.addEventListener('click', function (e) {
+      var btn = e.target.closest('.btn-browse')
+      if (!btn) return
+      send('browse', { id: btn.dataset.target, mode: btn.dataset.mode || 'file' })
+    })
+
+    // Single delegated ppCheck label updater
+    document.addEventListener('change', function (e) {
+      if (e.target.type !== 'checkbox') return
+      var wrap = e.target.closest('.pp-check-wrap')
+      var lbl = wrap && wrap.querySelector('.pp-check-label')
+      if (lbl) lbl.textContent = e.target.checked ? 'Yes' : 'No'
+    })
 
     // Properties panel header close button (X) — just closes, no save/discard
     var ppCloseBtn = byId('btn-pp-close')
