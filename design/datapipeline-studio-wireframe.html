@@ -1,0 +1,809 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Flogo Data Pipeline — UX Wireframe Draft v0.1</title>
+<style>
+  :root{
+    --bg:#eceef0; --frame:#ffffff; --chrome:#fafbfc; --rail:#f3f4f6;
+    --line:#cfd3d8; --line2:#c4c9cf; --ph:#e3e6e9; --ph2:#eef0f2;
+    --ink:#23272b; --body:#5b6169; --mute:#9aa0a6;
+    --accent:#2f6db3; --accent-soft:#e7f0fe;
+    --ok:#2e7d46; --ok-bg:#e6f4ea; --run:#1f6feb; --run-bg:#e7f0fe;
+    --warn:#b06f00; --warn-bg:#fbf1dd; --err:#c1362f; --err-bg:#fbe9e7;
+    --idle:#6b7280; --idle-bg:#e9ebee;
+    --anno:#e8590c; --anno-bg:#fff7f2;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:14px;line-height:1.5}
+
+  /* ── top header ───────────────────────────────────────────── */
+  header.top{position:sticky;top:0;z-index:50;background:#1c2126;color:#e7eaed;
+    display:flex;align-items:center;gap:16px;padding:10px 20px;border-bottom:1px solid #000}
+  header.top .brand{font-weight:700;letter-spacing:.2px}
+  header.top .brand b{color:#7fb2e6}
+  header.top .tag{font-size:12px;color:#9aa4ad;border:1px solid #3a424b;border-radius:20px;padding:2px 10px}
+  header.top .spacer{flex:1}
+  header.top .legend{display:flex;gap:12px;font-size:11px;color:#aeb6bd;align-items:center;flex-wrap:wrap}
+  header.top .legend .k{display:inline-flex;align-items:center;gap:5px}
+  header.top .legend .sw{width:11px;height:11px;border-radius:3px;display:inline-block}
+  .toggle{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:#cfd6dc;cursor:pointer;user-select:none}
+  .toggle input{accent-color:#7fb2e6}
+
+  /* ── layout ───────────────────────────────────────────────── */
+  .wrap{display:grid;grid-template-columns:210px 1fr;gap:0;max-width:1500px;margin:0 auto}
+  nav.index{position:sticky;top:53px;align-self:start;height:calc(100vh - 53px);
+    overflow:auto;padding:22px 14px 40px;border-right:1px solid var(--line)}
+  nav.index .lbl{font-size:10px;text-transform:uppercase;letter-spacing:.12em;color:var(--mute);margin:16px 6px 8px}
+  nav.index a{display:block;padding:7px 10px;border-radius:7px;color:var(--body);text-decoration:none;font-size:13px}
+  nav.index a:hover{background:#e4e7ea;color:var(--ink)}
+  nav.index a .n{display:inline-block;width:22px;color:var(--mute);font-variant-numeric:tabular-nums;font-size:11px}
+  main{padding:26px 30px 120px;min-width:0}
+
+  /* ── boards ───────────────────────────────────────────────── */
+  .board{margin-bottom:52px}
+  .board-head{margin-bottom:14px}
+  .board-head .num{display:inline-block;font:600 12px var(--mono);color:#fff;background:#33383e;border-radius:6px;padding:2px 8px;vertical-align:middle}
+  .board-head h2{display:inline;font-size:20px;margin:0 0 0 10px;vertical-align:middle}
+  .board-head .jtbd{margin:9px 0 0;color:var(--body);font-size:13px;max-width:80ch}
+  .board-head .jtbd b{color:var(--ink)}
+
+  .frame{background:var(--frame);border:1px solid var(--line);border-radius:12px;
+    box-shadow:0 1px 2px rgba(20,25,30,.05),0 8px 24px rgba(20,25,30,.06);overflow:hidden}
+
+  /* mock app chrome */
+  .app{display:grid;grid-template-columns:56px 1fr;min-height:520px}
+  .app.wide-rail{grid-template-columns:200px 1fr}
+  .appbar{grid-column:1 / -1;display:flex;align-items:center;gap:12px;padding:10px 16px;
+    background:var(--chrome);border-bottom:1px solid var(--line)}
+  .appbar .logo{width:22px;height:22px;border-radius:6px;background:linear-gradient(135deg,#2f6db3,#7fb2e6)}
+  .appbar .path{font:12px/1 var(--mono);color:var(--body)}
+  .appbar .path b{color:var(--ink)}
+  .appbar .grow{flex:1}
+  .searchbar{display:flex;align-items:center;gap:8px;background:#fff;border:1px solid var(--line);
+    border-radius:8px;padding:6px 10px;min-width:220px;color:var(--mute);font-size:12px}
+  .searchbar::before{content:"";width:12px;height:12px;border:1.5px solid var(--mute);border-radius:50%;
+    box-shadow:5px 5px 0 -3.5px var(--mute)}
+  .avatar{width:26px;height:26px;border-radius:50%;background:#d5dade}
+
+  .rail{background:var(--rail);border-right:1px solid var(--line);padding:12px 8px;display:flex;flex-direction:column;gap:4px}
+  .app.wide-rail .rail{padding:14px 10px}
+  .rail .ri{display:flex;align-items:center;gap:10px;padding:9px;border-radius:8px;color:var(--body);font-size:13px}
+  .rail .ri .ic{width:18px;height:18px;border-radius:5px;background:#d7dbe0;flex:none}
+  .rail.icon-only .ri{justify-content:center}
+  .rail.icon-only .ri span{display:none}
+  .rail .ri.on{background:#e2ebf6;color:var(--accent)}
+  .rail .ri.on .ic{background:#a9c6e6}
+  .rail .sep{height:1px;background:var(--line);margin:8px 4px}
+
+  .body{padding:18px 20px;min-width:0}
+  .body.split{display:grid;grid-template-columns:1fr 320px;gap:0;padding:0}
+  .canvaswrap{padding:18px 20px;overflow:hidden;background:
+    linear-gradient(90deg,#f7f8f9 1px,transparent 1px) 0 0/22px 22px,
+    linear-gradient(#f7f8f9 1px,transparent 1px) 0 0/22px 22px, #fff}
+
+  h3.sec{font-size:15px;margin:2px 0 14px}
+  .muted{color:var(--mute)}
+  .row{display:flex;gap:14px}
+  .between{display:flex;align-items:center;justify-content:space-between;gap:12px}
+  .wrapf{flex-wrap:wrap}
+
+  /* placeholders */
+  .ph{background:var(--ph);border-radius:5px;height:10px}
+  .ph.t{height:8px}.ph.h{height:14px}
+  .lines .ph{margin:7px 0}
+  .w20{width:20%}.w30{width:30%}.w40{width:40%}.w50{width:50%}.w60{width:60%}.w70{width:70%}.w80{width:80%}.w100{width:100%}
+
+  /* buttons + fields */
+  .btn{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line);background:#fff;
+    color:var(--body);border-radius:8px;padding:7px 12px;font-size:12.5px;font-weight:600}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  .btn.ghost{border-style:dashed}
+  .btn .dot{width:8px;height:8px;border-radius:50%;background:currentColor;opacity:.7}
+  .field{border:1px solid var(--line);border-radius:8px;padding:8px 10px;background:#fff;color:var(--body);font-size:12.5px}
+  .field.lbl{display:flex;flex-direction:column;gap:6px;border:none;padding:0}
+  .field.lbl .k{font-size:11px;color:var(--mute);text-transform:uppercase;letter-spacing:.06em}
+  .field.lbl .v{border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+  .seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+  .seg span{padding:6px 12px;font-size:12px;color:var(--body);border-right:1px solid var(--line)}
+  .seg span:last-child{border-right:none}
+  .seg span.on{background:var(--accent);color:#fff}
+
+  /* chips */
+  .chip{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:600;border-radius:20px;padding:3px 9px}
+  .chip::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor}
+  .chip.ok{color:var(--ok);background:var(--ok-bg)}
+  .chip.run{color:var(--run);background:var(--run-bg)}
+  .chip.warn{color:var(--warn);background:var(--warn-bg)}
+  .chip.err{color:var(--err);background:var(--err-bg)}
+  .chip.idle{color:var(--idle);background:var(--idle-bg)}
+  .chip.plain{color:var(--body);background:#eef0f2}
+  .chip.plain::before{display:none}
+
+  /* cards / tables */
+  .cards{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+  .cards.c3{grid-template-columns:repeat(3,1fr)}
+  .cards.c2{grid-template-columns:repeat(2,1fr)}
+  .card{border:1px solid var(--line);border-radius:10px;padding:13px 14px;background:#fff}
+  .card .kpi{font-size:22px;font-weight:700;font-variant-numeric:tabular-nums}
+  .card .cap{font-size:11px;color:var(--mute);text-transform:uppercase;letter-spacing:.06em}
+  .card .sub{font-size:11.5px;color:var(--body);margin-top:4px}
+
+  table.grid{width:100%;border-collapse:collapse;font-size:12.5px}
+  table.grid th{text-align:left;color:var(--mute);font-weight:600;font-size:10.5px;text-transform:uppercase;
+    letter-spacing:.06em;padding:8px 10px;border-bottom:1px solid var(--line)}
+  table.grid td{padding:10px 10px;border-bottom:1px solid #eef0f2;color:var(--body);vertical-align:middle}
+  table.grid tr:hover td{background:#fafbfc}
+  table.grid td.mono,table.grid .mono{font-family:var(--mono);font-size:11.5px}
+  .barmini{height:6px;border-radius:4px;background:#e6e9ec;position:relative;overflow:hidden;min-width:60px}
+  .barmini i{position:absolute;inset:0 auto 0 0;background:var(--accent);border-radius:4px}
+  .barmini i.g{background:var(--ok)}.barmini i.r{background:var(--err)}.barmini i.a{background:var(--warn)}
+
+  /* canvas nodes */
+  .flowrow{display:flex;align-items:center;gap:0;flex-wrap:nowrap;overflow:auto;padding:6px 2px 14px}
+  .node{flex:none;width:150px;background:#fff;border:1.5px solid var(--line);border-radius:11px;padding:11px 12px;position:relative}
+  .node.src{border-color:#9ec3e8}.node.tf{border-color:#c7cdd4}.node.snk{border-color:#a9d5b8}.node.dlq{border-color:#e6b4ad;border-style:dashed}
+  .node.sel{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+  .node .ntype{font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--mute)}
+  .node .nname{font-weight:700;font-size:13px;margin:3px 0 6px}
+  .node .nmeta{font:11px/1.4 var(--mono);color:var(--body)}
+  .node .badge{position:absolute;top:-9px;right:-9px;font-size:10px;font-weight:700;background:#fff;border:1px solid var(--line);border-radius:20px;padding:2px 7px;color:var(--body)}
+  .node .thru{margin-top:8px;height:5px;border-radius:4px;background:#eef0f2;overflow:hidden}
+  .node .thru i{display:block;height:100%;background:var(--accent);width:82%}
+  .conn{flex:none;width:34px;height:2px;background:#c4c9cf;position:relative;margin-top:6px}
+  .conn::after{content:"";position:absolute;right:-1px;top:-4px;border:5px solid transparent;border-left-color:#c4c9cf}
+  .conn.pulse{background:linear-gradient(90deg,#c4c9cf 40%,#7fb2e6 60%)}
+  .branch{display:flex;align-items:flex-start;gap:0;margin-top:14px;margin-left:190px}
+  .branch .down{width:2px;height:26px;background:#e0b8b0;margin-left:16px}
+  .addnode{flex:none;width:44px;height:44px;border:1.5px dashed var(--line2);border-radius:11px;color:var(--mute);
+    display:flex;align-items:center;justify-content:center;font-size:20px;margin-top:6px}
+
+  /* inspector */
+  .inspector{border-left:1px solid var(--line);background:#fcfcfd;padding:16px}
+  .inspector .ihead{display:flex;align-items:center;gap:9px;margin-bottom:12px}
+  .inspector .ihead .ic{width:26px;height:26px;border-radius:7px;background:#a9c6e6}
+  .tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin-bottom:12px}
+  .tabs span{padding:8px 11px;font-size:12px;color:var(--mute);border-bottom:2px solid transparent;margin-bottom:-1px}
+  .tabs span.on{color:var(--accent);border-bottom-color:var(--accent);font-weight:600}
+  .fgroup{margin-bottom:12px}
+
+  /* data preview (glass box) */
+  .preview{border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-top:6px}
+  .preview .ptop{display:flex;align-items:center;justify-content:space-between;padding:8px 11px;background:#fafbfc;border-bottom:1px solid var(--line);font-size:12px}
+  .preview table{width:100%;border-collapse:collapse;font:11.5px/1.3 var(--mono)}
+  .preview th{background:#f6f7f8;color:var(--mute);text-align:left;padding:6px 9px;font-weight:600;border-bottom:1px solid var(--line);white-space:nowrap}
+  .preview td{padding:6px 9px;border-bottom:1px solid #f0f2f4;color:var(--body);white-space:nowrap}
+  .preview td.add{background:#eafaef;color:#1f7a3d}
+  .preview td.chg{background:#fff6e6;color:#8a5a00}
+  .preview td.del{background:#fdeeec;color:#a5352c;text-decoration:line-through}
+
+  /* funnel */
+  .funnel{display:flex;align-items:stretch;gap:0;margin:6px 0 4px}
+  .fstage{flex:1;min-width:0;text-align:center;position:relative;padding:0 6px}
+  .fstage .bar{height:64px;border-radius:8px;background:#dfe8f4;display:flex;align-items:flex-end;justify-content:center;position:relative;overflow:hidden}
+  .fstage .bar i{position:absolute;left:0;right:0;bottom:0;background:var(--accent);opacity:.85}
+  .fstage.loss .bar i{background:#c9ced4}
+  .fstage.route .bar i{background:var(--warn)}
+  .fstage.err .bar i{background:var(--err)}
+  .fstage .n{font-size:15px;font-weight:700;margin-top:8px;font-variant-numeric:tabular-nums}
+  .fstage .l{font-size:11px;color:var(--mute)}
+  .fstage .arrow{position:absolute;right:-7px;top:26px;z-index:2;color:#b7bdc4;font-size:14px}
+
+  /* spark bars */
+  .spark{display:flex;align-items:flex-end;gap:3px;height:56px}
+  .spark i{flex:1;background:#cdd9ea;border-radius:2px 2px 0 0}
+  .spark i.hi{background:var(--accent)}
+
+  /* annotations */
+  .annos{margin-top:16px;display:grid;grid-template-columns:1fr 1fr;gap:10px 22px}
+  .anno{display:flex;gap:10px;font-size:12.5px;color:var(--body);border-left:3px solid var(--anno);
+    background:var(--anno-bg);padding:9px 12px;border-radius:0 8px 8px 0}
+  .anno .pin{flex:none;width:20px;height:20px;border-radius:50%;background:var(--anno);color:#fff;
+    font:700 11px/20px var(--sans);text-align:center}
+  .anno b{color:var(--ink)}
+  .anno code{font:11px var(--mono);background:#fff;border:1px solid #f0d8c8;border-radius:4px;padding:0 4px;color:#a4471a}
+  body.hide-annos .annos{display:none}
+  .callout{position:absolute;z-index:5;background:var(--anno);color:#fff;font:700 11px/1 var(--sans);
+    width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+    box-shadow:0 1px 4px rgba(0,0,0,.25)}
+  body.hide-annos .callout{display:none}
+
+  .relwrap{position:relative}
+  .foot{color:var(--mute);font-size:12px;text-align:center;padding:30px 0 10px;border-top:1px solid var(--line);margin-top:30px}
+  .pillrow{display:flex;gap:6px;flex-wrap:wrap}
+  .pill{font:11px var(--mono);color:var(--body);background:#eef0f2;border-radius:6px;padding:3px 8px}
+
+  /* strategy board */
+  .strat{display:grid;grid-template-columns:1fr 1fr;gap:18px;padding:20px}
+  .strat .panel{border:1px solid var(--line);border-radius:10px;padding:16px}
+  .strat h4{margin:0 0 10px;font-size:13px}
+  .persona{display:flex;gap:11px;margin-bottom:12px}
+  .persona .pic{width:34px;height:34px;border-radius:9px;background:#d7dbe0;flex:none}
+  .persona .who{font-weight:700;font-size:13px}
+  .persona .goal{font-size:12px;color:var(--body)}
+  .prin{display:flex;gap:9px;margin-bottom:9px;font-size:12.5px;color:var(--body)}
+  .prin .no{flex:none;width:20px;height:20px;border-radius:6px;background:var(--accent);color:#fff;font:700 11px/20px var(--sans);text-align:center}
+  .prin b{color:var(--ink)}
+  .sitemap{display:flex;flex-direction:column;gap:6px;font-size:12.5px}
+  .sitemap .lv1{font-weight:700;color:var(--ink)}
+  .sitemap .lv2{margin-left:18px;color:var(--body);position:relative}
+  .sitemap .lv2::before{content:"└";position:absolute;left:-13px;color:var(--mute)}
+  @media(max-width:1100px){.strat{grid-template-columns:1fr}.annos{grid-template-columns:1fr}
+    .cards{grid-template-columns:repeat(2,1fr)}.body.split{grid-template-columns:1fr}.wrap{grid-template-columns:1fr}nav.index{display:none}}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="brand">Flogo <b>Data Pipeline</b> · UX Wireframe</div>
+  <div class="tag">Draft v0.1 — low-fidelity</div>
+  <div class="spacer"></div>
+  <div class="legend">
+    <span class="k"><i class="sw" style="background:#2e7d46"></i>completed</span>
+    <span class="k"><i class="sw" style="background:#1f6feb"></i>running</span>
+    <span class="k"><i class="sw" style="background:#b06f00"></i>partial</span>
+    <span class="k"><i class="sw" style="background:#c1362f"></i>failed</span>
+    <span class="k"><i class="sw" style="background:#e8590c"></i>UX note</span>
+  </div>
+  <label class="toggle"><input type="checkbox" id="annoToggle" checked /> annotations</label>
+</header>
+
+<div class="wrap">
+  <nav class="index">
+    <div class="lbl">Boards</div>
+    <a href="#b00"><span class="n">00</span>Strategy &amp; IA</a>
+    <a href="#b01"><span class="n">01</span>Fleet / Control plane</a>
+    <a href="#b02"><span class="n">02</span>Pipeline Builder</a>
+    <a href="#b03"><span class="n">03</span>Run &amp; Observability</a>
+    <a href="#b04"><span class="n">04</span>DLQ &amp; Data Quality</a>
+    <a href="#b05"><span class="n">05</span>Connections</a>
+    <a href="#b06"><span class="n">06</span>Incremental &amp; Scale</a>
+    <div class="lbl">Grounding</div>
+    <a href="#grounding"><span class="n">→</span>Backend mapping</a>
+  </nav>
+
+  <main>
+
+  <!-- ══════════════ BOARD 00 — STRATEGY ══════════════ -->
+  <section class="board" id="b00">
+    <div class="board-head">
+      <span class="num">00</span><h2>Strategy &amp; Information Architecture</h2>
+      <p class="jtbd">The frame that every screen serves. <b>Two jobs, one model:</b> engineers <b>author &amp; test</b> pipelines; operators <b>run, watch &amp; recover</b> them — on the same canvas, with the data always visible.</p>
+    </div>
+    <div class="frame">
+      <div class="strat">
+        <div class="panel">
+          <h4>Who we design for</h4>
+          <div class="persona"><div class="pic"></div><div><div class="who">Priya — Integration / Data Engineer <span class="chip plain">primary</span></div><div class="goal">Builds a Source → Transform → Sink pipeline, needs to <b>see records flow</b> and trust the output before shipping.</div></div></div>
+          <div class="persona"><div class="pic"></div><div><div class="who">Marco — Platform / DataOps <span class="chip plain">primary</span></div><div class="goal">Runs a <b>fleet</b> of pipelines; needs health, throughput, incremental position, and fast failure triage.</div></div></div>
+          <div class="persona"><div class="pic"></div><div><div class="who">Dana — Data Steward <span class="chip plain">secondary</span></div><div class="goal">Cares about <b>quality &amp; rejects</b> — DQ scorecards, the DLQ, and why rows were dropped.</div></div></div>
+        </div>
+        <div class="panel">
+          <h4>Design principles (best-in-class bar)</h4>
+          <div class="prin"><span class="no">1</span><div><b>Glass-box, not black-box.</b> Show the <b>data</b> at every stage — live samples, before/after — not just row counts.</div></div>
+          <div class="prin"><span class="no">2</span><div><b>Design ↔ Run parity.</b> The authoring canvas <b>is</b> the observability canvas; nodes light up with live throughput.</div></div>
+          <div class="prin"><span class="no">3</span><div><b>The funnel always reconciles.</b> processed = written + dropped + routed + failed, on every run. No silent loss.</div></div>
+          <div class="prin"><span class="no">4</span><div><b>Progressive disclosure.</b> One inspector panel; depth on demand. No modal mazes, no raw-JSON gymnastics.</div></div>
+          <div class="prin"><span class="no">5</span><div><b>Guardrails before commit.</b> Dry-run preview, validate, DQ gate, and a DLQ so bad rows are captured — never lost.</div></div>
+          <div class="prin"><span class="no">6</span><div><b>Operate at fleet scale.</b> Status, throughput &amp; watermark across many pipelines; keyboard-first, real-time.</div></div>
+        </div>
+        <div class="panel" style="grid-column:1 / -1">
+          <h4>Product sitemap</h4>
+          <div class="row" style="gap:40px;flex-wrap:wrap">
+            <div class="sitemap">
+              <div class="lv1">◉ Fleet (home)</div>
+              <div class="lv2">Pipeline list · health · throughput</div>
+              <div class="lv2">Global run activity</div>
+              <div class="lv1">◉ Builder</div>
+              <div class="lv2">Canvas · Inspector · Data preview</div>
+              <div class="lv2">Templates &amp; catalog</div>
+            </div>
+            <div class="sitemap">
+              <div class="lv1">◉ Run &amp; Observability</div>
+              <div class="lv2">Row funnel · throughput · stage metrics</div>
+              <div class="lv2">Run history (last 100)</div>
+              <div class="lv1">◉ Quality &amp; DLQ</div>
+              <div class="lv2">DQ scorecard · violations</div>
+              <div class="lv2">Rejected-row inspector · replay</div>
+            </div>
+            <div class="sitemap">
+              <div class="lv1">◉ Connections</div>
+              <div class="lv2">Credentials · test connection</div>
+              <div class="lv2">Engine capabilities</div>
+              <div class="lv1">◉ Incremental &amp; Scale</div>
+              <div class="lv2">Watermark · checkpoint</div>
+              <div class="lv2">Sharding · deploy to K8s</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="annos">
+      <div class="anno"><span class="pin">i</span><div>This board is the <b>north star</b>; the six screens below each trace back to a persona job and one or more principles.</div></div>
+      <div class="anno"><span class="pin">ii</span><div>Scope assumption: a <b>browser-based control plane</b> (not the IDE). Same engine &amp; <code>/v1</code> API; nothing here copies the existing studio.</div></div>
+    </div>
+  </section>
+
+  <!-- ══════════════ BOARD 01 — FLEET ══════════════ -->
+  <section class="board" id="b01">
+    <div class="board-head">
+      <span class="num">01</span><h2>Fleet — Control Plane Home</h2>
+      <p class="jtbd"><b>Marco lands here.</b> One glance answers: is anything <b>failing</b>, is anything <b>behind</b>, and where is throughput going? Backed by <code>GET /v1/pipelines</code>.</p>
+    </div>
+    <div class="frame relwrap">
+      <span class="callout" style="top:70px;left:250px">1</span>
+      <span class="callout" style="top:150px;left:48%">2</span>
+      <span class="callout" style="top:300px;left:20px">3</span>
+      <div class="app wide-rail">
+        <div class="appbar">
+          <div class="logo"></div>
+          <div class="path"><b>Fleet</b></div>
+          <div class="grow"></div>
+          <div class="searchbar">Search pipelines, refs, sources…</div>
+          <button class="btn primary"><span class="dot"></span>New pipeline</button>
+          <div class="avatar"></div>
+        </div>
+        <div class="rail">
+          <div class="ri on"><span class="ic"></span><span>Fleet</span></div>
+          <div class="ri"><span class="ic"></span><span>Builder</span></div>
+          <div class="ri"><span class="ic"></span><span>Runs</span></div>
+          <div class="ri"><span class="ic"></span><span>Quality &amp; DLQ</span></div>
+          <div class="sep"></div>
+          <div class="ri"><span class="ic"></span><span>Connections</span></div>
+          <div class="ri"><span class="ic"></span><span>Scale &amp; Deploy</span></div>
+        </div>
+        <div class="body">
+          <div class="cards" style="margin-bottom:16px">
+            <div class="card"><div class="cap">Pipelines</div><div class="kpi">24</div><div class="sub">18 healthy · 4 idle</div></div>
+            <div class="card"><div class="cap">Running now</div><div class="kpi" style="color:var(--run)">3</div><div class="sub">~412k rows/s combined</div></div>
+            <div class="card"><div class="cap">Needs attention</div><div class="kpi" style="color:var(--err)">2</div><div class="sub">1 failed · 1 partial</div></div>
+            <div class="card"><div class="cap">Rows / 24h</div><div class="kpi">1.24B</div><div class="sub">DLQ 0.03%</div></div>
+          </div>
+          <div class="between" style="margin-bottom:8px">
+            <div class="pillrow">
+              <span class="chip plain">All 24</span><span class="chip run">Running 3</span><span class="chip err">Failed 1</span>
+              <span class="chip warn">Partial 1</span><span class="chip idle">Idle 4</span>
+            </div>
+            <div class="seg"><span>Table</span><span class="on">Board</span><span>Map</span></div>
+          </div>
+          <table class="grid">
+            <thead><tr><th style="width:26%">Pipeline</th><th>Source → Sink</th><th>Status</th><th>Last run</th><th style="width:16%">Throughput</th><th>DQ</th><th></th></tr></thead>
+            <tbody>
+              <tr><td><b>daily-tx-load</b><div class="muted mono">res://pipeline:daily-tx</div></td>
+                <td><span class="pill">kafka</span> → <span class="pill">jdbc·pg</span></td>
+                <td><span class="chip run">running</span></td><td class="mono">now · 00:42</td>
+                <td><div class="barmini"><i style="width:78%"></i></div><div class="muted" style="font-size:11px">248k/s</div></td>
+                <td><span class="chip ok">98%</span></td><td><button class="btn ghost">⋯</button></td></tr>
+              <tr><td><b>mainframe-offload</b><div class="muted mono">res://pipeline:mf-offload</div></td>
+                <td><span class="pill">fixedwidth·EBCDIC</span> → <span class="pill">parquet·s3</span></td>
+                <td><span class="chip err">failed</span></td><td class="mono">12m ago</td>
+                <td><div class="barmini"><i class="r" style="width:34%"></i></div><div class="muted" style="font-size:11px">stalled</div></td>
+                <td><span class="chip idle">—</span></td><td><button class="btn ghost">⋯</button></td></tr>
+              <tr><td><b>orders-to-lake</b><div class="muted mono">res://pipeline:orders-lake</div></td>
+                <td><span class="pill">csv</span> → <span class="pill">parquet·s3</span></td>
+                <td><span class="chip warn">partial</span></td><td class="mono">1h ago</td>
+                <td><div class="barmini"><i class="a" style="width:64%"></i></div><div class="muted" style="font-size:11px">4.5k routed→DLQ</div></td>
+                <td><span class="chip warn">91%</span></td><td><button class="btn ghost">⋯</button></td></tr>
+              <tr><td><b>crm-sync-incremental</b><div class="muted mono">res://pipeline:crm-sync</div></td>
+                <td><span class="pill">jdbc·mysql</span> → <span class="pill">jdbc·pg</span></td>
+                <td><span class="chip ok">completed</span></td><td class="mono">2h ago</td>
+                <td><div class="barmini"><i class="g" style="width:58%"></i></div><div class="muted" style="font-size:11px">HWM +2.1M</div></td>
+                <td><span class="chip ok">100%</span></td><td><button class="btn ghost">⋯</button></td></tr>
+              <tr><td><b>events-archive</b><div class="muted mono">res://pipeline:events-arch</div></td>
+                <td><span class="pill">kafka</span> → <span class="pill">objstore·gcs</span></td>
+                <td><span class="chip idle">idle</span></td><td class="mono">scheduled 18:00</td>
+                <td><div class="barmini"><i style="width:0%"></i></div><div class="muted" style="font-size:11px">—</div></td>
+                <td><span class="chip idle">—</span></td><td><button class="btn ghost">⋯</button></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    <div class="annos">
+      <div class="anno"><span class="pin">1</span><div><b>Triage-first ordering.</b> Failed &amp; partial float to the top by default; the 4 KPI tiles above answer "should I worry?" in &lt;2s.</div></div>
+      <div class="anno"><span class="pin">2</span><div><b>Source→Sink as identity.</b> Every row shows the shape of the pipeline (<code>kafka → jdbc·pg</code>) so operators recognise pipelines by their <i>data path</i>, not just a name.</div></div>
+      <div class="anno"><span class="pin">3</span><div><b>Throughput + DQ inline.</b> A live micro-bar and DQ % per row — the two numbers that predict trouble — without opening the pipeline. Colour encodes routed / failed.</div></div>
+      <div class="anno"><span class="pin">i</span><div>Board / Map views are progressive: same data, denser or geo/topology framing for large fleets. Table is the default for keyboard triage.</div></div>
+    </div>
+  </section>
+
+  <!-- ══════════════ BOARD 02 — BUILDER ══════════════ -->
+  <section class="board" id="b02">
+    <div class="board-head">
+      <span class="num">02</span><h2>Pipeline Builder — Canvas + Inspector + Live Preview</h2>
+      <p class="jtbd"><b>Priya composes here.</b> Drag Source → Transforms → Sink, configure in one inspector, and — the differentiator — <b>see sample records transform in real time</b> before running anything.</p>
+    </div>
+    <div class="frame relwrap">
+      <span class="callout" style="top:120px;left:34%">1</span>
+      <span class="callout" style="top:96px;left:66%">2</span>
+      <span class="callout" style="top:360px;left:30%">3</span>
+      <span class="callout" style="top:250px;left:63%">4</span>
+      <div class="app">
+        <div class="appbar">
+          <div class="logo"></div>
+          <div class="path">Builder / <b>orders-to-lake</b> <span class="chip plain" style="margin-left:6px">ETL</span></div>
+          <div class="grow"></div>
+          <span class="muted" style="font-size:12px">saved · valid ✓</span>
+          <button class="btn ghost"><span class="dot"></span>Dry-run preview</button>
+          <button class="btn primary"><span class="dot"></span>Run</button>
+        </div>
+        <div class="rail icon-only">
+          <div class="ri"><span class="ic"></span></div>
+          <div class="ri on"><span class="ic"></span></div>
+          <div class="ri"><span class="ic"></span></div>
+          <div class="ri"><span class="ic"></span></div>
+          <div class="sep"></div>
+          <div class="ri"><span class="ic"></span></div>
+          <div class="ri"><span class="ic"></span></div>
+        </div>
+        <div class="body split">
+          <div class="canvaswrap">
+            <div class="flowrow">
+              <div class="node src"><span class="badge">2.0M</span><div class="ntype">Source</div><div class="nname">orders.csv</div><div class="nmeta">csv · header · 12 cols</div><div class="thru"><i></i></div></div>
+              <div class="conn pulse"></div>
+              <div class="node tf"><div class="ntype">Filter</div><div class="nname">drop cancelled</div><div class="nmeta">status != 'CANCELLED'</div><div class="thru"><i style="width:94%"></i></div></div>
+              <div class="conn pulse"></div>
+              <div class="node tf sel"><div class="ntype">Map</div><div class="nname">derive net_amount</div><div class="nmeta">=multiply($qty,$price)</div><div class="thru"><i style="width:94%"></i></div></div>
+              <div class="conn pulse"></div>
+              <div class="node tf"><div class="ntype">Validate</div><div class="nname">field rules</div><div class="nmeta">4 rules · route→DLQ</div><div class="thru"><i style="width:89%"></i></div></div>
+              <div class="conn"></div>
+              <div class="node snk"><div class="ntype">Sink</div><div class="nname">lake / parquet</div><div class="nmeta">s3 · snappy</div><div class="thru"><i style="width:89%"></i></div></div>
+              <div class="conn"></div>
+              <div class="addnode">+</div>
+            </div>
+            <div class="branch">
+              <div style="display:flex;flex-direction:column;align-items:center">
+                <div class="down"></div>
+                <div class="node dlq" style="width:150px"><div class="ntype">DLQ Sink</div><div class="nname">rejects</div><div class="nmeta">jdbc·pg · orders_dlq</div></div>
+              </div>
+            </div>
+            <div style="margin-top:22px" class="preview">
+              <div class="ptop"><span><b>Live preview</b> · 5 of 1,000 sampled rows · <span class="muted">after “Map: derive net_amount”</span></span><span class="muted">before ↔ after ⇄</span></div>
+              <table>
+                <thead><tr><th>order_id</th><th>qty</th><th>unit_price</th><th>net_amount</th><th>region</th><th>status</th></tr></thead>
+                <tbody>
+                  <tr><td>ORD-100482</td><td>3</td><td>19.99</td><td class="add">59.97</td><td>emea</td><td>PAID</td></tr>
+                  <tr><td>ORD-100483</td><td>1</td><td>249.00</td><td class="add">249.00</td><td>amer</td><td>PAID</td></tr>
+                  <tr><td>ORD-100484</td><td>10</td><td>4.50</td><td class="add">45.00</td><td>apac</td><td>PAID</td></tr>
+                  <tr><td>ORD-100485</td><td>2</td><td>—</td><td class="chg">null ⚠</td><td>emea</td><td>PAID</td></tr>
+                  <tr><td>ORD-100486</td><td>5</td><td>12.00</td><td class="add">60.00</td><td>amer</td><td>PAID</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div class="inspector">
+            <div class="ihead"><div class="ic"></div><div><div style="font-weight:700">Map</div><div class="muted" style="font-size:11px">derive net_amount</div></div></div>
+            <div class="tabs"><span class="on">Config</span><span>Schema</span><span>Test</span></div>
+            <div class="fgroup field lbl"><span class="k">Output field</span><span class="v mono">net_amount</span></div>
+            <div class="fgroup field lbl"><span class="k">Expression</span><span class="v mono">=multiply(=$qty, =$unit_price)</span></div>
+            <div class="fgroup"><div class="between"><span class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.06em">Type coercion</span><span class="chip plain">float64</span></div></div>
+            <div class="fgroup field lbl"><span class="k">On error</span><span class="v">emit null · warn</span></div>
+            <div class="sep" style="height:1px;background:var(--line);margin:14px 0"></div>
+            <div class="between"><span class="muted" style="font-size:12px">40+ functions</span><span class="btn ghost" style="padding:5px 9px">ƒ library</span></div>
+            <div class="pillrow" style="margin-top:9px"><span class="pill">multiply</span><span class="pill">upper</span><span class="pill">coerce</span><span class="pill">concat</span><span class="pill">divide</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="annos">
+      <div class="anno"><span class="pin">1</span><div><b>Data path, left→right.</b> Nodes carry live per-stage throughput bars &amp; counts, so the canvas doubles as the run view (principle 2). Selected node = blue focus ring.</div></div>
+      <div class="anno"><span class="pin">2</span><div><b>One inspector, tabbed.</b> Config / Schema / Test for the selected node — no dialog stacking. Expression uses the engine's real <code>=</code>-prefixed syntax with the ƒ-library at hand.</div></div>
+      <div class="anno"><span class="pin">3</span><div><b>The glass-box.</b> A 1,000-row sample streams through the chain; <span style="color:#1f7a3d">green</span> = added, <span style="color:#8a5a00">amber</span> = changed/at-risk. Priya sees the null-price edge case <i>before</i> shipping.</div></div>
+      <div class="anno"><span class="pin">4</span><div><b>DLQ is a visible branch.</b> Rejected rows route down to a dead-letter sink drawn on-canvas — capture, never silent-drop (principle 5). Mirrors validate <code>onViolation:route</code>.</div></div>
+      <div class="anno"><span class="pin">i</span><div><b>Dry-run preview</b> (toolbar) runs the sample end-to-end with a null sink — zero side effects — and lights up the funnel on Board 03 without writing to the real target.</div></div>
+      <div class="anno"><span class="pin">ii</span><div>Empty state (new pipeline): the canvas opens with a <b>template catalog</b> (CSV→Postgres, Kafka→JDBC, EBCDIC→PG…) instead of a blank page.</div></div>
+    </div>
+  </section>
+
+  <!-- ══════════════ BOARD 03 — RUN / OBSERVABILITY ══════════════ -->
+  <section class="board" id="b03">
+    <div class="board-head">
+      <span class="num">03</span><h2>Run &amp; Observability — The Reconciled Funnel</h2>
+      <p class="jtbd"><b>Where a run is judged.</b> Every row is accounted for: <code>processed = written + dropped + routed + failed</code>. Backed by <code>GET /v1/pipelines/{ref}/status</code> (last 100 runs).</p>
+    </div>
+    <div class="frame relwrap">
+      <span class="callout" style="top:150px;left:40%">1</span>
+      <span class="callout" style="top:330px;left:22%">2</span>
+      <span class="callout" style="top:330px;left:70%">3</span>
+      <div class="app">
+        <div class="appbar">
+          <div class="logo"></div>
+          <div class="path">Runs / <b>orders-to-lake</b> / <span class="mono">run 8f3a…c1</span></div>
+          <div class="grow"></div>
+          <span class="chip warn">partial</span>
+          <button class="btn ghost"><span class="dot"></span>Re-run</button>
+          <button class="btn ghost"><span class="dot"></span>Cancel</button>
+        </div>
+        <div class="rail icon-only">
+          <div class="ri"><span class="ic"></span></div><div class="ri"><span class="ic"></span></div>
+          <div class="ri on"><span class="ic"></span></div><div class="ri"><span class="ic"></span></div>
+          <div class="sep"></div><div class="ri"><span class="ic"></span></div><div class="ri"><span class="ic"></span></div>
+        </div>
+        <div class="body">
+          <div class="cards" style="margin-bottom:18px">
+            <div class="card"><div class="cap">Processed</div><div class="kpi">2,000,000</div><div class="sub">read from source</div></div>
+            <div class="card"><div class="cap">Written</div><div class="kpi" style="color:var(--ok)">1,876,300</div><div class="sub">93.8% to sink</div></div>
+            <div class="card"><div class="cap">Duration</div><div class="kpi">9.9s</div><div class="sub">~202k rows/s</div></div>
+            <div class="card"><div class="cap">DQ score</div><div class="kpi" style="color:var(--warn)">91%</div><div class="sub">2 of 22 expectations failed</div></div>
+          </div>
+
+          <h3 class="sec">Row funnel <span class="muted" style="font-weight:400;font-size:12px">— reconciled, click any segment to inspect those rows</span></h3>
+          <div class="funnel">
+            <div class="fstage"><div class="bar"><i style="height:100%"></i></div><span class="arrow">›</span><div class="n">2,000,000</div><div class="l">Read</div></div>
+            <div class="fstage loss"><div class="bar"><i style="height:6%"></i></div><span class="arrow">›</span><div class="n" style="color:var(--idle)">119,200</div><div class="l">Filtered (dropped)</div></div>
+            <div class="fstage route"><div class="bar"><i style="height:5%"></i></div><span class="arrow">›</span><div class="n" style="color:var(--warn)">4,500</div><div class="l">Routed → DLQ</div></div>
+            <div class="fstage err"><div class="bar"><i style="height:1%"></i></div><span class="arrow">›</span><div class="n" style="color:var(--err)">0</div><div class="l">Failed</div></div>
+            <div class="fstage"><div class="bar"><i style="height:94%;background:var(--ok)"></i></div><div class="n" style="color:var(--ok)">1,876,300</div><div class="l">Written</div></div>
+          </div>
+
+          <div class="row" style="margin-top:20px;gap:18px">
+            <div style="flex:1.4;min-width:0">
+              <h3 class="sec">Throughput <span class="muted" style="font-weight:400;font-size:12px">rows/s over run</span></h3>
+              <div class="spark">
+                <i style="height:20%"></i><i style="height:55%"></i><i style="height:82%" class="hi"></i><i style="height:88%" class="hi"></i><i style="height:79%" class="hi"></i><i style="height:90%" class="hi"></i><i style="height:84%" class="hi"></i><i style="height:60%"></i><i style="height:73%"></i><i style="height:86%" class="hi"></i><i style="height:80%" class="hi"></i><i style="height:44%"></i>
+              </div>
+            </div>
+            <div style="flex:1;min-width:0">
+              <h3 class="sec">Per-stage</h3>
+              <table class="grid">
+                <thead><tr><th>Stage</th><th>In</th><th>Out</th><th>ms</th></tr></thead>
+                <tbody>
+                  <tr><td>csv source</td><td class="mono">—</td><td class="mono">2.00M</td><td class="mono">3,910</td></tr>
+                  <tr><td>filter</td><td class="mono">2.00M</td><td class="mono">1.88M</td><td class="mono">610</td></tr>
+                  <tr><td>map</td><td class="mono">1.88M</td><td class="mono">1.88M</td><td class="mono">840</td></tr>
+                  <tr><td>validate</td><td class="mono">1.88M</td><td class="mono">1.876M</td><td class="mono">520</td></tr>
+                  <tr><td>parquet sink</td><td class="mono">1.876M</td><td class="mono">1.876M</td><td class="mono">3,020</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="annos">
+      <div class="anno"><span class="pin">1</span><div><b>The funnel is the hero.</b> Read → Dropped → Routed → Failed → Written, summing exactly. It renders the engine's real counters (<code>rowsProcessed/dropped/routed/failed/written</code>) so "where did my rows go?" is never a mystery.</div></div>
+      <div class="anno"><span class="pin">2</span><div><b>Every segment is a doorway.</b> Click "Routed → DLQ" to jump to Board 04 pre-filtered to those 4,500 rows. Observability that ends in <i>action</i>, not just a number.</div></div>
+      <div class="anno"><span class="pin">3</span><div><b>Stage table finds bottlenecks.</b> Parquet write dominates ms — the honest signal that the sink, not transforms, is the ceiling (matches engine reality).</div></div>
+      <div class="anno"><span class="pin">i</span><div>Run history (last 100, the API's ring buffer) lists as a sparkline strip above; selecting a past run swaps this whole view for point-in-time comparison.</div></div>
+    </div>
+  </section>
+
+  <!-- ══════════════ BOARD 04 — DLQ + DQ ══════════════ -->
+  <section class="board" id="b04">
+    <div class="board-head">
+      <span class="num">04</span><h2>Data Quality &amp; Dead-Letter Inspector</h2>
+      <p class="jtbd"><b>Dana investigates rejects.</b> See the DQ scorecard <i>and</i> the actual rejected rows with the rule that failed — then fix &amp; replay. This is where "bad data captured, not lost" pays off.</p>
+    </div>
+    <div class="frame relwrap">
+      <span class="callout" style="top:96px;left:30%">1</span>
+      <span class="callout" style="top:250px;left:20px">2</span>
+      <span class="callout" style="top:250px;left:70%">3</span>
+      <div class="app">
+        <div class="appbar">
+          <div class="logo"></div>
+          <div class="path">Quality &amp; DLQ / <b>orders-to-lake</b></div>
+          <div class="grow"></div>
+          <span class="muted" style="font-size:12px">4,500 rejected · run 8f3a…c1</span>
+          <button class="btn ghost"><span class="dot"></span>Export</button>
+          <button class="btn primary"><span class="dot"></span>Fix &amp; replay</button>
+        </div>
+        <div class="rail icon-only">
+          <div class="ri"><span class="ic"></span></div><div class="ri"><span class="ic"></span></div>
+          <div class="ri"><span class="ic"></span></div><div class="ri on"><span class="ic"></span></div>
+          <div class="sep"></div><div class="ri"><span class="ic"></span></div><div class="ri"><span class="ic"></span></div>
+        </div>
+        <div class="body">
+          <h3 class="sec">DQ scorecard <span class="muted" style="font-weight:400;font-size:12px">— 22 expectations · 91% pass</span></h3>
+          <div class="cards" style="margin-bottom:18px">
+            <div class="card"><div class="between"><div class="cap">expectColumnNotNull</div><span class="chip ok">pass</span></div><div class="sub mono">unit_price · 99.8%</div><div class="barmini" style="margin-top:8px"><i class="g" style="width:99%"></i></div></div>
+            <div class="card"><div class="between"><div class="cap">expectValuesInSet</div><span class="chip err">fail</span></div><div class="sub mono">region ∉ {emea,amer,apac}</div><div class="barmini" style="margin-top:8px"><i class="r" style="width:88%"></i></div></div>
+            <div class="card"><div class="between"><div class="cap">expectValuesBetween</div><span class="chip warn">warn</span></div><div class="sub mono">net_amount 0–100k</div><div class="barmini" style="margin-top:8px"><i class="a" style="width:94%"></i></div></div>
+            <div class="card"><div class="between"><div class="cap">expectColumnUnique</div><span class="chip ok">pass</span></div><div class="sub mono">order_id · 100%</div><div class="barmini" style="margin-top:8px"><i class="g" style="width:100%"></i></div></div>
+          </div>
+
+          <div class="between" style="margin-bottom:8px">
+            <h3 class="sec" style="margin:0">Rejected rows <span class="muted" style="font-weight:400;font-size:12px">— from validate · onViolation=route</span></h3>
+            <div class="pillrow"><span class="chip err">not-null 3,910</span><span class="chip warn">enum 512</span><span class="chip warn">pattern 78</span></div>
+          </div>
+          <div class="preview">
+            <div class="ptop"><span><b>orders_dlq</b> · showing 4 of 4,500</span><span class="muted">select rows → requeue</span></div>
+            <table>
+              <thead><tr><th>☐</th><th>order_id</th><th>region</th><th>unit_price</th><th>net_amount</th><th>rejected_by</th><th>reason</th></tr></thead>
+              <tbody>
+                <tr><td>☐</td><td>ORD-100485</td><td>emea</td><td class="del">null</td><td class="del">null</td><td>validate</td><td class="chg">unit_price notNull</td></tr>
+                <tr><td>☐</td><td>ORD-100931</td><td class="del">EU</td><td>19.99</td><td>39.98</td><td>validate</td><td class="chg">region ∉ set</td></tr>
+                <tr><td>☐</td><td>ORD-101044</td><td class="del">EMEA1</td><td>5.00</td><td>25.00</td><td>validate</td><td class="chg">region ∉ set</td></tr>
+                <tr><td>☐</td><td>ORD-101120</td><td>apac</td><td class="del">-3.00</td><td class="del">-9.00</td><td>dq</td><td class="chg">value &lt; min</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="annos">
+      <div class="anno"><span class="pin">1</span><div><b>Scorecard ↔ rows, unified.</b> DQ expectations (the engine's real <code>expectColumnNotNull / ValuesInSet / ValuesBetween / Unique</code>) sit directly above the rows that failed them — diagnosis in one screen.</div></div>
+      <div class="anno"><span class="pin">2</span><div><b>Reason is explicit &amp; per-row.</b> Each reject carries <code>rejected_by</code> (validate vs dq) and the exact rule — <span style="color:#a5352c">strike-through</span> marks the offending value. No log spelunking.</div></div>
+      <div class="anno"><span class="pin">3</span><div><b>Close the loop.</b> Select rows → <b>Fix &amp; replay</b> re-injects them through the pipeline (or an amended map) so remediation lives here, not in a side script.</div></div>
+      <div class="anno"><span class="pin">i</span><div>Reached directly from Board 03's funnel click, or from the fleet's DQ% chip — three paths, one destination.</div></div>
+    </div>
+  </section>
+
+  <!-- ══════════════ BOARD 05 — CONNECTIONS ══════════════ -->
+  <section class="board" id="b05">
+    <div class="board-head">
+      <span class="num">05</span><h2>Connections &amp; Engine Capabilities</h2>
+      <p class="jtbd">Reusable, testable, <b>secret-safe</b> connections — decoupled from pipeline logic. Capabilities are read live from <code>GET /v1/capabilities</code> so the palette can never drift from the running engine.</p>
+    </div>
+    <div class="frame relwrap">
+      <span class="callout" style="top:120px;left:26%">1</span>
+      <span class="callout" style="top:120px;left:70%">2</span>
+      <span class="callout" style="top:340px;left:20px">3</span>
+      <div class="app">
+        <div class="appbar">
+          <div class="logo"></div><div class="path"><b>Connections</b></div><div class="grow"></div>
+          <div class="searchbar">Filter by type…</div>
+          <button class="btn primary"><span class="dot"></span>New connection</button>
+        </div>
+        <div class="rail icon-only">
+          <div class="ri"><span class="ic"></span></div><div class="ri"><span class="ic"></span></div>
+          <div class="ri"><span class="ic"></span></div><div class="ri"><span class="ic"></span></div>
+          <div class="sep"></div><div class="ri on"><span class="ic"></span></div><div class="ri"><span class="ic"></span></div>
+        </div>
+        <div class="body">
+          <div class="cards c3" style="margin-bottom:20px">
+            <div class="card"><div class="between"><div><b>warehouse-pg</b><div class="muted mono" style="font-size:11px">jdbc · postgres</div></div><span class="chip ok">tested</span></div>
+              <div class="sub mono">pg://prod-wh:5432/analytics</div>
+              <div class="row" style="margin-top:10px"><button class="btn ghost" style="padding:5px 9px">Test</button><span class="muted" style="font-size:11px;align-self:center">used by 6 pipelines</span></div></div>
+            <div class="card"><div class="between"><div><b>lake-s3</b><div class="muted mono" style="font-size:11px">objstore · s3</div></div><span class="chip ok">tested</span></div>
+              <div class="sub mono">s3://acme-datalake/orders</div>
+              <div class="row" style="margin-top:10px"><button class="btn ghost" style="padding:5px 9px">Test</button><span class="muted" style="font-size:11px;align-self:center">used by 3 pipelines</span></div></div>
+            <div class="card"><div class="between"><div><b>events-kafka</b><div class="muted mono" style="font-size:11px">kafka · SASL_SSL</div></div><span class="chip err">auth failed</span></div>
+              <div class="sub mono">broker-1:9092, broker-2:9092</div>
+              <div class="row" style="margin-top:10px"><button class="btn ghost" style="padding:5px 9px">Test</button><span class="muted" style="font-size:11px;align-self:center;color:var(--err)">secret rotated?</span></div></div>
+          </div>
+
+          <h3 class="sec">Engine capabilities <span class="muted" style="font-weight:400;font-size:12px">— live from the running binary · /v1/capabilities</span></h3>
+          <div class="row wrapf" style="gap:22px">
+            <div><div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:7px">Sources · 9</div>
+              <div class="pillrow" style="max-width:340px"><span class="pill">csv</span><span class="pill">tsv</span><span class="pill">fixedwidth</span><span class="pill">parquet</span><span class="pill">xml</span><span class="pill">jsonlines</span><span class="pill">jdbc</span><span class="pill">kafka</span><span class="pill">objstore</span></div></div>
+            <div><div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:7px">Sinks · 5 + DLQ</div>
+              <div class="pillrow" style="max-width:280px"><span class="pill">jdbc</span><span class="pill">parquet</span><span class="pill">kafka</span><span class="pill">objstore</span><span class="pill">null</span><span class="pill">dlq</span></div></div>
+            <div><div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:7px">Transforms · 7</div>
+              <div class="pillrow" style="max-width:300px"><span class="pill">filter</span><span class="pill">map</span><span class="pill">validate</span><span class="pill">lookup</span><span class="pill">hwm</span><span class="pill">schemadrift</span><span class="pill">dq</span></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="annos">
+      <div class="anno"><span class="pin">1</span><div><b>Connections ≠ pipelines.</b> Credentials are defined once, reused everywhere, and show <b>usage count</b> so nothing breaks silently when rotated. Secrets are never rendered.</div></div>
+      <div class="anno"><span class="pin">2</span><div><b>Test connection is one click</b> with a truthful result chip. A failed auth (secret rotated) is caught here, not at 2am in a run.</div></div>
+      <div class="anno"><span class="pin">3</span><div><b>Capabilities are live, not hard-coded.</b> The builder palette is generated from <code>/v1/capabilities</code>, so the UI and engine can never disagree about what's supported.</div></div>
+    </div>
+  </section>
+
+  <!-- ══════════════ BOARD 06 — INCREMENTAL + SCALE ══════════════ -->
+  <section class="board" id="b06">
+    <div class="board-head">
+      <span class="num">06</span><h2>Incremental State &amp; Scale / Deploy</h2>
+      <p class="jtbd">The operator's advanced surface: <b>watermark position</b>, <b>checkpoint/resume</b>, horizontal <b>sharding</b>, and a one-click path to a Kubernetes deployment. Makes the engine's honest ops primitives visible.</p>
+    </div>
+    <div class="frame relwrap">
+      <span class="callout" style="top:110px;left:24%">1</span>
+      <span class="callout" style="top:110px;left:72%">2</span>
+      <span class="callout" style="top:330px;left:24%">3</span>
+      <div class="app">
+        <div class="appbar">
+          <div class="logo"></div><div class="path">Scale &amp; Deploy / <b>crm-sync-incremental</b></div><div class="grow"></div>
+          <button class="btn ghost"><span class="dot"></span>Export K8s manifest</button>
+          <button class="btn primary"><span class="dot"></span>Apply</button>
+        </div>
+        <div class="rail icon-only">
+          <div class="ri"><span class="ic"></span></div><div class="ri"><span class="ic"></span></div>
+          <div class="ri"><span class="ic"></span></div><div class="ri"><span class="ic"></span></div>
+          <div class="sep"></div><div class="ri"><span class="ic"></span></div><div class="ri on"><span class="ic"></span></div>
+        </div>
+        <div class="body">
+          <div class="cards c2" style="margin-bottom:18px">
+            <div class="card"><div class="cap">Watermark (HWM)</div><div class="kpi mono" style="font-size:16px">updated_at</div>
+              <div class="sub mono">= 2026-07-10T04:12:55Z</div>
+              <div class="between" style="margin-top:10px"><span class="muted" style="font-size:11px">backend: postgres</span><span class="chip ok">advancing</span></div>
+              <div class="spark" style="height:34px;margin-top:10px"><i style="height:40%"></i><i style="height:55%"></i><i style="height:62%" class="hi"></i><i style="height:70%" class="hi"></i><i style="height:78%" class="hi"></i><i style="height:88%" class="hi"></i></div></div>
+            <div class="card"><div class="cap">Checkpoint / resume</div><div class="kpi mono" style="font-size:16px">every 100k rows</div>
+              <div class="sub mono">last ckpt: 2,100,000 rows · file</div>
+              <div class="between" style="margin-top:10px"><span class="muted" style="font-size:11px">deleteOnSuccess</span><span class="chip ok">enabled</span></div>
+              <div class="muted" style="font-size:11px;margin-top:12px">On interruption, resume skips to the last committed row — no double-writes.</div></div>
+          </div>
+
+          <div class="row" style="gap:18px">
+            <div style="flex:1">
+              <h3 class="sec">Horizontal scaling <span class="muted" style="font-weight:400;font-size:12px">— sharded mode · partIndex % N == INDEX</span></h3>
+              <div class="between" style="margin-bottom:10px">
+                <div class="seg"><span>N=1</span><span>N=2</span><span class="on">N=4</span><span>N=8</span></div>
+                <span class="muted" style="font-size:12px">~741k rows/s projected · 93% efficiency</span>
+              </div>
+              <div class="cards" style="grid-template-columns:repeat(4,1fr)">
+                <div class="card" style="padding:10px"><div class="cap">shard 0</div><div class="chip run" style="margin-top:6px">running</div><div class="barmini" style="margin-top:8px"><i style="width:74%"></i></div></div>
+                <div class="card" style="padding:10px"><div class="cap">shard 1</div><div class="chip run" style="margin-top:6px">running</div><div class="barmini" style="margin-top:8px"><i style="width:81%"></i></div></div>
+                <div class="card" style="padding:10px"><div class="cap">shard 2</div><div class="chip run" style="margin-top:6px">running</div><div class="barmini" style="margin-top:8px"><i style="width:69%"></i></div></div>
+                <div class="card" style="padding:10px"><div class="cap">shard 3</div><div class="chip ok" style="margin-top:6px">done</div><div class="barmini" style="margin-top:8px"><i class="g" style="width:100%"></i></div></div>
+              </div>
+            </div>
+            <div style="flex:.9;min-width:0">
+              <h3 class="sec">Deploy target</h3>
+              <div class="field lbl fgroup"><span class="k">Runtime</span><span class="v">Kubernetes · StatefulSet</span></div>
+              <div class="field lbl fgroup"><span class="k">Image</span><span class="v mono">flogo-dp:runtime-1.25</span></div>
+              <div class="field lbl fgroup"><span class="k">Replicas</span><span class="v">4 (INSTANCE_COUNT=4)</span></div>
+              <div class="row"><button class="btn ghost" style="flex:1;justify-content:center">Preview manifest</button></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="annos">
+      <div class="anno"><span class="pin">1</span><div><b>Incremental made visible.</b> The HWM column, its current value, backend, and an "advancing" trend turn the invisible watermark into a monitorable object — core to DB-sync trust.</div></div>
+      <div class="anno"><span class="pin">2</span><div><b>Checkpoint as a safety promise.</b> Interval + last-committed row + resume behaviour, stated plainly. This is what lets a 5GB job survive a pod restart.</div></div>
+      <div class="anno"><span class="pin">3</span><div><b>Scale is a slider, not YAML.</b> Pick N; see per-shard progress + projected throughput (grounded in the engine's near-linear sharded scaling), then export the StatefulSet manifest.</div></div>
+      <div class="anno"><span class="pin">i</span><div>This surface is <b>collapsed by default</b> for simple file→file pipelines (progressive disclosure); it only expands when a watermark, checkpoint, or scaling config is present.</div></div>
+    </div>
+  </section>
+
+  <!-- ══════════════ GROUNDING ══════════════ -->
+  <section class="board" id="grounding">
+    <div class="board-head">
+      <span class="num">→</span><h2>How every screen maps to the backend</h2>
+      <p class="jtbd">Nothing here is invented — each surface renders a real engine concept or API. This is the contract the wireframe honours.</p>
+    </div>
+    <div class="frame">
+      <div class="body">
+        <table class="grid">
+          <thead><tr><th style="width:22%">UX surface</th><th style="width:30%">Backend concept</th><th>API / source of truth</th></tr></thead>
+          <tbody>
+            <tr><td>Fleet list &amp; status chips</td><td>Registered pipeline actions + last-run status</td><td class="mono">GET /v1/pipelines</td></tr>
+            <tr><td>Run funnel &amp; per-stage</td><td>rowsProcessed / written / dropped / routed / failed, durationMs</td><td class="mono">GET /v1/pipelines/{ref}/status</td></tr>
+            <tr><td>Run / Cancel / Re-run</td><td>Sync &amp; async run, in-flight cancel</td><td class="mono">POST · DELETE …/run[/{runId}]</td></tr>
+            <tr><td>Builder canvas</td><td>Source → transform chain → sink (+ DLQ) definition</td><td class="mono">GET/PUT …/{ref}[/definition]</td></tr>
+            <tr><td>Palette &amp; capabilities</td><td>Registered source/sink/transform type names</td><td class="mono">GET /v1/capabilities</td></tr>
+            <tr><td>DQ scorecard</td><td>DQReport {passed, failed, violations[]}</td><td class="mono">qualityReport in run status</td></tr>
+            <tr><td>DLQ inspector</td><td>validate onViolation=route · dq onFail=route → DLQ sink</td><td class="mono">transform: validate / dq</td></tr>
+            <tr><td>Incremental / Watermark</td><td>HWM transform + watermark backend (file/redis/pg)</td><td class="mono">watermark/*</td></tr>
+            <tr><td>Checkpoint / resume</td><td>checkpoint {type, intervalRows, deleteOnSuccess}</td><td class="mono">checkpoint/* · --run-id</td></tr>
+            <tr><td>Scale &amp; Deploy</td><td>sharded scaling (partIndex % N) · K8s StatefulSet</td><td class="mono">scaling/* · deploy/*</td></tr>
+            <tr><td>Health / liveness</td><td>engine reachable + pipeline count</td><td class="mono">GET /v1/health · /metrics</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="foot">
+      Flogo Data Pipeline — UX wireframe draft v0.1 · low-fidelity, for direction &amp; critique · not a visual spec.<br/>
+      Grounded in the engine domain model &amp; the <span class="mono">/v1</span> management API. Independent of any existing studio UI.
+    </div>
+  </section>
+
+  </main>
+</div>
+
+<script>
+  // annotation toggle
+  document.getElementById('annoToggle').addEventListener('change', function(e){
+    document.body.classList.toggle('hide-annos', !e.target.checked);
+  });
+  // active nav on scroll
+  var links = Array.prototype.slice.call(document.querySelectorAll('nav.index a'));
+  var map = {};
+  links.forEach(function(a){ var id=a.getAttribute('href').slice(1); map[id]=a; });
+  var obs = new IntersectionObserver(function(entries){
+    entries.forEach(function(en){
+      if(en.isIntersecting){
+        links.forEach(function(a){ a.style.background=''; a.style.color=''; });
+        var a=map[en.target.id];
+        if(a){ a.style.background='#e2ebf6'; a.style.color='#2f6db3'; }
+      }
+    });
+  }, {rootMargin:'-20% 0px -70% 0px'});
+  document.querySelectorAll('section.board').forEach(function(s){ obs.observe(s); });
+</script>
+</body>
+</html>

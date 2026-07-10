@@ -1,0 +1,51 @@
+{
+  "name": "hello-world",
+  "type": "flogo:app",
+  "version": "1.0.0",
+  "appModel": "1.1.1",
+  "resources": [
+    {
+      "id": "pipeline:hello-world",
+      "data": {
+        "name": "hello-world",
+        "source": {
+          "type": "csv",
+          "path": "./orders.csv",
+          "hasHeader": true,
+          "columns": [
+            { "name": "order_id", "type": "string" },
+            { "name": "quantity", "type": "int" },
+            { "name": "unit_price", "type": "float" },
+            { "name": "region", "type": "string" },
+            { "name": "status", "type": "string" }
+          ]
+        },
+        "transforms": [
+          { "type": "filter", "expr": "status != 'CANCELLED'" },
+          {
+            "type": "map",
+            "fields": {
+              "order_id": "=$order_id",
+              "region": "=upper(=$region)",
+              "net_amount": "=multiply(=$quantity, =$unit_price)"
+            }
+          },
+          {
+            "type": "dq",
+            "onFail": "warn",
+            "threshold": 0.05,
+            "expectations": [
+              { "type": "expectColumnNotNull", "column": "net_amount" },
+              {
+                "type": "expectColumnValuesInSet",
+                "column": "region",
+                "values": ["EMEA", "AMER", "APAC"]
+              }
+            ]
+          }
+        ],
+        "sink": { "type": "null" }
+      }
+    }
+  ]
+}
