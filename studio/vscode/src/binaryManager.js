@@ -300,6 +300,7 @@ class BinaryManager {
     const args = ['-port', String(port)]
     if (pipelineFile) args.push('-f', pipelineFile)
 
+    /** @type {Record<string, string|undefined>} */
     const env = { ...process.env, PORT: String(port) }
     if (pipelineFile) env.PIPELINE_FILE = pipelineFile
 

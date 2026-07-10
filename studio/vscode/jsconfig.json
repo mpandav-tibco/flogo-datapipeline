@@ -1,9 +1,0 @@
-{
-  "compilerOptions": {
-    "module": "commonjs",
-    "target": "es2020",
-    "checkJs": true,
-    "strict": false
-  },
-  "exclude": ["node_modules", ".vscode-test"]
-}
