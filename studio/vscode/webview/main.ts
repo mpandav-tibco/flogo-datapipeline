@@ -34,12 +34,12 @@ function post(msg: WebviewToHost) {
 // ── node model ────────────────────────────────────────────────────────────
 interface Node {
   id: string;
-  kind: 'source' | 'transform' | 'sink';
+  kind: 'source' | 'transform' | 'sink' | 'dlq';
   type: string;
   nm: string;
   meta: string;
   cfg: Record<string, string>;
-  ref: 'source' | 'sink' | number; // where this maps back into the doc
+  ref: 'source' | 'sink' | 'dlq' | number; // where this maps back into the doc
 }
 
 interface Pipe {
@@ -48,6 +48,7 @@ interface Pipe {
   status: string;
   nodes: Node[];
   hasDlq: boolean;
+  dlqNode: Node | null;
 }
 
 // ── state ─────────────────────────────────────────────────────────────────
@@ -127,21 +128,54 @@ function buildPipe(doc: PipelineDoc): Pipe {
     cfg: cfgOf(sink),
     ref: 'sink',
   });
-  const hasDlq = transforms.some((t: any) => t && (t.onViolation === 'route' || t.type === 'validate'));
+
+  // Dead-Letter Queue is a SEPARATE top-level `dlq` block that routes write-time
+  // failures — it sits alongside the main sink, it never replaces it. The DLQ
+  // node is built from doc.dlq (destination type + flattened options), not from
+  // the transform chain.
+  const dlq: any = doc.dlq || {};
+  const hasDlq = !!dlq.type;
+  let dlqNode: Node | null = null;
+  if (hasDlq) {
+    const opts = (dlq.options && typeof dlq.options === 'object') ? dlq.options : {};
+    // Flatten options + the two top-level tunables for display.
+    const cfg = cfgOf({ ...opts, maxRowsPerBatch: dlq.maxRowsPerBatch, onFull: dlq.onFull });
+    dlqNode = {
+      id: 'dlq',
+      kind: 'dlq',
+      type: dlq.type,
+      nm: opts.table || opts.path || dlq.type,
+      meta: metaFor('dlq', dlq.type, opts),
+      cfg,
+      ref: 'dlq',
+    };
+  }
+
   return {
     name: doc.name || S.fileName.replace(/\.datapipeline$/, ''),
     mode: String(doc.mode || 'etl').toUpperCase(),
     status: S.running ? 'running' : S.ran ? 'partial' : 'idle',
     nodes,
     hasDlq,
+    dlqNode,
   };
 }
 
 // Resolve the doc object a stage's config lives in.
+// For the DLQ node, the two tunables (maxRowsPerBatch / onFull) live on the
+// top-level dlq block; every other field lives in dlq.options (the destination
+// sink config). cfgTarget returns dlq.options; setCfgField/Value special-case
+// the two tunables.
+const DLQ_TOPLEVEL = new Set(['maxRowsPerBatch', 'onFull']);
 function cfgTarget(node: Node): any {
   const doc: any = S.doc;
   if (node.ref === 'source') return (doc.source = doc.source || {});
   if (node.ref === 'sink') return (doc.sink = doc.sink || {});
+  if (node.ref === 'dlq') {
+    doc.dlq = doc.dlq || {};
+    doc.dlq.options = doc.dlq.options || {};
+    return doc.dlq.options;
+  }
   doc.transforms = doc.transforms || [];
   return (doc.transforms[node.ref] = doc.transforms[node.ref] || {});
 }
@@ -149,7 +183,7 @@ function cfgTarget(node: Node): any {
 // Write a config field back into the doc and persist (string value, coerced to
 // the prior type where possible).
 function setCfgField(node: Node, key: string, value: string) {
-  const target = cfgTarget(node);
+  const target = node.ref === 'dlq' && DLQ_TOPLEVEL.has(key) ? ((S.doc as any).dlq = (S.doc as any).dlq || {}) : cfgTarget(node);
   const prev = target[key];
   if (typeof prev === 'number' && value.trim() !== '' && !isNaN(Number(value))) target[key] = Number(value);
   else if (typeof prev === 'boolean') target[key] = value === 'true';
@@ -160,7 +194,8 @@ function setCfgField(node: Node, key: string, value: string) {
 
 // Write a raw (non-string) value — used by toggles, number, and structured editors.
 function setCfgValue(node: Node, key: string, value: unknown) {
-  cfgTarget(node)[key] = value;
+  const target = node.ref === 'dlq' && DLQ_TOPLEVEL.has(key) ? ((S.doc as any).dlq = (S.doc as any).dlq || {}) : cfgTarget(node);
+  target[key] = value;
   S.pipe = buildPipe(S.doc);
   post({ type: 'save', doc: S.doc });
 }
@@ -193,9 +228,8 @@ const FIELD_LABELS: Record<string, string> = {
   region: 'Region', key: 'Key template',
   // jdbc sink
   onConflict: 'On conflict', conflictKey: 'Conflict key', autoMigrate: 'Auto-migrate table',
-  // dlq sink
-  innerType: 'Inner sink type', innerOptions: 'Inner sink options', envelopeColumn: 'Envelope column',
-  maxRowsPerBatch: 'Max rows per batch', onFull: 'On full',
+  // dlq destination (top-level dlq block + options)
+  envelopeColumn: 'Error envelope column', maxRowsPerBatch: 'Max rows per batch', onFull: 'On full',
   // filter / map
   expr: 'Filter expression', fieldOrder: 'Field order',
   // validate
@@ -242,7 +276,6 @@ const FIELD_ENUMS: Record<string, string[]> = {
   method: ['GET', 'POST'],
   onError: ['fail', 'skip', 'default'],
   // dlq
-  innerType: ['jdbc', 'parquet', 'kafka', 's3', 'gcs', 'adls', 'null'],
   onFull: ['block', 'drop'],
   // watermark
   backend: ['file', 'redis', 'postgres'],
@@ -262,7 +295,10 @@ const FIELD_HINTS: Record<string, string> = {
   url: 'Enrichment endpoint. ${field} placeholders are substituted per row.',
 };
 const SOURCE_TYPES = ['csv', 'tsv', 'fixedwidth', 'parquet', 'xml', 'jsonlines', 'jdbc', 'kafka', 's3', 'gcs', 'adls'];
-const SINK_TYPES = ['jdbc', 'parquet', 'csv', 'jsonlines', 'kafka', 's3', 'gcs', 'adls', 'null', 'dlq'];
+const SINK_TYPES = ['jdbc', 'parquet', 'csv', 'jsonlines', 'kafka', 's3', 'gcs', 'adls', 'null'];
+// A DLQ destination is any real sink type (never 'dlq' itself — DLQ is a route,
+// not a sink type).
+const DLQ_DEST_TYPES = ['jdbc', 'parquet', 'csv', 'jsonlines', 's3', 'gcs', 'adls', 'null'];
 
 // Starter config for a freshly chosen source/sink type — matches the keys each
 // backend reads, so a newly switched stage is immediately runnable/editable.
@@ -290,9 +326,23 @@ function defaultConfigFor(kind: 'source' | 'sink', type: string): Record<string,
     gcs: { bucket: '', key: '${date}/part-${uuid}.parquet', format: 'parquet' },
     adls: { bucket: '', key: '${date}/part-${uuid}.parquet', format: 'parquet' },
     null: {},
-    dlq: { innerType: 'jdbc', innerOptions: {}, envelopeColumn: '_error', onFull: 'block' },
   };
   return (kind === 'source' ? src[type] : sink[type]) || {};
+}
+
+// Starter DLQ destination options for a chosen DLQ destination sink type.
+function defaultDlqOptions(type: string): Record<string, unknown> {
+  const m: Record<string, Record<string, unknown>> = {
+    jdbc: { driver: 'postgres', dsn: '', table: 'pipeline_dlq', envelopeColumn: '_error' },
+    parquet: { path: './out/dlq.parquet', compression: 'snappy' },
+    csv: { path: './out/dlq.csv', writeHeader: true },
+    jsonlines: { path: './out/dlq.jsonl' },
+    s3: { bucket: '', key: 'dlq/${date}.jsonl', format: 'jsonlines' },
+    gcs: { bucket: '', key: 'dlq/${date}.jsonl', format: 'jsonlines' },
+    adls: { bucket: '', key: 'dlq/${date}.jsonl', format: 'jsonlines' },
+    null: {},
+  };
+  return m[type] || {};
 }
 
 function humanize(k: string): string {
@@ -581,19 +631,25 @@ function renderCanvas(m: HTMLElement) {
   row.appendChild(add);
   cv.appendChild(row);
 
-  if (p.hasDlq) {
+  // DLQ branch: a separate top-level destination for write-time failures. It
+  // hangs off the main sink and is selectable/configurable in the Inspector.
+  if (p.hasDlq && p.dlqNode) {
+    const dn = p.dlqNode;
     const br = el('div', 'branch');
     br.innerHTML = '<div class="down"></div>';
-    const dn = el('div', 'node dlq');
-    dn.style.width = '150px';
-    dn.innerHTML = '<div class="kind">DLQ Sink</div><div class="nm">rejects</div><div class="meta">routed rows</div>';
-    dn.onclick = () => openTab('dlq', 'dlq');
-    br.appendChild(dn);
+    const dnode = el('div', 'node dlq' + (S.selNode === 'dlq' ? ' sel' : ''));
+    dnode.style.width = '150px';
+    dnode.innerHTML = `<div class="kind">DLQ · ${dn.type}</div><div class="nm">${dn.nm}</div><div class="meta">${dn.meta}</div>`;
+    dnode.tabIndex = 0;
+    dnode.onclick = () => { S.selNode = 'dlq'; S.inspTab = 'Config'; renderEditor(); };
+    dnode.oncontextmenu = (e) => dlqMenu(e);
+    br.appendChild(dnode);
     cv.appendChild(br);
   }
 
   const hint = el('div', 'canvas-hint pillrow');
-  hint.innerHTML = '<span class="pill" data-h="src">＋ Source</span><span class="pill" data-h="tf">＋ Transform</span><span class="pill" data-h="sink">＋ Sink</span><span class="pill">⤢ Fit</span>';
+  const dlqPill = p.hasDlq ? '' : '<span class="pill" data-h="dlq">＋ DLQ</span>';
+  hint.innerHTML = '<span class="pill" data-h="src">＋ Source</span><span class="pill" data-h="tf">＋ Transform</span><span class="pill" data-h="sink">＋ Sink</span>' + dlqPill + '<span class="pill">⤢ Fit</span>';
   (hint.querySelector('[data-h="tf"]') as HTMLElement).onclick = () => addTransform(p.nodes.length - 1);
   (hint.querySelector('[data-h="src"]') as HTMLElement).onclick = () =>
     quickPick('Change source type', SOURCE_TYPES, (v) => {
@@ -607,6 +663,8 @@ function renderCanvas(m: HTMLElement) {
       persistAndRebuild();
       toast('ok', `Sink type → ${v}`);
     });
+  const dlqBtn = hint.querySelector('[data-h="dlq"]') as HTMLElement | null;
+  if (dlqBtn) dlqBtn.onclick = () => addDlq();
   cv.appendChild(hint);
   m.appendChild(c);
 
@@ -624,7 +682,7 @@ function renderCanvas(m: HTMLElement) {
   ib.appendChild(tabs);
 
   if (S.inspTab === 'Config') {
-    // Stage type: dropdown for source/sink, badge for transforms.
+    // Stage type: dropdown for source/sink/dlq destination, badge for transforms.
     const typeRow = el('div', 'insp-type');
     if (sn.kind === 'source' || sn.kind === 'sink') {
       typeRow.appendChild(el('span', 'badge', sn.kind + ' type'));
@@ -643,11 +701,37 @@ function renderCanvas(m: HTMLElement) {
         persistAndRebuild();
       };
       typeRow.appendChild(sel);
+    } else if (sn.kind === 'dlq') {
+      typeRow.appendChild(el('span', 'badge', 'DLQ destination'));
+      const sel = el('select', 'v') as HTMLSelectElement;
+      const list = DLQ_DEST_TYPES.includes(sn.type) ? DLQ_DEST_TYPES : [sn.type, ...DLQ_DEST_TYPES];
+      list.forEach((o) => {
+        const op = document.createElement('option');
+        op.value = o; op.textContent = o;
+        if (o === sn.type) op.selected = true;
+        sel.appendChild(op);
+      });
+      sel.onchange = () => {
+        const cur = (S.doc as any).dlq || {};
+        (S.doc as any).dlq = {
+          type: sel.value,
+          options: defaultDlqOptions(sel.value),
+          maxRowsPerBatch: cur.maxRowsPerBatch ?? 0,
+          onFull: cur.onFull || 'block',
+        };
+        persistAndRebuild();
+        toast('ok', `DLQ destination → ${sel.value}`);
+      };
+      typeRow.appendChild(sel);
     } else {
       typeRow.appendChild(el('span', 'badge', 'transform'));
       typeRow.appendChild(el('span', 'chip plain', sn.type));
     }
     ib.appendChild(typeRow);
+
+    if (sn.kind === 'dlq') {
+      ib.appendChild(el('div', 'muted', '<div style="font-size:11.5px;padding:0 0 8px">Rows that still fail after per-row isolation are written here with an error-envelope column — the main sink is unaffected.</div>'));
+    }
 
     // Transform stages get an editable name; source/sink names are derived.
     if (sn.kind === 'transform') {
@@ -669,6 +753,13 @@ function renderCanvas(m: HTMLElement) {
     if (!Object.keys(sn.cfg).length && sn.kind !== 'source') {
       ib.appendChild(el('div', 'muted', '<div style="font-size:11.5px;padding:4px 0">No configuration for this stage yet.</div>'));
     }
+
+    if (sn.kind === 'dlq') {
+      const rm = el('button', 'btn sm', '✕ Remove DLQ');
+      rm.style.marginTop = '10px';
+      rm.onclick = () => removeDlq();
+      ib.appendChild(rm);
+    }
   } else if (S.inspTab === 'Schema') {
     renderSchemaTab(ib, sn);
   } else {
@@ -686,7 +777,9 @@ function schemaForNode(node: Node): Array<{ name: string; type: string; derived?
     ? src.columns.map((c: any) => ({ name: c.name, type: c.type || 'string' }))
     : [];
   const transforms = Array.isArray(S.doc.transforms) ? S.doc.transforms : [];
-  const upto = node.kind === 'source' ? -1 : node.kind === 'sink' ? transforms.length - 1 : (node.ref as number);
+  // Source sees no transforms; sink/dlq see the full chain; a transform sees up
+  // to its own index.
+  const upto = node.kind === 'source' ? -1 : (node.kind === 'sink' || node.kind === 'dlq') ? transforms.length - 1 : (node.ref as number);
   for (let i = 0; i <= upto; i++) {
     const t: any = transforms[i];
     if (!t) continue;
@@ -792,6 +885,42 @@ function deleteTransform(ref: number) {
   post({ type: 'save', doc: S.doc });
   renderEditor();
   toast('warn', 'Removed transform stage');
+}
+
+// ── DLQ (separate top-level `dlq` block; never replaces the main sink) ────────
+function addDlq() {
+  quickPick('Add DLQ — pick a destination', DLQ_DEST_TYPES, (type) => {
+    (S.doc as any).dlq = {
+      type,
+      options: defaultDlqOptions(type),
+      maxRowsPerBatch: 0,
+      onFull: 'block',
+    };
+    S.pipe = buildPipe(S.doc);
+    S.selNode = 'dlq';
+    S.inspTab = 'Config';
+    post({ type: 'save', doc: S.doc });
+    renderEditor();
+    toast('ok', `Added DLQ → ${type}. Configure it in the Inspector →`);
+  });
+}
+function removeDlq() {
+  delete (S.doc as any).dlq;
+  S.pipe = buildPipe(S.doc);
+  S.selNode = 'sink';
+  post({ type: 'save', doc: S.doc });
+  renderEditor();
+  toast('warn', 'Removed DLQ — write failures will only be counted, not routed');
+}
+function dlqMenu(e: MouseEvent) {
+  e.preventDefault();
+  e.stopPropagation();
+  contextMenu(e.clientX, e.clientY, [
+    { ic: '⚙', label: 'Configure DLQ', fn: () => { S.selNode = 'dlq'; S.inspTab = 'Config'; renderEditor(); } },
+    { ic: '⧉', label: 'Open DLQ run stats', fn: () => openTab('dlq', 'dlq') },
+    { sep: true },
+    { ic: '✕', label: 'Remove DLQ', fn: () => removeDlq() },
+  ]);
 }
 
 // ── run / preview (native VS Code panels) ────────────────────────────────────
@@ -1027,15 +1156,28 @@ function nodeMenu(n: Node, i: number, e: MouseEvent) {
   e.preventDefault();
   e.stopPropagation();
   const isT = n.kind === 'transform';
-  contextMenu(e.clientX, e.clientY, [
+  const items: Array<{ ic?: string; label?: string; fn?: () => void; sep?: boolean; dis?: boolean }> = [
     { ic: '⚙', label: 'Configure', fn: () => { S.selNode = n.id; S.inspTab = 'Config'; renderEditor(); } },
     { ic: '▷', label: 'Test this stage on sample', fn: () => doPreview() },
     { sep: true },
     { ic: '＋', label: 'Insert transform before', fn: () => addTransform(i) },
     { ic: '＋', label: 'Insert transform after', fn: () => addTransform(i + 1) },
+  ];
+  // On the sink node, offer to add/configure the DLQ (a separate destination
+  // that routes write-time failures alongside this sink).
+  if (n.kind === 'sink') {
+    items.push({ sep: true });
+    if (S.pipe?.hasDlq) {
+      items.push({ ic: '⚠', label: 'Configure DLQ', fn: () => { S.selNode = 'dlq'; S.inspTab = 'Config'; renderEditor(); } });
+    } else {
+      items.push({ ic: '⚠', label: 'Add DLQ (route write failures)…', fn: () => addDlq() });
+    }
+  }
+  items.push(
     { sep: true },
     { ic: '✕', label: 'Delete stage', dis: !isT, fn: () => { if (typeof n.ref === 'number') deleteTransform(n.ref); } },
-  ]);
+  );
+  contextMenu(e.clientX, e.clientY, items);
 }
 
 // ── toasts ────────────────────────────────────────────────────────────────────
