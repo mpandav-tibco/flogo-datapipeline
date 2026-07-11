@@ -942,7 +942,7 @@ function renderEditor() {
     return;
   }
   if (t.type === 'canvas') {
-    const sn = S.pipe.nodes.find((n) => n.id === S.selNode) || S.pipe.nodes[0];
+    const sn = (S.selNode === 'dlq' && S.pipe.dlqNode) ? S.pipe.dlqNode : (S.pipe.nodes.find((n) => n.id === S.selNode) || S.pipe.nodes[0]);
     bc.innerHTML = `◈ ${S.pipe.name} <span class="sep">›</span> ${sn ? sn.type + ': ' + sn.nm : ''} <span class="sep">›</span> <span class="chip plain" style="padding:1px 7px">${S.pipe.mode}</span>`;
     renderCanvas(m);
   } else {
@@ -1029,9 +1029,9 @@ function renderCanvas(m: HTMLElement) {
   cv.appendChild(hint);
   m.appendChild(c);
 
-  // inspector
+  // inspector — the selected node may be the DLQ branch node (not in p.nodes).
   const insp = el('div', 'inspector');
-  const sn = p.nodes.find((n) => n.id === S.selNode) || p.nodes[0];
+  const sn = (S.selNode === 'dlq' && p.dlqNode) ? p.dlqNode : (p.nodes.find((n) => n.id === S.selNode) || p.nodes[0]);
   insp.appendChild(el('div', 'ih', 'Inspector — ' + (sn ? sn.type : '')));
   const ib = el('div', 'ib');
   const tabs = el('div', 'tabs');
@@ -1193,6 +1193,28 @@ function upstreamSchema(node: Node): Array<{ name: string; type: string; derived
 }
 
 function renderSchemaTab(ib: HTMLElement, sn: Node) {
+  // The DLQ destination receives rejected rows plus an error-envelope column,
+  // not the normal pipeline output — describe that instead of a stage schema.
+  if (sn.kind === 'dlq') {
+    const env = ((S.doc as any).dlq?.options?.envelopeColumn) || '_error';
+    ib.appendChild(el('div', 'muted', `<div style="font-size:12px;padding:2px 0 8px">The DLQ receives <b style="color:var(--text)">rejected rows</b> — the pipeline columns as they were when the write failed, plus an error-envelope column <code style="color:var(--orange)">${escapeHtml(env)}</code> carrying the failure reason, pipeline ref and run id.</div>`));
+    const cols = schemaForNode(sn);
+    if (cols.length) {
+      const box = el('div', 'cols');
+      cols.forEach((c) => {
+        const row = el('div', 'crow');
+        row.style.cursor = 'default';
+        row.innerHTML = `<span style="flex:1;font:11.5px var(--mono);color:var(--text)">${escapeHtml(c.name)}</span><span class="pill" style="flex:none">${c.derived ? 'derived' : escapeHtml(c.type)}</span>`;
+        box.appendChild(row);
+      });
+      const erow = el('div', 'crow');
+      erow.style.cursor = 'default';
+      erow.innerHTML = `<span style="flex:1;font:11.5px var(--mono);color:var(--orange)">${escapeHtml(env)}</span><span class="pill" style="flex:none">envelope</span>`;
+      box.appendChild(erow);
+      ib.appendChild(box);
+    }
+    return;
+  }
   const cols = schemaForNode(sn);
   ib.appendChild(el('div', 'muted', `<div style="font-size:12px;padding:2px 0 8px">Columns visible <b style="color:var(--text)">after ${sn.nm}</b>:</div>`));
   if (!cols.length) {
@@ -1218,6 +1240,22 @@ function renderSchemaTab(ib: HTMLElement, sn: Node) {
 }
 
 function renderTestTab(ib: HTMLElement, sn: Node) {
+  // The DLQ only receives rows on a real write failure, which a side-effect-free
+  // dry-run preview cannot produce — guide the user to a full run instead.
+  if (sn.kind === 'dlq') {
+    ib.appendChild(el('div', 'muted', '<div style="font-size:11.5px;padding:2px 0 12px">The DLQ is exercised only when a real write to the main sink fails. Dry-run Preview never writes, so it cannot populate the DLQ. Run the pipeline end-to-end, then inspect rejected rows.</div>'));
+    const run = el('button', 'btn sm pri', '▷ Run pipeline');
+    run.onclick = () => doRun();
+    ib.appendChild(run);
+    const stats = el('button', 'btn sm', '⧉ Open DLQ run stats');
+    stats.style.marginLeft = '8px';
+    stats.onclick = () => openTab('dlq', 'dlq');
+    ib.appendChild(stats);
+    if (S.lastRun) {
+      ib.appendChild(el('div', 'muted', `<div style="font-size:11px;margin-top:10px">Last run — <span class="chip ${S.lastRun.rowsFailed ? 'err' : 'idle'}">${fmt(S.lastRun.rowsFailed)} failed</span> of ${fmt(S.lastRun.rowsProcessed)} processed.</div>`));
+    }
+    return;
+  }
   const b = el('button', 'btn sm pri', '▷ Test on live sample');
   b.onclick = () => doPreview();
   ib.appendChild(b);
