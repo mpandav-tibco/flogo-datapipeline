@@ -82,6 +82,34 @@ button{font-family:inherit;color:inherit;background:none;border:none;cursor:poin
 .fld .k{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px}
 .fld .v{background:var(--input);border:1px solid var(--inputBorder);border-radius:5px;padding:6px 9px;font:12px var(--mono);color:var(--text);width:100%}
 .fld .v:focus{border-color:var(--blue);outline:none}
+.fld textarea.v{resize:vertical;min-height:54px;line-height:1.45}
+select.v{appearance:none;cursor:pointer;background-image:linear-gradient(45deg,transparent 50%,var(--dim) 50%),linear-gradient(135deg,var(--dim) 50%,transparent 50%);background-position:calc(100% - 15px) 12px,calc(100% - 10px) 12px;background-size:5px 5px,5px 5px;background-repeat:no-repeat}
+.fld .hint{font-size:10.5px;color:var(--dim);margin-top:4px;line-height:1.4}
+/* input + browse button row */
+.inputrow{display:flex;gap:6px;align-items:stretch}
+.inputrow .v{flex:1;min-width:0}
+.browse{flex:none;display:inline-flex;align-items:center;gap:4px;background:var(--input);border:1px solid var(--inputBorder);color:var(--mute);border-radius:5px;padding:0 10px;font-size:11px;font-weight:600;cursor:pointer}
+.browse:hover{background:#3a3a3a;color:var(--text)}
+/* toggle switch for booleans */
+.toggle{display:inline-flex;align-items:center;gap:9px;cursor:pointer;user-select:none}
+.toggle .sw{width:34px;height:18px;border-radius:10px;background:#3a3a3a;position:relative;transition:background .15s;flex:none}
+.toggle .sw::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:#cfd3d8;transition:transform .15s}
+.toggle.on .sw{background:var(--blue)}
+.toggle.on .sw::after{transform:translateX(16px);background:#fff}
+.toggle .lbl{font:12px var(--mono);color:var(--text)}
+/* structured column editor */
+.cols{border:1px solid var(--inputBorder);border-radius:5px;overflow:hidden}
+.cols .crow{display:flex;gap:6px;align-items:center;padding:5px 6px;border-bottom:1px solid #2a2a2a}
+.cols .crow:last-child{border-bottom:none}
+.cols .crow input{flex:1;min-width:0;background:var(--input);border:1px solid var(--inputBorder);border-radius:4px;padding:4px 7px;font:11.5px var(--mono);color:var(--text)}
+.cols .crow select{flex:none;width:96px;background:var(--input);border:1px solid var(--inputBorder);border-radius:4px;padding:4px 6px;font:11.5px var(--mono);color:var(--text)}
+.cols .crow .del{flex:none;color:var(--dim);cursor:pointer;padding:0 4px;font-size:13px}
+.cols .crow .del:hover{color:var(--red)}
+.cols .addcol{display:block;width:100%;text-align:center;padding:5px;font-size:11px;color:var(--blueHi);background:#202020;cursor:pointer}
+.cols .addcol:hover{background:var(--hover)}
+.insp-type{display:flex;gap:8px;align-items:center;margin-bottom:12px}
+.insp-type .badge{font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--dim)}
+.insp-type .v{flex:1;min-width:0}
 
 .wv{padding:16px 18px}
 .wvnote{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--dim);padding:6px 14px;border-bottom:1px solid var(--border);background:#1a1a1a}

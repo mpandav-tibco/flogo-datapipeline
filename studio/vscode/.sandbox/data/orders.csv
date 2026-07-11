@@ -1,0 +1,9 @@
+id,name,amount,status
+1,alice,120,PAID
+2,bob,0,CANCELLED
+3,carol,45,PAID
+4,dave,,PAID
+5,erin,88,PAID
+6,frank,210,PAID
+7,grace,0,CANCELLED
+8,heidi,63,PAID

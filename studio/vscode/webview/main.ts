@@ -140,23 +140,219 @@ function buildPipe(doc: PipelineDoc): Pipe {
   };
 }
 
-// Write a config field back into the doc and persist.
-function setCfgField(node: Node, key: string, value: string) {
+// Resolve the doc object a stage's config lives in.
+function cfgTarget(node: Node): any {
   const doc: any = S.doc;
-  let target: any;
-  if (node.ref === 'source') target = (doc.source = doc.source || {});
-  else if (node.ref === 'sink') target = (doc.sink = doc.sink || {});
-  else {
-    doc.transforms = doc.transforms || [];
-    target = doc.transforms[node.ref] = doc.transforms[node.ref] || {};
-  }
-  // Coerce back to number/bool where the original was one.
+  if (node.ref === 'source') return (doc.source = doc.source || {});
+  if (node.ref === 'sink') return (doc.sink = doc.sink || {});
+  doc.transforms = doc.transforms || [];
+  return (doc.transforms[node.ref] = doc.transforms[node.ref] || {});
+}
+
+// Write a config field back into the doc and persist (string value, coerced to
+// the prior type where possible).
+function setCfgField(node: Node, key: string, value: string) {
+  const target = cfgTarget(node);
   const prev = target[key];
   if (typeof prev === 'number' && value.trim() !== '' && !isNaN(Number(value))) target[key] = Number(value);
   else if (typeof prev === 'boolean') target[key] = value === 'true';
   else target[key] = value;
   S.pipe = buildPipe(S.doc);
   post({ type: 'save', doc: S.doc });
+}
+
+// Write a raw (non-string) value — used by toggles, number, and structured editors.
+function setCfgValue(node: Node, key: string, value: unknown) {
+  cfgTarget(node)[key] = value;
+  S.pipe = buildPipe(S.doc);
+  post({ type: 'save', doc: S.doc });
+}
+
+// ── config-field metadata (labels, enums, widget selection) ─────────────────
+const FIELD_LABELS: Record<string, string> = {
+  path: 'File path', dsn: 'Connection string (DSN)', hasHeader: 'Has header row',
+  delimiter: 'Delimiter', encoding: 'Encoding', table: 'Table', driver: 'Driver',
+  onConflict: 'On conflict', conflictKey: 'Conflict key', batchSize: 'Batch size',
+  expr: 'Filter expression', fields: 'Field mappings', onViolation: 'On violation',
+  rules: 'Validation rules', url: 'URL', key: 'Cache key', cache: 'Cache policy',
+  column: 'Watermark column', backend: 'Backend', policy: 'Drift policy',
+  onDrift: 'On drift', threshold: 'DQ threshold', expectations: 'Expectations',
+  compression: 'Compression', bucket: 'Bucket', brokers: 'Brokers', topic: 'Topic',
+  group: 'Consumer group', rowGroup: 'Row group size', columns: 'Columns',
+  addr: 'Address', keyPrefix: 'Key prefix', region: 'Region', nullable: 'Nullable',
+};
+const FIELD_ENUMS: Record<string, string[]> = {
+  onConflict: ['insert', 'upsert', 'ignore'],
+  onViolation: ['route', 'drop', 'fail'],
+  policy: ['additive', 'strict', 'ignore'],
+  onDrift: ['warn', 'fail', 'route'],
+  compression: ['snappy', 'gzip', 'zstd', 'none'],
+  driver: ['postgres', 'mysql', 'sqlite'],
+  encoding: ['utf-8', 'ebcdic-037', 'latin-1'],
+  backend: ['file', 'redis', 'postgres'],
+};
+const FIELD_HINTS: Record<string, string> = {
+  path: 'Local path or glob. Supports ${date}/${year} templating.',
+  dsn: 'e.g. host=localhost port=5432 dbname=app user=… sslmode=disable',
+  expr: "Boolean expression over row fields, e.g. amount > 0 AND status != 'CANCELLED'",
+  conflictKey: 'Comma-separated key columns used for upsert matching.',
+  fields: 'JSON map of output field → expression.',
+};
+const SOURCE_TYPES = ['csv', 'tsv', 'fixedwidth', 'parquet', 'xml', 'jsonlines', 'jdbc', 'kafka', 's3', 'gcs', 'adls'];
+const SINK_TYPES = ['jdbc', 'parquet', 'kafka', 's3', 'gcs', 'adls', 'null', 'dlq'];
+
+function humanize(k: string): string {
+  return FIELD_LABELS[k] || k.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase());
+}
+function isBoolField(k: string, v: string): boolean {
+  return v === 'true' || v === 'false' || /^(has|is|enable|delete|trim|nullable|repeating|deleteOnSuccess)/i.test(k);
+}
+function isFileField(k: string): boolean {
+  return /(^path$|_path$|file$|dir$|directory$)/i.test(k);
+}
+function isNumField(k: string, v: string): boolean {
+  return /(size|port|workers|batches|interval|memory|parallelism|scale|length|start|retries|threshold|rows|seconds|delay)/i.test(k) && v.trim() !== '' && !isNaN(Number(v));
+}
+function isJsonField(v: string): boolean {
+  const t = v.trim();
+  return t.startsWith('{') || t.startsWith('[');
+}
+
+// browse callbacks keyed by request id (resolved via browseResult host message)
+let browseSeq = 0;
+const pendingBrowse: Record<string, (p: string) => void> = {};
+function requestBrowse(mode: 'file' | 'folder', onPick: (p: string) => void) {
+  const id = 'b' + ++browseSeq;
+  pendingBrowse[id] = onPick;
+  post({ type: 'browse', id, mode });
+}
+
+// Build one config field widget appropriate to its key/value type.
+function renderField(node: Node, key: string, value: string): HTMLElement {
+  const f = el('div', 'fld');
+  f.appendChild(el('div', 'k', humanize(key)));
+
+  // Boolean → toggle
+  if (isBoolField(key, value)) {
+    const on = value === 'true';
+    const t = el('div', 'toggle' + (on ? ' on' : ''));
+    t.innerHTML = `<span class="sw"></span><span class="lbl">${on ? 'true' : 'false'}</span>`;
+    t.onclick = () => {
+      const next = !t.classList.contains('on');
+      t.classList.toggle('on', next);
+      (t.querySelector('.lbl') as HTMLElement).textContent = String(next);
+      setCfgValue(node, key, next);
+    };
+    f.appendChild(t);
+    return f;
+  }
+
+  // Enum → dropdown
+  if (FIELD_ENUMS[key]) {
+    const sel = el('select', 'v') as HTMLSelectElement;
+    const opts = FIELD_ENUMS[key].slice();
+    if (!opts.includes(value) && value) opts.unshift(value);
+    opts.forEach((o) => {
+      const op = document.createElement('option');
+      op.value = o;
+      op.textContent = o;
+      if (o === value) op.selected = true;
+      sel.appendChild(op);
+    });
+    sel.onchange = () => setCfgField(node, key, sel.value);
+    f.appendChild(sel);
+    return f;
+  }
+
+  // File path → text + Browse
+  if (isFileField(key)) {
+    const row = el('div', 'inputrow');
+    const inp = el('input', 'v') as HTMLInputElement;
+    inp.value = value;
+    inp.onchange = () => setCfgField(node, key, inp.value);
+    const btn = el('button', 'browse', '📂 Browse');
+    const folder = node.type === 'file' || /checkpoint/i.test(node.type) || key.toLowerCase().includes('dir');
+    btn.onclick = () => requestBrowse(folder ? 'folder' : 'file', (p) => { inp.value = p; setCfgField(node, key, p); });
+    row.appendChild(inp);
+    row.appendChild(btn);
+    f.appendChild(row);
+    if (FIELD_HINTS[key]) f.appendChild(el('div', 'hint', FIELD_HINTS[key]));
+    return f;
+  }
+
+  // JSON object/array (non-columns) → textarea
+  if (isJsonField(value) && key !== 'columns') {
+    const ta = document.createElement('textarea');
+    ta.className = 'v';
+    ta.value = value;
+    ta.onchange = () => {
+      try {
+        setCfgValue(node, key, JSON.parse(ta.value));
+        ta.style.borderColor = '';
+      } catch {
+        ta.style.borderColor = 'var(--red)';
+        toast('err', `${humanize(key)} is not valid JSON`);
+      }
+    };
+    f.appendChild(ta);
+    return f;
+  }
+
+  // Number
+  if (isNumField(key, value)) {
+    const inp = el('input', 'v') as HTMLInputElement;
+    inp.type = 'number';
+    inp.value = value;
+    inp.onchange = () => setCfgValue(node, key, inp.value === '' ? '' : Number(inp.value));
+    f.appendChild(inp);
+    if (FIELD_HINTS[key]) f.appendChild(el('div', 'hint', FIELD_HINTS[key]));
+    return f;
+  }
+
+  // Plain text (default)
+  const inp = el('input', 'v') as HTMLInputElement;
+  inp.value = value;
+  inp.onchange = () => setCfgField(node, key, inp.value);
+  f.appendChild(inp);
+  if (FIELD_HINTS[key]) f.appendChild(el('div', 'hint', FIELD_HINTS[key]));
+  return f;
+}
+
+// Structured column editor for the source `columns` array.
+function renderColumnsEditor(node: Node): HTMLElement {
+  const f = el('div', 'fld');
+  f.appendChild(el('div', 'k', 'Columns'));
+  const target = cfgTarget(node);
+  const cols: Array<{ name?: string; type?: string }> = Array.isArray(target.columns) ? target.columns : [];
+  const box = el('div', 'cols');
+  const types = ['string', 'int', 'float', 'bool', 'date', 'decimal'];
+  const save = () => setCfgValue(node, 'columns', cols);
+  cols.forEach((c, i) => {
+    const row = el('div', 'crow');
+    const name = document.createElement('input');
+    name.value = c.name || '';
+    name.placeholder = 'name';
+    name.onchange = () => { cols[i].name = name.value; save(); };
+    const sel = document.createElement('select');
+    types.forEach((t) => {
+      const op = document.createElement('option');
+      op.value = t; op.textContent = t;
+      if (t === c.type) op.selected = true;
+      sel.appendChild(op);
+    });
+    sel.onchange = () => { cols[i].type = sel.value; save(); };
+    const del = el('span', 'del', '✕');
+    del.onclick = () => { cols.splice(i, 1); save(); renderEditor(); };
+    row.appendChild(name);
+    row.appendChild(sel);
+    row.appendChild(del);
+    box.appendChild(row);
+  });
+  const add = el('div', 'addcol', '＋ Add column');
+  add.onclick = () => { cols.push({ name: 'new_column', type: 'string' }); setCfgValue(node, 'columns', cols); renderEditor(); };
+  box.appendChild(add);
+  f.appendChild(box);
+  return f;
 }
 
 // ── render root ───────────────────────────────────────────────────────────
@@ -331,25 +527,50 @@ function renderCanvas(m: HTMLElement) {
   ib.appendChild(tabs);
 
   if (S.inspTab === 'Config') {
-    const nameF = el('div', 'fld');
-    nameF.innerHTML = '<div class="k">Stage name</div>';
-    const ni = el('input', 'v') as HTMLInputElement;
-    ni.value = sn.nm;
-    ni.onchange = () => {
-      if (sn.ref === 'source') (S.doc.source as any).path = (S.doc.source as any)?.path;
-      if (typeof sn.ref === 'number') { (S.doc.transforms as any)[sn.ref].name = ni.value; persistAndRebuild(); }
-    };
-    ib.appendChild(nameF);
-    ib.appendChild(ni);
+    // Stage type: dropdown for source/sink, badge for transforms.
+    const typeRow = el('div', 'insp-type');
+    if (sn.kind === 'source' || sn.kind === 'sink') {
+      typeRow.appendChild(el('span', 'badge', sn.kind + ' type'));
+      const sel = el('select', 'v') as HTMLSelectElement;
+      const opts = sn.kind === 'source' ? SOURCE_TYPES : SINK_TYPES;
+      const list = opts.includes(sn.type) ? opts : [sn.type, ...opts];
+      list.forEach((o) => {
+        const op = document.createElement('option');
+        op.value = o; op.textContent = o;
+        if (o === sn.type) op.selected = true;
+        sel.appendChild(op);
+      });
+      sel.onchange = () => {
+        (S.doc[sn.kind] as any) = { ...(S.doc[sn.kind] as any || {}), type: sel.value };
+        persistAndRebuild();
+      };
+      typeRow.appendChild(sel);
+    } else {
+      typeRow.appendChild(el('span', 'badge', 'transform'));
+      typeRow.appendChild(el('span', 'chip plain', sn.type));
+    }
+    ib.appendChild(typeRow);
+
+    // Transform stages get an editable name; source/sink names are derived.
+    if (sn.kind === 'transform') {
+      const nameF = el('div', 'fld');
+      nameF.appendChild(el('div', 'k', 'Stage name'));
+      const ni = el('input', 'v') as HTMLInputElement;
+      ni.value = (S.doc.transforms as any)?.[sn.ref as number]?.name || sn.type;
+      ni.onchange = () => { (S.doc.transforms as any)[sn.ref as number].name = ni.value; persistAndRebuild(); };
+      nameF.appendChild(ni);
+      ib.appendChild(nameF);
+    }
+
+    // Config fields — type-aware widgets.
     Object.entries(sn.cfg).forEach(([k, v]) => {
-      const f = el('div', 'fld');
-      f.innerHTML = `<div class="k">${k}</div>`;
-      const inp = el('input', 'v') as HTMLInputElement;
-      inp.value = v;
-      inp.onchange = () => setCfgField(sn, k, inp.value);
-      f.appendChild(inp);
-      ib.appendChild(f);
+      if (k === 'columns') ib.appendChild(renderColumnsEditor(sn));
+      else ib.appendChild(renderField(sn, k, v));
     });
+
+    if (!Object.keys(sn.cfg).length && sn.kind !== 'source') {
+      ib.appendChild(el('div', 'muted', '<div style="font-size:11.5px;padding:4px 0">No configuration for this stage yet.</div>'));
+    }
   } else if (S.inspTab === 'Schema') {
     ib.appendChild(el('div', 'muted', `<div style="font-size:12px;padding:6px 0">Inferred schema for <b style="color:var(--text)">${sn.nm}</b>. Run the pipeline to populate live column types.</div>`));
   } else {
@@ -854,8 +1075,13 @@ window.addEventListener('message', (ev: MessageEvent<HostToWebview>) => {
       }
       break;
     }
-    case 'browseResult':
+    case 'browseResult': {
+      const cb = pendingBrowse[msg.id];
+      if (cb) { cb(msg.path); delete pendingBrowse[msg.id]; }
+      break;
+    }
     case 'browseCancelled':
+      delete pendingBrowse[msg.id];
       break;
   }
 });
