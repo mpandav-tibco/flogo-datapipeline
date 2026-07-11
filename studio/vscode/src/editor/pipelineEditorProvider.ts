@@ -1,6 +1,5 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import * as http from 'http';
 import * as crypto from 'crypto';
 
 import { BinaryManager } from '../binaryManager';
@@ -8,9 +7,11 @@ import {
   extractPipelineData,
   mergePipelineIntoDoc,
   validate,
+  slug,
   PipelineDoc,
   ValidationIssue,
 } from '../model/pipeline';
+import { ApiClient } from '../engine/apiClient';
 import type { WebviewToHost } from '../protocol';
 
 export interface EngineHooks {
@@ -19,9 +20,6 @@ export interface EngineHooks {
   onStopped?: () => void;
   onActivePipeline?: (uri: vscode.Uri | null) => void;
 }
-
-const HEALTH_ENDPOINT = '/v1/health';
-const METRICS_ENDPOINT = '/v1/metrics';
 
 export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
   public static readonly viewType = 'flogoDataPipelineStudio.pipelineEditor';
@@ -157,10 +155,12 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
         } catch {
           /* new/invalid */
         }
+        const pd = extractPipelineData(appDoc);
         this.post(panel, {
           type: 'init',
-          doc: extractPipelineData(appDoc),
+          doc: pd,
           fileName: path.basename(doc.uri.fsPath),
+          ref: this.refForDoc(doc, pd),
           nonce: crypto.randomBytes(8).toString('hex'),
         });
         if (this.manager.port) this.post(panel, { type: 'runStarted', port: this.manager.port });
@@ -189,10 +189,7 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
       }
 
       case 'preview':
-        // Dry-run preview is engine-backed when running; otherwise informational.
-        if (!this.manager.port) {
-          this.post(panel, { type: 'runError', message: 'Start the pipeline to sample live rows.' });
-        }
+        await this.previewPipeline(doc, panel, msg.limit ?? 100);
         break;
 
       case 'export':
@@ -205,6 +202,21 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
         );
         break;
 
+      case 'definition': {
+        const port = this.manager.port;
+        if (!port) {
+          this.post(panel, { type: 'metricsResult', error: 'Start the pipeline to read its engine definition.' });
+          break;
+        }
+        try {
+          const def = await new ApiClient(port).definition(this.refForDoc(doc));
+          this.post(panel, { type: 'definition', def });
+        } catch (err) {
+          this.post(panel, { type: 'metricsResult', error: errText(err) });
+        }
+        break;
+      }
+
       case 'metrics': {
         const port = this.manager.port;
         if (!port) {
@@ -212,8 +224,8 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
           break;
         }
         try {
-          const data = await this.fetchJson(port, METRICS_ENDPOINT);
-          this.post(panel, { type: 'metricsResult', data });
+          const st = await new ApiClient(port).status(this.refForDoc(doc));
+          this.post(panel, { type: 'metricsResult', data: st });
         } catch (err) {
           this.post(panel, { type: 'metricsResult', error: errText(err) });
         }
@@ -248,8 +260,7 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
         break;
 
       case 'deploy':
-        vscode.window.showInformationMessage(`Generating a sharded StatefulSet with ${msg.replicas} replica(s)…`);
-        await this.exportFromUri(doc.uri, 'platform');
+        await this.generateDeployArtifacts(doc, msg.replicas);
         break;
 
       case 'showError':
@@ -278,61 +289,143 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
 
   // ── Engine lifecycle ───────────────────────────────────────────────────────
 
+  // Compute the pipeline ref (bare slug the REST API accepts) from the document.
+  private refForDoc(doc: vscode.TextDocument, pd?: PipelineDoc): string {
+    let data = pd;
+    if (!data) {
+      try {
+        data = extractPipelineData(JSON.parse(doc.getText()));
+      } catch {
+        data = {};
+      }
+    }
+    const name = data?.name || path.basename(doc.uri.fsPath, '.datapipeline');
+    return slug(name);
+  }
+
+  // Ensure the engine is running for this document; start it if necessary.
+  // Returns the bound port, or null if startup failed (error already posted).
+  private async ensureEngine(document: vscode.TextDocument, panel: vscode.WebviewPanel): Promise<number | null> {
+    if (this.manager.port) return this.manager.port;
+
+    const cfg = vscode.workspace.getConfiguration('flogoDataPipelineStudio');
+    const startPort = cfg.get<number>('apiPort') ?? 9080;
+    const binPath = cfg.get<string>('binaryPath') ?? '';
+    if (binPath) this.manager.setOverrideBinaryPath(binPath);
+
+    this.post(panel, { type: 'runStarting' });
+    this.hooks.onStarting?.();
+
+    this.manager.onLog((text) => {
+      text.split(/\r?\n/).forEach((line) => {
+        if (line.trim()) this.post(panel, { type: 'runLog', line });
+      });
+    });
+    this.post(panel, { type: 'runLog', line: `[engine] Starting flogo-datapipeline on port ${startPort}…` });
+
+    try {
+      const port = await this.manager.start(document.uri.fsPath, startPort);
+      this.post(panel, { type: 'runLog', line: `[engine] Ready on port ${port}` });
+      this.hooks.onRunning?.(port, path.basename(document.uri.fsPath, '.datapipeline'));
+      this.post(panel, { type: 'runStarted', port });
+      return port;
+    } catch (err: any) {
+      this.hooks.onStopped?.();
+      this.post(panel, { type: 'runError', message: errText(err) });
+      if (err && err.code === 'NO_BINARY') {
+        const buildCmd = err.buildCmd || this.manager.buildCommand();
+        vscode.window
+          .showErrorMessage(
+            'flogo-datapipeline binary not found. Build it or set the binary path in settings.',
+            'Show Build Command',
+            'Open Settings',
+          )
+          .then((choice) => {
+            if (choice === 'Show Build Command') {
+              const ch = this.manager.channel;
+              ch.show(true);
+              ch.appendLine('\n══ Build the binary ══');
+              ch.appendLine('  ' + buildCmd);
+            } else if (choice === 'Open Settings') {
+              vscode.commands.executeCommand('workbench.action.openSettings', 'flogoDataPipelineStudio.binaryPath');
+            }
+          });
+      }
+      return null;
+    } finally {
+      this.manager.onLog(null);
+    }
+  }
+
   private async runPipeline(document: vscode.TextDocument, panel: vscode.WebviewPanel): Promise<void> {
     if (this.runInFlight) {
-      this.post(panel, { type: 'runError', message: 'Another pipeline is already starting.' });
+      this.post(panel, { type: 'runError', message: 'Another pipeline run is already in progress.' });
       return;
     }
     this.runInFlight = true;
     try {
-      const cfg = vscode.workspace.getConfiguration('flogoDataPipelineStudio');
-      const startPort = (cfg.get<number>('apiPort') ?? 9080);
-      const binPath = cfg.get<string>('binaryPath') ?? '';
-      if (binPath) this.manager.setOverrideBinaryPath(binPath);
+      const port = await this.ensureEngine(document, panel);
+      if (!port) return;
 
-      this.post(panel, { type: 'runStarting' });
-      this.hooks.onStarting?.();
+      const client = new ApiClient(port);
+      const ref = this.refForDoc(document);
 
-      this.manager.onLog((text) => {
-        text.split(/\r?\n/).forEach((line) => {
-          if (line.trim()) this.post(panel, { type: 'runLog', line });
-        });
-      });
-      this.post(panel, { type: 'runLog', line: `[engine] Starting flogo-datapipeline on port ${startPort}…` });
-
+      // Kick off an async run so we can stream status while it executes.
+      this.post(panel, { type: 'runLog', line: `[run] POST /v1/pipelines/${ref}/run` });
+      let runId: string;
       try {
-        this.manager.stop();
-        const port = await this.manager.start(document.uri.fsPath, startPort);
-        this.post(panel, { type: 'runLog', line: `[engine] Ready on port ${port}` });
-        this.hooks.onRunning?.(port, path.basename(document.uri.fsPath, '.datapipeline'));
-        this.post(panel, { type: 'runStarted', port });
-      } catch (err: any) {
-        this.hooks.onStopped?.();
-        this.post(panel, { type: 'runError', message: errText(err) });
-        if (err && err.code === 'NO_BINARY') {
-          const buildCmd = err.buildCmd || this.manager.buildCommand();
-          vscode.window
-            .showErrorMessage(
-              'flogo-datapipeline binary not found. Build it or set the binary path in settings.',
-              'Show Build Command',
-              'Open Settings',
-            )
-            .then((choice) => {
-              if (choice === 'Show Build Command') {
-                const ch = this.manager.channel;
-                ch.show(true);
-                ch.appendLine('\n══ Build the binary ══');
-                ch.appendLine('  ' + buildCmd);
-              } else if (choice === 'Open Settings') {
-                vscode.commands.executeCommand('workbench.action.openSettings', 'flogoDataPipelineStudio.binaryPath');
-              }
-            });
+        const ack = await client.runPipeline(ref, { async: true });
+        runId = ack.runId;
+        this.post(panel, { type: 'runLog', line: `[run] accepted runId=${runId}` });
+        this.post(panel, { type: 'runResult', result: ack, final: false });
+      } catch (err) {
+        this.post(panel, { type: 'runError', message: 'Run request failed: ' + errText(err) });
+        return;
+      }
+
+      // Poll status until the run reaches a terminal state.
+      const deadline = Date.now() + 30 * 60 * 1000; // 30 min safety cap
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        await delay(700);
+        if (Date.now() > deadline) {
+          this.post(panel, { type: 'runError', message: 'Run polling timed out after 30 minutes.' });
+          break;
         }
-      } finally {
-        this.manager.onLog(null);
+        let st;
+        try {
+          st = await client.status(ref);
+        } catch (err) {
+          this.post(panel, { type: 'runLog', line: '[run] status poll error: ' + errText(err) });
+          continue;
+        }
+        const run = st.runs.find((r) => r.runId === runId) || st.runs[st.runs.length - 1];
+        if (!run) continue;
+        const terminal = ['completed', 'partial', 'failed', 'cancelled'].includes(run.status);
+        this.post(panel, { type: 'runResult', result: run, final: terminal });
+        if (terminal) {
+          this.post(panel, {
+            type: 'runLog',
+            line: `[run] ${run.status} — processed=${run.rowsProcessed} written=${run.rowsWritten} failed=${run.rowsFailed} dropped=${run.rowsDropped ?? 0} (${run.durationMs}ms)`,
+          });
+          break;
+        }
       }
     } finally {
       this.runInFlight = false;
+    }
+  }
+
+  private async previewPipeline(document: vscode.TextDocument, panel: vscode.WebviewPanel, limit: number): Promise<void> {
+    const port = await this.ensureEngine(document, panel);
+    if (!port) return;
+    const client = new ApiClient(port);
+    const ref = this.refForDoc(document);
+    try {
+      const result = await client.preview(ref, limit);
+      this.post(panel, { type: 'previewResult', result });
+    } catch (err) {
+      this.post(panel, { type: 'previewError', message: errText(err) });
     }
   }
 
@@ -363,8 +456,48 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
       const out = path.join(this.context.extensionPath, 'bin', binaryName());
       await this.manager.buildBinary({ sourcePath, out });
       vscode.window.showInformationMessage(`Built binary → ${out}`);
+    } else if (format === 'dockerfile' || format === 'image' || format === 'platform') {
+      await this.writeDockerfile(uri);
+      if (format === 'platform') {
+        await this.generateDeployArtifacts(await vscode.workspace.openTextDocument(uri), 4);
+      } else {
+        vscode.window.showInformationMessage('Generated Dockerfile next to the pipeline.');
+      }
     } else {
       vscode.window.showInformationMessage(`Build target "${format}" — see the Flogo Data Pipeline output channel.`);
+    }
+  }
+
+  private async writeDockerfile(uri: vscode.Uri): Promise<vscode.Uri> {
+    const { dockerfile } = await import('../deploy/manifests');
+    const dir = vscode.Uri.joinPath(uri, '..');
+    const fileName = path.basename(uri.fsPath);
+    const target = vscode.Uri.joinPath(dir, 'Dockerfile');
+    await vscode.workspace.fs.writeFile(target, Buffer.from(dockerfile(fileName), 'utf8'));
+    return target;
+  }
+
+  // Generate a Dockerfile + sharded StatefulSet + README next to the pipeline.
+  async generateDeployArtifacts(doc: vscode.TextDocument, replicas: number): Promise<void> {
+    const { statefulSet, deployReadme } = await import('../deploy/manifests');
+    const dir = vscode.Uri.joinPath(doc.uri, '..');
+    const fileName = path.basename(doc.uri.fsPath);
+    const pd = extractPipelineData(safeParse(doc.getText()));
+    const name = pd.name || path.basename(doc.uri.fsPath, '.datapipeline');
+    const image = this.defaultImageTag(doc.uri);
+
+    await this.writeDockerfile(doc.uri);
+    const stsUri = vscode.Uri.joinPath(dir, 'k8s-statefulset.yaml');
+    await vscode.workspace.fs.writeFile(stsUri, Buffer.from(statefulSet(name, fileName, replicas, image), 'utf8'));
+    const readmeUri = vscode.Uri.joinPath(dir, 'DEPLOY.md');
+    await vscode.workspace.fs.writeFile(readmeUri, Buffer.from(deployReadme(name, replicas, image), 'utf8'));
+
+    const choice = await vscode.window.showInformationMessage(
+      `Generated Dockerfile + k8s-statefulset.yaml (${replicas} replicas) + DEPLOY.md.`,
+      'Open Manifest',
+    );
+    if (choice === 'Open Manifest') {
+      await vscode.window.showTextDocument(stsUri);
     }
   }
 
@@ -427,24 +560,6 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
     return new vscode.Position(line, col);
   }
 
-  private fetchJson(port: number, endpoint: string): Promise<unknown> {
-    return new Promise((resolve, reject) => {
-      const req = http.get(`http://127.0.0.1:${port}${endpoint}`, (res) => {
-        let body = '';
-        res.on('data', (d) => (body += d));
-        res.on('end', () => {
-          try {
-            resolve(JSON.parse(body));
-          } catch (e) {
-            reject(e);
-          }
-        });
-      });
-      req.on('error', reject);
-      req.setTimeout(3000, () => req.destroy(new Error('metrics request timed out')));
-    });
-  }
-
   private buildHtml(webview: vscode.Webview, extUri: vscode.Uri): string {
     const nonce = crypto.randomBytes(16).toString('base64');
     const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(extUri, 'dist', 'webview.js'));
@@ -495,4 +610,16 @@ function binaryName(): string {
 
 function errText(err: unknown): string {
   return err && (err as any).message ? (err as any).message : String(err);
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function safeParse(text: string): any {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return {};
+  }
 }

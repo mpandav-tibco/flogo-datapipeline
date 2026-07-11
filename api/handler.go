@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,9 +17,10 @@ import (
 // Registered routes:
 //
 //	POST   /v1/pipelines/{ref}/run              → handleRunPipeline
+//	POST   /v1/pipelines/{ref}/preview          → handlePreview
 //	DELETE /v1/pipelines/{ref}/run/{runId}      → handleCancelRun
 //	GET    /v1/pipelines/{ref}/status            → handlePipelineStatus
-//	GET    /v1/pipelines/{ref}/definition        → stub (501)
+//	GET    /v1/pipelines/{ref}/definition        → handlePipelineDefinition
 //	PUT    /v1/pipelines/{ref}                   → stub (501)
 func (s *Server) handlePipelinesPrefix(w http.ResponseWriter, r *http.Request) {
 	// Strip the /v1/pipelines/ prefix and split the remainder.
@@ -37,6 +39,10 @@ func (s *Server) handlePipelinesPrefix(w http.ResponseWriter, r *http.Request) {
 	case len(parts) == 2 && parts[1] == "run" && r.Method == http.MethodPost:
 		s.handleRunPipeline(w, r, ref)
 
+	// POST /v1/pipelines/{ref}/preview
+	case len(parts) == 2 && parts[1] == "preview" && r.Method == http.MethodPost:
+		s.handlePreview(w, r, ref)
+
 	// DELETE /v1/pipelines/{ref}/run/{runId}
 	case len(parts) == 3 && parts[1] == "run" && r.Method == http.MethodDelete:
 		s.handleCancelRun(w, r, ref, parts[2])
@@ -45,10 +51,9 @@ func (s *Server) handlePipelinesPrefix(w http.ResponseWriter, r *http.Request) {
 	case len(parts) == 2 && parts[1] == "status" && r.Method == http.MethodGet:
 		s.handlePipelineStatus(w, r, ref)
 
-	// GET /v1/pipelines/{ref}/definition — future UI read-back, stubbed
+	// GET /v1/pipelines/{ref}/definition
 	case len(parts) == 2 && parts[1] == "definition" && r.Method == http.MethodGet:
-		writeError(w, http.StatusNotImplemented, "not_implemented",
-			"GET /v1/pipelines/{ref}/definition is not yet implemented")
+		s.handlePipelineDefinition(w, r, ref)
 
 	// PUT /v1/pipelines/{ref} — future UI write-back, stubbed
 	case len(parts) == 1 && r.Method == http.MethodPut:
@@ -231,6 +236,56 @@ func (s *Server) handlePipelineStatus(w http.ResponseWriter, r *http.Request, re
 		PipelineInfo: info,
 		Runs:         runs,
 	})
+}
+
+// handlePipelineDefinition handles GET /v1/pipelines/{ref}/definition.
+// Returns a JSON-safe snapshot of the parsed pipeline definition so the Studio
+// can verify what the engine actually loaded (source/sink/transform types).
+func (s *Server) handlePipelineDefinition(w http.ResponseWriter, r *http.Request, ref string) {
+	act := s.findAction(ref)
+	if act == nil {
+		writeError(w, http.StatusNotFound, "not_found",
+			"no pipeline registered for ref: "+ref)
+		return
+	}
+	writeJSON(w, http.StatusOK, act.DefinitionSummary())
+}
+
+// handlePreview handles POST /v1/pipelines/{ref}/preview.
+//
+// Query parameters:
+//
+//	limit=<n>   — maximum number of sample rows to return (default 100, max 1000).
+//
+// It runs a bounded, side-effect-free read+transform sample (no sink writes)
+// and returns the resulting rows. Used by the Studio "Dry-run Preview" panel.
+func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request, ref string) {
+	act := s.findAction(ref)
+	if act == nil {
+		writeError(w, http.StatusNotFound, "not_found",
+			"no pipeline registered for ref: "+ref)
+		return
+	}
+
+	limit := 100
+	if q := r.URL.Query().Get("limit"); q != "" {
+		if n, err := strconv.Atoi(q); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+
+	res, err := act.Preview(ctx, limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "preview_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
 }
 
 // findAction looks up a DataPipelineAction by its resource ref.

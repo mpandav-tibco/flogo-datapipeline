@@ -6,6 +6,7 @@
 
 import type { PipelineDoc } from '../src/model/pipeline';
 import type { HostToWebview, WebviewToHost } from '../src/protocol';
+import type { RunResponse, PreviewResult, StatusResponse } from '../src/engine/apiClient';
 
 interface VsCodeApi {
   postMessage(msg: WebviewToHost): void;
@@ -52,6 +53,7 @@ interface Pipe {
 // ── state ─────────────────────────────────────────────────────────────────
 const S = {
   fileName: 'pipeline.datapipeline',
+  ref: '',
   doc: {} as PipelineDoc,
   pipe: null as Pipe | null,
   selNode: null as string | null,
@@ -63,6 +65,8 @@ const S = {
   running: false,
   port: null as number | null,
   ran: false,
+  lastRun: null as RunResponse | null,
+  preview: null as PreviewResult | null,
   outputLines: [] as string[],
   previewOn: false,
   issues: [] as { sev: string; label: string; msg: string; anchor: string | null }[],
@@ -413,7 +417,9 @@ function doRun() {
 function doPreview() {
   S.previewOn = true;
   setPanel('preview');
-  post({ type: 'preview' });
+  const pb = $('#panelbody');
+  if (pb) pb.innerHTML = '<div class="muted">Sampling up to 100 rows through the transform chain…</div>';
+  post({ type: 'preview', limit: 100 });
 }
 
 // ── bottom panel ─────────────────────────────────────────────────────────────
@@ -472,9 +478,27 @@ function renderOutput(b: HTMLElement) {
 function renderPreview(b: HTMLElement) {
   b.style.fontFamily = 'var(--sans)';
   if (!S.previewOn) { b.innerHTML = '<div class="muted">Click ⌕ Dry-run Preview to sample rows through the chain.</div>'; return; }
-  if (!S.running) { b.innerHTML = '<div class="muted">Start the pipeline to stream sampled rows.</div>'; return; }
-  b.innerHTML = '<div class="muted">Sampling live rows from the engine…</div>';
-  post({ type: 'metrics' });
+  const pr = S.preview;
+  if (!pr) { b.innerHTML = '<div class="muted">Sampling rows from the engine…</div>'; return; }
+  if (!pr.rows.length) {
+    b.innerHTML = `<div class="muted">No sample rows produced. Read ${fmt(pr.rowsRead)} rows · dropped ${fmt(pr.rowsDropped)} · failed ${fmt(pr.rowsFailed)}.</div>`;
+    return;
+  }
+  const cols = pr.columns.length ? pr.columns : Object.keys(pr.rows[0]);
+  const pv = el('div', 'pv');
+  const head = `<div class="pvtop"><span><b style="color:var(--text)">Live preview</b> · ${pr.rows.length} sampled${pr.truncated ? ' (truncated)' : ''} · read ${fmt(pr.rowsRead)}</span><span class="muted">after transforms</span></div>`;
+  const ths = cols.map((c) => `<th>${escapeHtml(c)}</th>`).join('');
+  const trs = pr.rows
+    .map((row) => '<tr>' + cols.map((c) => `<td>${escapeHtml(cellText(row[c]))}</td>`).join('') + '</tr>')
+    .join('');
+  pv.innerHTML = head + `<table><thead><tr>${ths}</tr></thead><tbody>${trs}</tbody></table>`;
+  b.innerHTML = '';
+  b.appendChild(pv);
+}
+function cellText(v: unknown): string {
+  if (v == null) return 'null';
+  if (typeof v === 'object') return JSON.stringify(v);
+  return String(v);
 }
 function renderTerminal(b: HTMLElement) {
   b.className = 'panelbody log';
@@ -484,25 +508,83 @@ function renderTerminal(b: HTMLElement) {
 // ── report / dlq / drift / tail / fleet (engine-or-demo) ─────────────────────
 function renderReport(wv: HTMLElement) {
   wv.innerHTML = '';
-  if (!S.ran) { wv.appendChild(el('div', 'muted', 'Run the pipeline to generate a report.')); return; }
+  const r = S.lastRun;
+  if (!r) {
+    wv.appendChild(el('div', 'muted', 'Run the pipeline to generate a report.'));
+    const b = el('button', 'btn sm pri', '▷ Run now');
+    b.style.marginTop = '10px';
+    b.onclick = () => doRun();
+    wv.appendChild(b);
+    return;
+  }
+  const processed = r.rowsProcessed || 0;
+  const written = r.rowsWritten || 0;
+  const dropped = r.rowsDropped || 0;
+  const failed = r.rowsFailed || 0;
+  const pct = processed ? ((written / processed) * 100).toFixed(1) : '0';
+  const rps = r.durationMs ? Math.round(processed / (r.durationMs / 1000)) : 0;
   const cards = el('div', 'cards');
   cards.style.marginBottom = '16px';
   cards.innerHTML =
-    '<div class="card"><div class="cap">Status</div><div class="kpi">' + (S.running ? 'running' : 'completed') + '</div></div>' +
-    '<div class="card"><div class="cap">Port</div><div class="kpi">' + (S.port || '—') + '</div></div>' +
-    '<div class="card"><div class="cap">Mode</div><div class="kpi">' + (S.pipe?.mode || '—') + '</div></div>' +
-    '<div class="card"><div class="cap">Stages</div><div class="kpi">' + (S.pipe?.nodes.length || 0) + '</div></div>';
+    `<div class="card"><div class="cap">Processed</div><div class="kpi">${fmt(processed)}</div><div class="sub">read from source</div></div>` +
+    `<div class="card"><div class="cap">Written</div><div class="kpi" style="color:var(--green)">${fmt(written)}</div><div class="sub">${pct}% to sink</div></div>` +
+    `<div class="card"><div class="cap">Duration</div><div class="kpi">${(r.durationMs / 1000).toFixed(1)}s</div><div class="sub">~${fmtK(rps)} rows/s</div></div>` +
+    `<div class="card"><div class="cap">Status</div><div class="kpi" style="color:${r.status === 'completed' ? 'var(--green)' : r.status === 'failed' ? 'var(--red)' : 'var(--yellow)'}">${r.status}</div><div class="sub">runId ${r.runId.slice(0, 8)}</div></div>`;
   wv.appendChild(cards);
-  const refresh = el('button', 'btn sm', '⟳ Refresh metrics');
+
+  wv.appendChild(el('h3', 'sec', 'Row funnel'));
+  const fn = el('div', 'funnel');
+  const stages: Array<[string, number, string]> = [
+    ['', processed, 'Read'],
+    ['loss', dropped, 'Dropped'],
+    ['err', failed, 'Failed'],
+    ['win', written, 'Written'],
+  ];
+  const max = Math.max(1, processed);
+  stages.forEach((s, i) => {
+    const st = el('div', 'fstage ' + s[0]);
+    st.innerHTML = `<div class="bar"><i></i></div><div class="n">${fmt(s[1])}</div><div class="l">${s[2]}</div>`;
+    st.onclick = () => {
+      if (s[0] === 'win') toast('ok', `${fmt(written)} rows written to the sink`);
+      else if (s[2] === 'Dropped') toast('info', `${fmt(dropped)} rows dropped by a transform`);
+      else if (s[2] === 'Failed') openTab('dlq', 'dlq');
+      else toast('info', `${s[2]}: ${fmt(s[1])} rows`);
+    };
+    fn.appendChild(st);
+    const h = s[0] === 'win' ? (s[1] / max) * 100 : Math.max(2, (s[1] / max) * 100);
+    setTimeout(() => { (st.querySelector('i') as HTMLElement).style.height = h + '%'; }, 60 + i * 80);
+  });
+  wv.appendChild(fn);
+
+  if (r.qualityReport) {
+    const dq = r.qualityReport;
+    const total = dq.passed + dq.failed;
+    wv.appendChild(el('h3', 'sec', 'Data quality'));
+    wv.appendChild(el('div', 'between', `<span class="muted">${dq.passed}/${total} expectations passed</span><span class="chip ${dq.failed ? 'warn' : 'ok'}">${dq.failed} failed</span>`));
+    (dq.violations || []).forEach((v) => wv.appendChild(el('div', 'prob', `<span class="i warn">⚠</span><div class="msg">${escapeHtml(v)}</div>`)));
+  }
+
+  const actions = el('div', 'row');
+  actions.style.marginTop = '16px';
+  const refresh = el('button', 'btn sm', '⟳ Refresh');
   refresh.onclick = () => post({ type: 'metrics' });
-  wv.appendChild(refresh);
-  wv.appendChild(el('div', 'muted', '<div id="metricsBox" style="margin-top:12px;font:11.5px var(--mono)"></div>'));
-  post({ type: 'metrics' });
+  const rerun = el('button', 'btn sm pri', '▷ Re-run');
+  rerun.onclick = () => doRun();
+  actions.appendChild(refresh);
+  actions.appendChild(rerun);
+  wv.appendChild(actions);
 }
 function renderDLQ(wv: HTMLElement) {
   wv.innerHTML = '';
-  wv.appendChild(el('div', 'between', '<h3 class="sec" style="margin:0">Dead-letter · ' + (S.pipe?.name || '') + '</h3>'));
-  wv.appendChild(el('div', 'muted', '<div style="margin-top:8px">Rejected rows appear here once the pipeline routes violations to a DLQ sink. Requeue after fixing upstream data.</div>'));
+  const failed = S.lastRun?.rowsFailed ?? 0;
+  wv.appendChild(el('div', 'between', `<h3 class="sec" style="margin:0">Dead-letter · ${S.pipe?.name || ''}</h3><span class="chip ${failed ? 'err' : 'idle'}">${fmt(failed)} rejected</span>`));
+  if (failed > 0 && S.pipe?.hasDlq) {
+    wv.appendChild(el('div', 'muted', `<div style="margin-top:8px">${fmt(failed)} rows failed the last run and were routed to the configured DLQ sink. Inspect the DLQ sink target to triage them, then fix upstream data and re-run.</div>`));
+  } else if (failed > 0) {
+    wv.appendChild(el('div', 'muted', '<div style="margin-top:8px">Rows failed but no DLQ sink is configured — add a <b style="color:var(--text)">validate</b> transform with <code>onViolation: route</code> and a <code>dlq</code> block to capture rejects.</div>'));
+  } else {
+    wv.appendChild(el('div', 'muted', '<div style="margin-top:8px">No rejected rows. The DLQ inspector lists failed rows after a run routes violations to a DLQ sink.</div>'));
+  }
 }
 function renderDrift(wv: HTMLElement) {
   wv.innerHTML = '';
@@ -676,6 +758,7 @@ window.addEventListener('message', (ev: MessageEvent<HostToWebview>) => {
   switch (msg.type) {
     case 'init':
       S.fileName = msg.fileName;
+      S.ref = msg.ref;
       S.doc = msg.doc || {};
       S.pipe = buildPipe(S.doc);
       if (!S.selNode) S.selNode = 'source';
@@ -702,7 +785,23 @@ window.addEventListener('message', (ev: MessageEvent<HostToWebview>) => {
       renderTabs();
       renderStatus();
       renderEditor();
-      toast('ok', `Pipeline running on port ${msg.port}`);
+      break;
+    case 'runResult':
+      S.lastRun = msg.result;
+      S.ran = true;
+      if (msg.final) {
+        S.running = false;
+        const r = msg.result;
+        toast(
+          r.status === 'failed' ? 'err' : r.status === 'partial' ? 'warn' : 'ok',
+          `Run ${r.status} — ${fmt(r.rowsWritten)} written · ${fmt(r.rowsFailed)} failed · ${(r.durationMs / 1000).toFixed(1)}s`,
+          r.status === 'failed',
+        );
+        openTab('report', 'report');
+      }
+      renderTabs();
+      renderStatus();
+      if (cur()?.type === 'report' || cur()?.type === 'dlq') renderEditor();
       break;
     case 'runLog':
       S.outputLines.push(msg.line);
@@ -728,12 +827,30 @@ window.addEventListener('message', (ev: MessageEvent<HostToWebview>) => {
       renderPanel();
       renderStatus();
       break;
-    case 'metricsResult': {
-      const box = document.getElementById('metricsBox');
-      if (box) box.innerHTML = msg.error ? `<span style="color:var(--red)">${escapeHtml(msg.error)}</span>` : escapeHtml(JSON.stringify(msg.data, null, 2));
+    case 'previewResult':
+      S.preview = msg.result;
+      S.previewOn = true;
+      if (S.panelTab === 'preview' && !S.panelCollapsed) renderPreview($('#panelbody')!);
+      break;
+    case 'previewError': {
+      S.preview = null;
       const pb = $('#panelbody');
-      if (pb && S.panelTab === 'preview') {
-        pb.innerHTML = msg.error ? `<div class="muted">${escapeHtml(msg.error)}</div>` : `<pre class="ln">${escapeHtml(JSON.stringify(msg.data, null, 2))}</pre>`;
+      if (pb && S.panelTab === 'preview') pb.innerHTML = `<div class="muted">Preview failed: ${escapeHtml(msg.message)}</div>`;
+      toast('err', 'Preview failed: ' + msg.message);
+      break;
+    }
+    case 'definition':
+      toast('info', `Engine definition: ${msg.def.source.type} → ${msg.def.sink.type} · ${msg.def.transforms.length} transform(s)`);
+      break;
+    case 'metricsResult': {
+      const st = msg.data as StatusResponse | undefined;
+      if (!msg.error && st && Array.isArray(st.runs) && st.runs.length) {
+        S.lastRun = st.runs[st.runs.length - 1];
+        if (cur()?.type === 'report' || cur()?.type === 'dlq') renderEditor();
+      }
+      const pb = $('#panelbody');
+      if (pb && S.panelTab === 'preview' && msg.error) {
+        pb.innerHTML = `<div class="muted">${escapeHtml(msg.error)}</div>`;
       }
       break;
     }
