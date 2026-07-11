@@ -174,7 +174,7 @@ const FIELD_LABELS: Record<string, string> = {
   path: 'File path', dsn: 'Connection string (DSN)', driver: 'Driver', table: 'Table',
   batchSize: 'Batch size', columns: 'Columns', encoding: 'Encoding',
   // csv / tsv
-  hasHeader: 'Has header row', delimiter: 'Delimiter',
+  hasHeader: 'Has header row', delimiter: 'Delimiter', writeHeader: 'Write header row',
   // jdbc source
   query: 'SQL query', orderKey: 'Order-by key', where: 'WHERE clause',
   // fixedwidth
@@ -265,7 +265,7 @@ const FIELD_HINTS: Record<string, string> = {
   url: 'Enrichment endpoint. ${field} placeholders are substituted per row.',
 };
 const SOURCE_TYPES = ['csv', 'tsv', 'fixedwidth', 'parquet', 'xml', 'jsonlines', 'jdbc', 'kafka', 's3', 'gcs', 'adls'];
-const SINK_TYPES = ['jdbc', 'parquet', 'kafka', 's3', 'gcs', 'adls', 'null', 'dlq'];
+const SINK_TYPES = ['jdbc', 'parquet', 'csv', 'jsonlines', 'kafka', 's3', 'gcs', 'adls', 'null', 'dlq'];
 
 // Starter config for a freshly chosen source/sink type — matches the keys each
 // backend reads, so a newly switched stage is immediately runnable/editable.
@@ -286,6 +286,8 @@ function defaultConfigFor(kind: 'source' | 'sink', type: string): Record<string,
   const sink: Record<string, Record<string, unknown>> = {
     jdbc: { driver: 'postgres', dsn: '', table: '', batchSize: 1000, onConflict: 'insert' },
     parquet: { path: './out/output.parquet', compression: 'snappy', rowGroupSize: 100000 },
+    csv: { path: './out/output.csv', delimiter: ',', writeHeader: true },
+    jsonlines: { path: './out/output.jsonl' },
     kafka: { brokers: '', topic: '', ackMode: 'all', serializer: 'json' },
     s3: { bucket: '', key: '${date}/part-${uuid}.parquet', format: 'parquet' },
     gcs: { bucket: '', key: '${date}/part-${uuid}.parquet', format: 'parquet' },

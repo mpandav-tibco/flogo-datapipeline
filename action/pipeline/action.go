@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -211,7 +212,26 @@ func (a *DataPipelineAction) Shutdown(ctx context.Context) error {
 // executePipeline runs the full source → transform → sink loop.
 // Called from the goroutine spawned by Run() and directly from RunDirect().
 // runLog carries the per-run structured fields {"pipeline": "...", "runId": "..."}.
-func (a *DataPipelineAction) executePipeline(ctx context.Context, in *Input, runLog corelog.Logger, runID string) (*Output, error) {
+//
+// A deferred recover converts any panic from a source/transform/sink (e.g. a
+// type-mapping panic deep in a columnar writer) into a normal error return, so
+// one malformed run fails gracefully with status "failed" instead of crashing
+// the whole engine process (which would take down every other pipeline and the
+// REST API with it).
+func (a *DataPipelineAction) executePipeline(ctx context.Context, in *Input, runLog corelog.Logger, runID string) (out *Output, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			if out == nil {
+				out = &Output{}
+			}
+			err = fmt.Errorf("pipeline panicked: %v", r)
+			runLog.Errorf("recovered from panic in pipeline run: %v\n%s", r, debug.Stack())
+		}
+	}()
+	return a.executePipelineImpl(ctx, in, runLog, runID)
+}
+
+func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input, runLog corelog.Logger, runID string) (*Output, error) {
 	def := a.def
 	out := &Output{}
 
@@ -328,7 +348,15 @@ func (a *DataPipelineAction) executePipeline(ctx context.Context, in *Input, run
 	if err != nil {
 		return out, fmt.Errorf("sink open: %w", err)
 	}
-	defer snk.Close()
+	// Guard against double-close: the happy path closes the sink explicitly (to
+	// surface upload/commit errors that only occur at Close); this deferred close
+	// then only runs on an early error return.
+	sinkClosed := false
+	defer func() {
+		if !sinkClosed {
+			_ = snk.Close()
+		}
+	}()
 
 	// --- DLQ sink (lazy: inner connection opened only on first bad row) ---
 	// dlq is nil when no DLQ is configured; rowLevelWrite handles nil safely.
@@ -437,6 +465,16 @@ func (a *DataPipelineAction) executePipeline(ctx context.Context, in *Input, run
 	if err := snk.Flush(); err != nil {
 		return out, fmt.Errorf("sink final flush: %w", err)
 	}
+
+	// Explicitly close the sink and surface any error. This is critical for sinks
+	// whose durable write happens at Close (e.g. the object-store sink uploads the
+	// buffered object on Close) — relying only on the deferred Close would discard
+	// that error and mis-report a failed upload as a successful run. Closing here
+	// makes the deferred snk.Close() a harmless no-op (idempotent close).
+	if err := snk.Close(); err != nil {
+		return out, fmt.Errorf("sink close: %w", err)
+	}
+	sinkClosed = true
 
 	if def.Checkpoint.DeleteOnSuccess {
 		_ = ckpt.Delete(runID)

@@ -45,16 +45,13 @@ import (
 	"github.com/mpandav-tibco/flogo-datapipeline/sink"
 )
 
-// streamingFormats is the set of inner sink formats that can write to an
-// arbitrary io.Writer (rather than requiring an os.File with a path).
-// For these formats we use an io.Pipe to stream directly to the object store.
-// All other formats write to a temp file and are uploaded on Close.
-var streamingFormats = map[string]bool{
-	"csv":       true,
-	"tsv":       true,
-	"jsonlines": true,
-	"ndjson":    true,
-}
+// streamingFormats is the set of inner sink formats that stream directly to the
+// object store via an io.Pipe. It is currently empty: all inner formats write to
+// a temp file that is uploaded synchronously on Close (see uploadTmpFile), which
+// gives deterministic completion and proper error propagation. The csv/jsonlines
+// file sinks write by path, so the temp-file path handles them correctly without
+// the extra pipe goroutine (whose completion was racy).
+var streamingFormats = map[string]bool{}
 
 func init() {
 	for _, provider := range []string{"s3", "gcs", "adls"} {

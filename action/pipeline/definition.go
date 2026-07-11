@@ -49,6 +49,61 @@ type SourceDef struct {
 	ErrorSink map[string]interface{} `json:"errorSink,omitempty"`
 }
 
+// UnmarshalJSON flattens the entire source object into Options so that
+// source-specific keys can be written either at the top level (e.g. "dsn",
+// "driver", "table", "brokers", "topic") or nested under "options" — matching
+// the ergonomics of SinkDef. The dedicated struct fields (Type, Path, Encoding,
+// Columns, ErrorSink) are also populated for typed access. buildSourceConfig
+// copies Options over the config map, so flat keys reach the source factory.
+func (s *SourceDef) UnmarshalJSON(data []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	if typ, ok := raw["type"].(string); ok {
+		s.Type = typ
+	}
+	if p, ok := raw["path"].(string); ok {
+		s.Path = p
+	}
+	if e, ok := raw["encoding"].(string); ok {
+		s.Encoding = e
+	}
+	// Decode columns (if present) into the typed slice.
+	if _, ok := raw["columns"]; ok {
+		var wrapper struct {
+			Columns []ColumnDef `json:"columns"`
+		}
+		if err := json.Unmarshal(data, &wrapper); err != nil {
+			return err
+		}
+		s.Columns = wrapper.Columns
+	}
+	if es, ok := raw["errorSink"].(map[string]interface{}); ok {
+		s.ErrorSink = es
+	}
+	// Flatten everything (except the reserved structural keys) into Options so
+	// flat top-level keys reach the source factory. Keys nested under an explicit
+	// "options" object are merged in as well and take precedence.
+	opts := make(map[string]interface{})
+	for k, v := range raw {
+		switch k {
+		case "type", "path", "encoding", "columns", "errorSink", "options":
+			continue
+		}
+		opts[k] = v
+	}
+	if nested, ok := raw["options"].(map[string]interface{}); ok {
+		for k, v := range nested {
+			opts[k] = v
+		}
+	}
+	if len(opts) > 0 {
+		s.Options = opts
+	}
+	return nil
+}
+
 // TransformDef describes a single transform stage.
 // The "type" field selects the registered transform factory.
 // All other fields are passed to the factory as the config map.
