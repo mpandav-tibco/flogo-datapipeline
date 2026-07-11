@@ -638,6 +638,230 @@ function renderMapEditor(node: Node): HTMLElement {
   return f;
 }
 
+// Structured rule editor for the `validate` transform. Each rule is a card with
+// a field picker (from upstream columns) and plain-language constraints — not
+// null, allowed values, min/max, length, pattern — instead of hand-written JSON.
+function renderRulesEditor(node: Node): HTMLElement {
+  const f = el('div', 'fld');
+  f.appendChild(el('div', 'k', 'Validation rules'));
+  const target = cfgTarget(node);
+  const rules: any[] = Array.isArray(target.rules) ? target.rules : [];
+  const cols = upstreamSchema(node);
+  const save = () => setCfgValue(node, 'rules', rules);
+
+  const box = el('div', 'rcards');
+  rules.forEach((r, i) => {
+    const card = el('div', 'rcard');
+    // header: field picker + delete
+    const head = el('div', 'rhead');
+    const fld = document.createElement(cols.length ? 'select' : 'input') as HTMLSelectElement | HTMLInputElement;
+    if (cols.length) {
+      const opts = cols.map((c) => c.name);
+      if (r.field && !opts.includes(r.field)) opts.unshift(r.field);
+      opts.forEach((o) => {
+        const op = document.createElement('option');
+        op.value = o; op.textContent = o;
+        if (o === r.field) (op as HTMLOptionElement).selected = true;
+        fld.appendChild(op);
+      });
+    } else {
+      (fld as HTMLInputElement).placeholder = 'field name';
+      (fld as HTMLInputElement).value = r.field || '';
+    }
+    fld.onchange = () => { r.field = (fld as HTMLInputElement).value; save(); };
+    const del = el('span', 'del', '✕');
+    del.title = 'Remove rule';
+    del.onclick = () => { rules.splice(i, 1); save(); renderEditor(); };
+    head.appendChild(el('span', 'muted', '<span style="font-size:11px">Field</span>'));
+    head.appendChild(fld);
+    head.appendChild(del);
+    card.appendChild(head);
+
+    // required toggle
+    const req = el('div', 'rtoggle' + (r.notNull ? ' on' : ''));
+    req.innerHTML = '<span class="sw"></span><span class="lbl">Required (not null)</span>';
+    req.onclick = () => { r.notNull = !r.notNull; if (!r.notNull) delete r.notNull; save(); renderEditor(); };
+    card.appendChild(req);
+
+    // helper to render an optional constraint row
+    const constraint = (label: string, key: string, ph: string, transform?: (v: string) => any) => {
+      const row = el('div', 'rrow');
+      row.appendChild(el('label', undefined, label));
+      const inp = document.createElement('input');
+      inp.placeholder = ph;
+      inp.value = r[key] != null ? (Array.isArray(r[key]) ? r[key].join(', ') : String(r[key])) : '';
+      inp.onchange = () => {
+        const v = inp.value.trim();
+        if (v === '') { delete r[key]; } else { r[key] = transform ? transform(v) : v; }
+        save();
+      };
+      row.appendChild(inp);
+      card.appendChild(row);
+    };
+    constraint('In set', 'in', 'emea, amer, apac', (v) => v.split(',').map((s) => s.trim()).filter(Boolean));
+    constraint('Min', 'min', 'e.g. 0', (v) => Number(v));
+    constraint('Max', 'max', 'e.g. 1000', (v) => Number(v));
+    constraint('Min len', 'minLength', 'e.g. 3', (v) => Number(v));
+    constraint('Max len', 'maxLength', 'e.g. 50', (v) => Number(v));
+    constraint('Pattern', 'pattern', 'regex, e.g. ^CUST-\\d{6}$');
+    box.appendChild(card);
+  });
+  const add = el('button', 'addcard', '＋ Add rule');
+  add.onclick = () => {
+    rules.push({ field: cols[0]?.name || '', notNull: true });
+    setCfgValue(node, 'rules', rules);
+    renderEditor();
+  };
+  box.appendChild(add);
+  f.appendChild(box);
+  return f;
+}
+
+// Catalogue of DQ expectation types with their parameter shapes, mirroring the
+// engine's expectationFactories. Each entry declares which fields to render.
+const DQ_EXPECTATIONS: Array<{ type: string; label: string; params: Array<{ key: string; label: string; kind: 'number' | 'text' | 'list' | 'bool' }> }> = [
+  { type: 'expectColumnNotNull', label: 'Column not null', params: [{ key: 'threshold', label: 'Threshold', kind: 'number' }] },
+  { type: 'expectColumnUnique', label: 'Column unique', params: [{ key: 'threshold', label: 'Threshold', kind: 'number' }] },
+  { type: 'expectColumnValuesBetween', label: 'Values between', params: [{ key: 'min', label: 'Min', kind: 'number' }, { key: 'max', label: 'Max', kind: 'number' }] },
+  { type: 'expectColumnValuesInSet', label: 'Values in set', params: [{ key: 'values', label: 'Allowed', kind: 'list' }, { key: 'caseSensitive', label: 'Case-sensitive', kind: 'bool' }] },
+  { type: 'expectTableRowCountBetween', label: 'Row count between', params: [{ key: 'min', label: 'Min', kind: 'number' }, { key: 'max', label: 'Max', kind: 'number' }] },
+  { type: 'expectColumnMeanBetween', label: 'Mean between', params: [{ key: 'min', label: 'Min', kind: 'number' }, { key: 'max', label: 'Max', kind: 'number' }] },
+  { type: 'expectColumnStddevBelow', label: 'Std-dev below', params: [{ key: 'threshold', label: 'Threshold', kind: 'number' }] },
+];
+const DQ_NEEDS_COLUMN = new Set(['expectColumnNotNull', 'expectColumnUnique', 'expectColumnValuesBetween', 'expectColumnValuesInSet', 'expectColumnMeanBetween', 'expectColumnStddevBelow']);
+
+// Structured expectation editor for the `dq` transform. Each expectation is a
+// card: a type picker (plain-language label), a column picker, and only the
+// parameters that type needs.
+function renderExpectationsEditor(node: Node): HTMLElement {
+  const f = el('div', 'fld');
+  f.appendChild(el('div', 'k', 'Expectations'));
+  const target = cfgTarget(node);
+  const exps: any[] = Array.isArray(target.expectations) ? target.expectations : [];
+  const cols = upstreamSchema(node);
+  const save = () => setCfgValue(node, 'expectations', exps);
+
+  const box = el('div', 'rcards');
+  exps.forEach((ex, i) => {
+    const spec = DQ_EXPECTATIONS.find((d) => d.type === ex.type) || DQ_EXPECTATIONS[0];
+    const card = el('div', 'rcard');
+    const head = el('div', 'rhead');
+    const typeSel = document.createElement('select');
+    DQ_EXPECTATIONS.forEach((d) => {
+      const op = document.createElement('option');
+      op.value = d.type; op.textContent = d.label;
+      if (d.type === ex.type) op.selected = true;
+      typeSel.appendChild(op);
+    });
+    typeSel.onchange = () => { ex.type = typeSel.value; save(); renderEditor(); };
+    const del = el('span', 'del', '✕');
+    del.onclick = () => { exps.splice(i, 1); save(); renderEditor(); };
+    head.appendChild(typeSel);
+    head.appendChild(del);
+    card.appendChild(head);
+
+    if (DQ_NEEDS_COLUMN.has(ex.type)) {
+      const row = el('div', 'rrow');
+      row.appendChild(el('label', undefined, 'Column'));
+      const colSel = document.createElement(cols.length ? 'select' : 'input') as HTMLSelectElement | HTMLInputElement;
+      if (cols.length) {
+        const opts = cols.map((c) => c.name);
+        if (ex.column && !opts.includes(ex.column)) opts.unshift(ex.column);
+        opts.forEach((o) => {
+          const op = document.createElement('option');
+          op.value = o; op.textContent = o;
+          if (o === ex.column) (op as HTMLOptionElement).selected = true;
+          colSel.appendChild(op);
+        });
+      } else {
+        (colSel as HTMLInputElement).placeholder = 'column name';
+        (colSel as HTMLInputElement).value = ex.column || '';
+      }
+      colSel.onchange = () => { ex.column = (colSel as HTMLInputElement).value; save(); };
+      row.appendChild(colSel);
+      card.appendChild(row);
+    }
+
+    spec.params.forEach((p) => {
+      if (p.kind === 'bool') {
+        const tg = el('div', 'rtoggle' + (ex[p.key] ? ' on' : ''));
+        tg.innerHTML = `<span class="sw"></span><span class="lbl">${p.label}</span>`;
+        tg.onclick = () => { ex[p.key] = !ex[p.key]; if (!ex[p.key]) delete ex[p.key]; save(); renderEditor(); };
+        card.appendChild(tg);
+        return;
+      }
+      const row = el('div', 'rrow');
+      row.appendChild(el('label', undefined, p.label));
+      const inp = document.createElement('input');
+      if (p.kind === 'number') inp.type = 'number';
+      inp.placeholder = p.kind === 'list' ? 'comma-separated' : '';
+      inp.value = ex[p.key] != null ? (Array.isArray(ex[p.key]) ? ex[p.key].join(', ') : String(ex[p.key])) : '';
+      inp.onchange = () => {
+        const v = inp.value.trim();
+        if (v === '') { delete ex[p.key]; }
+        else if (p.kind === 'number') ex[p.key] = Number(v);
+        else if (p.kind === 'list') ex[p.key] = v.split(',').map((s) => s.trim()).filter(Boolean);
+        else ex[p.key] = v;
+        save();
+      };
+      row.appendChild(inp);
+      card.appendChild(row);
+    });
+    box.appendChild(card);
+  });
+  const add = el('button', 'addcard', '＋ Add expectation');
+  add.onclick = () => {
+    exps.push({ type: 'expectColumnNotNull', column: cols[0]?.name || '' });
+    setCfgValue(node, 'expectations', exps);
+    renderEditor();
+  };
+  box.appendChild(add);
+  f.appendChild(box);
+  return f;
+}
+
+// Filter expression field with a click-to-insert Available-data palette and an
+// operators cheat-sheet, so users build boolean conditions without memorising
+// syntax.
+function renderFilterEditor(node: Node): HTMLElement {
+  const f = el('div', 'fld');
+  f.appendChild(el('div', 'k', 'Keep rows where'));
+  const target = cfgTarget(node);
+  const inp = document.createElement('input');
+  inp.className = 'v';
+  inp.value = target.expr || '';
+  inp.placeholder = "amount > 0 AND status != 'CANCELLED'";
+  inp.onfocus = () => { mapFocusedInput = inp; };
+  inp.onchange = () => setCfgField(node, 'expr', inp.value);
+  f.appendChild(inp);
+
+  const help = el('div', 'mhelp');
+  const cols = upstreamSchema(node);
+  if (cols.length) {
+    help.appendChild(el('div', 'lbl', 'Available data'));
+    const chips = el('div', 'chips');
+    cols.forEach((c) => {
+      const chip = el('span', 'chip2', c.name);
+      chip.title = `Insert ${c.name}`;
+      chip.onclick = () => insertIntoMapExpr(c.name);
+      chips.appendChild(chip);
+    });
+    help.appendChild(chips);
+  }
+  help.appendChild(el('div', 'lbl', 'Operators'));
+  const ops = ['=', '!=', '>', '>=', '<', '<=', 'AND', 'OR'];
+  const ochips = el('div', 'chips');
+  ops.forEach((o) => {
+    const chip = el('span', 'chip2 fn', o);
+    chip.onclick = () => insertIntoMapExpr(` ${o} `);
+    ochips.appendChild(chip);
+  });
+  help.appendChild(ochips);
+  help.appendChild(el('div', 'focushint', "Rows matching this condition are kept; the rest are dropped. Quote text literals, e.g. status != 'CANCELLED'."));
+  f.appendChild(help);
+  return f;
+}
+
 // ── render root ───────────────────────────────────────────────────────────
 function renderAll() {
   renderTabs();
@@ -888,6 +1112,9 @@ function renderCanvas(m: HTMLElement) {
     Object.entries(sn.cfg).forEach(([k, v]) => {
       if (k === 'columns') ib.appendChild(renderColumnsEditor(sn));
       else if (k === 'fields' && (sn.type === 'map' || sn.type === 'mapper')) ib.appendChild(renderMapEditor(sn));
+      else if (k === 'rules' && sn.type === 'validate') ib.appendChild(renderRulesEditor(sn));
+      else if (k === 'expectations' && sn.type === 'dq') ib.appendChild(renderExpectationsEditor(sn));
+      else if (k === 'expr' && sn.type === 'filter') ib.appendChild(renderFilterEditor(sn));
       else ib.appendChild(renderField(sn, k, v));
     });
 

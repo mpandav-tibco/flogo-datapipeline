@@ -130,6 +130,25 @@ select.v{appearance:none;cursor:pointer;background-image:linear-gradient(45deg,t
 .mhelp .chip2:hover{background:#33608f;color:#fff;border-color:#33608f}
 .mhelp .chip2.fn{color:var(--orange)}
 .mhelp .focushint{font-size:10.5px;color:var(--dim);margin-top:6px}
+/* rule / expectation cards (validate + dq) */
+.rcards{display:flex;flex-direction:column;gap:8px}
+.rcard{border:1px solid var(--inputBorder);border-radius:6px;background:#202020;padding:8px}
+.rcard .rhead{display:flex;gap:6px;align-items:center;margin-bottom:7px}
+.rcard .rhead select,.rcard .rhead input{flex:1;min-width:0;background:var(--input);border:1px solid var(--inputBorder);border-radius:4px;padding:4px 7px;font:11.5px var(--mono);color:var(--text)}
+.rcard .rhead .del{flex:none;color:var(--dim);cursor:pointer;padding:0 3px;font-size:13px}
+.rcard .rhead .del:hover{color:var(--red)}
+.rcard .rrow{display:flex;gap:6px;align-items:center;margin-top:6px}
+.rcard .rrow label{font-size:10.5px;color:var(--dim);flex:none;width:56px}
+.rcard .rrow input{flex:1;min-width:0;background:var(--input);border:1px solid var(--inputBorder);border-radius:4px;padding:4px 7px;font:11.5px var(--mono);color:var(--text)}
+.rcard .rrow input:focus,.rcard .rhead input:focus,.rcard .rhead select:focus{border-color:var(--blue);outline:none}
+.rcard .rtoggle{display:inline-flex;align-items:center;gap:8px;cursor:pointer;margin-top:2px}
+.rcard .rtoggle .sw{width:30px;height:16px;border-radius:9px;background:#3a3a3a;position:relative;transition:background .15s;flex:none}
+.rcard .rtoggle .sw::after{content:"";position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;background:#cfd3d8;transition:transform .15s}
+.rcard .rtoggle.on .sw{background:var(--blue)}
+.rcard .rtoggle.on .sw::after{transform:translateX(14px);background:#fff}
+.rcard .rtoggle .lbl{font-size:11.5px;color:var(--text)}
+.addcard{display:block;width:100%;text-align:center;padding:6px;font-size:11px;color:var(--blueHi);background:#202020;border:1px solid var(--inputBorder);border-radius:6px;cursor:pointer;margin-top:2px}
+.addcard:hover{background:var(--hover)}
 
 .wv{padding:16px 18px}
 .wvnote{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--dim);padding:6px 14px;border-bottom:1px solid var(--border);background:#1a1a1a}
