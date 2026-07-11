@@ -73,13 +73,13 @@ func init() {
 // Temp-file path (parquet, …): the inner sink writes to a local temp file;
 // Close() uploads the file and then deletes it.
 type objstoreSink struct {
-	provider string
-	store    objstore.Store
-	key      string       // destination object key (macros already expanded)
-	inner    sink.Sink
-	tmpPath  string       // non-empty on temp-file path
-	pw       io.WriteCloser // write end of the pipe (streaming path)
-	uploadDone chan error  // receives the upload goroutine result (streaming path)
+	provider   string
+	store      objstore.Store
+	key        string // destination object key (macros already expanded)
+	inner      sink.Sink
+	tmpPath    string         // non-empty on temp-file path
+	pw         io.WriteCloser // write end of the pipe (streaming path)
+	uploadDone chan error     // receives the upload goroutine result (streaming path)
 	streaming  bool
 }
 
@@ -288,10 +288,10 @@ func buildInnerCfg(cfg map[string]interface{}, format string) map[string]interfa
 // streaming to the object store for line-oriented formats.
 
 type pipeWriterSink struct {
-	inner    sink.Sink    // inner sink writing to a named temp pipe file
-	tmpPath  string       // temp file that inner sink writes to
-	pw       io.Writer    // ultimate destination (object store pipe)
-	closed   bool
+	inner   sink.Sink // inner sink writing to a named temp pipe file
+	tmpPath string    // temp file that inner sink writes to
+	pw      io.Writer // ultimate destination (object store pipe)
+	closed  bool
 }
 
 func newPipeWriterSink(format string, cfg map[string]interface{}, pw io.Writer) (sink.Sink, error) {

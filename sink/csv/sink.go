@@ -29,11 +29,11 @@ func init() {
 }
 
 type csvSink struct {
-	f          *os.File
-	w          *encodingcsv.Writer
-	cols       []string
-	wroteHead  bool
-	writeHead  bool
+	f         *os.File
+	w         *encodingcsv.Writer
+	cols      []string
+	wroteHead bool
+	writeHead bool
 }
 
 func newCSVSink(cfg map[string]interface{}) (sink.Sink, error) {

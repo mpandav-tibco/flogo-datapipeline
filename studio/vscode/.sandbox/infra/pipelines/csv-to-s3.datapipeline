@@ -11,13 +11,19 @@
     {
       "id": "pipeline-timer",
       "ref": "github.com/project-flogo/contrib/trigger/timer",
-      "settings": { "repeating": true, "startDelay": 0, "interval": 86400000 },
+      "settings": {
+        "repeating": true,
+        "startDelay": 0,
+        "interval": 86400000
+      },
       "handlers": [
         {
           "settings": {},
           "action": {
             "ref": "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
-            "settings": { "pipelineRef": "res://pipeline:csv-to-s3" }
+            "settings": {
+              "pipelineRef": "res://pipeline:csv-to-s3"
+            }
           }
         }
       ]
@@ -35,15 +41,38 @@
           "path": "../data/orders.csv",
           "hasHeader": true,
           "columns": [
-            { "name": "id", "type": "int" },
-            { "name": "order_id", "type": "string" },
-            { "name": "customer_id", "type": "string" },
-            { "name": "amount", "type": "int", "nullable": true },
-            { "name": "status", "type": "string" }
+            {
+              "name": "id",
+              "type": "int"
+            },
+            {
+              "name": "order_id",
+              "type": "string"
+            },
+            {
+              "name": "customer_id",
+              "type": "string"
+            },
+            {
+              "name": "amount",
+              "type": "int",
+              "nullable": true
+            },
+            {
+              "name": "status",
+              "type": "string"
+            }
           ]
         },
         "transforms": [
-          { "type": "map", "name": "project", "fields": { "order_id": "=$order_id", "amount": "=$amount" } }
+          {
+            "type": "map",
+            "name": "project",
+            "fields": {
+              "order_id": "=$order_id",
+              "amount": "=$amount"
+            }
+          }
         ],
         "sink": {
           "type": "s3-sink",

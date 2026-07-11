@@ -19,24 +19,24 @@ const ResType = "pipeline"
 // (CSV without auto-inference, fixed-width, delimited flat files).
 type ColumnDef struct {
 	Name           string `json:"name"`
-	Type           string `json:"type"`            // string | int | float | bool | date | decimal
-	Scale          int    `json:"scale,omitempty"` // decimal places
-	Format         string `json:"format,omitempty"` // date format e.g. "2006-01-02"
-	Start          int    `json:"start,omitempty"`  // fixed-width: 1-based column start position
-	Length         int    `json:"length,omitempty"` // fixed-width: column byte length
+	Type           string `json:"type"`                     // string | int | float | bool | date | decimal
+	Scale          int    `json:"scale,omitempty"`          // decimal places
+	Format         string `json:"format,omitempty"`         // date format e.g. "2006-01-02"
+	Start          int    `json:"start,omitempty"`          // fixed-width: 1-based column start position
+	Length         int    `json:"length,omitempty"`         // fixed-width: column byte length
 	ImpliedDecimal int    `json:"impliedDecimal,omitempty"` // fixed-width: implied decimal places
-	Trim           bool   `json:"trim,omitempty"`   // trim whitespace
+	Trim           bool   `json:"trim,omitempty"`           // trim whitespace
 	Nullable       bool   `json:"nullable,omitempty"`
 }
 
 // SourceDef configures the data source for the pipeline.
 // The "type" field selects the registered source factory.
 type SourceDef struct {
-	Type     string                 `json:"type"`              // csv | parquet | fixedwidth | xml | jsonlines | jdbc
-	Path     string                 `json:"path,omitempty"`    // file path or glob pattern
+	Type     string                 `json:"type"`               // csv | parquet | fixedwidth | xml | jsonlines | jdbc
+	Path     string                 `json:"path,omitempty"`     // file path or glob pattern
 	Encoding string                 `json:"encoding,omitempty"` // utf-8 | ebcdic-037 | latin-1
-	Columns  []ColumnDef            `json:"columns,omitempty"` // explicit schema (optional for self-describing formats)
-	Options  map[string]interface{} `json:"options,omitempty"` // format-specific options
+	Columns  []ColumnDef            `json:"columns,omitempty"`  // explicit schema (optional for self-describing formats)
+	Options  map[string]interface{} `json:"options,omitempty"`  // format-specific options
 
 	// ErrorSink routes deserialization failures from streaming sources (malformed
 	// JSON, schema-mismatch, encoding errors) to a DLQ rather than aborting the
@@ -127,7 +127,7 @@ func (t *TransformDef) UnmarshalJSON(data []byte) error {
 
 // SinkDef configures the data sink for the pipeline.
 type SinkDef struct {
-	Type    string                 `json:"type"`             // jdbc | parquet | csv | kafka | null
+	Type    string                 `json:"type"`              // jdbc | parquet | csv | kafka | null
 	Options map[string]interface{} `json:"options,omitempty"` // type-specific options (flattened at parse time)
 }
 
@@ -157,12 +157,12 @@ type CheckpointDef struct {
 
 // PerformanceDef tunes the pipeline execution parameters.
 type PerformanceDef struct {
-	BatchSize               int `json:"batchSize,omitempty"`               // rows per RecordBatch (default 5000)
-	TransformWorkers        int `json:"transformWorkers,omitempty"`        // parallel transform goroutines (default 1)
-	SourceBufferBatches     int `json:"sourceBufferBatches,omitempty"`     // channel depth between source and transforms (default 4)
-	SinkBufferBatches       int `json:"sinkBufferBatches,omitempty"`       // channel depth between transforms and sink (default 4)
-	MaxMemoryMB             int `json:"maxMemoryMB,omitempty"`             // backpressure: block source when in-flight batches exceed this (default 512)
-	RowGroupParallelism     int `json:"rowGroupParallelism,omitempty"`     // parquet: concurrent row-group readers (default 4)
+	BatchSize           int `json:"batchSize,omitempty"`           // rows per RecordBatch (default 5000)
+	TransformWorkers    int `json:"transformWorkers,omitempty"`    // parallel transform goroutines (default 1)
+	SourceBufferBatches int `json:"sourceBufferBatches,omitempty"` // channel depth between source and transforms (default 4)
+	SinkBufferBatches   int `json:"sinkBufferBatches,omitempty"`   // channel depth between transforms and sink (default 4)
+	MaxMemoryMB         int `json:"maxMemoryMB,omitempty"`         // backpressure: block source when in-flight batches exceed this (default 512)
+	RowGroupParallelism int `json:"rowGroupParallelism,omitempty"` // parquet: concurrent row-group readers (default 4)
 }
 
 // IncrementalDef configures incremental-load / CDC behaviour for the pipeline.
@@ -205,12 +205,12 @@ type IncrementalDef struct {
 
 // ScalingDef controls multi-instance horizontal scaling.
 type ScalingDef struct {
-	Mode           string         `json:"mode"`                     // single | sharded | distributed
-	InstanceIndex  int            `json:"instanceIndex,omitempty"`  // sharded: 0-based index of this instance
-	InstanceCount  int            `json:"instanceCount,omitempty"`  // sharded: total number of instances
-	Coordinator    *CoordinatorDef `json:"coordinator,omitempty"`   // distributed: work queue config
-	PartitionStrategy string      `json:"partitionStrategy,omitempty"` // rowgroup | file | byterange
-	PartitionsPerClaim int        `json:"partitionsPerClaim,omitempty"` // distributed: claim batch size
+	Mode               string          `json:"mode"`                         // single | sharded | distributed
+	InstanceIndex      int             `json:"instanceIndex,omitempty"`      // sharded: 0-based index of this instance
+	InstanceCount      int             `json:"instanceCount,omitempty"`      // sharded: total number of instances
+	Coordinator        *CoordinatorDef `json:"coordinator,omitempty"`        // distributed: work queue config
+	PartitionStrategy  string          `json:"partitionStrategy,omitempty"`  // rowgroup | file | byterange
+	PartitionsPerClaim int             `json:"partitionsPerClaim,omitempty"` // distributed: claim batch size
 }
 
 // CoordinatorDef configures the distributed work queue.
@@ -329,19 +329,19 @@ type ObservabilityDef struct {
 // Definition is the declarative pipeline spec carried by a "pipeline:" resource.
 // All fields map directly to the JSON structure of the pipeline resource file.
 type Definition struct {
-	Name        string           `json:"name,omitempty"`
-	Description string           `json:"description,omitempty"`
-	Source      SourceDef        `json:"source"`
-	Transforms  []TransformDef   `json:"transforms,omitempty"`
-	Sink        SinkDef          `json:"sink"`
-	Checkpoint  CheckpointDef    `json:"checkpoint,omitempty"`
-	Performance PerformanceDef   `json:"performance,omitempty"`
-	Scaling     ScalingDef       `json:"scaling,omitempty"`
+	Name        string         `json:"name,omitempty"`
+	Description string         `json:"description,omitempty"`
+	Source      SourceDef      `json:"source"`
+	Transforms  []TransformDef `json:"transforms,omitempty"`
+	Sink        SinkDef        `json:"sink"`
+	Checkpoint  CheckpointDef  `json:"checkpoint,omitempty"`
+	Performance PerformanceDef `json:"performance,omitempty"`
+	Scaling     ScalingDef     `json:"scaling,omitempty"`
 	// SchemaDrift configures automatic schema evolution handling. When
 	// Policy is non-empty, a schemadrift transform is prepended to the
 	// transform pipeline automatically; the schemadrift package must be
 	// imported (blank import) in the main package alongside this package.
-	SchemaDrift   SchemaDriftDef   `json:"schemaDrift,omitempty"`
+	SchemaDrift SchemaDriftDef `json:"schemaDrift,omitempty"`
 	// Observability configures the metrics backend. When Metrics is empty or
 	// "none", a zero-cost NoopRecorder is used so there is no overhead.
 	Observability ObservabilityDef `json:"observability,omitempty"`
