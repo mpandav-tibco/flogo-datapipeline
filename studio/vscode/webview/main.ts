@@ -60,14 +60,11 @@ const S = {
   inspTab: 'Config',
   tabs: [{ id: 'canvas', type: 'canvas' as string }],
   active: 'canvas',
-  panelTab: 'problems',
-  panelCollapsed: false,
   running: false,
   port: null as number | null,
   ran: false,
   lastRun: null as RunResponse | null,
   preview: null as PreviewResult | null,
-  outputLines: [] as string[],
   previewOn: false,
   issues: [] as { sev: string; label: string; msg: string; anchor: string | null }[],
   tailTimer: 0 as number | 0,
@@ -458,7 +455,6 @@ function renderColumnsEditor(node: Node): HTMLElement {
 function renderAll() {
   renderTabs();
   renderEditor();
-  renderPanel();
   renderStatus();
 }
 
@@ -743,7 +739,7 @@ function renderTestTab(ib: HTMLElement, sn: Node) {
     ib.appendChild(el('div', 'muted', `<div style="font-size:11px;margin-top:6px">read ${fmt(pr.rowsRead)} · dropped ${fmt(pr.rowsDropped)} · failed ${fmt(pr.rowsFailed)}${pr.truncated ? ' · truncated' : ''}</div>`));
     const open = el('button', 'btn sm', '⌕ Open Data Preview');
     open.style.marginTop = '10px';
-    open.onclick = () => { S.previewOn = true; setPanel('preview'); };
+    open.onclick = () => doPreview();
     ib.appendChild(open);
   }
 }
@@ -798,102 +794,16 @@ function deleteTransform(ref: number) {
   toast('warn', 'Removed transform stage');
 }
 
-// ── run / preview ────────────────────────────────────────────────────────────
+// ── run / preview (native VS Code panels) ────────────────────────────────────
 function doRun() {
   if (S.running) return;
-  S.outputLines = [];
-  setPanel('output');
+  post({ type: 'showOutput' }); // reveal native Output channel
   post({ type: 'run' });
 }
 function doPreview() {
   S.previewOn = true;
-  setPanel('preview');
-  const pb = $('#panelbody');
-  if (pb) pb.innerHTML = '<div class="muted">Sampling up to 100 rows through the transform chain…</div>';
+  // The host reveals the native Data Preview panel and streams rows there.
   post({ type: 'preview', limit: 100 });
-}
-
-// ── bottom panel ─────────────────────────────────────────────────────────────
-const PANELS = [
-  { id: 'problems', t: 'Problems', err: true },
-  { id: 'output', t: 'Output' },
-  { id: 'preview', t: 'Data Preview' },
-  { id: 'terminal', t: 'Terminal' },
-];
-function setPanel(id: string) {
-  S.panelTab = id;
-  S.panelCollapsed = false;
-  renderPanel();
-}
-function renderPanel() {
-  const tabs = $('#paneltabs')!;
-  const body = $('#panelbody')!;
-  const panel = $('#panel')!;
-  panel.classList.toggle('collapsed', S.panelCollapsed);
-  tabs.innerHTML = '';
-  PANELS.forEach((p) => {
-    const cnt = p.id === 'problems' && S.issues.length ? ` <span class="cnt">${S.issues.length}</span>` : '';
-    const s = el('div', 'pt' + (p.err ? ' err' : '') + (S.panelTab === p.id ? ' on' : ''), p.t + cnt);
-    s.onclick = () => setPanel(p.id);
-    tabs.appendChild(s);
-  });
-  const acts = el('div', 'pacts');
-  acts.innerHTML = `<span title="Clear">⌫</span><span title="${S.panelCollapsed ? 'Expand' : 'Collapse'}">${S.panelCollapsed ? '▴' : '▾'}</span>`;
-  (acts.lastChild as HTMLElement).onclick = () => { S.panelCollapsed = !S.panelCollapsed; renderPanel(); };
-  (acts.firstChild as HTMLElement).onclick = () => { if (S.panelTab === 'output') S.outputLines = []; renderPanel(); };
-  tabs.appendChild(acts);
-  if (S.panelCollapsed) { body.innerHTML = ''; return; }
-  body.innerHTML = '';
-  body.className = 'panelbody';
-  if (S.panelTab === 'problems') renderProblems(body);
-  else if (S.panelTab === 'output') renderOutput(body);
-  else if (S.panelTab === 'preview') renderPreview(body);
-  else renderTerminal(body);
-}
-function renderProblems(b: HTMLElement) {
-  b.style.fontFamily = 'var(--sans)';
-  if (!S.issues.length) { b.innerHTML = '<div class="muted">No problems detected. Edit config or run validation.</div>'; return; }
-  S.issues.forEach((x) => {
-    const icon = x.sev === 'error' ? 'err' : x.sev === 'warn' ? 'warn' : 'ok';
-    const sym = x.sev === 'error' ? '⊗' : x.sev === 'warn' ? '⚠' : 'ℹ';
-    const p = el('div', 'prob', `<span class="i ${icon}">${sym}</span><div><div class="msg">${x.label}: ${x.msg}</div><div class="loc">${x.anchor || ''}</div></div>`);
-    b.appendChild(p);
-  });
-}
-function renderOutput(b: HTMLElement) {
-  b.className = 'panelbody log';
-  if (!S.outputLines.length) { b.innerHTML = '<div class="muted">No run yet. Click ▷ Run.</div>'; return; }
-  b.innerHTML = S.outputLines.map((l) => `<div class="ln">${escapeHtml(l)}</div>`).join('');
-  b.scrollTop = b.scrollHeight;
-}
-function renderPreview(b: HTMLElement) {
-  b.style.fontFamily = 'var(--sans)';
-  if (!S.previewOn) { b.innerHTML = '<div class="muted">Click ⌕ Dry-run Preview to sample rows through the chain.</div>'; return; }
-  const pr = S.preview;
-  if (!pr) { b.innerHTML = '<div class="muted">Sampling rows from the engine…</div>'; return; }
-  if (!pr.rows.length) {
-    b.innerHTML = `<div class="muted">No sample rows produced. Read ${fmt(pr.rowsRead)} rows · dropped ${fmt(pr.rowsDropped)} · failed ${fmt(pr.rowsFailed)}.</div>`;
-    return;
-  }
-  const cols = pr.columns.length ? pr.columns : Object.keys(pr.rows[0]);
-  const pv = el('div', 'pv');
-  const head = `<div class="pvtop"><span><b style="color:var(--text)">Live preview</b> · ${pr.rows.length} sampled${pr.truncated ? ' (truncated)' : ''} · read ${fmt(pr.rowsRead)}</span><span class="muted">after transforms</span></div>`;
-  const ths = cols.map((c) => `<th>${escapeHtml(c)}</th>`).join('');
-  const trs = pr.rows
-    .map((row) => '<tr>' + cols.map((c) => `<td>${escapeHtml(cellText(row[c]))}</td>`).join('') + '</tr>')
-    .join('');
-  pv.innerHTML = head + `<table><thead><tr>${ths}</tr></thead><tbody>${trs}</tbody></table>`;
-  b.innerHTML = '';
-  b.appendChild(pv);
-}
-function cellText(v: unknown): string {
-  if (v == null) return 'null';
-  if (typeof v === 'object') return JSON.stringify(v);
-  return String(v);
-}
-function renderTerminal(b: HTMLElement) {
-  b.className = 'panelbody log';
-  b.innerHTML = `<div class="ln"><span class="ok">➜</span> flogo-datapipeline $ <span style="opacity:.6">flogo-datapipeline -f ${escapeHtml(S.fileName)} -v</span></div>`;
 }
 
 // ── report / dlq / drift / tail / fleet (engine-or-demo) ─────────────────────
@@ -1002,14 +912,14 @@ function renderStatus() {
   const errs = S.issues.filter((i) => i.sev === 'error').length;
   const warns = S.issues.filter((i) => i.sev === 'warn').length;
   const problems = el('div', 'sbi', `<span style="color:var(--red)">⊗ ${errs}</span> <span style="color:var(--yellow)">⚠ ${warns}</span>`);
-  problems.onclick = () => setPanel('problems');
+  problems.onclick = () => post({ type: 'showProblems' });
   sb.appendChild(problems);
   const eng = el('div', 'sbi', S.running ? `◈ engine :${S.port}` : '◈ engine: stopped');
-  eng.onclick = () => setPanel('output');
+  eng.onclick = () => post({ type: 'showOutput' });
   sb.appendChild(eng);
   sb.appendChild(el('div', 'grow'));
   const runItem = el('div', 'sbi run', S.running ? '⟳ running…' : '▷ Run');
-  runItem.onclick = () => (S.running ? setPanel('output') : doRun());
+  runItem.onclick = () => (S.running ? post({ type: 'showOutput' }) : doRun());
   sb.appendChild(runItem);
   const pal = el('div', 'sbi', 'Data Pipeline');
   pal.onclick = () => openPalette();
@@ -1164,9 +1074,7 @@ window.addEventListener('message', (ev: MessageEvent<HostToWebview>) => {
       break;
     case 'runStarting':
       S.running = false;
-      S.outputLines.push('[engine] starting…');
       renderStatus();
-      renderOutputIfActive();
       break;
     case 'runStarted':
       S.running = true;
@@ -1194,11 +1102,6 @@ window.addEventListener('message', (ev: MessageEvent<HostToWebview>) => {
       renderStatus();
       if (cur()?.type === 'report' || cur()?.type === 'dlq') renderEditor();
       break;
-    case 'runLog':
-      S.outputLines.push(msg.line);
-      if (S.outputLines.length > 500) S.outputLines.shift();
-      renderOutputIfActive();
-      break;
     case 'runError':
       S.running = false;
       renderTabs();
@@ -1215,23 +1118,19 @@ window.addEventListener('message', (ev: MessageEvent<HostToWebview>) => {
       break;
     case 'validationResult':
       S.issues = msg.issues || [];
-      renderPanel();
       renderStatus();
       break;
     case 'previewResult':
       S.preview = msg.result;
       S.previewOn = true;
-      if (S.panelTab === 'preview' && !S.panelCollapsed) renderPreview($('#panelbody')!);
-      // Refresh Schema/Test inspector tabs which surface preview data.
+      // Full table renders in the native Data Preview panel; here we only refresh
+      // the Inspector Schema/Test tabs which surface a summary.
       if (cur()?.type === 'canvas' && (S.inspTab === 'Schema' || S.inspTab === 'Test')) renderEditor();
       break;
-    case 'previewError': {
+    case 'previewError':
       S.preview = null;
-      const pb = $('#panelbody');
-      if (pb && S.panelTab === 'preview') pb.innerHTML = `<div class="muted">Preview failed: ${escapeHtml(msg.message)}</div>`;
       toast('err', 'Preview failed: ' + msg.message);
       break;
-    }
     case 'definition':
       toast('info', `Engine definition: ${msg.def.source.type} → ${msg.def.sink.type} · ${msg.def.transforms.length} transform(s)`);
       break;
@@ -1240,10 +1139,6 @@ window.addEventListener('message', (ev: MessageEvent<HostToWebview>) => {
       if (!msg.error && st && Array.isArray(st.runs) && st.runs.length) {
         S.lastRun = st.runs[st.runs.length - 1];
         if (cur()?.type === 'report' || cur()?.type === 'dlq') renderEditor();
-      }
-      const pb = $('#panelbody');
-      if (pb && S.panelTab === 'preview' && msg.error) {
-        pb.innerHTML = `<div class="muted">${escapeHtml(msg.error)}</div>`;
       }
       break;
     }
@@ -1257,10 +1152,6 @@ window.addEventListener('message', (ev: MessageEvent<HostToWebview>) => {
       break;
   }
 });
-
-function renderOutputIfActive() {
-  if (S.panelTab === 'output' && !S.panelCollapsed) renderOutput($('#panelbody')!);
-}
 
 // ── keyboard ──────────────────────────────────────────────────────────────────
 document.addEventListener('keydown', (e) => {

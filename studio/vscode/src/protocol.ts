@@ -9,7 +9,6 @@ export type HostToWebview =
   | { type: 'update'; doc: PipelineDoc }
   | { type: 'runStarting' }
   | { type: 'runStarted'; port: number }
-  | { type: 'runLog'; line: string }
   | { type: 'runResult'; result: RunResponse; final: boolean }
   | { type: 'runError'; message: string }
   | { type: 'stopped' }
@@ -33,6 +32,8 @@ export type WebviewToHost =
   | { type: 'openRaw' }
   | { type: 'metrics' }
   | { type: 'definition' }
+  | { type: 'showOutput' }
+  | { type: 'showProblems' }
   | { type: 'browse'; id: string; mode?: 'file' | 'folder' }
   | { type: 'newFromTemplate' }
   | { type: 'newConnection' }

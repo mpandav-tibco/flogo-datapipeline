@@ -3,6 +3,7 @@ import * as path from 'path';
 
 import { BinaryManager } from './binaryManager';
 import { PipelineEditorProvider, EngineHooks } from './editor/pipelineEditorProvider';
+import { DataPreviewView } from './panel/dataPreviewView';
 import { SidebarProvider } from './sidebar';
 import { TEMPLATES } from './templates';
 
@@ -37,7 +38,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
 
   context.subscriptions.push(manager.channel);
-  editor = PipelineEditorProvider.register(context, manager, hooks);
+
+  // Native panel view for dry-run data preview (docks next to Problems/Output/Terminal).
+  const dataPreview = new DataPreviewView(context.extensionUri);
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider(DataPreviewView.viewType, dataPreview),
+  );
+
+  editor = PipelineEditorProvider.register(context, manager, hooks, dataPreview);
   context.subscriptions.push(editor.disposable);
 
   manager.onCrash(() => {

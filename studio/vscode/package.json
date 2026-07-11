@@ -122,6 +122,23 @@
           "contextualTitle": "Flogo Data Pipelines",
           "when": "workbenchState != empty"
         }
+      ],
+      "flogoDataPipelinePanel": [
+        {
+          "id": "flogoDataPipelineStudio.dataPreview",
+          "name": "Data Preview",
+          "type": "webview",
+          "contextualTitle": "Data Pipeline"
+        }
+      ]
+    },
+    "viewsContainers": {
+      "panel": [
+        {
+          "id": "flogoDataPipelinePanel",
+          "title": "Data Preview",
+          "icon": "resources/icon.svg"
+        }
       ]
     },
     "menus": {

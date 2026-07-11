@@ -12,6 +12,7 @@ import {
   ValidationIssue,
 } from '../model/pipeline';
 import { ApiClient } from '../engine/apiClient';
+import { DataPreviewView } from '../panel/dataPreviewView';
 import type { WebviewToHost } from '../protocol';
 
 export interface EngineHooks {
@@ -30,22 +31,29 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
   private ignoreNextChange = false;
   private runInFlight = false;
   private readonly diag: vscode.DiagnosticCollection;
+  // Dedicated native Output channel for run/engine logs (replaces the webview's
+  // custom Output tab — full IDE integration).
+  private readonly runChannel: vscode.OutputChannel;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly manager: BinaryManager,
     private readonly hooks: EngineHooks = {},
+    private readonly dataPreview?: DataPreviewView,
   ) {
     this.diag = vscode.languages.createDiagnosticCollection('flogoDataPipeline');
     context.subscriptions.push(this.diag);
+    this.runChannel = vscode.window.createOutputChannel('Flogo Data Pipeline Run');
+    context.subscriptions.push(this.runChannel);
   }
 
   static register(
     context: vscode.ExtensionContext,
     manager: BinaryManager,
     hooks: EngineHooks,
+    dataPreview?: DataPreviewView,
   ): { provider: PipelineEditorProvider; disposable: vscode.Disposable } {
-    const provider = new PipelineEditorProvider(context, manager, hooks);
+    const provider = new PipelineEditorProvider(context, manager, hooks, dataPreview);
     const disposable = vscode.window.registerCustomEditorProvider(
       PipelineEditorProvider.viewType,
       provider,
@@ -202,6 +210,14 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
         );
         break;
 
+      case 'showOutput':
+        this.runChannel.show(true);
+        break;
+
+      case 'showProblems':
+        vscode.commands.executeCommand('workbench.actions.view.problems');
+        break;
+
       case 'definition': {
         const port = this.manager.port;
         if (!port) {
@@ -303,9 +319,21 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
     return slug(name);
   }
 
+  // Append a run/engine log line to the native Output channel.
+  private logRun(line: string): void {
+    const ts = new Date().toISOString().slice(11, 23);
+    this.runChannel.appendLine(`${ts}  ${line}`);
+  }
+
   // Ensure the engine is running for this document; start it if necessary.
   // Returns the bound port, or null if startup failed (error already posted).
-  private async ensureEngine(document: vscode.TextDocument, panel: vscode.WebviewPanel): Promise<number | null> {
+  // revealOutput controls whether the native Output channel is focused on start
+  // (true for runs; false for preview so the Data Preview panel keeps focus).
+  private async ensureEngine(
+    document: vscode.TextDocument,
+    panel: vscode.WebviewPanel,
+    revealOutput = true,
+  ): Promise<number | null> {
     if (this.manager.port) return this.manager.port;
 
     const cfg = vscode.workspace.getConfiguration('flogoDataPipelineStudio');
@@ -318,20 +346,22 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
 
     this.manager.onLog((text) => {
       text.split(/\r?\n/).forEach((line) => {
-        if (line.trim()) this.post(panel, { type: 'runLog', line });
+        if (line.trim()) this.runChannel.appendLine(line);
       });
     });
-    this.post(panel, { type: 'runLog', line: `[engine] Starting flogo-datapipeline on port ${startPort}…` });
+    if (revealOutput) this.runChannel.show(true);
+    this.logRun(`[engine] Starting flogo-datapipeline on port ${startPort}…`);
 
     try {
       const port = await this.manager.start(document.uri.fsPath, startPort);
-      this.post(panel, { type: 'runLog', line: `[engine] Ready on port ${port}` });
+      this.logRun(`[engine] Ready on port ${port}`);
       this.hooks.onRunning?.(port, path.basename(document.uri.fsPath, '.datapipeline'));
       this.post(panel, { type: 'runStarted', port });
       return port;
     } catch (err: any) {
       this.hooks.onStopped?.();
       this.post(panel, { type: 'runError', message: errText(err) });
+      this.logRun(`[engine] start failed: ${errText(err)}`);
       if (err && err.code === 'NO_BINARY') {
         const buildCmd = err.buildCmd || this.manager.buildCommand();
         vscode.window
@@ -371,15 +401,16 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
       const ref = this.refForDoc(document);
 
       // Kick off an async run so we can stream status while it executes.
-      this.post(panel, { type: 'runLog', line: `[run] POST /v1/pipelines/${ref}/run` });
+      this.logRun(`[run] POST /v1/pipelines/${ref}/run`);
       let runId: string;
       try {
         const ack = await client.runPipeline(ref, { async: true });
         runId = ack.runId;
-        this.post(panel, { type: 'runLog', line: `[run] accepted runId=${runId}` });
+        this.logRun(`[run] accepted runId=${runId}`);
         this.post(panel, { type: 'runResult', result: ack, final: false });
       } catch (err) {
         this.post(panel, { type: 'runError', message: 'Run request failed: ' + errText(err) });
+        this.logRun(`[run] request failed: ${errText(err)}`);
         return;
       }
 
@@ -396,7 +427,7 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
         try {
           st = await client.status(ref);
         } catch (err) {
-          this.post(panel, { type: 'runLog', line: '[run] status poll error: ' + errText(err) });
+          this.logRun(`[run] status poll error: ${errText(err)}`);
           continue;
         }
         const run = st.runs.find((r) => r.runId === runId) || st.runs[st.runs.length - 1];
@@ -404,10 +435,9 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
         const terminal = ['completed', 'partial', 'failed', 'cancelled'].includes(run.status);
         this.post(panel, { type: 'runResult', result: run, final: terminal });
         if (terminal) {
-          this.post(panel, {
-            type: 'runLog',
-            line: `[run] ${run.status} — processed=${run.rowsProcessed} written=${run.rowsWritten} failed=${run.rowsFailed} dropped=${run.rowsDropped ?? 0} (${run.durationMs}ms)`,
-          });
+          this.logRun(
+            `[run] ${run.status} — processed=${run.rowsProcessed} written=${run.rowsWritten} failed=${run.rowsFailed} dropped=${run.rowsDropped ?? 0} (${run.durationMs}ms)`,
+          );
           break;
         }
       }
@@ -417,14 +447,28 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
   }
 
   private async previewPipeline(document: vscode.TextDocument, panel: vscode.WebviewPanel, limit: number): Promise<void> {
-    const port = await this.ensureEngine(document, panel);
-    if (!port) return;
+    // Reveal the native Data Preview panel and show a loading state there.
+    this.dataPreview?.reveal();
+    this.dataPreview?.showLoading(`Sampling up to ${limit} rows through the transform chain…`);
+
+    // Start the engine without stealing focus to the Output channel.
+    const port = await this.ensureEngine(document, panel, false);
+    if (!port) {
+      this.dataPreview?.showError('Engine not available.');
+      return;
+    }
+    // Keep the Data Preview panel focused after the engine start.
+    this.dataPreview?.reveal();
     const client = new ApiClient(port);
     const ref = this.refForDoc(document);
     try {
       const result = await client.preview(ref, limit);
+      // Full table renders in the native panel view; the editor webview also
+      // receives it so the Inspector Schema/Test tabs can show a summary.
+      this.dataPreview?.showResult(result);
       this.post(panel, { type: 'previewResult', result });
     } catch (err) {
+      this.dataPreview?.showError(errText(err));
       this.post(panel, { type: 'previewError', message: errText(err) });
     }
   }
@@ -587,10 +631,6 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
       <div class="tabsbar" id="tabsbar"></div>
       <div class="breadcrumb" id="breadcrumb"></div>
       <div class="edmain" id="edmain"></div>
-      <div class="panel" id="panel">
-        <div class="paneltabs" id="paneltabs"></div>
-        <div class="panelbody" id="panelbody"></div>
-      </div>
     </div>
   </div>
   <div class="statusbar" id="statusbar"></div>
