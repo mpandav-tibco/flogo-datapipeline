@@ -1,0 +1,6 @@
+id,order_id,customer_id,amount,status
+1,ORD-1,c1,120,PAID
+2,ORD-2,c2,0,CANCELLED
+3,ORD-3,c3,45,PAID
+4,ORD-4,c4,,PAID
+5,ORD-5,c5,88,PAID

@@ -1,0 +1,71 @@
+{
+    "version":  "1.0.0",
+    "name":  "postgres-to-parquet",
+    "appModel":  "1.1.1",
+    "resources":  [
+                      {
+                          "id":  "pipeline:postgres-to-parquet",
+                          "data":  {
+                                       "name":  "postgres-to-parquet",
+                                       "source":  {
+                                                      "batchSize":  1000,
+                                                      "orderKey":  "id",
+                                                      "driver":  "postgres",
+                                                      "type":  "jdbc",
+                                                      "table":  "customers",
+                                                      "dsn":  "host=localhost port=55432 dbname=warehouse user=app password=secret sslmode=disable"
+                                                  },
+                                       "description":  "Postgres JDBC source -\u003e validate -\u003e Parquet file sink.",
+                                       "sink":  {
+                                                    "path":  "../out/customers.parquet",
+                                                    "rowGroupSize":  100000,
+                                                    "compression":  "snappy",
+                                                    "type":  "parquet"
+                                                },
+                                       "mode":  "etl",
+                                       "transforms":  [
+                                                          {
+                                                              "onViolation":  "drop",
+                                                              "rules":  [
+                                                                            {
+                                                                                "notNull":  true,
+                                                                                "field":  "email"
+                                                                            }
+                                                                        ],
+                                                              "name":  "email rule",
+                                                              "type":  "validate"
+                                                          }
+                                                      ]
+                                   }
+                      }
+                  ],
+    "type":  "flogo:app",
+    "imports":  [
+                    "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+                    "github.com/project-flogo/contrib/trigger/timer"
+                ],
+    "triggers":  [
+                     {
+                         "handlers":  [
+                                          {
+                                              "settings":  {
+
+                                                           },
+                                              "action":  {
+                                                             "settings":  {
+                                                                              "pipelineRef":  "res://pipeline:postgres-to-parquet"
+                                                                          },
+                                                             "ref":  "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline"
+                                                         }
+                                          }
+                                      ],
+                         "ref":  "github.com/project-flogo/contrib/trigger/timer",
+                         "id":  "pipeline-timer",
+                         "settings":  {
+                                          "repeating":  true,
+                                          "startDelay":  0,
+                                          "interval":  86400000
+                                      }
+                     }
+                 ]
+}

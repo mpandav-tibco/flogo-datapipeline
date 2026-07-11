@@ -1,0 +1,4 @@
+# Generated at test time
+out/
+logs/
+*.log
