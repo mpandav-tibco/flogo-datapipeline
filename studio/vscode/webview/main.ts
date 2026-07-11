@@ -89,7 +89,7 @@ function cfgOf(o: any): Record<string, string> {
   const out: Record<string, string> = {};
   if (!o || typeof o !== 'object') return out;
   for (const [k, v] of Object.entries(o)) {
-    if (k === 'type') continue;
+    if (k === 'type' || k === 'name') continue; // type is the stage kind; name is the editable stage label
     if (v == null) continue;
     if (typeof v === 'object') out[k] = JSON.stringify(v);
     else out[k] = String(v);
@@ -170,25 +170,84 @@ function setCfgValue(node: Node, key: string, value: unknown) {
 
 // ── config-field metadata (labels, enums, widget selection) ─────────────────
 const FIELD_LABELS: Record<string, string> = {
-  path: 'File path', dsn: 'Connection string (DSN)', hasHeader: 'Has header row',
-  delimiter: 'Delimiter', encoding: 'Encoding', table: 'Table', driver: 'Driver',
-  onConflict: 'On conflict', conflictKey: 'Conflict key', batchSize: 'Batch size',
-  expr: 'Filter expression', fields: 'Field mappings', onViolation: 'On violation',
-  rules: 'Validation rules', url: 'URL', key: 'Cache key', cache: 'Cache policy',
-  column: 'Watermark column', backend: 'Backend', policy: 'Drift policy',
-  onDrift: 'On drift', threshold: 'DQ threshold', expectations: 'Expectations',
-  compression: 'Compression', bucket: 'Bucket', brokers: 'Brokers', topic: 'Topic',
-  group: 'Consumer group', rowGroup: 'Row group size', columns: 'Columns',
-  addr: 'Address', keyPrefix: 'Key prefix', region: 'Region', nullable: 'Nullable',
+  // common
+  path: 'File path', dsn: 'Connection string (DSN)', driver: 'Driver', table: 'Table',
+  batchSize: 'Batch size', columns: 'Columns', encoding: 'Encoding',
+  // csv / tsv
+  hasHeader: 'Has header row', delimiter: 'Delimiter',
+  // jdbc source
+  query: 'SQL query', orderKey: 'Order-by key', where: 'WHERE clause',
+  // fixedwidth
+  skipLines: 'Skip lines', recordLength: 'Record length',
+  // xml / jsonlines
+  recordElement: 'Record element', fields: 'Fields',
+  // parquet
+  rowGroupParallelism: 'Row-group parallelism', rowGroupSize: 'Row-group size',
+  compression: 'Compression',
+  // kafka source
+  brokers: 'Brokers', topic: 'Topic', groupId: 'Consumer group', startOffset: 'Start offset',
+  pollMs: 'Poll interval (ms)', deserializer: 'Deserializer', mode: 'Read mode',
+  stopOffset: 'Stop offset', stopTimestamp: 'Stop timestamp', schemaRegistryURL: 'Schema registry URL',
+  // kafka sink
+  ackMode: 'Ack mode', compressionCodec: 'Compression codec', maxMessageBytes: 'Max message bytes',
+  partitionKey: 'Partition key', serializer: 'Serializer',
+  // objstore
+  bucket: 'Bucket', prefix: 'Prefix', format: 'Inner format', download: 'Download locally',
+  region: 'Region', key: 'Key template',
+  // jdbc sink
+  onConflict: 'On conflict', conflictKey: 'Conflict key', autoMigrate: 'Auto-migrate table',
+  // dlq sink
+  innerType: 'Inner sink type', innerOptions: 'Inner sink options', envelopeColumn: 'Envelope column',
+  maxRowsPerBatch: 'Max rows per batch', onFull: 'On full',
+  // filter / map
+  expr: 'Filter expression', fieldOrder: 'Field order',
+  // validate
+  rules: 'Validation rules', onViolation: 'On violation',
+  errorSinkType: 'Error sink type', errorSinkConfig: 'Error sink config',
+  // hwm
+  column: 'Watermark column', valueType: 'Value type',
+  // schemadrift
+  policy: 'Drift policy', onDrift: 'On drift',
+  // dq
+  expectations: 'Expectations', onFail: 'On fail', qualityThreshold: 'Quality threshold',
+  scoreColumn: 'Score column', reportSinkType: 'Report sink type', reportSinkConfig: 'Report sink config',
+  threshold: 'Threshold',
+  // lookup
+  keyField: 'Key field', url: 'URL', method: 'HTTP method', concurrency: 'Concurrency',
+  cacheSize: 'Cache size', timeoutMs: 'Timeout (ms)', onError: 'On error', outputFields: 'Output fields',
+  // checkpoint / watermark shared
+  addr: 'Address', keyPrefix: 'Key prefix', backend: 'Backend', nullable: 'Nullable',
 };
 const FIELD_ENUMS: Record<string, string[]> = {
-  onConflict: ['insert', 'upsert', 'ignore'],
-  onViolation: ['route', 'drop', 'fail'],
-  policy: ['additive', 'strict', 'ignore'],
-  onDrift: ['warn', 'fail', 'route'],
-  compression: ['snappy', 'gzip', 'zstd', 'none'],
   driver: ['postgres', 'mysql', 'sqlite'],
   encoding: ['utf-8', 'ebcdic-037', 'latin-1'],
+  compression: ['snappy', 'gzip', 'zstd', 'none'],
+  // kafka
+  startOffset: ['earliest', 'latest'],
+  deserializer: ['json', 'avro', 'string'],
+  serializer: ['json', 'avro', 'string'],
+  mode: ['continuous', 'bounded'],
+  ackMode: ['none', 'leader', 'all'],
+  compressionCodec: ['none', 'gzip', 'snappy', 'lz4', 'zstd'],
+  // objstore
+  format: ['csv', 'jsonlines', 'parquet'],
+  // jdbc sink
+  onConflict: ['insert', 'upsert', 'ignore'],
+  // validate / dq
+  onViolation: ['route', 'drop', 'fail'],
+  onFail: ['warn', 'fail', 'route'],
+  // schemadrift
+  policy: ['additive', 'strict', 'ignore'],
+  onDrift: ['warn', 'fail', 'route'],
+  // hwm
+  valueType: ['int', 'timestamp', 'string'],
+  // lookup
+  method: ['GET', 'POST'],
+  onError: ['fail', 'skip', 'default'],
+  // dlq
+  innerType: ['jdbc', 'parquet', 'kafka', 's3', 'gcs', 'adls', 'null'],
+  onFull: ['block', 'drop'],
+  // watermark
   backend: ['file', 'redis', 'postgres'],
 };
 const FIELD_HINTS: Record<string, string> = {
@@ -197,21 +256,59 @@ const FIELD_HINTS: Record<string, string> = {
   expr: "Boolean expression over row fields, e.g. amount > 0 AND status != 'CANCELLED'",
   conflictKey: 'Comma-separated key columns used for upsert matching.',
   fields: 'JSON map of output field → expression.',
+  query: 'Full SELECT statement. Overrides table/orderKey when set.',
+  brokers: 'Comma-separated host:port list, e.g. broker-1:9092, broker-2:9092',
+  recordElement: 'XML element that marks one record, e.g. "order".',
+  key: 'Object key template, supports ${date}, ${uuid}, ${runId}.',
+  rules: 'JSON array of field rules: [{ "field": "amount", "notNull": true }]',
+  expectations: 'JSON array of DQ expectations (expectColumnNotNull, expectValuesInSet, …).',
+  url: 'Enrichment endpoint. ${field} placeholders are substituted per row.',
 };
 const SOURCE_TYPES = ['csv', 'tsv', 'fixedwidth', 'parquet', 'xml', 'jsonlines', 'jdbc', 'kafka', 's3', 'gcs', 'adls'];
 const SINK_TYPES = ['jdbc', 'parquet', 'kafka', 's3', 'gcs', 'adls', 'null', 'dlq'];
+
+// Starter config for a freshly chosen source/sink type — matches the keys each
+// backend reads, so a newly switched stage is immediately runnable/editable.
+function defaultConfigFor(kind: 'source' | 'sink', type: string): Record<string, unknown> {
+  const src: Record<string, Record<string, unknown>> = {
+    csv: { path: './data/input.csv', hasHeader: true, delimiter: ',', columns: [] },
+    tsv: { path: './data/input.tsv', hasHeader: true, columns: [] },
+    fixedwidth: { path: './data/input.dat', encoding: 'utf-8', recordLength: 0, columns: [] },
+    parquet: { path: './data/input.parquet', rowGroupParallelism: 4 },
+    xml: { path: './data/input.xml', recordElement: 'record' },
+    jsonlines: { path: './data/input.jsonl' },
+    jdbc: { driver: 'postgres', dsn: '', table: '', orderKey: '', batchSize: 5000 },
+    kafka: { brokers: '', topic: '', groupId: 'dp-consumer', startOffset: 'earliest', deserializer: 'json' },
+    s3: { bucket: '', prefix: '', region: 'us-east-1', format: 'csv' },
+    gcs: { bucket: '', prefix: '', format: 'csv' },
+    adls: { bucket: '', prefix: '', format: 'csv' },
+  };
+  const sink: Record<string, Record<string, unknown>> = {
+    jdbc: { driver: 'postgres', dsn: '', table: '', batchSize: 1000, onConflict: 'insert' },
+    parquet: { path: './out/output.parquet', compression: 'snappy', rowGroupSize: 100000 },
+    kafka: { brokers: '', topic: '', ackMode: 'all', serializer: 'json' },
+    s3: { bucket: '', key: '${date}/part-${uuid}.parquet', format: 'parquet' },
+    gcs: { bucket: '', key: '${date}/part-${uuid}.parquet', format: 'parquet' },
+    adls: { bucket: '', key: '${date}/part-${uuid}.parquet', format: 'parquet' },
+    null: {},
+    dlq: { innerType: 'jdbc', innerOptions: {}, envelopeColumn: '_error', onFull: 'block' },
+  };
+  return (kind === 'source' ? src[type] : sink[type]) || {};
+}
 
 function humanize(k: string): string {
   return FIELD_LABELS[k] || k.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase());
 }
 function isBoolField(k: string, v: string): boolean {
-  return v === 'true' || v === 'false' || /^(has|is|enable|delete|trim|nullable|repeating|deleteOnSuccess)/i.test(k);
+  return v === 'true' || v === 'false' ||
+    /^(has|is|enable|delete|trim|nullable|repeating|download|autoMigrate|caseSensitive|deleteOnSuccess)/i.test(k);
 }
 function isFileField(k: string): boolean {
   return /(^path$|_path$|file$|dir$|directory$)/i.test(k);
 }
 function isNumField(k: string, v: string): boolean {
-  return /(size|port|workers|batches|interval|memory|parallelism|scale|length|start|retries|threshold|rows|seconds|delay)/i.test(k) && v.trim() !== '' && !isNaN(Number(v));
+  return /(size|port|workers|batches|interval|memory|parallelism|scale|length|start|retries|threshold|rows|seconds|delay|lines|concurrency|ms$|bytes|offset|count|limit|poll)/i.test(k) &&
+    v.trim() !== '' && !isNaN(Number(v));
 }
 function isJsonField(v: string): boolean {
   const t = v.trim();
@@ -501,14 +598,16 @@ function renderCanvas(m: HTMLElement) {
   hint.innerHTML = '<span class="pill" data-h="src">＋ Source</span><span class="pill" data-h="tf">＋ Transform</span><span class="pill" data-h="sink">＋ Sink</span><span class="pill">⤢ Fit</span>';
   (hint.querySelector('[data-h="tf"]') as HTMLElement).onclick = () => addTransform(p.nodes.length - 1);
   (hint.querySelector('[data-h="src"]') as HTMLElement).onclick = () =>
-    quickPick('Change source type', ['csv', 'tsv', 'fixedwidth', 'parquet', 'xml', 'jsonlines', 'jdbc', 'kafka', 'objstore'], (v) => {
-      (S.doc.source as any) = { ...(S.doc.source || {}), type: v };
+    quickPick('Change source type', SOURCE_TYPES, (v) => {
+      (S.doc.source as any) = { type: v, ...defaultConfigFor('source', v) };
       persistAndRebuild();
+      toast('ok', `Source type → ${v}`);
     });
   (hint.querySelector('[data-h="sink"]') as HTMLElement).onclick = () =>
-    quickPick('Change sink type', ['jdbc', 'parquet', 'kafka', 'objstore', 'null'], (v) => {
-      (S.doc.sink as any) = { ...(S.doc.sink || {}), type: v };
+    quickPick('Change sink type', SINK_TYPES, (v) => {
+      (S.doc.sink as any) = { type: v, ...defaultConfigFor('sink', v) };
       persistAndRebuild();
+      toast('ok', `Sink type → ${v}`);
     });
   cv.appendChild(hint);
   m.appendChild(c);
@@ -541,7 +640,8 @@ function renderCanvas(m: HTMLElement) {
         sel.appendChild(op);
       });
       sel.onchange = () => {
-        (S.doc[sn.kind] as any) = { ...(S.doc[sn.kind] as any || {}), type: sel.value };
+        const kind = sn.kind as 'source' | 'sink';
+        (S.doc[kind] as any) = { type: sel.value, ...defaultConfigFor(kind, sel.value) };
         persistAndRebuild();
       };
       typeRow.appendChild(sel);
@@ -572,15 +672,78 @@ function renderCanvas(m: HTMLElement) {
       ib.appendChild(el('div', 'muted', '<div style="font-size:11.5px;padding:4px 0">No configuration for this stage yet.</div>'));
     }
   } else if (S.inspTab === 'Schema') {
-    ib.appendChild(el('div', 'muted', `<div style="font-size:12px;padding:6px 0">Inferred schema for <b style="color:var(--text)">${sn.nm}</b>. Run the pipeline to populate live column types.</div>`));
+    renderSchemaTab(ib, sn);
   } else {
-    const b = el('button', 'btn sm pri', '▷ Test this stage on sample');
-    b.onclick = () => doPreview();
-    ib.appendChild(b);
-    ib.appendChild(el('div', 'muted', '<div style="font-size:11.5px;margin-top:10px">Runs the pipeline against a live sample.</div>'));
+    renderTestTab(ib, sn);
   }
   insp.appendChild(ib);
   m.appendChild(insp);
+}
+
+// Infer the column schema visible at a given stage by walking the doc from the
+// source forward: source columns → map output fields → passthrough.
+function schemaForNode(node: Node): Array<{ name: string; type: string; derived?: boolean }> {
+  const src: any = S.doc.source || {};
+  let cols: Array<{ name: string; type: string; derived?: boolean }> = Array.isArray(src.columns)
+    ? src.columns.map((c: any) => ({ name: c.name, type: c.type || 'string' }))
+    : [];
+  const transforms = Array.isArray(S.doc.transforms) ? S.doc.transforms : [];
+  const upto = node.kind === 'source' ? -1 : node.kind === 'sink' ? transforms.length - 1 : (node.ref as number);
+  for (let i = 0; i <= upto; i++) {
+    const t: any = transforms[i];
+    if (!t) continue;
+    if (t.type === 'map' && t.fields && typeof t.fields === 'object') {
+      // map replaces the projected set with its output fields
+      cols = Object.keys(t.fields).map((k) => ({ name: k, type: 'derived', derived: true }));
+    }
+    // filter/validate/hwm/dq/lookup/schemadrift are passthrough for schema purposes
+    // (lookup appends outputFields)
+    if (t.type === 'lookup' && Array.isArray(t.outputFields)) {
+      t.outputFields.forEach((f: any) => cols.push({ name: String(f), type: 'derived', derived: true }));
+    }
+  }
+  return cols;
+}
+
+function renderSchemaTab(ib: HTMLElement, sn: Node) {
+  const cols = schemaForNode(sn);
+  ib.appendChild(el('div', 'muted', `<div style="font-size:12px;padding:2px 0 8px">Columns visible <b style="color:var(--text)">after ${sn.nm}</b>:</div>`));
+  if (!cols.length) {
+    ib.appendChild(el('div', 'muted', '<div style="font-size:11.5px">No declared schema. For self-describing sources (Parquet, JSON), run <b style="color:var(--text)">Dry-run Preview</b> to see live columns; for CSV/fixed-width declare columns in the Config tab.</div>'));
+    const b = el('button', 'btn sm', '⌕ Preview to infer schema');
+    b.style.marginTop = '10px';
+    b.onclick = () => doPreview();
+    ib.appendChild(b);
+    return;
+  }
+  const box = el('div', 'cols');
+  cols.forEach((c) => {
+    const row = el('div', 'crow');
+    row.style.cursor = 'default';
+    row.innerHTML = `<span style="flex:1;font:11.5px var(--mono);color:var(--text)">${escapeHtml(c.name)}</span><span class="pill" style="flex:none">${c.derived ? 'derived' : escapeHtml(c.type)}</span>`;
+    box.appendChild(row);
+  });
+  ib.appendChild(box);
+  // If a preview ran, surface live column types too.
+  if (S.preview && S.preview.columns.length) {
+    ib.appendChild(el('div', 'muted', `<div style="font-size:11px;margin-top:10px;border-top:1px solid var(--border);padding-top:8px">Live columns from last preview: <span style="color:var(--blueHi)">${S.preview.columns.map(escapeHtml).join(', ')}</span></div>`));
+  }
+}
+
+function renderTestTab(ib: HTMLElement, sn: Node) {
+  const b = el('button', 'btn sm pri', '▷ Test on live sample');
+  b.onclick = () => doPreview();
+  ib.appendChild(b);
+  ib.appendChild(el('div', 'muted', '<div style="font-size:11.5px;margin:8px 0 12px">Reads a bounded sample from the source and runs it through the chain up to this stage — no sink writes. Results appear in the <b style="color:var(--text)">Data Preview</b> panel below.</div>'));
+  const pr = S.preview;
+  if (pr) {
+    ib.appendChild(el('div', 'between', `<span class="muted" style="font-size:11px">Last sample</span><span class="chip ${pr.rowsFailed ? 'warn' : 'ok'}">${pr.rows.length} rows</span>`));
+    ib.appendChild(el('div', 'muted', `<div style="font-size:11px;margin-top:6px">read ${fmt(pr.rowsRead)} · dropped ${fmt(pr.rowsDropped)} · failed ${fmt(pr.rowsFailed)}${pr.truncated ? ' · truncated' : ''}</div>`));
+    const open = el('button', 'btn sm', '⌕ Open Data Preview');
+    open.style.marginTop = '10px';
+    open.onclick = () => { S.previewOn = true; setPanel('preview'); };
+    ib.appendChild(open);
+  }
 }
 
 function persistAndRebuild() {
@@ -590,25 +753,30 @@ function persistAndRebuild() {
 }
 
 // ── add / remove transforms ─────────────────────────────────────────────────
-const TRANSFORMS = [
-  { type: 'filter', cfg: { expr: "amount > 0 AND status != 'CANCELLED'" } },
-  { type: 'map', cfg: { fields: '{}' } },
-  { type: 'validate', cfg: { onViolation: 'route' } },
-  { type: 'lookup', cfg: { url: 'https://api.internal/enrich' } },
-  { type: 'hwm', cfg: { column: 'updated_at' } },
-  { type: 'dq', cfg: { threshold: '0.05' } },
-  { type: 'schemadrift', cfg: { policy: 'additive' } },
+const TRANSFORMS: Array<{ type: string; label: string; cfg: Record<string, unknown> }> = [
+  { type: 'filter', label: 'Filter — drop rows by a boolean expression',
+    cfg: { expr: "amount > 0 AND status != 'CANCELLED'" } },
+  { type: 'map', label: 'Map — project, rename, coerce & derive fields',
+    cfg: { fields: { net_amount: '=multiply($amount, 1.1)' } } },
+  { type: 'validate', label: 'Validate — per-field rules, route to DLQ',
+    cfg: { rules: [{ field: 'amount', notNull: true }], onViolation: 'route' } },
+  { type: 'lookup', label: 'Lookup — HTTP enrichment with LRU cache',
+    cfg: { keyField: 'id', url: 'https://api.internal/enrich/${id}', method: 'GET', cacheSize: 10000, onError: 'skip' } },
+  { type: 'hwm', label: 'High-water mark — incremental cursor',
+    cfg: { column: 'updated_at', valueType: 'timestamp' } },
+  { type: 'dq', label: 'Data quality — expectations + quality score',
+    cfg: { expectations: [{ type: 'expectColumnNotNull', column: 'id' }], onFail: 'warn', qualityThreshold: 0.95 } },
+  { type: 'schemadrift', label: 'Schema drift — detect column add/remove/type',
+    cfg: { policy: 'additive', onDrift: 'warn' } },
 ];
 function addTransform(index: number) {
   // index is a node index; convert to transforms[] insert position.
   const tfInsert = Math.max(0, index - 1);
-  quickPick('Insert transform', TRANSFORMS.map((t) => t.type), (type) => {
-    const t = TRANSFORMS.find((x) => x.type === type)!;
+  quickPick('Insert transform', TRANSFORMS.map((t) => t.label), (label) => {
+    const t = TRANSFORMS.find((x) => x.label === label)!;
     const doc: any = S.doc;
     doc.transforms = Array.isArray(doc.transforms) ? doc.transforms : [];
-    const parsedCfg: any = {};
-    for (const [k, v] of Object.entries(t.cfg)) parsedCfg[k] = v;
-    doc.transforms.splice(tfInsert, 0, { type: t.type, ...parsedCfg });
+    doc.transforms.splice(tfInsert, 0, { type: t.type, ...JSON.parse(JSON.stringify(t.cfg)) });
     S.pipe = buildPipe(S.doc);
     S.selNode = 't' + tfInsert;
     S.inspTab = 'Config';
@@ -1052,6 +1220,8 @@ window.addEventListener('message', (ev: MessageEvent<HostToWebview>) => {
       S.preview = msg.result;
       S.previewOn = true;
       if (S.panelTab === 'preview' && !S.panelCollapsed) renderPreview($('#panelbody')!);
+      // Refresh Schema/Test inspector tabs which surface preview data.
+      if (cur()?.type === 'canvas' && (S.inspTab === 'Schema' || S.inspTab === 'Test')) renderEditor();
       break;
     case 'previewError': {
       S.preview = null;

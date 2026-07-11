@@ -1,0 +1,75 @@
+{
+    "version":  "1.0.0",
+    "name":  "mainframe-to-kafka",
+    "appModel":  "1.1.1",
+    "resources":  [
+                      {
+                          "id":  "pipeline:mainframe-to-kafka",
+                          "data":  {
+                                       "name":  "mainframe-to-kafka",
+                                       "source":  {
+                                                      "path":  "./data/UA00008P.dat",
+                                                      "columns":  [
+                                                                      {
+                                                                          "name":  "acct",
+                                                                          "type":  "string"
+                                                                      },
+                                                                      {
+                                                                          "name":  "balance",
+                                                                          "type":  "decimal"
+                                                                      }
+                                                                  ],
+                                                      "encoding":  "ebcdic-037",
+                                                      "recordLength":  280,
+                                                      "type":  "fixedwidth"
+                                                  },
+                                       "description":  "Fixed-width EBCDIC source -\u003e schema-drift policy -\u003e Kafka producer sink.",
+                                       "sink":  {
+                                                    "ackMode":  "all",
+                                                    "serializer":  "json",
+                                                    "brokers":  "broker-1:9092",
+                                                    "type":  "kafka",
+                                                    "topic":  "mainframe-offload"
+                                                },
+                                       "mode":  "el",
+                                       "transforms":  [
+                                                          {
+                                                              "onDrift":  "warn",
+                                                              "policy":  "additive",
+                                                              "name":  "drift policy",
+                                                              "type":  "schemadrift"
+                                                          }
+                                                      ]
+                                   }
+                      }
+                  ],
+    "type":  "flogo:app",
+    "imports":  [
+                    "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+                    "github.com/project-flogo/contrib/trigger/timer"
+                ],
+    "triggers":  [
+                     {
+                         "handlers":  [
+                                          {
+                                              "settings":  {
+
+                                                           },
+                                              "action":  {
+                                                             "settings":  {
+                                                                              "pipelineRef":  "res://pipeline:mainframe-to-kafka"
+                                                                          },
+                                                             "ref":  "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline"
+                                                         }
+                                          }
+                                      ],
+                         "ref":  "github.com/project-flogo/contrib/trigger/timer",
+                         "id":  "pipeline-timer",
+                         "settings":  {
+                                          "repeating":  true,
+                                          "startDelay":  0,
+                                          "interval":  86400000
+                                      }
+                     }
+                 ]
+}

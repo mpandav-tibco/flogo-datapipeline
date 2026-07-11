@@ -1,0 +1,4 @@
+{"user_id":"u1","event_type":"click","amount":10}
+{"user_id":"u2","event_type":"view","amount":5}
+{"user_id":null,"event_type":"purchase","amount":99}
+{"user_id":"u4","event_type":"click","amount":20}

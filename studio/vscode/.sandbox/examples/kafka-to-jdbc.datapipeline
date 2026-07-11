@@ -1,0 +1,58 @@
+{
+  "name": "kafka-to-jdbc-streaming",
+  "type": "flogo:app",
+  "version": "1.0.0",
+  "appModel": "1.1.1",
+  "imports": [
+    "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+    "github.com/project-flogo/contrib/trigger/timer"
+  ],
+  "triggers": [
+    {
+      "id": "pipeline-timer",
+      "ref": "github.com/project-flogo/contrib/trigger/timer",
+      "settings": { "repeating": true, "startDelay": 0, "interval": 86400000 },
+      "handlers": [
+        {
+          "settings": {},
+          "action": {
+            "ref": "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+            "settings": { "pipelineRef": "res://pipeline:kafka-to-jdbc-streaming" }
+          }
+        }
+      ]
+    }
+  ],
+  "resources": [
+    {
+      "id": "pipeline:kafka-to-jdbc-streaming",
+      "data": {
+        "name": "kafka-to-jdbc-streaming",
+        "description": "Kafka source → map + validate → JDBC upsert. Exercises streaming source, map, validate (DLQ), and jdbc sink.",
+        "mode": "etl",
+        "source": {
+          "type": "kafka",
+          "brokers": "broker-1:9092, broker-2:9092",
+          "topic": "orders",
+          "groupId": "dp-orders",
+          "startOffset": "earliest",
+          "deserializer": "json",
+          "batchSize": 5000
+        },
+        "transforms": [
+          { "type": "map", "name": "shape", "fields": { "order_id": "=$id", "net_amount": "=multiply($amount, 1.1)" } },
+          { "type": "validate", "name": "field rules", "rules": [{ "field": "order_id", "notNull": true }], "onViolation": "route" }
+        ],
+        "sink": {
+          "type": "jdbc",
+          "driver": "postgres",
+          "dsn": "host=localhost port=5432 dbname=warehouse user=app sslmode=disable",
+          "table": "orders",
+          "batchSize": 1000,
+          "onConflict": "upsert",
+          "conflictKey": ["order_id"]
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,70 @@
+{
+    "version":  "1.0.0",
+    "name":  "xml-enrich-to-gcs",
+    "appModel":  "1.1.1",
+    "resources":  [
+                      {
+                          "id":  "pipeline:xml-enrich-to-gcs",
+                          "data":  {
+                                       "name":  "xml-enrich-to-gcs",
+                                       "source":  {
+                                                      "recordElement":  "product",
+                                                      "path":  "./data/products.xml",
+                                                      "type":  "xml"
+                                                  },
+                                       "description":  "XML source -\u003e HTTP lookup enrichment -\u003e GCS object sink.",
+                                       "sink":  {
+                                                    "format":  "jsonlines",
+                                                    "key":  "products/${date}.jsonl",
+                                                    "bucket":  "acme-archive",
+                                                    "type":  "gcs"
+                                                },
+                                       "mode":  "etl",
+                                       "transforms":  [
+                                                          {
+                                                              "method":  "GET",
+                                                              "url":  "https://api.internal/price/${sku}",
+                                                              "type":  "lookup",
+                                                              "name":  "enrich",
+                                                              "keyField":  "sku",
+                                                              "cacheSize":  10000,
+                                                              "outputFields":  [
+                                                                                   "price",
+                                                                                   "currency"
+                                                                               ],
+                                                              "onError":  "skip"
+                                                          }
+                                                      ]
+                                   }
+                      }
+                  ],
+    "type":  "flogo:app",
+    "imports":  [
+                    "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+                    "github.com/project-flogo/contrib/trigger/timer"
+                ],
+    "triggers":  [
+                     {
+                         "handlers":  [
+                                          {
+                                              "settings":  {
+
+                                                           },
+                                              "action":  {
+                                                             "settings":  {
+                                                                              "pipelineRef":  "res://pipeline:xml-enrich-to-gcs"
+                                                                          },
+                                                             "ref":  "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline"
+                                                         }
+                                          }
+                                      ],
+                         "ref":  "github.com/project-flogo/contrib/trigger/timer",
+                         "id":  "pipeline-timer",
+                         "settings":  {
+                                          "repeating":  true,
+                                          "startDelay":  0,
+                                          "interval":  86400000
+                                      }
+                     }
+                 ]
+}

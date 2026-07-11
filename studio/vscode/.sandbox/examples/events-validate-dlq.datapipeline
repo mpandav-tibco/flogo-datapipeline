@@ -1,0 +1,81 @@
+{
+    "version":  "1.0.0",
+    "name":  "events-validate-dlq",
+    "appModel":  "1.1.1",
+    "resources":  [
+                      {
+                          "id":  "pipeline:events-validate-dlq",
+                          "data":  {
+                                       "name":  "events-validate-dlq",
+                                       "source":  {
+                                                      "type":  "jsonlines",
+                                                      "path":  "./data/events.jsonl"
+                                                  },
+                                       "description":  "JSON-lines source -\u003e validate -\u003e Dead-Letter Queue sink.",
+                                       "sink":  {
+                                                    "envelopeColumn":  "_error",
+                                                    "onFull":  "block",
+                                                    "innerType":  "jdbc",
+                                                    "type":  "dlq",
+                                                    "innerOptions":  {
+                                                                         "table":  "events_rejected",
+                                                                         "driver":  "postgres",
+                                                                         "dsn":  "host=localhost dbname=analytics"
+                                                                     }
+                                                },
+                                       "mode":  "etl",
+                                       "transforms":  [
+                                                          {
+                                                              "onViolation":  "route",
+                                                              "rules":  [
+                                                                            {
+                                                                                "notNull":  true,
+                                                                                "field":  "user_id"
+                                                                            },
+                                                                            {
+                                                                                "in":  [
+                                                                                           "click",
+                                                                                           "view",
+                                                                                           "purchase"
+                                                                                       ],
+                                                                                "field":  "event_type"
+                                                                            }
+                                                                        ],
+                                                              "name":  "rules",
+                                                              "type":  "validate"
+                                                          }
+                                                      ]
+                                   }
+                      }
+                  ],
+    "type":  "flogo:app",
+    "imports":  [
+                    "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+                    "github.com/project-flogo/contrib/trigger/timer"
+                ],
+    "triggers":  [
+                     {
+                         "handlers":  [
+                                          {
+                                              "settings":  {
+
+                                                           },
+                                              "action":  {
+                                                             "settings":  {
+                                                                              "pipelineRef":  "res://pipeline:events-validate-dlq"
+                                                                          },
+                                                             "ref":  "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline"
+                                                         }
+                                          }
+                                      ],
+                         "ref":  "github.com/project-flogo/contrib/trigger/timer",
+                         "id":  "pipeline-timer",
+                         "settings":  {
+                                          "repeating":  true,
+                                          "startDelay":  0,
+                                          "interval":  86400000
+                                      }
+                     }
+                 ]
+}
+

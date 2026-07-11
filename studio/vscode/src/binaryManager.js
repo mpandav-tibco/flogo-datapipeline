@@ -304,10 +304,17 @@ class BinaryManager {
     const env = { ...process.env, PORT: String(port) }
     if (pipelineFile) env.PIPELINE_FILE = pipelineFile
 
-    this._channel.appendLine(`[manager] spawning: ${binary} ${args.join(' ')}`)
+    // Run the engine with the pipeline file's own directory as the working
+    // directory so relative paths inside the .datapipeline (e.g. "./data/x.csv")
+    // resolve against the file's location — what the author intends — rather than
+    // the VS Code extension-host process CWD.
+    const cwd = pipelineFile ? path.dirname(pipelineFile) : undefined
+
+    this._channel.appendLine(`[manager] spawning: ${binary} ${args.join(' ')}${cwd ? ` (cwd: ${cwd})` : ''}`)
     const proc = spawn(binary, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
       shell: false,   // always false — same as flogo-agent; avoids quoting issues on Win32
+      cwd,
       env,
     })
 

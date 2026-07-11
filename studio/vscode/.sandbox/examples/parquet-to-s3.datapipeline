@@ -1,0 +1,69 @@
+{
+    "version":  "1.0.0",
+    "name":  "parquet-to-s3",
+    "appModel":  "1.1.1",
+    "resources":  [
+                      {
+                          "id":  "pipeline:parquet-to-s3",
+                          "data":  {
+                                       "name":  "parquet-to-s3",
+                                       "source":  {
+                                                      "path":  "./data/events/*.parquet",
+                                                      "type":  "parquet",
+                                                      "rowGroupParallelism":  4
+                                                  },
+                                       "description":  "Parquet source -\u003e data-quality gate -\u003e S3 object sink.",
+                                       "sink":  {
+                                                    "format":  "parquet",
+                                                    "key":  "events/${date}/part-${uuid}.parquet",
+                                                    "bucket":  "acme-datalake",
+                                                    "type":  "s3"
+                                                },
+                                       "mode":  "etl",
+                                       "transforms":  [
+                                                          {
+                                                              "expectations":  [
+                                                                                   {
+                                                                                       "column":  "event_id",
+                                                                                       "type":  "expectColumnNotNull"
+                                                                                   }
+                                                                               ],
+                                                              "name":  "quality gate",
+                                                              "qualityThreshold":  0.95,
+                                                              "type":  "dq",
+                                                              "onFail":  "warn"
+                                                          }
+                                                      ]
+                                   }
+                      }
+                  ],
+    "type":  "flogo:app",
+    "imports":  [
+                    "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+                    "github.com/project-flogo/contrib/trigger/timer"
+                ],
+    "triggers":  [
+                     {
+                         "handlers":  [
+                                          {
+                                              "settings":  {
+
+                                                           },
+                                              "action":  {
+                                                             "settings":  {
+                                                                              "pipelineRef":  "res://pipeline:parquet-to-s3"
+                                                                          },
+                                                             "ref":  "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline"
+                                                         }
+                                          }
+                                      ],
+                         "ref":  "github.com/project-flogo/contrib/trigger/timer",
+                         "id":  "pipeline-timer",
+                         "settings":  {
+                                          "repeating":  true,
+                                          "startDelay":  0,
+                                          "interval":  86400000
+                                      }
+                     }
+                 ]
+}
