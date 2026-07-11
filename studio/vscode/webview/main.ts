@@ -501,6 +501,143 @@ function renderColumnsEditor(node: Node): HTMLElement {
   return f;
 }
 
+// Builtin mapper functions available to the map transform's expressions. These
+// mirror the engine's `builtins` map (transform/mapper). Each carries a snippet
+// with a ${} cursor marker so clicking inserts a ready-to-fill call.
+const MAP_FUNCTIONS: Array<{ name: string; snippet: string; hint: string }> = [
+  { name: 'concat', snippet: 'concat($1, $2)', hint: 'Join values into a string' },
+  { name: 'upper', snippet: 'upper($1)', hint: 'Uppercase a string' },
+  { name: 'lower', snippet: 'lower($1)', hint: 'Lowercase a string' },
+  { name: 'trim', snippet: 'trim($1)', hint: 'Strip surrounding whitespace' },
+  { name: 'coalesce', snippet: 'coalesce($1, $2)', hint: 'First non-null value' },
+  { name: 'multiply', snippet: 'multiply($1, $2)', hint: 'Numeric a × b' },
+  { name: 'divide', snippet: 'divide($1, $2)', hint: 'Numeric a ÷ b' },
+];
+
+// The currently focused mapping-expression input, so Available-data / Function
+// chips insert at the caret of the row the user is editing.
+let mapFocusedInput: HTMLInputElement | null = null;
+
+// Insert text at the caret of the focused mapping expression input (or append).
+function insertIntoMapExpr(text: string) {
+  const inp = mapFocusedInput;
+  if (!inp) { toast('info', 'Click an expression field first, then pick a field or function'); return; }
+  const start = inp.selectionStart ?? inp.value.length;
+  const end = inp.selectionEnd ?? inp.value.length;
+  inp.value = inp.value.slice(0, start) + text + inp.value.slice(end);
+  // Place caret: if the snippet has a $1 marker, select it; else after text.
+  const marker = text.indexOf('$1');
+  if (marker >= 0) {
+    inp.value = inp.value.replace('$1', '').replace('$2', '');
+    inp.setSelectionRange(start + marker, start + marker);
+  } else {
+    inp.setSelectionRange(start + text.length, start + text.length);
+  }
+  inp.focus();
+  inp.dispatchEvent(new Event('change'));
+}
+
+// Structured field-mapping editor for the `map` transform. Renders each output
+// field as an "out ← =expression" row, plus click-to-insert palettes for the
+// upstream columns (Available data) and builtin functions — the same building
+// blocks as the Flogo mapper, right-sized for the flat map model.
+function renderMapEditor(node: Node): HTMLElement {
+  const f = el('div', 'fld');
+  f.appendChild(el('div', 'k', 'Field mappings'));
+  const target = cfgTarget(node);
+  const fields: Record<string, string> = (target.fields && typeof target.fields === 'object') ? target.fields : {};
+  // Preserve a stable, user-visible order via fieldOrder (backend honours it).
+  let order: string[] = Array.isArray(target.fieldOrder) ? target.fieldOrder.filter((k: string) => k in fields) : [];
+  for (const k of Object.keys(fields)) if (!order.includes(k)) order.push(k);
+
+  const persist = () => {
+    target.fields = fields;
+    target.fieldOrder = order;
+    setCfgValue(node, 'fields', fields);
+  };
+
+  const box = el('div', 'maps');
+  order.forEach((outName, i) => {
+    const row = el('div', 'mrow');
+    const out = document.createElement('input');
+    out.className = 'out';
+    out.value = outName;
+    out.placeholder = 'field';
+    out.title = 'Output field name';
+    out.onchange = () => {
+      const nn = out.value.trim();
+      if (!nn || nn === outName) return;
+      const val = fields[outName];
+      delete fields[outName];
+      fields[nn] = val;
+      order[i] = nn;
+      persist();
+      renderEditor();
+    };
+    const eq = el('span', 'eq', '←');
+    const expr = document.createElement('input');
+    expr.className = 'expr';
+    expr.value = fields[outName] ?? '';
+    expr.placeholder = '=$sourceField or =upper($field)';
+    expr.title = 'Mapping expression';
+    expr.onfocus = () => { mapFocusedInput = expr; };
+    expr.onchange = () => { fields[outName] = expr.value; persist(); };
+    const del = el('span', 'del', '✕');
+    del.title = 'Remove mapping';
+    del.onclick = () => { delete fields[outName]; order = order.filter((k) => k !== outName); persist(); renderEditor(); };
+    row.appendChild(out);
+    row.appendChild(eq);
+    row.appendChild(expr);
+    row.appendChild(del);
+    box.appendChild(row);
+  });
+  const add = el('button', 'addmap', '＋ Add field mapping');
+  add.onclick = () => {
+    let base = 'new_field';
+    let n = base;
+    let c = 1;
+    while (n in fields) n = base + '_' + c++;
+    fields[n] = '';
+    order.push(n);
+    persist();
+    renderEditor();
+  };
+  box.appendChild(add);
+  f.appendChild(box);
+
+  // ── Available data (upstream columns) — click to insert =$field ──────────
+  // Show the schema visible ENTERING this map (i.e. produced by everything
+  // before it), so users insert the source fields they map from — not the
+  // map's own output fields.
+  const help = el('div', 'mhelp');
+  const cols = upstreamSchema(node);
+  if (cols.length) {
+    help.appendChild(el('div', 'lbl', 'Available data'));
+    const chips = el('div', 'chips');
+    cols.forEach((c) => {
+      const chip = el('span', 'chip2', c.name);
+      chip.title = `Insert =$${c.name}`;
+      chip.onclick = () => insertIntoMapExpr(`=$${c.name}`);
+      chips.appendChild(chip);
+    });
+    help.appendChild(chips);
+  }
+
+  // ── Functions — click to insert a call snippet ───────────────────────────
+  help.appendChild(el('div', 'lbl', 'Functions'));
+  const fchips = el('div', 'chips');
+  MAP_FUNCTIONS.forEach((fn) => {
+    const chip = el('span', 'chip2 fn', `ƒ ${fn.name}`);
+    chip.title = fn.hint;
+    chip.onclick = () => insertIntoMapExpr(`=${fn.snippet}`);
+    fchips.appendChild(chip);
+  });
+  help.appendChild(fchips);
+  help.appendChild(el('div', 'focushint', 'Click an expression field, then a data column or function to insert at the caret. Prefix literals with =, reference fields with =$name.'));
+  f.appendChild(help);
+  return f;
+}
+
 // ── render root ───────────────────────────────────────────────────────────
 function renderAll() {
   renderTabs();
@@ -745,8 +882,12 @@ function renderCanvas(m: HTMLElement) {
     }
 
     // Config fields — type-aware widgets.
+    // The map transform's `fields` object gets a dedicated structured mapping
+    // editor (output field ← expression rows + click-to-insert available data
+    // and functions), like the Flogo mapper — instead of a raw JSON textarea.
     Object.entries(sn.cfg).forEach(([k, v]) => {
       if (k === 'columns') ib.appendChild(renderColumnsEditor(sn));
+      else if (k === 'fields' && (sn.type === 'map' || sn.type === 'mapper')) ib.appendChild(renderMapEditor(sn));
       else ib.appendChild(renderField(sn, k, v));
     });
 
@@ -792,6 +933,34 @@ function schemaForNode(node: Node): Array<{ name: string; type: string; derived?
     if (t.type === 'lookup' && Array.isArray(t.outputFields)) {
       t.outputFields.forEach((f: any) => cols.push({ name: String(f), type: 'derived', derived: true }));
     }
+  }
+  return cols;
+}
+
+// Columns visible ENTERING a transform (schema produced by every stage before
+// it) — used by the map editor's Available-data palette so users insert the
+// fields they map FROM, not the map's own outputs.
+function upstreamSchema(node: Node): Array<{ name: string; type: string; derived?: boolean }> {
+  const src: any = S.doc.source || {};
+  let cols: Array<{ name: string; type: string; derived?: boolean }> = Array.isArray(src.columns)
+    ? src.columns.map((c: any) => ({ name: c.name, type: c.type || 'string' }))
+    : [];
+  const transforms = Array.isArray(S.doc.transforms) ? S.doc.transforms : [];
+  const stop = typeof node.ref === 'number' ? (node.ref as number) : transforms.length;
+  for (let i = 0; i < stop; i++) {
+    const t: any = transforms[i];
+    if (!t) continue;
+    if (t.type === 'map' && t.fields && typeof t.fields === 'object') {
+      cols = Object.keys(t.fields).map((k) => ({ name: k, type: 'derived', derived: true }));
+    }
+    if (t.type === 'lookup' && Array.isArray(t.outputFields)) {
+      t.outputFields.forEach((f: any) => cols.push({ name: String(f), type: 'derived', derived: true }));
+    }
+  }
+  // If a preview ran, prefer its live columns for the very first map (source
+  // columns may be undeclared for self-describing formats).
+  if (!cols.length && S.preview && S.preview.columns.length) {
+    return S.preview.columns.map((c) => ({ name: c, type: 'any' }));
   }
   return cols;
 }

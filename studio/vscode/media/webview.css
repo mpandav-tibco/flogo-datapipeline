@@ -110,6 +110,26 @@ select.v{appearance:none;cursor:pointer;background-image:linear-gradient(45deg,t
 .insp-type{display:flex;gap:8px;align-items:center;margin-bottom:12px}
 .insp-type .badge{font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--dim)}
 .insp-type .v{flex:1;min-width:0}
+/* structured field-mapping editor (map transform) */
+.maps{border:1px solid var(--inputBorder);border-radius:5px;overflow:hidden}
+.maps .mrow{display:flex;gap:6px;align-items:center;padding:6px;border-bottom:1px solid #2a2a2a}
+.maps .mrow:last-of-type{border-bottom:none}
+.maps .mrow .out{flex:none;width:104px;background:var(--input);border:1px solid var(--inputBorder);border-radius:4px;padding:5px 7px;font:11.5px var(--mono);color:var(--blueHi)}
+.maps .mrow .eq{flex:none;color:var(--dim);font:12px var(--mono)}
+.maps .mrow .expr{flex:1;min-width:0;background:var(--input);border:1px solid var(--inputBorder);border-radius:4px;padding:5px 7px;font:11.5px var(--mono);color:var(--text)}
+.maps .mrow .expr:focus,.maps .mrow .out:focus{border-color:var(--blue);outline:none}
+.maps .mrow .del{flex:none;color:var(--dim);cursor:pointer;padding:0 4px;font-size:13px}
+.maps .mrow .del:hover{color:var(--red)}
+.maps .addmap{display:block;width:100%;text-align:center;padding:6px;font-size:11px;color:var(--blueHi);background:#202020;cursor:pointer;border:none}
+.maps .addmap:hover{background:var(--hover)}
+/* insert-helper palettes (fields + functions) */
+.mhelp{margin-top:8px}
+.mhelp .lbl{font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--dim);margin:8px 0 5px}
+.mhelp .chips{display:flex;flex-wrap:wrap;gap:5px}
+.mhelp .chip2{font:11px var(--mono);color:var(--text);background:#2a2a2a;border:1px solid var(--inputBorder);border-radius:5px;padding:2px 7px;cursor:pointer}
+.mhelp .chip2:hover{background:#33608f;color:#fff;border-color:#33608f}
+.mhelp .chip2.fn{color:var(--orange)}
+.mhelp .focushint{font-size:10.5px;color:var(--dim);margin-top:6px}
 
 .wv{padding:16px 18px}
 .wvnote{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--dim);padding:6px 14px;border-bottom:1px solid var(--border);background:#1a1a1a}
