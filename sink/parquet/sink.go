@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -83,6 +84,11 @@ func newParquetSink(cfg map[string]interface{}) (sink.Sink, error) {
 }
 
 func (s *parquetSink) initWriter(columns []record.Column) error {
+	if dir := filepath.Dir(s.path); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("parquet sink: create output directory %q: %w", dir, err)
+		}
+	}
 	f, err := os.Create(s.path)
 	if err != nil {
 		return fmt.Errorf("parquet sink: create %q: %w", s.path, err)

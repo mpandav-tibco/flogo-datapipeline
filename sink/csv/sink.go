@@ -12,6 +12,7 @@ import (
 	encodingcsv "encoding/csv"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/mpandav-tibco/flogo-datapipeline/record"
 	"github.com/mpandav-tibco/flogo-datapipeline/sink"
@@ -40,6 +41,11 @@ func newCSVSink(cfg map[string]interface{}) (sink.Sink, error) {
 	path, _ := cfg["path"].(string)
 	if path == "" {
 		return nil, fmt.Errorf("csv sink: 'path' is required")
+	}
+	if dir := filepath.Dir(path); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, fmt.Errorf("csv sink: create output directory %q: %w", dir, err)
+		}
 	}
 	f, err := os.Create(path)
 	if err != nil {
