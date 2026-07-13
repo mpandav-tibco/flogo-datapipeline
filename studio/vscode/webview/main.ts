@@ -85,9 +85,11 @@ interface DbIntrospect {
   error: string | null;
   objects?: string[] | null; // object-store keys (browse)
   loadingObjects?: boolean;
+  topics?: string[] | null;  // kafka topic list (browse)
+  loadingTopics?: boolean;
 }
 function dbState(target: string): DbIntrospect {
-  if (!S.db[target]) S.db[target] = { tables: null, loadingTables: false, loadingCols: false, autoSchema: true, error: null, objects: null, loadingObjects: false };
+  if (!S.db[target]) S.db[target] = { tables: null, loadingTables: false, loadingCols: false, autoSchema: true, error: null, objects: null, loadingObjects: false, topics: null, loadingTopics: false };
   return S.db[target];
 }
 function targetOf(node: Node): 'source' | 'sink' | 'dlq' | null {
@@ -708,6 +710,80 @@ function renderObjectField(node: Node, key: string, value: string): HTMLElement 
     f.appendChild(el('div', 'hint', 'No objects found under this prefix.'));
   }
   if (FIELD_HINTS[key]) f.appendChild(el('div', 'hint', FIELD_HINTS[key]));
+  return f;
+}
+
+// Kafka topic field with a "list topics" action so users can pick a topic from
+// the cluster instead of hand-typing it.
+function renderKafkaTopicField(node: Node, value: string): HTMLElement {
+  const target = targetOf(node);
+  const f = el('div', 'fld');
+  f.appendChild(el('div', 'k', 'Topic'));
+  const st = target ? dbState(target) : null;
+  const row = el('div', 'inputrow');
+  const inp = el('input', 'v') as HTMLInputElement;
+  inp.value = value;
+  inp.placeholder = 'topic name';
+  inp.onchange = () => setCfgField(node, 'topic', inp.value);
+  row.appendChild(inp);
+  const browse = el('button', 'browse', st?.loadingTopics ? '…' : '⤓ Topics');
+  browse.title = 'List topics from the Kafka cluster';
+  browse.onclick = () => { if (target) { dbState(target).loadingTopics = true; renderEditor(); post({ type: 'fetchKafkaTopics', target }); } };
+  row.appendChild(browse);
+  f.appendChild(row);
+  if (st?.topics && st.topics.length) {
+    const sel = el('select', 'v') as HTMLSelectElement;
+    const ph = document.createElement('option'); ph.value = ''; ph.textContent = `— ${st.topics.length} topics — pick one —`; sel.appendChild(ph);
+    st.topics.forEach((t) => { const o = document.createElement('option'); o.value = t; o.textContent = t; if (t === value) o.selected = true; sel.appendChild(o); });
+    sel.style.marginTop = '6px';
+    sel.onchange = () => { if (sel.value) { inp.value = sel.value; setCfgField(node, 'topic', sel.value); } };
+    f.appendChild(sel);
+  } else if (st?.topics && !st.topics.length) {
+    f.appendChild(el('div', 'hint', 'No topics found on this cluster.'));
+  }
+  if (st?.error) f.appendChild(el('div', 'hint', '⚠ ' + st.error));
+  return f;
+}
+
+// Schema Registry URL field with a "read Avro schema" action that fetches the
+// latest schema for the current topic and populates the source columns.
+function renderSchemaRegistryField(node: Node, value: string): HTMLElement {
+  const f = el('div', 'fld');
+  f.appendChild(el('div', 'k', humanize('schemaRegistryURL')));
+  const inp = el('input', 'v') as HTMLInputElement;
+  inp.value = value;
+  inp.placeholder = 'http://localhost:8081';
+  inp.onchange = () => setCfgField(node, 'schemaRegistryURL', inp.value);
+  f.appendChild(inp);
+  if (node.kind === 'source' && value) {
+    const readBtn = el('button', 'browse', S.srcSchemaLoading ? 'Reading…' : '⭳ Read schema from registry');
+    readBtn.style.marginTop = '6px';
+    readBtn.title = 'Fetch the latest Avro/JSON schema for the current topic and set the columns';
+    readBtn.onclick = () => { S.srcSchemaLoading = true; renderEditor(); post({ type: 'fetchSchemaRegistry' }); };
+    f.appendChild(readBtn);
+  }
+  f.appendChild(el('div', 'hint', 'Avro deserializer only. Reads <topic>-value from the registry to set columns.'));
+  return f;
+}
+
+// XML recordElement field with a "detect from file" action that samples the XML
+// file to auto-fill the record element, field xpaths and columns.
+function renderXmlRecordField(node: Node, value: string): HTMLElement {
+  const f = el('div', 'fld');
+  f.appendChild(el('div', 'k', humanize('recordElement')));
+  const inp = el('input', 'v') as HTMLInputElement;
+  inp.value = value;
+  inp.placeholder = 'e.g. product';
+  inp.onchange = () => setCfgField(node, 'recordElement', inp.value);
+  f.appendChild(inp);
+  if (node.kind === 'source') {
+    const btn = el('button', 'browse', S.srcSchemaLoading ? 'Detecting…' : '⤓ Detect structure from file');
+    btn.style.marginTop = '6px';
+    btn.title = 'Sample the XML file to detect the record element, fields and column types';
+    btn.onclick = () => { S.srcSchemaLoading = true; renderEditor(); post({ type: 'fetchXmlSchema' }); };
+    f.appendChild(btn);
+  }
+  f.appendChild(el('div', 'hint', 'The repeating element that becomes one record (e.g. <product> in <catalog>).'));
   return f;
 }
 
@@ -1464,6 +1540,20 @@ function renderCanvas(m: HTMLElement) {
       const isObjStore = ['s3', 'gcs', 'adls'].includes(sn.type);
       if (isObjStore && (k === 'key' || k === 'prefix')) {
         ib.appendChild(renderObjectField(sn, k, v));
+        return;
+      }
+      // Kafka: topic picker + schema-registry schema reader.
+      if (sn.type === 'kafka' && k === 'topic') {
+        ib.appendChild(renderKafkaTopicField(sn, v));
+        return;
+      }
+      if (sn.type === 'kafka' && k === 'schemaRegistryURL') {
+        ib.appendChild(renderSchemaRegistryField(sn, v));
+        return;
+      }
+      // XML: recordElement gets a "detect structure from file" action.
+      if (sn.type === 'xml' && k === 'recordElement') {
+        ib.appendChild(renderXmlRecordField(sn, v));
         return;
       }
       if (k === 'columns') ib.appendChild(renderColumnsEditor(sn));
@@ -2572,6 +2662,53 @@ window.addEventListener('message', (ev: MessageEvent<HostToWebview>) => {
       st.loadingObjects = false; st.error = msg.message;
       renderEditor();
       toast('err', 'Could not list objects: ' + msg.message);
+      break;
+    }
+    case 'kafkaTopics': {
+      const st = dbState(msg.target);
+      st.topics = msg.topics; st.loadingTopics = false; st.error = null;
+      renderEditor();
+      toast(msg.topics.length ? 'ok' : 'info', `Found ${msg.topics.length} topic${msg.topics.length === 1 ? '' : 's'}`);
+      break;
+    }
+    case 'kafkaTopicsError': {
+      const st = dbState(msg.target);
+      st.loadingTopics = false; st.error = msg.message;
+      renderEditor();
+      toast('err', 'Could not list topics: ' + msg.message);
+      break;
+    }
+    case 'schemaRegistry': {
+      S.srcSchemaLoading = false;
+      const node = S.pipe?.nodes.find((n) => n.kind === 'source');
+      if (node) setCfgValue(node, 'columns', msg.columns.map((c) => ({ name: c.name, type: c.type })));
+      renderEditor();
+      toast('ok', `Read ${msg.columns.length} column${msg.columns.length === 1 ? '' : 's'} from ${msg.subject}`);
+      break;
+    }
+    case 'schemaRegistryError': {
+      S.srcSchemaLoading = false;
+      renderEditor();
+      toast('err', 'Could not read schema registry: ' + msg.message);
+      break;
+    }
+    case 'xmlSchema': {
+      S.srcSchemaLoading = false;
+      const doc: any = S.doc;
+      doc.source = doc.source || {};
+      doc.source.recordElement = msg.recordElement;
+      doc.source.fields = msg.fields.map((fld) => ({ name: fld.name, xpath: fld.xpath, type: fld.type }));
+      doc.source.columns = msg.columns.map((c) => ({ name: c.name, type: c.type }));
+      S.pipe = buildPipe(S.doc);
+      post({ type: 'save', doc: S.doc });
+      renderEditor();
+      toast('ok', `Detected <${msg.recordElement}> with ${msg.fields.length} field${msg.fields.length === 1 ? '' : 's'}`);
+      break;
+    }
+    case 'xmlSchemaError': {
+      S.srcSchemaLoading = false;
+      renderEditor();
+      toast('err', 'Could not detect XML structure: ' + msg.message);
       break;
     }
   }

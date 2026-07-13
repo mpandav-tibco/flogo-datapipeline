@@ -34,7 +34,13 @@ export type HostToWebview =
   | { type: 'sourceSchema'; columns: Array<{ name: string; type: string }> }
   | { type: 'sourceSchemaError'; message: string }
   | { type: 'objectList'; target: 'source' | 'sink' | 'dlq'; objects: Array<{ key: string; size: number }> }
-  | { type: 'objectListError'; target: 'source' | 'sink' | 'dlq'; message: string };
+  | { type: 'objectListError'; target: 'source' | 'sink' | 'dlq'; message: string }
+  | { type: 'kafkaTopics'; target: 'source' | 'sink' | 'dlq'; topics: string[] }
+  | { type: 'kafkaTopicsError'; target: 'source' | 'sink' | 'dlq'; message: string }
+  | { type: 'schemaRegistry'; columns: Array<{ name: string; type: string; nullable?: boolean }>; subject: string }
+  | { type: 'schemaRegistryError'; message: string }
+  | { type: 'xmlSchema'; recordElement: string; fields: Array<{ name: string; xpath: string; type: string }>; columns: Array<{ name: string; type: string }> }
+  | { type: 'xmlSchemaError'; message: string };
 
 // Webview -> Host
 export type WebviewToHost =
@@ -63,6 +69,9 @@ export type WebviewToHost =
   | { type: 'fetchDbColumns'; target: 'source' | 'sink' | 'dlq'; table: string }
   | { type: 'fetchSourceSchema' }
   | { type: 'fetchObjects'; target: 'source' | 'sink' | 'dlq' }
+  | { type: 'fetchKafkaTopics'; target: 'source' | 'sink' | 'dlq' }
+  | { type: 'fetchSchemaRegistry' }
+  | { type: 'fetchXmlSchema' }
   | { type: 'deploy'; replicas: number }
   | { type: 'showError'; text: string }
   | { type: 'copyText'; text: string }

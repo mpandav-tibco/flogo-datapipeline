@@ -116,6 +116,9 @@ func NewServer(factory *pipeline.Factory, listenAddr string) *Server {
 	mux.HandleFunc("/v1/introspect/columns", s.handleIntrospectColumns)
 	mux.HandleFunc("/v1/introspect/source-schema", s.handleIntrospectSourceSchema)
 	mux.HandleFunc("/v1/introspect/objects", s.handleIntrospectObjects)
+	mux.HandleFunc("/v1/introspect/kafka-topics", s.handleIntrospectKafkaTopics)
+	mux.HandleFunc("/v1/introspect/schema-registry", s.handleIntrospectSchemaRegistry)
+	mux.HandleFunc("/v1/introspect/xml", s.handleIntrospectXML)
 	s.mux = mux
 	s.httpSrv = &http.Server{
 		Addr:         listenAddr,

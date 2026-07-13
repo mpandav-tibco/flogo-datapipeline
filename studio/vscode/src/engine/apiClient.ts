@@ -201,6 +201,25 @@ export class ApiClient {
     return request(this.port, 'POST', '/v1/introspect/objects', { provider, config }, 20_000);
   }
 
+  // List non-internal topic names from a Kafka cluster.
+  introspectKafkaTopics(brokers: string[], config: Record<string, unknown>): Promise<{ topics: string[] }> {
+    return request(this.port, 'POST', '/v1/introspect/kafka-topics', { brokers, config }, 20_000);
+  }
+
+  // Fetch the latest Avro/JSON schema for a topic/subject from a schema registry.
+  introspectSchemaRegistry(url: string, topic: string): Promise<{ columns: IntrospectedColumn[]; subject: string }> {
+    return request(this.port, 'POST', '/v1/introspect/schema-registry', { url, topic }, 20_000);
+  }
+
+  // Sample an XML file to detect the record element + child fields.
+  introspectXML(path: string): Promise<{
+    recordElement: string;
+    fields: Array<{ name: string; xpath: string; type: string }>;
+    columns: IntrospectedColumn[];
+  }> {
+    return request(this.port, 'POST', '/v1/introspect/xml', { path }, 20_000);
+  }
+
   cancel(ref: string, runId: string): Promise<void> {
     return request(this.port, 'DELETE', `/v1/pipelines/${encodeURIComponent(ref)}/run/${encodeURIComponent(runId)}`);
   }

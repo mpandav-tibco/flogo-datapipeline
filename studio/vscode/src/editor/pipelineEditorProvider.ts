@@ -425,6 +425,88 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
         break;
       }
 
+      case 'fetchKafkaTopics': {
+        try {
+          const { config } = await this.resolveStageConfigFor(doc, msg.target);
+          const brokers = Array.isArray((config as Record<string, unknown>).brokers)
+            ? ((config as Record<string, unknown>).brokers as unknown[]).map((b) => String(b)).filter(Boolean)
+            : String((config as Record<string, unknown>).brokers ?? '')
+                .split(',')
+                .map((b) => b.trim())
+                .filter(Boolean);
+          if (brokers.length === 0) {
+            this.post(panel, { type: 'kafkaTopicsError', target: msg.target, message: 'No brokers configured.' });
+            break;
+          }
+          const port = await this.ensureEngine(doc, panel, false);
+          if (!port) {
+            this.post(panel, { type: 'kafkaTopicsError', target: msg.target, message: 'Engine not available.' });
+            break;
+          }
+          const res = await new ApiClient(port).introspectKafkaTopics(brokers, config as Record<string, unknown>);
+          this.post(panel, { type: 'kafkaTopics', target: msg.target, topics: res.topics });
+        } catch (err) {
+          this.post(panel, { type: 'kafkaTopicsError', target: msg.target, message: errText(err) });
+        }
+        break;
+      }
+
+      case 'fetchSchemaRegistry': {
+        try {
+          const { config } = await this.resolveStageConfigFor(doc, 'source');
+          const url = String((config as Record<string, unknown>).schemaRegistryURL ?? '').trim();
+          const topic = String((config as Record<string, unknown>).topic ?? '').trim();
+          if (!url) {
+            this.post(panel, { type: 'schemaRegistryError', message: 'No schemaRegistryURL configured.' });
+            break;
+          }
+          if (!topic) {
+            this.post(panel, { type: 'schemaRegistryError', message: 'Set the topic first.' });
+            break;
+          }
+          const port = await this.ensureEngine(doc, panel, false);
+          if (!port) {
+            this.post(panel, { type: 'schemaRegistryError', message: 'Engine not available.' });
+            break;
+          }
+          const res = await new ApiClient(port).introspectSchemaRegistry(url, topic);
+          this.post(panel, {
+            type: 'schemaRegistry',
+            subject: res.subject,
+            columns: res.columns.map((c) => ({ name: c.name, type: c.type, nullable: c.nullable })),
+          });
+        } catch (err) {
+          this.post(panel, { type: 'schemaRegistryError', message: errText(err) });
+        }
+        break;
+      }
+
+      case 'fetchXmlSchema': {
+        try {
+          const { config } = await this.resolveStageConfigFor(doc, 'source');
+          const path = String((config as Record<string, unknown>).path ?? '').trim();
+          if (!path) {
+            this.post(panel, { type: 'xmlSchemaError', message: 'Set the XML file path first.' });
+            break;
+          }
+          const port = await this.ensureEngine(doc, panel, false);
+          if (!port) {
+            this.post(panel, { type: 'xmlSchemaError', message: 'Engine not available.' });
+            break;
+          }
+          const res = await new ApiClient(port).introspectXML(path);
+          this.post(panel, {
+            type: 'xmlSchema',
+            recordElement: res.recordElement,
+            fields: res.fields,
+            columns: res.columns.map((c) => ({ name: c.name, type: c.type })),
+          });
+        } catch (err) {
+          this.post(panel, { type: 'xmlSchemaError', message: errText(err) });
+        }
+        break;
+      }
+
       case 'deploy':
         await this.generateDeployArtifacts(doc, msg.replicas);
         break;
