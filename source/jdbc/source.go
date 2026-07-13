@@ -39,7 +39,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/mpandav-tibco/flogo-datapipeline/internal/sqlutil"
 	"github.com/mpandav-tibco/flogo-datapipeline/record"
@@ -332,7 +334,11 @@ func (s *jdbcSource) ReadBatch(size int) (*record.RecordBatch, error) {
 		}
 
 		row := make([]interface{}, len(s.schema))
-		copy(row, vals)
+		for i := range s.schema {
+			if i < len(vals) {
+				row[i] = coerceScanned(vals[i], s.schema[i])
+			}
+		}
 		batch.Rows = append(batch.Rows, row)
 		s.rowsRead++
 
@@ -340,7 +346,7 @@ func (s *jdbcSource) ReadBatch(size int) (*record.RecordBatch, error) {
 		if s.useKeyset {
 			for i, col := range s.schema {
 				if col.Name == s.orderKey {
-					s.lastKeyVal = vals[i]
+					s.lastKeyVal = row[i]
 					break
 				}
 			}
@@ -728,6 +734,9 @@ func formatLiteral(v interface{}, driver string) string {
 		return fmt.Sprintf("%g", n)
 	case float64:
 		return fmt.Sprintf("%g", n)
+	case time.Time:
+		// ISO-8601 timestamp literal, valid across Postgres/MySQL/SQLite.
+		return "'" + n.Format("2006-01-02 15:04:05.999999-07:00") + "'"
 	case []byte:
 		// Treat raw bytes as a hex literal (Postgres, MySQL, SQLite all support this).
 		return fmt.Sprintf("'%s'", strings.ReplaceAll(string(n), "'", "''"))
@@ -735,4 +744,85 @@ func formatLiteral(v interface{}, driver string) string {
 		s := fmt.Sprintf("%v", v)
 		return "'" + strings.ReplaceAll(s, "'", "''") + "'"
 	}
+}
+
+// coerceScanned normalises a value produced by database/sql's Scan-into-any into
+// a typed Go value that matches the declared column type. Drivers (notably
+// lib/pq) return NUMERIC/DECIMAL columns as []byte and some return numbers as
+// strings; without this, arithmetic transforms (e.g. multiply) and typed sinks
+// (Parquet) see raw bytes instead of numbers. Values already scanned as the
+// right Go type (int64, float64, bool, time.Time) are passed through unchanged.
+func coerceScanned(v interface{}, col record.Column) interface{} {
+	if v == nil {
+		return nil
+	}
+	// Reduce []byte to string so the type-specific parsing below can run.
+	switch b := v.(type) {
+	case []byte:
+		v = string(b)
+	}
+
+	switch col.Type {
+	case record.TypeInt:
+		switch n := v.(type) {
+		case int64:
+			return n
+		case int32:
+			return int64(n)
+		case float64:
+			return int64(n)
+		case string:
+			if iv, err := strconv.ParseInt(strings.TrimSpace(n), 10, 64); err == nil {
+				return iv
+			}
+			// Some drivers hand back "12.0" for integer-typed expressions.
+			if fv, err := strconv.ParseFloat(strings.TrimSpace(n), 64); err == nil {
+				return int64(fv)
+			}
+		}
+	case record.TypeFloat, record.TypeDecimal:
+		switch n := v.(type) {
+		case float64:
+			return n
+		case float32:
+			return float64(n)
+		case int64:
+			return float64(n)
+		case string:
+			if fv, err := strconv.ParseFloat(strings.TrimSpace(n), 64); err == nil {
+				return fv
+			}
+		}
+	case record.TypeBool:
+		switch n := v.(type) {
+		case bool:
+			return n
+		case string:
+			switch strings.ToLower(strings.TrimSpace(n)) {
+			case "true", "t", "1", "yes", "y":
+				return true
+			case "false", "f", "0", "no", "n":
+				return false
+			}
+		case int64:
+			return n != 0
+		}
+	case record.TypeDate:
+		switch n := v.(type) {
+		case time.Time:
+			return n
+		case string:
+			for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02 15:04:05.999999-07:00", "2006-01-02 15:04:05", "2006-01-02"} {
+				if t, err := time.Parse(layout, strings.TrimSpace(n)); err == nil {
+					return t
+				}
+			}
+		}
+	case record.TypeString:
+		if s, ok := v.(string); ok {
+			return s
+		}
+		return fmt.Sprintf("%v", v)
+	}
+	return v
 }
