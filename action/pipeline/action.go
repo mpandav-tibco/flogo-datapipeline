@@ -505,24 +505,46 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 }
 
 // buildSourceConfig merges definition config with runtime overrides.
-// a.def.Source.Columns is []ColumnDef; we convert to []record.Column here so
-// that parseColumnDefs in the csv (and other) source packages always receives
-// the concrete type it already handles, avoiding a type-switch miss that would
-// silently drop all explicit type/format/scale information.
+// a.def.Source.Columns is []ColumnDef; we convert it to a slice of maps that
+// carry every column attribute (name/type/format/scale plus the fixed-width
+// start/length/impliedDecimal/trim). Emitting maps — rather than
+// []record.Column — means every source parser (csv, fixedwidth, jsonlines, …)
+// receives the full schema instead of silently losing the fixed-width layout
+// fields that record.Column cannot represent.
 func (a *DataPipelineAction) buildSourceConfig(in *Input) map[string]interface{} {
-	cols := make([]record.Column, len(a.def.Source.Columns))
+	cols := make([]interface{}, len(a.def.Source.Columns))
 	for i, cd := range a.def.Source.Columns {
-		cols[i] = record.Column{
-			Name:   cd.Name,
-			Type:   record.ColumnType(cd.Type),
-			Format: cd.Format,
-			Scale:  cd.Scale,
+		m := map[string]interface{}{
+			"name": cd.Name,
+			"type": cd.Type,
 		}
+		if cd.Format != "" {
+			m["format"] = cd.Format
+		}
+		if cd.Scale != 0 {
+			m["scale"] = cd.Scale
+		}
+		if cd.Start != 0 {
+			m["start"] = cd.Start
+		}
+		if cd.Length != 0 {
+			m["length"] = cd.Length
+		}
+		if cd.ImpliedDecimal != 0 {
+			m["impliedDecimal"] = cd.ImpliedDecimal
+		}
+		if cd.Trim {
+			m["trim"] = cd.Trim
+		}
+		if cd.Nullable {
+			m["nullable"] = cd.Nullable
+		}
+		cols[i] = m
 	}
 	cfg := map[string]interface{}{
 		"type":     a.def.Source.Type,
 		"encoding": a.def.Source.Encoding,
-		"columns":  cols, // []record.Column — never a []ColumnDef type-switch miss
+		"columns":  cols, // []interface{} of maps — full schema incl. fixed-width layout
 	}
 	for k, v := range a.def.Source.Options {
 		cfg[k] = v
