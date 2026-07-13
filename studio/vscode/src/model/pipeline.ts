@@ -104,6 +104,11 @@ export function mergePipelineIntoDoc(currentText: string, pd: PipelineDoc): stri
         }
       }
     }
+    // Mirror the description to the top-level app metadata too (kept in sync
+    // with the resource data so both the app JSON and the pipeline resource
+    // document the pipeline).
+    if (pd.description) appDoc.description = pd.description;
+    else delete appDoc.description;
     return JSON.stringify(appDoc, null, 2);
   }
   return JSON.stringify(wrapInAppJson(pd), null, 2);

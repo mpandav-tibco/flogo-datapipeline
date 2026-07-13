@@ -43,6 +43,7 @@ interface Node {
 
 interface Pipe {
   name: string;
+  description: string;
   mode: string;
   status: string;
   nodes: Node[];
@@ -221,6 +222,7 @@ function buildPipe(doc: PipelineDoc): Pipe {
 
   return {
     name: doc.name || S.fileName.replace(/\.datapipeline$/, ''),
+    description: doc.description || '',
     mode: String(doc.mode || 'etl').toUpperCase(),
     status: S.running ? 'running' : S.ran ? 'partial' : 'idle',
     nodes,
@@ -1366,6 +1368,35 @@ function renderCanvas(m: HTMLElement) {
   const c = el('div', 'edcontent');
   const cv = el('div', 'canvas');
   c.appendChild(cv);
+
+  // Pipeline header — editable name + description that live in the pipeline file
+  // (doc.name / doc.description). Lets users document the pipeline inline.
+  const head = el('div', 'pipehead');
+  const nameIn = el('input', 'pipename') as HTMLInputElement;
+  nameIn.value = p.name;
+  nameIn.placeholder = 'Pipeline name';
+  nameIn.title = 'Pipeline name (saved in the .datapipeline file)';
+  nameIn.onchange = () => {
+    const v = nameIn.value.trim();
+    (S.doc as any).name = v || undefined;
+    persistAndRebuild();
+  };
+  head.appendChild(nameIn);
+  const descIn = el('textarea', 'pipedesc') as HTMLTextAreaElement;
+  descIn.value = p.description;
+  descIn.placeholder = 'Add a description… (documents this pipeline, saved in the file)';
+  descIn.rows = p.description ? Math.min(4, p.description.split('\n').length) : 1;
+  descIn.title = 'Pipeline description (saved in the .datapipeline file)';
+  descIn.onchange = () => {
+    const v = descIn.value.trim();
+    (S.doc as any).description = v || undefined;
+    persistAndRebuild();
+  };
+  // Auto-grow the textarea as the user types.
+  descIn.oninput = () => { descIn.style.height = 'auto'; descIn.style.height = descIn.scrollHeight + 'px'; };
+  head.appendChild(descIn);
+  cv.appendChild(head);
+
   const row = el('div', 'flowrow');
   p.nodes.forEach((n, i) => {
     if (i > 0) {

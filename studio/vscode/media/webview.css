@@ -50,6 +50,14 @@ button{font-family:inherit;color:inherit;background:none;border:none;cursor:poin
 
 .canvas{position:absolute;inset:0;overflow:auto;padding:22px 20px;background:radial-gradient(#2a2a2a 1px,transparent 1px) 0 0/22px 22px,var(--editor)}
 .flowrow{display:flex;align-items:center;flex-wrap:nowrap;padding:10px 2px}
+/* pipeline header (editable name + description, persisted in the file) */
+.pipehead{max-width:680px;margin:0 0 6px;display:flex;flex-direction:column;gap:2px}
+.pipehead .pipename{background:transparent;border:1px solid transparent;color:var(--text);font-size:17px;font-weight:700;padding:3px 6px;margin-left:-6px;border-radius:5px;outline:none}
+.pipehead .pipename:hover{border-color:var(--border)}
+.pipehead .pipename:focus{border-color:#007fd4;background:#1e1e1e}
+.pipehead .pipedesc{background:transparent;border:1px solid transparent;color:var(--mute);font-size:12.5px;line-height:1.5;padding:3px 6px;margin-left:-6px;border-radius:5px;outline:none;resize:none;font-family:inherit;overflow:hidden}
+.pipehead .pipedesc:hover{border-color:var(--border)}
+.pipehead .pipedesc:focus{border-color:#007fd4;background:#1e1e1e;color:var(--text)}
 .node{flex:none;width:150px;background:var(--node);border:1px solid var(--nodeBorder);border-radius:9px;padding:10px 11px;position:relative;cursor:pointer;transition:box-shadow .12s,border-color .12s}
 .node:hover{border-color:#565a60}
 .node.src{border-top:2px solid #4a90d9}.node.sink{border-top:2px solid #4caf7d}.node.dlq{border-style:dashed}
