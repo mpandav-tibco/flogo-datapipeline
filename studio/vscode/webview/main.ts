@@ -2120,6 +2120,29 @@ const TRANSFORMS: Array<{ type: string; label: string; cfg: Record<string, unkno
   { type: 'schemadrift', label: 'Schema drift — detect column add/remove/type',
     cfg: { policy: 'additive', onDrift: 'log' } },
 ];
+
+// Compute the column names visible at a given transforms[] insert position,
+// walking the source columns through any map/lookup stages before it. Used to
+// pre-populate a new map with passthrough mappings so users start from a
+// complete, valid projection.
+function upstreamColumnsAt(insertIndex: number): string[] {
+  const src: any = S.doc.source || {};
+  let cols: string[] = Array.isArray(src.columns) ? src.columns.map((c: any) => String(c.name)) : [];
+  const transforms = Array.isArray(S.doc.transforms) ? S.doc.transforms : [];
+  for (let i = 0; i < insertIndex && i < transforms.length; i++) {
+    const t: any = transforms[i];
+    if (!t) continue;
+    if (t.type === 'map' && t.fields && typeof t.fields === 'object') {
+      cols = Object.keys(t.fields);
+    }
+    if (t.type === 'lookup' && Array.isArray(t.outputFields)) {
+      t.outputFields.forEach((f: any) => cols.push(String(f)));
+    }
+  }
+  if (!cols.length && S.preview && S.preview.columns.length) cols = S.preview.columns.slice();
+  return cols;
+}
+
 function addTransform(index: number) {
   // index is a node index; convert to transforms[] insert position.
   const tfInsert = Math.max(0, index - 1);
@@ -2127,7 +2150,19 @@ function addTransform(index: number) {
     const t = TRANSFORMS.find((x) => x.label === label)!;
     const doc: any = S.doc;
     doc.transforms = Array.isArray(doc.transforms) ? doc.transforms : [];
-    doc.transforms.splice(tfInsert, 0, { type: t.type, ...JSON.parse(JSON.stringify(t.cfg)) });
+    const cfg = JSON.parse(JSON.stringify(t.cfg));
+    // Map: start from a complete, working projection — pass every upstream
+    // column through (=$col) so the user edits from a valid state instead of a
+    // single placeholder that references a field their schema may not have.
+    if (t.type === 'map') {
+      const cols = upstreamColumnsAt(tfInsert);
+      if (cols.length) {
+        const fields: Record<string, string> = {};
+        cols.forEach((c) => { fields[c] = '=$' + c; });
+        cfg.fields = fields;
+      }
+    }
+    doc.transforms.splice(tfInsert, 0, { type: t.type, ...cfg });
     S.pipe = buildPipe(S.doc);
     S.selNode = 't' + tfInsert;
     S.inspTab = 'Config';
