@@ -18,6 +18,7 @@
 //	mode              string    "streaming" | "batch" (default "streaming")
 //	stopOffset        int64     Batch mode: stop when this offset is reached per partition
 //	stopTimestamp     string    Batch mode: stop when message timestamp >= this RFC3339 value
+//	stopAtCurrentEnd  bool      Batch mode: drain to each partition's end-of-log snapshotted at open (no sentinel needed)
 //	hwmColumn         string    Injected by action.go for incremental pipelines
 //	hwmValue          string    The prior watermark value
 //	hwmValueType      string    "datetime" | "int" | "string"
@@ -102,6 +103,7 @@ type kafkaSourceConfig struct {
 	mode         string    // "streaming" | "batch"
 	stopOffset   int64     // batch mode: stop at this offset (0 = not set)
 	stopTS       time.Time // batch mode: stop at or after this timestamp (zero = not set)
+	stopAtEnd    bool      // batch mode: stop when each partition's end-of-log (HWM at open) is reached
 }
 
 // msgEnvelope wraps a Kafka message with the session for offset marking.
@@ -120,11 +122,35 @@ type consumerGroupHandler struct {
 	stopOffset int64
 	stopTS     time.Time
 
+	// stopAtEnd + endOffsets support "drain to current end of log": endOffsets
+	// holds the per-partition high-water-mark snapshotted at source open, so a
+	// batch run finishes exactly when every assigned partition has been read up
+	// to that boundary (no sentinel message required).
+	stopAtEnd  bool
+	endOffsets map[int32]int64
+	partMu     sync.Mutex
+	donePart   map[int32]bool
+
 	reachedStop atomic.Int32
+}
+
+// markPartitionDone records that a partition has reached its stop boundary and
+// flips reachedStop once every partition with a known end offset is complete.
+func (h *consumerGroupHandler) markPartitionDone(partition int32) {
+	h.partMu.Lock()
+	defer h.partMu.Unlock()
+	if h.donePart == nil {
+		h.donePart = make(map[int32]bool)
+	}
+	h.donePart[partition] = true
+	if len(h.donePart) >= len(h.endOffsets) {
+		h.reachedStop.Store(1)
+	}
 }
 
 func (h *consumerGroupHandler) Setup(_ sarama.ConsumerGroupSession) error   { return nil }
 func (h *consumerGroupHandler) Cleanup(_ sarama.ConsumerGroupSession) error { return nil }
+
 
 // ConsumeClaim is called by sarama in a dedicated goroutine per partition.
 // It enqueues messages into h.msgCh (blocking on backpressure) and marks
@@ -134,6 +160,16 @@ func (h *consumerGroupHandler) ConsumeClaim(
 	claim sarama.ConsumerGroupClaim,
 ) error {
 	h.readyOnce.Do(func() { close(h.ready) })
+
+	// Drain-to-end: if this partition has no messages past where we start
+	// reading, it is already complete.
+	if h.batchMode && h.stopAtEnd {
+		end, known := h.endOffsets[claim.Partition()]
+		if !known || claim.InitialOffset() >= end || end <= 0 {
+			h.markPartitionDone(claim.Partition())
+			return nil
+		}
+	}
 
 	for msg := range claim.Messages() {
 		if h.batchMode && h.stopOffset > 0 && msg.Offset >= h.stopOffset {
@@ -146,6 +182,15 @@ func (h *consumerGroupHandler) ConsumeClaim(
 		}
 		h.msgCh <- msgEnvelope{session: session, msg: msg}
 		session.MarkMessage(msg, "")
+
+		// Drain-to-end: this partition is complete once we've consumed the last
+		// message that existed at source-open time (end offset - 1).
+		if h.batchMode && h.stopAtEnd {
+			if end, known := h.endOffsets[msg.Partition]; known && msg.Offset >= end-1 {
+				h.markPartitionDone(msg.Partition)
+				return nil
+			}
+		}
 	}
 	return nil
 }
@@ -181,6 +226,18 @@ func newKafkaSource(cfg map[string]interface{}) (source.Source, error) {
 		batchMode:  kc.mode == "batch",
 		stopOffset: kc.stopOffset,
 		stopTS:     kc.stopTS,
+		stopAtEnd:  kc.stopAtEnd,
+	}
+
+	// Drain-to-end: snapshot each partition's high-water-mark (end of log) now,
+	// before consuming, so the batch finishes at the current end regardless of
+	// records produced after the run starts. Uses a short-lived client.
+	if handler.batchMode && kc.stopAtEnd {
+		endOffsets, oerr := snapshotEndOffsets(kc.brokers, kc.topic, sc)
+		if oerr != nil {
+			return nil, fmt.Errorf("kafka source: snapshot end offsets: %w", oerr)
+		}
+		handler.endOffsets = endOffsets
 	}
 
 	cg, err := sarama.NewConsumerGroup(kc.brokers, kc.groupID, sc)
@@ -346,7 +403,10 @@ done:
 	batch.Columns = ks.schema
 	ks.mu.RUnlock()
 
-	if ks.cfg.mode == "batch" && ks.handler.reachedStop.Load() == 1 {
+	// Batch mode: only signal end-of-stream once the stop boundary is reached
+	// AND the channel is fully drained, so no buffered messages are lost when
+	// more than one batch's worth were queued before the stop fired.
+	if ks.cfg.mode == "batch" && ks.handler.reachedStop.Load() == 1 && len(ks.handler.msgCh) == 0 {
 		if len(batch.Rows) == 0 {
 			record.Put(batch)
 			return nil, io.EOF
@@ -700,6 +760,32 @@ func (r *avroBinaryReader) readType(typeName string) (interface{}, error) {
 
 // --- Config parser ---
 
+// snapshotEndOffsets returns the current end-of-log (high-water-mark) offset for
+// every partition of a topic, using a short-lived client. Called at source open
+// so a batch "drain to end" run finishes at a stable boundary regardless of
+// records produced after it starts.
+func snapshotEndOffsets(brokers []string, topic string, sc *sarama.Config) (map[int32]int64, error) {
+	client, err := sarama.NewClient(brokers, sc)
+	if err != nil {
+		return nil, err
+	}
+	defer client.Close()
+
+	partitions, err := client.Partitions(topic)
+	if err != nil {
+		return nil, fmt.Errorf("list partitions for %q: %w", topic, err)
+	}
+	ends := make(map[int32]int64, len(partitions))
+	for _, p := range partitions {
+		end, err := client.GetOffset(topic, p, sarama.OffsetNewest)
+		if err != nil {
+			return nil, fmt.Errorf("get end offset partition=%d: %w", p, err)
+		}
+		ends[p] = end
+	}
+	return ends, nil
+}
+
 func parseSourceConfig(cfg map[string]interface{}) (*kafkaSourceConfig, error) {
 	kc := &kafkaSourceConfig{
 		startOffset:  sarama.OffsetNewest,
@@ -792,6 +878,10 @@ func parseSourceConfig(cfg map[string]interface{}) (*kafkaSourceConfig, error) {
 			return nil, fmt.Errorf("stopTimestamp %q: %w", sts, err)
 		}
 		kc.stopTS = t.UTC()
+	}
+
+	if b, ok := cfg["stopAtCurrentEnd"].(bool); ok {
+		kc.stopAtEnd = b
 	}
 
 	return kc, nil

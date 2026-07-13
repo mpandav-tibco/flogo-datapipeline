@@ -287,6 +287,7 @@ const FIELD_LABELS: Record<string, string> = {
   brokers: 'Brokers', topic: 'Topic', groupId: 'Consumer group', startOffset: 'Start offset',
   pollMs: 'Poll interval (ms)', deserializer: 'Deserializer', mode: 'Read mode',
   stopOffset: 'Stop offset', stopTimestamp: 'Stop timestamp', schemaRegistryURL: 'Schema registry URL',
+  stopAtCurrentEnd: 'Drain to current end',
   // kafka sink
   ackMode: 'Ack mode', compressionCodec: 'Compression codec', maxMessageBytes: 'Max message bytes',
   partitionKey: 'Partition key', serializer: 'Serializer',
