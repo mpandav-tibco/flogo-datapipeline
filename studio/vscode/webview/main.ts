@@ -1479,6 +1479,13 @@ function renderCanvas(m: HTMLElement) {
       ib.appendChild(renderConflictKeyEditor(sn));
     }
 
+    // A source with no explicit `columns` key (e.g. Parquet is self-describing)
+    // still gets a columns editor so users can view/declare columns and use the
+    // "Read schema from source" / "Infer" actions.
+    if (sn.kind === 'source' && !('columns' in sn.cfg)) {
+      ib.appendChild(renderColumnsEditor(sn));
+    }
+
     if (!Object.keys(sn.cfg).length && sn.kind !== 'source') {
       ib.appendChild(el('div', 'muted', '<div style="font-size:11.5px;padding:4px 0">No configuration for this stage yet.</div>'));
     }
