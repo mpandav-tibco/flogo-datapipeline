@@ -191,6 +191,16 @@ export class ApiClient {
     return request(this.port, 'POST', '/v1/introspect/columns', { driver, dsn, table }, 15_000);
   }
 
+  // Read a source's own schema (Parquet footer, CSV header, JSON sample, …).
+  introspectSourceSchema(type: string, config: Record<string, unknown>): Promise<{ columns: IntrospectedColumn[] }> {
+    return request(this.port, 'POST', '/v1/introspect/source-schema', { type, config }, 20_000);
+  }
+
+  // List objects in an object store under an optional prefix.
+  introspectObjects(provider: string, config: Record<string, unknown>): Promise<{ objects: Array<{ key: string; size: number }> }> {
+    return request(this.port, 'POST', '/v1/introspect/objects', { provider, config }, 20_000);
+  }
+
   cancel(ref: string, runId: string): Promise<void> {
     return request(this.port, 'DELETE', `/v1/pipelines/${encodeURIComponent(ref)}/run/${encodeURIComponent(runId)}`);
   }

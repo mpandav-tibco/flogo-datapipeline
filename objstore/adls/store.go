@@ -60,15 +60,21 @@ func newADLSStore(cfg map[string]interface{}) (objstore.Store, error) {
 
 	sasTokenEnv, _ := cfg["sasTokenEnv"].(string)
 	accountKeyEnv, _ := cfg["accountKeyEnv"].(string)
+	// Inline values (from a Studio connection or explicit config).
+	inlineSasToken, _ := cfg["sasToken"].(string)
+	inlineAccountKey, _ := cfg["accountKey"].(string)
 
 	var client *azblob.Client
 	var err error
 
 	switch {
-	case sasTokenEnv != "":
-		sasToken := os.Getenv(sasTokenEnv)
-		if sasToken == "" {
-			return nil, fmt.Errorf("adls store: env var %q (sasTokenEnv) is empty", sasTokenEnv)
+	case sasTokenEnv != "" || inlineSasToken != "":
+		sasToken := inlineSasToken
+		if sasTokenEnv != "" {
+			sasToken = os.Getenv(sasTokenEnv)
+			if sasToken == "" {
+				return nil, fmt.Errorf("adls store: env var %q (sasTokenEnv) is empty", sasTokenEnv)
+			}
 		}
 		// A SAS token can be embedded directly in the service URL or supplied as a
 		// query string.  azblob.NewClientWithNoCredential handles both forms.
@@ -78,10 +84,13 @@ func newADLSStore(cfg map[string]interface{}) (objstore.Store, error) {
 		}
 		client, err = azblob.NewClientWithNoCredential(urlWithSAS, nil)
 
-	case accountKeyEnv != "":
-		accountKey := os.Getenv(accountKeyEnv)
-		if accountKey == "" {
-			return nil, fmt.Errorf("adls store: env var %q (accountKeyEnv) is empty", accountKeyEnv)
+	case accountKeyEnv != "" || inlineAccountKey != "":
+		accountKey := inlineAccountKey
+		if accountKeyEnv != "" {
+			accountKey = os.Getenv(accountKeyEnv)
+			if accountKey == "" {
+				return nil, fmt.Errorf("adls store: env var %q (accountKeyEnv) is empty", accountKeyEnv)
+			}
 		}
 		cred, credErr := azblob.NewSharedKeyCredential(accountName, accountKey)
 		if credErr != nil {

@@ -30,7 +30,11 @@ export type HostToWebview =
   | { type: 'dbTables'; target: 'source' | 'sink' | 'dlq'; tables: string[] }
   | { type: 'dbTablesError'; target: 'source' | 'sink' | 'dlq'; message: string }
   | { type: 'dbColumns'; target: 'source' | 'sink' | 'dlq'; columns: Array<{ name: string; type: string; dbType?: string; nullable?: boolean }> }
-  | { type: 'dbColumnsError'; target: 'source' | 'sink' | 'dlq'; message: string };
+  | { type: 'dbColumnsError'; target: 'source' | 'sink' | 'dlq'; message: string }
+  | { type: 'sourceSchema'; columns: Array<{ name: string; type: string }> }
+  | { type: 'sourceSchemaError'; message: string }
+  | { type: 'objectList'; target: 'source' | 'sink' | 'dlq'; objects: Array<{ key: string; size: number }> }
+  | { type: 'objectListError'; target: 'source' | 'sink' | 'dlq'; message: string };
 
 // Webview -> Host
 export type WebviewToHost =
@@ -57,6 +61,8 @@ export type WebviewToHost =
   | { type: 'testStage'; stage: number; columns: string[]; rows: Array<Record<string, unknown>> }
   | { type: 'fetchDbTables'; target: 'source' | 'sink' | 'dlq' }
   | { type: 'fetchDbColumns'; target: 'source' | 'sink' | 'dlq'; table: string }
+  | { type: 'fetchSourceSchema' }
+  | { type: 'fetchObjects'; target: 'source' | 'sink' | 'dlq' }
   | { type: 'deploy'; replicas: number }
   | { type: 'showError'; text: string }
   | { type: 'copyText'; text: string }

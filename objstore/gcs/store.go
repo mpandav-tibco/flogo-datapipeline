@@ -48,6 +48,8 @@ func newGCSStore(cfg map[string]interface{}) (objstore.Store, error) {
 	}
 
 	credEnv, _ := cfg["credentialsFileEnv"].(string)
+	// Inline service-account JSON (from a Studio connection).
+	inlineCredJSON, _ := cfg["credentialsJson"].(string)
 
 	var opts []option.ClientOption
 	if credEnv != "" {
@@ -56,6 +58,8 @@ func newGCSStore(cfg map[string]interface{}) (objstore.Store, error) {
 			return nil, fmt.Errorf("gcs store: env var %q (credentialsFileEnv) is empty", credEnv)
 		}
 		opts = append(opts, option.WithCredentialsFile(credFile))
+	} else if inlineCredJSON != "" {
+		opts = append(opts, option.WithCredentialsJSON([]byte(inlineCredJSON)))
 	}
 	// If no credentials option provided, storage.NewClient uses ADC automatically.
 

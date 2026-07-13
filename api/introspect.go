@@ -1,12 +1,19 @@
 package api
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"sort"
 	"strings"
+	"time"
+
+	"github.com/mpandav-tibco/flogo-datapipeline/objstore"
+	"github.com/mpandav-tibco/flogo-datapipeline/record"
+	"github.com/mpandav-tibco/flogo-datapipeline/source"
 )
 
 // handleIntrospectTables handles POST /v1/introspect/tables.
@@ -64,6 +71,142 @@ func (s *Server) handleIntrospectColumns(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"columns": cols})
+}
+
+// handleIntrospectSourceSchema handles POST /v1/introspect/source-schema.
+// Body: { "type": "parquet"|"csv"|"jsonlines"|"xml"|..., "config": { ...source config... } }
+// Opens the source and returns its column schema (mapped to pipeline types) —
+// self-describing for Parquet (footer), header-derived for CSV/TSV, sampled for
+// JSON-lines. Side-effect-free: reads at most one small batch, then closes.
+func (s *Server) handleIntrospectSourceSchema(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "use POST")
+		return
+	}
+	var body struct {
+		Type   string                 `json:"type"`
+		Config map[string]interface{} `json:"config"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON: "+err.Error())
+		return
+	}
+	if body.Type == "" {
+		writeError(w, http.StatusBadRequest, "bad_request", "source type is required")
+		return
+	}
+	cols, err := introspectSourceSchema(body.Type, body.Config)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "introspect_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"columns": cols})
+}
+
+// handleIntrospectObjects handles POST /v1/introspect/objects.
+// Body: { "provider": "s3"|"gcs"|"adls", "config": { bucket, prefix, ... } }
+// Lists objects in the bucket under an optional prefix so users can browse and
+// pick a file/prefix instead of hand-typing keys.
+func (s *Server) handleIntrospectObjects(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "use POST")
+		return
+	}
+	var body struct {
+		Provider string                 `json:"provider"`
+		Config   map[string]interface{} `json:"config"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON: "+err.Error())
+		return
+	}
+	if body.Provider == "" {
+		writeError(w, http.StatusBadRequest, "bad_request", "provider is required")
+		return
+	}
+	objs, err := introspectObjects(body.Provider, body.Config)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "introspect_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"objects": objs})
+}
+
+// introspectSourceSchema opens a source and returns its column schema. It reads
+// at most one small batch to force schema resolution for formats that determine
+// columns lazily (CSV header, JSON-lines sampling), then closes.
+func introspectSourceSchema(typ string, cfg map[string]interface{}) ([]ColumnInfo, error) {
+	if cfg == nil {
+		cfg = map[string]interface{}{}
+	}
+	src, err := source.New(typ, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("open source: %w", err)
+	}
+	defer src.Close()
+
+	schema := src.Schema()
+	if len(schema) == 0 {
+		// Force lazy schema resolution by reading a tiny batch.
+		batch, rerr := src.ReadBatch(1)
+		if rerr != nil && rerr != io.EOF {
+			return nil, fmt.Errorf("read sample: %w", rerr)
+		}
+		if batch != nil {
+			if len(batch.Columns) > 0 {
+				schema = batch.Columns
+			}
+			record.Put(batch)
+		}
+		if len(schema) == 0 {
+			schema = src.Schema()
+		}
+	}
+	if len(schema) == 0 {
+		return nil, fmt.Errorf("source schema is empty — the source may need explicit columns")
+	}
+	out := make([]ColumnInfo, len(schema))
+	for i, c := range schema {
+		out[i] = ColumnInfo{Name: c.Name, Type: string(c.Type), DBType: string(c.Type)}
+	}
+	return out, nil
+}
+
+// ObjectInfo is a discovered object-store object.
+type ObjectInfo struct {
+	Key  string `json:"key"`
+	Size int64  `json:"size"`
+}
+
+// introspectObjects lists objects in an object store under an optional prefix.
+func introspectObjects(provider string, cfg map[string]interface{}) ([]ObjectInfo, error) {
+	if cfg == nil {
+		cfg = map[string]interface{}{}
+	}
+	store, err := objstore.New(provider, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("open store: %w", err)
+	}
+	defer store.Close()
+
+	prefix, _ := cfg["prefix"].(string)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	objs, err := store.List(ctx, prefix)
+	if err != nil {
+		return nil, fmt.Errorf("list objects: %w", err)
+	}
+	// Cap the response so a huge bucket doesn't overwhelm the UI.
+	const maxObjects = 500
+	out := make([]ObjectInfo, 0, len(objs))
+	for _, o := range objs {
+		out = append(out, ObjectInfo{Key: o.Key, Size: o.Size})
+		if len(out) >= maxObjects {
+			break
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
+	return out, nil
 }
 
 // TableInfo is a discovered database table.

@@ -393,6 +393,38 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
         break;
       }
 
+      case 'fetchSourceSchema': {
+        try {
+          const { type, config } = await this.resolveStageConfigFor(doc, 'source');
+          const port = await this.ensureEngine(doc, panel, false);
+          if (!port) {
+            this.post(panel, { type: 'sourceSchemaError', message: 'Engine not available.' });
+            break;
+          }
+          const res = await new ApiClient(port).introspectSourceSchema(type, config);
+          this.post(panel, { type: 'sourceSchema', columns: res.columns.map((c) => ({ name: c.name, type: c.type })) });
+        } catch (err) {
+          this.post(panel, { type: 'sourceSchemaError', message: errText(err) });
+        }
+        break;
+      }
+
+      case 'fetchObjects': {
+        try {
+          const { type, config } = await this.resolveStageConfigFor(doc, msg.target);
+          const port = await this.ensureEngine(doc, panel, false);
+          if (!port) {
+            this.post(panel, { type: 'objectListError', target: msg.target, message: 'Engine not available.' });
+            break;
+          }
+          const res = await new ApiClient(port).introspectObjects(type, config);
+          this.post(panel, { type: 'objectList', target: msg.target, objects: res.objects });
+        } catch (err) {
+          this.post(panel, { type: 'objectListError', target: msg.target, message: errText(err) });
+        }
+        break;
+      }
+
       case 'deploy':
         await this.generateDeployArtifacts(doc, msg.replicas);
         break;
@@ -587,6 +619,33 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
     const dsn = String(stage.dsn || '');
     if (!dsn) throw new Error('No connection or DSN configured for this stage.');
     return { driver, dsn };
+  }
+
+  // Resolve a source/sink/dlq stage's type + full config (bound connection
+  // fields merged in), for source-schema / object-list introspection.
+  private async resolveStageConfigFor(
+    doc: vscode.TextDocument,
+    target: 'source' | 'sink' | 'dlq',
+  ): Promise<{ type: string; config: Record<string, unknown> }> {
+    const app: any = safeParse(doc.getText());
+    const pipe = app?.resources?.[0]?.data;
+    if (!pipe) throw new Error('Pipeline has no data.');
+    const stage: any = target === 'dlq' ? pipe.dlq?.options : pipe[target];
+    if (!stage || typeof stage !== 'object') throw new Error(`No ${target} configured.`);
+    const type = String((target === 'dlq' ? pipe.dlq?.type : stage.type) || '');
+    if (!type) throw new Error(`${target} has no type.`);
+
+    const config: Record<string, unknown> = { ...stage };
+    delete config.type;
+    if (typeof stage.connection === 'string' && this.connections) {
+      const conn = await this.connections.getByName(stage.connection);
+      if (conn) {
+        const resolved = await this.connections.resolveStageConfig(conn.id);
+        Object.assign(config, resolved);
+      }
+      delete config.connection;
+    }
+    return { type, config };
   }
 
   // Remove the last resolved temp file, if any.

@@ -73,6 +73,7 @@ const S = {
   srcSample: null as SrcSample | null,
   sinkSample: null as SrcSample | null,
   db: {} as Record<string, DbIntrospect>,
+  srcSchemaLoading: false,
 };
 
 // Live-DB introspection state, keyed by target ('source' | 'sink' | 'dlq').
@@ -82,9 +83,11 @@ interface DbIntrospect {
   loadingCols: boolean;
   autoSchema: boolean;       // auto-fetch columns from DB on table select
   error: string | null;
+  objects?: string[] | null; // object-store keys (browse)
+  loadingObjects?: boolean;
 }
 function dbState(target: string): DbIntrospect {
-  if (!S.db[target]) S.db[target] = { tables: null, loadingTables: false, loadingCols: false, autoSchema: true, error: null };
+  if (!S.db[target]) S.db[target] = { tables: null, loadingTables: false, loadingCols: false, autoSchema: true, error: null, objects: null, loadingObjects: false };
   return S.db[target];
 }
 function targetOf(node: Node): 'source' | 'sink' | 'dlq' | null {
@@ -676,6 +679,38 @@ function fetchCols(node: Node, table: string) {
   post({ type: 'fetchDbColumns', target, table });
 }
 
+// Object-store key/prefix field with a "browse objects" action that lists the
+// bucket's objects so users can pick a file/prefix instead of hand-typing.
+function renderObjectField(node: Node, key: string, value: string): HTMLElement {
+  const target = targetOf(node);
+  const f = el('div', 'fld');
+  f.appendChild(el('div', 'k', humanize(key)));
+  const st = target ? dbState(target) : null;
+  const row = el('div', 'inputrow');
+  const inp = el('input', 'v') as HTMLInputElement;
+  inp.value = value;
+  inp.placeholder = key === 'key' ? 'path/to/object or ${date}/part.parquet' : 'prefix/';
+  inp.onchange = () => setCfgField(node, key, inp.value);
+  row.appendChild(inp);
+  const browse = el('button', 'browse', st?.loadingObjects ? '…' : '⤓ Browse');
+  browse.title = 'List objects in the bucket';
+  browse.onclick = () => { if (target) { dbState(target).loadingObjects = true; renderEditor(); post({ type: 'fetchObjects', target }); } };
+  row.appendChild(browse);
+  f.appendChild(row);
+  if (st?.objects && st.objects.length) {
+    const sel = el('select', 'v') as HTMLSelectElement;
+    const ph = document.createElement('option'); ph.value = ''; ph.textContent = `— ${st.objects.length} objects — pick one —`; sel.appendChild(ph);
+    st.objects.forEach((o) => { const op = document.createElement('option'); op.value = o; op.textContent = o; if (o === value) op.selected = true; sel.appendChild(op); });
+    sel.style.marginTop = '6px';
+    sel.onchange = () => { if (sel.value) { inp.value = sel.value; setCfgField(node, key, sel.value); } };
+    f.appendChild(sel);
+  } else if (st?.objects && !st.objects.length) {
+    f.appendChild(el('div', 'hint', 'No objects found under this prefix.'));
+  }
+  if (FIELD_HINTS[key]) f.appendChild(el('div', 'hint', FIELD_HINTS[key]));
+  return f;
+}
+
 // Structured column editor for the source `columns` array.
 // Conflict-key picker for the JDBC sink `conflictKey` — checkboxes over the
 // columns visible at the sink, so users pick the upsert key instead of typing a
@@ -768,6 +803,17 @@ function renderColumnsEditor(node: Node): HTMLElement {
     };
     f.appendChild(infer);
     f.appendChild(el('div', 'hint', 'Reads the header + a sample of rows to guess column names and types.'));
+  }
+
+  // Read the schema straight from the source via the engine — works for
+  // self-describing formats (Parquet footer) and for object-store sources where
+  // the file isn't on the local disk. Available for any source stage.
+  if (node.kind === 'source') {
+    const readBtn = el('button', 'browse infer-btn', S.srcSchemaLoading ? 'Reading schema…' : '⤓ Read schema from source');
+    readBtn.style.marginTop = '6px';
+    readBtn.onclick = () => { S.srcSchemaLoading = true; renderEditor(); post({ type: 'fetchSourceSchema' }); };
+    f.appendChild(readBtn);
+    f.appendChild(el('div', 'hint', 'Opens the source (e.g. reads a Parquet footer) and fills columns from its actual schema.'));
   }
   return f;
 }
@@ -1412,6 +1458,12 @@ function renderCanvas(m: HTMLElement) {
       // JDBC table: offer a live "pick from database" dropdown + refresh.
       if (isJdbc && k === 'table') {
         ib.appendChild(renderTableField(sn, v));
+        return;
+      }
+      // Object-store key/prefix: offer a "browse objects" picker.
+      const isObjStore = ['s3', 'gcs', 'adls'].includes(sn.type);
+      if (isObjStore && (k === 'key' || k === 'prefix')) {
+        ib.appendChild(renderObjectField(sn, k, v));
         return;
       }
       if (k === 'columns') ib.appendChild(renderColumnsEditor(sn));
@@ -2485,6 +2537,34 @@ window.addEventListener('message', (ev: MessageEvent<HostToWebview>) => {
       st.loadingCols = false; st.error = msg.message;
       renderEditor();
       toast('err', 'Could not fetch schema: ' + msg.message);
+      break;
+    }
+    case 'sourceSchema': {
+      S.srcSchemaLoading = false;
+      const node = S.pipe?.nodes.find((n) => n.kind === 'source');
+      if (node) setCfgValue(node, 'columns', msg.columns.map((c) => ({ name: c.name, type: c.type })));
+      renderEditor();
+      toast('ok', `Read ${msg.columns.length} column${msg.columns.length === 1 ? '' : 's'} from the source`);
+      break;
+    }
+    case 'sourceSchemaError':
+      S.srcSchemaLoading = false;
+      renderEditor();
+      toast('err', 'Could not read source schema: ' + msg.message);
+      break;
+    case 'objectList': {
+      const st = dbState(msg.target);
+      st.objects = msg.objects.map((o) => o.key);
+      st.loadingObjects = false;
+      renderEditor();
+      toast(msg.objects.length ? 'ok' : 'info', `Found ${msg.objects.length} object${msg.objects.length === 1 ? '' : 's'}`);
+      break;
+    }
+    case 'objectListError': {
+      const st = dbState(msg.target);
+      st.loadingObjects = false; st.error = msg.message;
+      renderEditor();
+      toast('err', 'Could not list objects: ' + msg.message);
       break;
     }
   }

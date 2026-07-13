@@ -64,10 +64,17 @@ func newS3Store(cfg map[string]interface{}) (objstore.Store, error) {
 	endpoint, _ := cfg["endpoint"].(string)
 	forcePathStyle, _ := cfg["forcePathStyle"].(bool)
 
-	// Resolve credentials: prefer env-var-referenced secrets over SDK chain.
+	// Resolve credentials: prefer env-var-referenced secrets, then inline
+	// accessKeyId/secretAccessKey (used by Studio connections and local/dev),
+	// else fall back to the SDK default chain.
 	accessKeyIDEnv, _ := cfg["accessKeyIdEnv"].(string)
 	secretKeyEnv, _ := cfg["secretAccessKeyEnv"].(string)
 	sessionTokenEnv, _ := cfg["sessionTokenEnv"].(string)
+
+	// Inline credential values (from a Studio connection or explicit config).
+	inlineKeyID, _ := cfg["accessKeyId"].(string)
+	inlineSecret, _ := cfg["secretAccessKey"].(string)
+	inlineToken, _ := cfg["sessionToken"].(string)
 
 	var awsCfg aws.Config
 	var err error
@@ -89,6 +96,13 @@ func newS3Store(cfg map[string]interface{}) (objstore.Store, error) {
 			awsconfig.WithRegion(region),
 			awsconfig.WithCredentialsProvider(
 				credentials.NewStaticCredentialsProvider(keyID, secret, token),
+			),
+		)
+	} else if inlineKeyID != "" && inlineSecret != "" {
+		awsCfg, err = awsconfig.LoadDefaultConfig(context.Background(),
+			awsconfig.WithRegion(region),
+			awsconfig.WithCredentialsProvider(
+				credentials.NewStaticCredentialsProvider(inlineKeyID, inlineSecret, inlineToken),
 			),
 		)
 	} else {
