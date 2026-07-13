@@ -141,6 +141,15 @@ func (s *jdbcSink) WriteBatch(batch *record.RecordBatch) error {
 		for i, col := range batch.Columns {
 			s.columns[i] = col.Name
 		}
+		// autoMigrate=true also creates the target table when it does not yet
+		// exist, using the first batch's schema. Without this, a fresh table
+		// (the common case for the Studio "auto-migrate table" toggle) would fail
+		// the INSERT with "relation does not exist".
+		if s.autoMigrate {
+			if err := s.ensureTable(); err != nil {
+				return err
+			}
+		}
 	} else if len(batch.Columns) != len(s.schema) || !schemasEqual(s.schema, batch.Columns) {
 		// Subsequent batch: schema may have drifted (additive policy upstream).
 		// reconcileSchema either migrates the database table or trims the batch.
@@ -248,6 +257,33 @@ func (s *jdbcSink) reconcileSchema(batch *record.RecordBatch) error {
 		s.columns = append(s.columns, col.Name)
 	}
 
+	return nil
+}
+
+// ensureTable issues a CREATE TABLE IF NOT EXISTS for s.table using the sink's
+// current known schema. It is called on the first batch when autoMigrate is
+// true so that a not-yet-existing target table is created automatically (the
+// Studio "auto-migrate table" toggle). Existing tables are left untouched;
+// subsequent additive columns are handled by reconcileSchema's ALTER TABLE path.
+func (s *jdbcSink) ensureTable() error {
+	if len(s.schema) == 0 {
+		return nil
+	}
+	cols := make([]string, len(s.schema))
+	for i, col := range s.schema {
+		cols[i] = fmt.Sprintf("%s %s",
+			sqlutil.QuoteIdent(col.Name, s.driver),
+			recordTypeToSQL(col.Type, s.driver),
+		)
+	}
+	stmt := fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s (%s)",
+		sqlutil.QuoteIdent(s.table, s.driver),
+		strings.Join(cols, ", "),
+	)
+	jlog.Infof("jdbc sink table=%q: autoMigrate — %s", s.table, stmt)
+	if _, err := s.db.Exec(stmt); err != nil {
+		return fmt.Errorf("jdbc sink: create table %q: %w", s.table, err)
+	}
 	return nil
 }
 
