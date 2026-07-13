@@ -417,7 +417,10 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
             this.post(panel, { type: 'objectListError', target: msg.target, message: 'Engine not available.' });
             break;
           }
-          const res = await new ApiClient(port).introspectObjects(type, config);
+          // Object-store sinks register as "<provider>-sink"; the objstore
+          // provider expects the bare provider name ("s3"/"gcs"/"adls").
+          const provider = type.replace(/-sink$/, '');
+          const res = await new ApiClient(port).introspectObjects(provider, config);
           this.post(panel, { type: 'objectList', target: msg.target, objects: res.objects });
         } catch (err) {
           this.post(panel, { type: 'objectListError', target: msg.target, message: errText(err) });

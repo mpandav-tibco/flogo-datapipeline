@@ -13,6 +13,9 @@
 //	{DD}    — two-digit day     (UTC)
 //	{HH}    — two-digit hour    (UTC)
 //	{mm}    — two-digit minute  (UTC)
+//	{ss}    — two-digit second  (UTC)
+//	{ts}    — unix timestamp    (UTC seconds)
+//	{uuid}  — random v4 UUID    (unique per run)
 //
 // Format decoupling: the sink delegates all serialisation to an inner sink
 // registered in the sink registry (csv, parquet, jsonlines, …).  For streaming
@@ -33,6 +36,7 @@ package objstore
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
@@ -56,9 +60,15 @@ var streamingFormats = map[string]bool{}
 func init() {
 	for _, provider := range []string{"s3", "gcs", "adls"} {
 		p := provider // capture for closure
-		sink.Register(p+"-sink", func(cfg map[string]interface{}) (sink.Sink, error) {
+		ctor := func(cfg map[string]interface{}) (sink.Sink, error) {
 			return newObjstoreSink(p, cfg)
-		})
+		}
+		// Register under both the "<provider>-sink" name and the bare provider
+		// name so the type is symmetric with the object-store source (which
+		// registers as "s3"/"gcs"/"adls") and so Studio-built pipelines that use
+		// the bare provider name resolve correctly.
+		sink.Register(p+"-sink", ctor)
+		sink.Register(p, ctor)
 	}
 }
 
@@ -252,8 +262,26 @@ func expandKeyMacros(key string) string {
 		"{DD}", fmt.Sprintf("%02d", now.Day()),
 		"{HH}", fmt.Sprintf("%02d", now.Hour()),
 		"{mm}", fmt.Sprintf("%02d", now.Minute()),
+		"{ss}", fmt.Sprintf("%02d", now.Second()),
+		"{ts}", fmt.Sprintf("%d", now.Unix()),
+		"{uuid}", newUUID(),
 	)
 	return r.Replace(key)
+}
+
+// newUUID returns a random RFC-4122 v4 UUID string. Used to make object keys
+// unique per run (e.g. "orders-{uuid}.parquet") so concurrent writers and
+// re-runs never collide.
+func newUUID() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// Fall back to a timestamp-based value; collisions are still astronomically
+		// unlikely given the surrounding date macros.
+		return fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	b[6] = (b[6] & 0x0f) | 0x40 // version 4
+	b[8] = (b[8] & 0x3f) | 0x80 // variant 10
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
 // buildInnerCfg copies config keys that are relevant to the inner sink,

@@ -26,6 +26,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/mpandav-tibco/flogo-datapipeline/record"
 	"github.com/mpandav-tibco/flogo-datapipeline/transform"
@@ -39,6 +40,10 @@ func init() {
 type mapperTransform struct {
 	fieldExprs []fieldExpr
 	outCols    []record.Column
+	// typesResolved is set once the output column types have been inferred from
+	// the first batch's actual values, so downstream sinks (Parquet, JDBC) get
+	// concrete types instead of a stringified TypeAny schema.
+	typesResolved bool
 }
 
 type fieldExpr struct {
@@ -96,7 +101,6 @@ func (m *mapperTransform) Name() string { return "map" }
 
 func (m *mapperTransform) Apply(in *record.RecordBatch) (*record.RecordBatch, error) {
 	out := record.Get()
-	out.Columns = m.outCols
 	out.Rows = make([][]interface{}, 0, in.Len())
 
 	for i := range in.Rows {
@@ -107,7 +111,54 @@ func (m *mapperTransform) Apply(in *record.RecordBatch) (*record.RecordBatch, er
 		}
 		out.Rows = append(out.Rows, outRow)
 	}
+
+	// Infer concrete output column types from the first batch's values, so a
+	// downstream typed sink (Parquet/JDBC) doesn't stringify everything. Columns
+	// whose values are all nil stay TypeAny (string-compatible).
+	if !m.typesResolved {
+		m.resolveTypes(out.Rows)
+		m.typesResolved = true
+	}
+	out.Columns = m.outCols
 	return out, nil
+}
+
+// resolveTypes refines TypeAny output columns to concrete pipeline types by
+// scanning the first non-nil value produced for each column.
+func (m *mapperTransform) resolveTypes(rows [][]interface{}) {
+	for j := range m.outCols {
+		if m.outCols[j].Type != record.TypeAny {
+			continue
+		}
+		for _, r := range rows {
+			if j >= len(r) || r[j] == nil {
+				continue
+			}
+			if t, ok := inferColumnType(r[j]); ok {
+				m.outCols[j].Type = t
+			}
+			break
+		}
+	}
+}
+
+// inferColumnType maps a Go value's dynamic type to a pipeline column type.
+// The bool return is false when the value doesn't map to a concrete type.
+func inferColumnType(v interface{}) (record.ColumnType, bool) {
+	switch v.(type) {
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+		return record.TypeInt, true
+	case float32, float64:
+		return record.TypeFloat, true
+	case bool:
+		return record.TypeBool, true
+	case time.Time:
+		return record.TypeDate, true
+	case string:
+		return record.TypeString, true
+	default:
+		return record.TypeAny, false
+	}
 }
 
 func (m *mapperTransform) Close() error { return nil }

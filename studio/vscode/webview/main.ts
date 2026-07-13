@@ -1537,7 +1537,7 @@ function renderCanvas(m: HTMLElement) {
         return;
       }
       // Object-store key/prefix: offer a "browse objects" picker.
-      const isObjStore = ['s3', 'gcs', 'adls'].includes(sn.type);
+      const isObjStore = ['s3', 'gcs', 'adls', 's3-sink', 'gcs-sink', 'adls-sink'].includes(sn.type);
       if (isObjStore && (k === 'key' || k === 'prefix')) {
         ib.appendChild(renderObjectField(sn, k, v));
         return;
