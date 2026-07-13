@@ -2112,7 +2112,7 @@ const TRANSFORMS: Array<{ type: string; label: string; cfg: Record<string, unkno
   { type: 'validate', label: 'Validate — per-field rules, route to DLQ',
     cfg: { rules: [{ field: 'amount', notNull: true }], onViolation: 'route' } },
   { type: 'lookup', label: 'Lookup — HTTP enrichment with LRU cache',
-    cfg: { keyField: 'id', url: 'https://api.internal/enrich/{id}', method: 'GET', cacheSize: 10000, onError: 'skip' } },
+    cfg: { keyField: 'id', url: 'https://api.internal/enrich/{id}', method: 'GET', cacheSize: 10000, onError: 'null' } },
   { type: 'hwm', label: 'High-water mark — incremental cursor',
     cfg: { column: 'updated_at', valueType: 'datetime' } },
   { type: 'dq', label: 'Data quality — expectations + quality score',
