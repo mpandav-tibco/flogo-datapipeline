@@ -866,9 +866,12 @@ function renderColumnsEditor(node: Node): HTMLElement {
   f.appendChild(box);
 
   // Auto-generate columns by sampling the source file (CSV/TSV/JSON-lines).
+  // XML is excluded: it has its own "Detect structure from file" action on the
+  // recordElement field; the generic header sampler would misread the XML
+  // prolog (<?xml …?>) as a bogus single column.
   const target2 = cfgTarget(node);
   const filePath = typeof target2.path === 'string' ? target2.path : '';
-  if (node.kind === 'source' && filePath) {
+  if (node.kind === 'source' && filePath && node.type !== 'xml') {
     const infer = el('button', 'browse infer-btn', '✨ Infer columns from file');
     infer.onclick = () => {
       infer.textContent = 'Sampling file…';
