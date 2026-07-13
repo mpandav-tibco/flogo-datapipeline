@@ -18,6 +18,8 @@ import (
 //
 //	POST   /v1/pipelines/{ref}/run              → handleRunPipeline
 //	POST   /v1/pipelines/{ref}/preview          → handlePreview
+//	POST   /v1/pipelines/{ref}/sampleinput      → handleSampleInput
+//	POST   /v1/pipelines/{ref}/teststage        → handleTestStage
 //	DELETE /v1/pipelines/{ref}/run/{runId}      → handleCancelRun
 //	GET    /v1/pipelines/{ref}/status            → handlePipelineStatus
 //	GET    /v1/pipelines/{ref}/definition        → handlePipelineDefinition
@@ -42,6 +44,14 @@ func (s *Server) handlePipelinesPrefix(w http.ResponseWriter, r *http.Request) {
 	// POST /v1/pipelines/{ref}/preview
 	case len(parts) == 2 && parts[1] == "preview" && r.Method == http.MethodPost:
 		s.handlePreview(w, r, ref)
+
+	// POST /v1/pipelines/{ref}/teststage
+	case len(parts) == 2 && parts[1] == "teststage" && r.Method == http.MethodPost:
+		s.handleTestStage(w, r, ref)
+
+	// POST /v1/pipelines/{ref}/sampleinput
+	case len(parts) == 2 && parts[1] == "sampleinput" && r.Method == http.MethodPost:
+		s.handleSampleInput(w, r, ref)
 
 	// DELETE /v1/pipelines/{ref}/run/{runId}
 	case len(parts) == 3 && parts[1] == "run" && r.Method == http.MethodDelete:
@@ -283,6 +293,84 @@ func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request, ref strin
 	res, err := act.Preview(ctx, limit)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "preview_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+// handleSampleInput handles POST /v1/pipelines/{ref}/sampleinput.
+//
+// Body: { "stage": <int>, "limit": <int> }
+//
+// Returns a bounded sample of the rows that ENTER the user transform at `stage`
+// (i.e. the source run through all preceding transforms). Seeds the Studio
+// atomic stage tester with realistic upstream data.
+func (s *Server) handleSampleInput(w http.ResponseWriter, r *http.Request, ref string) {
+	act := s.findAction(ref)
+	if act == nil {
+		writeError(w, http.StatusNotFound, "not_found", "no pipeline registered for ref: "+ref)
+		return
+	}
+	var body struct {
+		Stage int `json:"stage"`
+		Limit int `json:"limit"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON body: "+err.Error())
+		return
+	}
+	limit := body.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+
+	res, err := act.SampleInput(ctx, limit, body.Stage)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "sample_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+// handleTestStage handles POST /v1/pipelines/{ref}/teststage.
+//
+// Body: { "stage": <int>, "columns": ["a","b"], "rows": [ {"a":1,"b":2}, … ] }
+//
+// Runs the single transform at `stage` against the supplied input rows in
+// isolation and returns per-row kept/dropped/failed outcomes. Side-effect-free.
+func (s *Server) handleTestStage(w http.ResponseWriter, r *http.Request, ref string) {
+	act := s.findAction(ref)
+	if act == nil {
+		writeError(w, http.StatusNotFound, "not_found", "no pipeline registered for ref: "+ref)
+		return
+	}
+	var body struct {
+		Stage   int                      `json:"stage"`
+		Columns []string                 `json:"columns"`
+		Rows    []map[string]interface{} `json:"rows"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON body: "+err.Error())
+		return
+	}
+	if len(body.Rows) == 0 {
+		writeError(w, http.StatusBadRequest, "bad_request", "no input rows supplied")
+		return
+	}
+	if len(body.Rows) > 200 {
+		body.Rows = body.Rows[:200]
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	res, err := act.TestStage(ctx, body.Stage, body.Columns, body.Rows)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "teststage_failed", err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, res)

@@ -84,16 +84,18 @@ export class SidebarProvider implements vscode.TreeDataProvider<PipelineTreeItem
     }
 
     const files = await vscode.workspace.findFiles('**/*.datapipeline', '**/node_modules/**', 200);
-    files.sort((a, b) => a.fsPath.localeCompare(b.fsPath));
+    // Exclude the transient connection-resolved run files (.<name>.resolved.datapipeline).
+    const visible = files.filter((u) => !path.basename(u.fsPath).endsWith('.resolved.datapipeline'));
+    visible.sort((a, b) => a.fsPath.localeCompare(b.fsPath));
 
-    if (!files.length) {
+    if (!visible.length) {
       const msg = new PipelineTreeItem('No .datapipeline files found', 'message', vscode.TreeItemCollapsibleState.None);
       msg.description = 'Create one from a template';
       items.push(msg);
       return items;
     }
 
-    for (const uri of files) {
+    for (const uri of visible) {
       const name = path.basename(uri.fsPath);
       const item = new PipelineTreeItem(name, 'pipeline', vscode.TreeItemCollapsibleState.None, uri);
       item.resourceUri = uri;

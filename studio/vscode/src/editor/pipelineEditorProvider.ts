@@ -13,6 +13,7 @@ import {
 } from '../model/pipeline';
 import { ApiClient } from '../engine/apiClient';
 import { DataPreviewView } from '../panel/dataPreviewView';
+import { ConnectionStore } from '../connections/store';
 import type { WebviewToHost } from '../protocol';
 
 export interface EngineHooks {
@@ -31,6 +32,9 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
   private ignoreNextChange = false;
   private runInFlight = false;
   private readonly diag: vscode.DiagnosticCollection;
+  // Path of the resolved (connections-injected) sibling file the engine was
+  // last started against, so it can be cleaned up on stop/dispose.
+  private resolvedPath: string | null = null;
   // Dedicated native Output channel for run/engine logs (replaces the webview's
   // custom Output tab — full IDE integration).
   private readonly runChannel: vscode.OutputChannel;
@@ -40,11 +44,17 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
     private readonly manager: BinaryManager,
     private readonly hooks: EngineHooks = {},
     private readonly dataPreview?: DataPreviewView,
+    private readonly connections?: ConnectionStore,
   ) {
     this.diag = vscode.languages.createDiagnosticCollection('flogoDataPipeline');
     context.subscriptions.push(this.diag);
     this.runChannel = vscode.window.createOutputChannel('Flogo Data Pipeline Run');
     context.subscriptions.push(this.runChannel);
+    if (this.connections) {
+      context.subscriptions.push(
+        this.connections.onDidChange(() => this.broadcastConnections()),
+      );
+    }
   }
 
   static register(
@@ -52,8 +62,9 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
     manager: BinaryManager,
     hooks: EngineHooks,
     dataPreview?: DataPreviewView,
+    connections?: ConnectionStore,
   ): { provider: PipelineEditorProvider; disposable: vscode.Disposable } {
-    const provider = new PipelineEditorProvider(context, manager, hooks, dataPreview);
+    const provider = new PipelineEditorProvider(context, manager, hooks, dataPreview, connections);
     const disposable = vscode.window.registerCustomEditorProvider(
       PipelineEditorProvider.viewType,
       provider,
@@ -70,6 +81,7 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
   }
 
   broadcastStopped(): void {
+    this.clearResolved();
     for (const p of this.panels) {
       try {
         p.webview.postMessage({ type: 'stopped' });
@@ -150,6 +162,22 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
     }
   }
 
+  // Push the current connection summaries to one panel.
+  private async sendConnections(panel: vscode.WebviewPanel): Promise<void> {
+    if (!this.connections) {
+      this.post(panel, { type: 'connections', items: [] });
+      return;
+    }
+    const items = await this.connections.summaries();
+    this.post(panel, { type: 'connections', items });
+  }
+
+  // Push connection summaries to every open panel (on store changes).
+  private async broadcastConnections(): Promise<void> {
+    const items = this.connections ? await this.connections.summaries() : [];
+    for (const p of this.panels) this.post(p, { type: 'connections', items });
+  }
+
   private async onMessage(
     panel: vscode.WebviewPanel,
     doc: vscode.TextDocument,
@@ -172,6 +200,7 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
           nonce: crypto.randomBytes(8).toString('hex'),
         });
         if (this.manager.port) this.post(panel, { type: 'runStarted', port: this.manager.port });
+        this.sendConnections(panel);
         break;
       }
 
@@ -272,8 +301,97 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
         break;
 
       case 'newConnection':
-        vscode.window.showInformationMessage('Connections are stored in VS Code Secret Storage (coming soon in this build).');
+        vscode.commands.executeCommand('flogoDataPipelineStudio.newConnection');
         break;
+
+      case 'testConnection':
+        vscode.commands.executeCommand('flogoDataPipelineStudio.testConnectionById', msg.id);
+        break;
+
+      case 'editConnection':
+        vscode.commands.executeCommand('flogoDataPipelineStudio.editConnectionById', msg.id);
+        break;
+
+      case 'requestConnections':
+        this.sendConnections(panel);
+        break;
+
+      case 'inferSchema': {
+        try {
+          const { inferSchema } = await import('../schema/infer');
+          const cols = await inferSchema(doc.uri.fsPath, msg.path, {
+            sourceType: msg.sourceType,
+            delimiter: msg.delimiter,
+            hasHeader: msg.hasHeader,
+          });
+          this.post(panel, { type: 'schemaInferred', columns: cols, count: cols.length });
+        } catch (err) {
+          this.post(panel, { type: 'schemaInferError', message: errText(err) });
+        }
+        break;
+      }
+
+      case 'sampleStageInput': {
+        const port = await this.ensureEngine(doc, panel, false);
+        if (!port) {
+          this.post(panel, { type: 'stageSampleError', stage: msg.stage, message: 'Engine not available.' });
+          break;
+        }
+        try {
+          const res = await new ApiClient(port).sampleInput(this.refForDoc(doc), msg.stage, msg.limit ?? 20);
+          this.post(panel, { type: 'stageSample', stage: msg.stage, columns: res.columns, rows: res.rows });
+        } catch (err) {
+          this.post(panel, { type: 'stageSampleError', stage: msg.stage, message: errText(err) });
+        }
+        break;
+      }
+
+      case 'testStage': {
+        const port = await this.ensureEngine(doc, panel, false);
+        if (!port) {
+          this.post(panel, { type: 'stageTestError', stage: msg.stage, message: 'Engine not available.' });
+          break;
+        }
+        try {
+          const result = await new ApiClient(port).testStage(this.refForDoc(doc), msg.stage, msg.columns, msg.rows);
+          this.post(panel, { type: 'stageTestResult', stage: msg.stage, result });
+        } catch (err) {
+          this.post(panel, { type: 'stageTestError', stage: msg.stage, message: errText(err) });
+        }
+        break;
+      }
+
+      case 'fetchDbTables': {
+        try {
+          const { driver, dsn } = await this.resolveDbTarget(doc, msg.target);
+          const port = await this.ensureEngine(doc, panel, false);
+          if (!port) {
+            this.post(panel, { type: 'dbTablesError', target: msg.target, message: 'Engine not available.' });
+            break;
+          }
+          const res = await new ApiClient(port).introspectTables(driver, dsn);
+          this.post(panel, { type: 'dbTables', target: msg.target, tables: res.tables });
+        } catch (err) {
+          this.post(panel, { type: 'dbTablesError', target: msg.target, message: errText(err) });
+        }
+        break;
+      }
+
+      case 'fetchDbColumns': {
+        try {
+          const { driver, dsn } = await this.resolveDbTarget(doc, msg.target);
+          const port = await this.ensureEngine(doc, panel, false);
+          if (!port) {
+            this.post(panel, { type: 'dbColumnsError', target: msg.target, message: 'Engine not available.' });
+            break;
+          }
+          const res = await new ApiClient(port).introspectColumns(driver, dsn, msg.table);
+          this.post(panel, { type: 'dbColumns', target: msg.target, columns: res.columns });
+        } catch (err) {
+          this.post(panel, { type: 'dbColumnsError', target: msg.target, message: errText(err) });
+        }
+        break;
+      }
 
       case 'deploy':
         await this.generateDeployArtifacts(doc, msg.replicas);
@@ -353,7 +471,12 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
     this.logRun(`[engine] Starting flogo-datapipeline on port ${startPort}…`);
 
     try {
-      const port = await this.manager.start(document.uri.fsPath, startPort);
+      const startPath = await this.materializeResolved(document);
+      // Run with the workspace root as the working directory so relative data
+      // paths (data/x.csv, out/y.parquet) resolve against the project root even
+      // when the pipeline lives in a pipelines/ subfolder.
+      const wsRoot = vscode.workspace.getWorkspaceFolder(document.uri)?.uri.fsPath;
+      const port = await this.manager.start(startPath, startPort, wsRoot);
       this.logRun(`[engine] Ready on port ${port}`);
       this.hooks.onRunning?.(port, path.basename(document.uri.fsPath, '.datapipeline'));
       this.post(panel, { type: 'runStarted', port });
@@ -385,6 +508,96 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
     } finally {
       this.manager.onLog(null);
     }
+  }
+
+  // Resolve any bound connections into concrete engine config and, if any are
+  // present, write a sibling temp file the engine reads (keeping secrets out of
+  // the on-disk .datapipeline). Returns the path the engine should start from.
+  private async materializeResolved(document: vscode.TextDocument): Promise<string> {
+    this.clearResolved();
+    if (!this.connections) return document.uri.fsPath;
+
+    let app: any;
+    try {
+      app = safeParse(document.getText());
+    } catch {
+      return document.uri.fsPath;
+    }
+    const pipe = app?.resources?.[0]?.data;
+    if (!pipe || typeof pipe !== 'object') return document.uri.fsPath;
+
+    // Collect stages that may carry a `connection` binding.
+    const stages: any[] = [];
+    if (pipe.source) stages.push(pipe.source);
+    if (pipe.sink) stages.push(pipe.sink);
+    if (pipe.dlq?.options) stages.push(pipe.dlq.options);
+    if (Array.isArray(pipe.transforms)) for (const t of pipe.transforms) if (t && typeof t === 'object') stages.push(t);
+
+    let injected = 0;
+    for (const stage of stages) {
+      const name = stage.connection;
+      if (!name || typeof name !== 'string') continue;
+      const conn = await this.connections.getByName(name);
+      if (!conn) {
+        this.logRun(`[connections] WARNING: bound connection "${name}" not found — leaving stage unresolved.`);
+        continue;
+      }
+      const resolved = await this.connections.resolveStageConfig(conn.id);
+      Object.assign(stage, resolved);
+      delete stage.connection;
+      injected++;
+    }
+
+    if (injected === 0) return document.uri.fsPath;
+
+    const dir = path.dirname(document.uri.fsPath);
+    const base = path.basename(document.uri.fsPath, '.datapipeline');
+    const target = path.join(dir, `.${base}.resolved.datapipeline`);
+    await vscode.workspace.fs.writeFile(vscode.Uri.file(target), Buffer.from(JSON.stringify(app, null, 2), 'utf8'));
+    this.resolvedPath = target;
+    this.logRun(
+      `[connections] Injected ${injected} connection(s) into a resolved run file (secrets stay out of ${base}.datapipeline).`,
+    );
+    return target;
+  }
+
+  // Resolve the JDBC driver + DSN for a source/sink/dlq target so the DB can be
+  // introspected. Uses a bound connection when present, else the inline
+  // driver/dsn fields on the stage.
+  private async resolveDbTarget(
+    doc: vscode.TextDocument,
+    target: 'source' | 'sink' | 'dlq',
+  ): Promise<{ driver: string; dsn: string }> {
+    const app: any = safeParse(doc.getText());
+    const pipe = app?.resources?.[0]?.data;
+    if (!pipe) throw new Error('Pipeline has no data.');
+    const stage: any = target === 'dlq' ? pipe.dlq?.options : pipe[target];
+    if (!stage || typeof stage !== 'object') throw new Error(`No ${target} configured.`);
+
+    if (typeof stage.connection === 'string' && this.connections) {
+      const conn = await this.connections.getByName(stage.connection);
+      if (!conn) throw new Error(`Connection "${stage.connection}" not found.`);
+      const cfg = await this.connections.resolveStageConfig(conn.id);
+      const driver = String((cfg as any).driver || 'postgres');
+      const dsn = String((cfg as any).dsn || '');
+      if (!dsn) throw new Error(`Connection "${stage.connection}" is not a database connection.`);
+      return { driver, dsn };
+    }
+    const driver = String(stage.driver || 'postgres');
+    const dsn = String(stage.dsn || '');
+    if (!dsn) throw new Error('No connection or DSN configured for this stage.');
+    return { driver, dsn };
+  }
+
+  // Remove the last resolved temp file, if any.
+  private clearResolved(): void {
+    if (!this.resolvedPath) return;
+    try {
+      vscode.workspace.fs.delete(vscode.Uri.file(this.resolvedPath));
+    } catch {
+      /* best effort */
+    }
+    this.resolvedPath = null;
   }
 
   private async runPipeline(document: vscode.TextDocument, panel: vscode.WebviewPanel): Promise<void> {
@@ -475,6 +688,7 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
 
   private stopPipeline(panel: vscode.WebviewPanel): void {
     this.manager.stop();
+    this.clearResolved();
     this.hooks.onStopped?.();
     this.post(panel, { type: 'stopped' });
   }
@@ -501,43 +715,109 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
       await this.manager.buildBinary({ sourcePath, out });
       vscode.window.showInformationMessage(`Built binary → ${out}`);
     } else if (format === 'dockerfile' || format === 'image' || format === 'platform') {
-      await this.writeDockerfile(uri);
+      const doc = await vscode.workspace.openTextDocument(uri);
+      const deploy = await this.buildDeployPipeline(doc);
+      await this.writeDockerfile(uri, deploy.deployFileName);
       if (format === 'platform') {
-        await this.generateDeployArtifacts(await vscode.workspace.openTextDocument(uri), 4);
+        await this.generateDeployArtifacts(doc, 4, deploy);
       } else {
-        vscode.window.showInformationMessage('Generated Dockerfile next to the pipeline.');
+        const envNote = deploy.env.length
+          ? ` Provide ${deploy.env.length} secret env var(s) at runtime — see the generated ${path.basename(deploy.deployFileName)}.env.example.`
+          : '';
+        vscode.window.showInformationMessage('Generated Dockerfile next to the pipeline.' + envNote);
       }
     } else {
       vscode.window.showInformationMessage(`Build target "${format}" — see the Flogo Data Pipeline output channel.`);
     }
   }
 
-  private async writeDockerfile(uri: vscode.Uri): Promise<vscode.Uri> {
+  // Resolve bound connections into a deploy-ready sibling pipeline. Non-secret
+  // connection fields are inlined; secret fields become ${ENV_VAR} placeholders
+  // the engine expands at runtime. Also writes a .env.example listing the
+  // required variables (with placeholder values — the real secrets stay in
+  // Secret Storage and are never written to disk). Returns the deploy file name
+  // and the env var list.
+  private async buildDeployPipeline(
+    doc: vscode.TextDocument,
+  ): Promise<{ deployFileName: string; env: Array<{ name: string; value: string }> }> {
+    const base = path.basename(doc.uri.fsPath, '.datapipeline');
+    const deployFileName = `${base}.deploy.datapipeline`;
+    const app: any = safeParse(doc.getText());
+    const pipe = app?.resources?.[0]?.data;
+    const env: Array<{ name: string; value: string }> = [];
+
+    if (pipe && typeof pipe === 'object' && this.connections) {
+      const stages: any[] = [];
+      if (pipe.source) stages.push(pipe.source);
+      if (pipe.sink) stages.push(pipe.sink);
+      if (pipe.dlq?.options) stages.push(pipe.dlq.options);
+      if (Array.isArray(pipe.transforms)) for (const t of pipe.transforms) if (t && typeof t === 'object') stages.push(t);
+
+      for (const stage of stages) {
+        const name = stage.connection;
+        if (!name || typeof name !== 'string') continue;
+        const conn = await this.connections.getByName(name);
+        if (!conn) continue;
+        const { config, env: stageEnv } = await this.connections.resolveStageConfigForDeploy(conn.id);
+        Object.assign(stage, config);
+        delete stage.connection;
+        // Record only the var name — real secret values stay in Secret Storage.
+        for (const e of stageEnv) if (!env.some((x) => x.name === e.name)) env.push({ name: e.name, value: '' });
+      }
+    }
+
+    const dir = path.dirname(doc.uri.fsPath);
+    const target = path.join(dir, deployFileName);
+    await vscode.workspace.fs.writeFile(vscode.Uri.file(target), Buffer.from(JSON.stringify(app, null, 2), 'utf8'));
+
+    if (env.length) {
+      const envExample =
+        '# Fill in the secret values (kept out of the pipeline file). Do not commit.\n' +
+        env.map((e) => `${e.name}=CHANGE_ME`).join('\n') +
+        '\n';
+      await vscode.workspace.fs.writeFile(
+        vscode.Uri.file(path.join(dir, `${deployFileName}.env.example`)),
+        Buffer.from(envExample, 'utf8'),
+      );
+    }
+    return { deployFileName, env };
+  }
+
+  private async writeDockerfile(uri: vscode.Uri, pipelineFileName?: string): Promise<vscode.Uri> {
     const { dockerfile } = await import('../deploy/manifests');
     const dir = vscode.Uri.joinPath(uri, '..');
-    const fileName = path.basename(uri.fsPath);
+    const fileName = pipelineFileName ?? path.basename(uri.fsPath);
     const target = vscode.Uri.joinPath(dir, 'Dockerfile');
     await vscode.workspace.fs.writeFile(target, Buffer.from(dockerfile(fileName), 'utf8'));
     return target;
   }
 
   // Generate a Dockerfile + sharded StatefulSet + README next to the pipeline.
-  async generateDeployArtifacts(doc: vscode.TextDocument, replicas: number): Promise<void> {
+  async generateDeployArtifacts(
+    doc: vscode.TextDocument,
+    replicas: number,
+    deploy?: { deployFileName: string; env: Array<{ name: string; value: string }> },
+  ): Promise<void> {
     const { statefulSet, deployReadme } = await import('../deploy/manifests');
     const dir = vscode.Uri.joinPath(doc.uri, '..');
-    const fileName = path.basename(doc.uri.fsPath);
+    const resolved = deploy ?? (await this.buildDeployPipeline(doc));
+    const fileName = resolved.deployFileName;
+    const envVars = resolved.env;
     const pd = extractPipelineData(safeParse(doc.getText()));
     const name = pd.name || path.basename(doc.uri.fsPath, '.datapipeline');
     const image = this.defaultImageTag(doc.uri);
 
-    await this.writeDockerfile(doc.uri);
+    await this.writeDockerfile(doc.uri, fileName);
     const stsUri = vscode.Uri.joinPath(dir, 'k8s-statefulset.yaml');
-    await vscode.workspace.fs.writeFile(stsUri, Buffer.from(statefulSet(name, fileName, replicas, image), 'utf8'));
+    await vscode.workspace.fs.writeFile(stsUri, Buffer.from(statefulSet(name, fileName, replicas, image, envVars), 'utf8'));
     const readmeUri = vscode.Uri.joinPath(dir, 'DEPLOY.md');
-    await vscode.workspace.fs.writeFile(readmeUri, Buffer.from(deployReadme(name, replicas, image), 'utf8'));
+    await vscode.workspace.fs.writeFile(readmeUri, Buffer.from(deployReadme(name, replicas, image, envVars), 'utf8'));
 
+    const secretNote = envVars.length
+      ? ` ${envVars.length} secret env var(s) required — a Secret template is included in the manifest and DEPLOY.md.`
+      : '';
     const choice = await vscode.window.showInformationMessage(
-      `Generated Dockerfile + k8s-statefulset.yaml (${replicas} replicas) + DEPLOY.md.`,
+      `Generated Dockerfile + k8s-statefulset.yaml (${replicas} replicas) + DEPLOY.md.` + secretNote,
       'Open Manifest',
     );
     if (choice === 'Open Manifest') {

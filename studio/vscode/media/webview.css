@@ -68,6 +68,16 @@ button{font-family:inherit;color:inherit;background:none;border:none;cursor:poin
 .conn:hover{background:var(--blueHi)}
 .branch{margin:12px 0 0 186px;display:flex;flex-direction:column;align-items:center}
 .branch .down{width:2px;height:22px;background:#7a3c34}
+/* DLQ as a "catch" error-handler lane under the sink end of the flow */
+.flowwrap{display:inline-block}
+.catchlane{display:flex;justify-content:flex-end;padding-right:64px;margin-top:0}
+.catchcol{display:flex;flex-direction:column;align-items:center}
+.catchlane .elbow-line{width:2px;height:24px;background:repeating-linear-gradient(#c9903f 0 5px,transparent 5px 9px)}
+.catchlane .elbow-tag{margin:4px 0 6px;font:600 10px var(--sans);color:#c9903f;white-space:nowrap;letter-spacing:.03em}
+.node.catch{width:170px;border:1px solid #6b4a1f;border-top:2px solid #c9903f;background:linear-gradient(180deg,rgba(201,144,63,.10),var(--node))}
+.node.catch:hover{border-color:#c9903f}
+.node.catch .kind{color:#c9903f;text-transform:uppercase;letter-spacing:.06em;font-size:10px}
+.node.catch.sel{border-color:var(--blue);box-shadow:0 0 0 2px rgba(0,120,212,.4)}
 .addnode{flex:none;width:42px;height:42px;border:1px dashed var(--inputBorder);border-radius:9px;color:var(--dim);display:flex;align-items:center;justify-content:center;font-size:18px}
 .addnode:hover{color:var(--text);border-color:#565a60}
 .canvas-hint{position:absolute;left:20px;bottom:14px}
@@ -90,6 +100,52 @@ select.v{appearance:none;cursor:pointer;background-image:linear-gradient(45deg,t
 .inputrow .v{flex:1;min-width:0}
 .browse{flex:none;display:inline-flex;align-items:center;gap:4px;background:var(--input);border:1px solid var(--inputBorder);color:var(--mute);border-radius:5px;padding:0 10px;font-size:11px;font-weight:600;cursor:pointer}
 .browse:hover{background:#3a3a3a;color:var(--text)}
+/* connection selector */
+.conn-fld{border:1px solid var(--inputBorder);border-radius:6px;padding:8px;background:rgba(120,160,255,0.05)}
+.conn-fld .k{color:var(--text)}
+.conn-actions{display:flex;gap:6px;margin-top:6px}
+.conn-actions .browse{flex:1;justify-content:center}
+/* atomic stage tester */
+.hr{height:1px;background:var(--border);margin:14px 0 10px}
+.ttl{font-weight:600;font-size:12.5px;margin-bottom:2px}
+.ttl2{font-weight:600;font-size:12px}
+.ttbar{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
+.tt-json{width:100%;min-height:120px;font:11.5px var(--mono);white-space:pre;border:none;border-radius:0 0 7px 7px}
+/* input-sample card */
+.ttcard{border:1px solid var(--inputBorder);border-radius:8px;overflow:hidden;background:var(--panel)}
+.ttcard-h{display:flex;align-items:center;justify-content:space-between;padding:7px 10px;border-bottom:1px solid var(--border)}
+.ttcard-t{font:600 11px var(--sans);text-transform:uppercase;letter-spacing:.05em;color:var(--mute)}
+.ttcard-a{display:flex;gap:4px}
+.iconbtn{width:26px;height:24px;display:inline-flex;align-items:center;justify-content:center;background:transparent;border:1px solid transparent;border-radius:5px;color:var(--mute);font-size:13px;cursor:pointer;transition:background .1s,color .1s}
+.iconbtn:hover{background:var(--input);color:var(--text);border-color:var(--inputBorder)}
+.ttempty{padding:14px 12px;font-size:11.5px;color:var(--dim)}
+.link{color:var(--blueHi);cursor:pointer;text-decoration:none}
+.link:hover{text-decoration:underline}
+.ttrun{width:100%;margin-top:10px;justify-content:center}
+.ttgrid{overflow:auto}
+.ttgrid table{border-collapse:collapse;width:100%}
+.ttgrid th{font:600 10px var(--sans);text-transform:uppercase;letter-spacing:.04em;color:var(--dim);text-align:left;padding:5px 7px;border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--panel)}
+.ttgrid td{padding:2px 4px;border-bottom:1px solid #2b2b2b}
+.ttgrid input{width:100%;min-width:70px;background:transparent;border:1px solid transparent;border-radius:4px;color:var(--text);font:12px var(--mono);padding:3px 5px}
+.ttgrid input:focus{outline:none;border-color:var(--blue);background:var(--input)}
+.ttgrid .del{color:var(--dim);cursor:pointer;padding:0 4px}
+.ttgrid .del:hover{color:var(--red)}
+.ttgrid .rocell{font:12px var(--mono);color:var(--text);padding:5px 7px;white-space:nowrap;max-width:200px;overflow:hidden;text-overflow:ellipsis}
+.ttgrid .nullcell{color:var(--dim);font-style:italic}
+.ttgrid .rocell.nullcell::before{content:'null'}
+.ttresult{margin-top:14px}
+.ttout{border-collapse:collapse;width:100%;margin-top:6px}
+.ttout th{font:600 10px var(--sans);text-transform:uppercase;color:var(--dim);text-align:left;padding:4px 6px;border-bottom:1px solid var(--border)}
+.ttout td{padding:4px 6px;border-bottom:1px solid #2b2b2b;vertical-align:top}
+.ttcode{font:11px var(--mono);color:var(--text);word-break:break-all}
+.ttreason{font:11px var(--mono);color:var(--red)}
+/* infer-schema button */
+.infer-btn{width:100%;justify-content:center;margin-top:6px;color:var(--text)}
+/* conflict-key checkbox rows */
+.ckrow{display:flex;align-items:center;gap:8px;padding:3px 0;cursor:pointer}
+.ckrow input{margin:0}
+.cklbl{font-size:12px}
+.cklbl .ty{color:var(--dim);font-size:10.5px;margin-left:4px}
 /* toggle switch for booleans */
 .toggle{display:inline-flex;align-items:center;gap:9px;cursor:pointer;user-select:none}
 .toggle .sw{width:34px;height:18px;border-radius:10px;background:#3a3a3a;position:relative;transition:background .15s;flex:none}
@@ -215,7 +271,8 @@ h3.sec{font-size:14px;margin:2px 0 12px}
 .palette{position:fixed;top:38px;left:50%;transform:translateX(-50%);width:min(600px,86vw);z-index:50;background:#252526;border:1px solid #454545;border-radius:8px;box-shadow:0 16px 50px rgba(0,0,0,.6);overflow:hidden}
 .palette input{background:#3c3c3c;border:1px solid #007fd4;color:var(--text);font-size:13px;padding:8px 10px;margin:8px;width:calc(100% - 16px);border-radius:4px;outline:none}
 .palette .pi{display:flex;align-items:center;gap:10px;padding:7px 16px;font-size:13px;color:var(--text);cursor:pointer}
-.palette .pi.on,.palette .pi:hover{background:var(--sel)}
+.palette .pi.on,.palette .pi.sel,.palette .pi:hover{background:var(--sel)}
+.palette .pi.dis{color:var(--dim);cursor:default}
 .palette .pi .ic{color:var(--blueHi);width:16px;text-align:center}
 .palette .pi .cat{color:var(--dim)}
 .palette .pi .kb{margin-left:auto;color:var(--dim);font:11px var(--mono)}

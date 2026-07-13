@@ -35,6 +35,20 @@
           "dark": "resources/icon.svg"
         },
         "configuration": "./language-configuration.json"
+      },
+      {
+        "id": "flogo-connection",
+        "aliases": [
+          "Flogo Connection"
+        ],
+        "extensions": [
+          ".fgconn"
+        ],
+        "icon": {
+          "light": "resources/connection-icon.svg",
+          "dark": "resources/connection-icon.svg"
+        },
+        "configuration": "./language-configuration.json"
       }
     ],
     "grammars": [
@@ -54,12 +68,26 @@
           }
         ],
         "priority": "default"
+      },
+      {
+        "viewType": "flogoDataPipelineStudio.connectionEditor",
+        "displayName": "Flogo Connection",
+        "selector": [
+          {
+            "filenamePattern": "*.fgconn"
+          }
+        ],
+        "priority": "default"
       }
     ],
     "jsonValidation": [
       {
         "fileMatch": "*.datapipeline",
         "url": "./schemas/datapipeline.schema.json"
+      },
+      {
+        "fileMatch": "*.fgconn",
+        "url": "./schemas/fgconn.schema.json"
       }
     ],
     "commands": [
@@ -110,13 +138,79 @@
         "title": "Open Fleet Dashboard",
         "category": "Data Pipeline",
         "icon": "$(dashboard)"
+      },
+      {
+        "command": "flogoDataPipelineStudio.initProject",
+        "title": "Initialize Project Structure",
+        "category": "Data Pipeline",
+        "icon": "$(folder-library)"
+      },
+      {
+        "command": "flogoDataPipelineStudio.newConnection",
+        "title": "New Connection…",
+        "category": "Data Pipeline",
+        "icon": "$(add)"
+      },
+      {
+        "command": "flogoDataPipelineStudio.refreshConnections",
+        "title": "Refresh Connections",
+        "category": "Data Pipeline",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "flogoDataPipelineStudio.editConnection",
+        "title": "Edit Connection",
+        "category": "Data Pipeline",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "flogoDataPipelineStudio.testConnection",
+        "title": "Test Connection",
+        "category": "Data Pipeline",
+        "icon": "$(pulse)"
+      },
+      {
+        "command": "flogoDataPipelineStudio.deleteConnection",
+        "title": "Delete Connection",
+        "category": "Data Pipeline",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "flogoDataPipelineStudio.revealConnectionsFile",
+        "title": "Where are Connections stored?",
+        "category": "Data Pipeline",
+        "icon": "$(info)"
       }
     ],
     "views": {
-      "explorer": [
+      "flogoDataPipelineActivity": [
         {
           "id": "flogoDataPipelineStudio.pipelinesExplorer",
+          "name": "Pipelines",
+          "type": "tree",
+          "icon": "resources/icon.svg",
+          "contextualTitle": "Flogo Data Pipelines"
+        },
+        {
+          "id": "flogoDataPipelineStudio.connectionsExplorer",
+          "name": "Connections",
+          "type": "tree",
+          "icon": "resources/icon.svg",
+          "contextualTitle": "Flogo Data Pipelines"
+        }
+      ],
+      "explorer": [
+        {
+          "id": "flogoDataPipelineStudio.pipelinesExplorerMirror",
           "name": "Flogo Data Pipelines",
+          "type": "tree",
+          "icon": "resources/icon.svg",
+          "contextualTitle": "Flogo Data Pipelines",
+          "when": "workbenchState != empty"
+        },
+        {
+          "id": "flogoDataPipelineStudio.connectionsExplorerMirror",
+          "name": "Pipeline Connections",
           "type": "tree",
           "icon": "resources/icon.svg",
           "contextualTitle": "Flogo Data Pipelines",
@@ -133,6 +227,13 @@
       ]
     },
     "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "flogoDataPipelineActivity",
+          "title": "Flogo Data Pipelines",
+          "icon": "resources/icon.svg"
+        }
+      ],
       "panel": [
         {
           "id": "flogoDataPipelinePanel",
@@ -145,18 +246,50 @@
       "view/title": [
         {
           "command": "flogoDataPipelineStudio.build",
-          "when": "view == flogoDataPipelineStudio.pipelinesExplorer",
+          "when": "view == flogoDataPipelineStudio.pipelinesExplorer || view == flogoDataPipelineStudio.pipelinesExplorerMirror",
           "group": "navigation@0"
         },
         {
           "command": "flogoDataPipelineStudio.newFromTemplate",
-          "when": "view == flogoDataPipelineStudio.pipelinesExplorer",
+          "when": "view == flogoDataPipelineStudio.pipelinesExplorer || view == flogoDataPipelineStudio.pipelinesExplorerMirror",
           "group": "navigation@1"
         },
         {
           "command": "flogoDataPipelineStudio.newPipeline",
-          "when": "view == flogoDataPipelineStudio.pipelinesExplorer",
+          "when": "view == flogoDataPipelineStudio.pipelinesExplorer || view == flogoDataPipelineStudio.pipelinesExplorerMirror",
           "group": "navigation@2"
+        },
+        {
+          "command": "flogoDataPipelineStudio.initProject",
+          "when": "view == flogoDataPipelineStudio.pipelinesExplorer || view == flogoDataPipelineStudio.pipelinesExplorerMirror",
+          "group": "1_setup@0"
+        },
+        {
+          "command": "flogoDataPipelineStudio.newConnection",
+          "when": "view == flogoDataPipelineStudio.connectionsExplorer || view == flogoDataPipelineStudio.connectionsExplorerMirror",
+          "group": "navigation@0"
+        },
+        {
+          "command": "flogoDataPipelineStudio.refreshConnections",
+          "when": "view == flogoDataPipelineStudio.connectionsExplorer || view == flogoDataPipelineStudio.connectionsExplorerMirror",
+          "group": "navigation@1"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "flogoDataPipelineStudio.testConnection",
+          "when": "(view == flogoDataPipelineStudio.connectionsExplorer || view == flogoDataPipelineStudio.connectionsExplorerMirror) && viewItem == flogoConnection",
+          "group": "inline@0"
+        },
+        {
+          "command": "flogoDataPipelineStudio.editConnection",
+          "when": "(view == flogoDataPipelineStudio.connectionsExplorer || view == flogoDataPipelineStudio.connectionsExplorerMirror) && viewItem == flogoConnection",
+          "group": "1_modify@0"
+        },
+        {
+          "command": "flogoDataPipelineStudio.deleteConnection",
+          "when": "(view == flogoDataPipelineStudio.connectionsExplorer || view == flogoDataPipelineStudio.connectionsExplorerMirror) && viewItem == flogoConnection",
+          "group": "9_danger@0"
         }
       ],
       "explorer/context": [
@@ -184,27 +317,49 @@
       "editor/title": [
         {
           "command": "flogoDataPipelineStudio.runPipeline",
-          "when": "resourceExtname == .datapipeline",
+          "when": "resourceExtname == .datapipeline || activeCustomEditorId == flogoDataPipelineStudio.pipelineEditor",
           "group": "navigation@1"
         },
         {
           "command": "flogoDataPipelineStudio.build",
-          "when": "resourceExtname == .datapipeline",
+          "when": "resourceExtname == .datapipeline || activeCustomEditorId == flogoDataPipelineStudio.pipelineEditor",
           "group": "navigation@2"
         }
       ],
       "commandPalette": [
         {
           "command": "flogoDataPipelineStudio.runPipeline",
-          "when": "resourceExtname == .datapipeline"
+          "when": "resourceExtname == .datapipeline || activeCustomEditorId == flogoDataPipelineStudio.pipelineEditor"
         },
         {
           "command": "flogoDataPipelineStudio.build",
-          "when": "resourceExtname == .datapipeline"
+          "when": "resourceExtname == .datapipeline || activeCustomEditorId == flogoDataPipelineStudio.pipelineEditor"
         },
         {
           "command": "flogoDataPipelineStudio.runWithOptions",
-          "when": "resourceExtname == .datapipeline"
+          "when": "resourceExtname == .datapipeline || activeCustomEditorId == flogoDataPipelineStudio.pipelineEditor"
+        },
+        {
+          "command": "flogoDataPipelineStudio.newConnection"
+        },
+        {
+          "command": "flogoDataPipelineStudio.revealConnectionsFile"
+        },
+        {
+          "command": "flogoDataPipelineStudio.editConnection",
+          "when": "false"
+        },
+        {
+          "command": "flogoDataPipelineStudio.testConnection",
+          "when": "false"
+        },
+        {
+          "command": "flogoDataPipelineStudio.deleteConnection",
+          "when": "false"
+        },
+        {
+          "command": "flogoDataPipelineStudio.refreshConnections",
+          "when": "false"
         }
       ]
     },

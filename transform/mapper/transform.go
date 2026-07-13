@@ -112,16 +112,29 @@ func (m *mapperTransform) Apply(in *record.RecordBatch) (*record.RecordBatch, er
 
 func (m *mapperTransform) Close() error { return nil }
 
-// compileExpr compiles an expression string into an evaluator function.
+// compileExpr compiles a field-value expression into an evaluator function.
+// A value with no leading "=" is a static string constant; otherwise everything
+// after the "=" is compiled as an expression (field ref, function call, literal).
 func compileExpr(expr string) (func(row map[string]interface{}) interface{}, error) {
 	if !strings.HasPrefix(expr, "=") {
 		// Static string constant.
 		return func(_ map[string]interface{}) interface{} { return expr }, nil
 	}
+	return compileInner(strings.TrimPrefix(expr, "="))
+}
 
-	inner := strings.TrimPrefix(expr, "=")
+// compileInner compiles an expression (the part after a leading "="). It is also
+// used to compile function-call arguments, which are always expressions —
+// `$field`, a numeric/quoted literal, or a nested `func(...)`. Arguments may be
+// written with or without a leading "=" (both `upper($product)` and
+// `upper(=$product)` resolve $product to the row value), so we tolerate an
+// optional "=" prefix here.
+func compileInner(inner string) (func(row map[string]interface{}) interface{}, error) {
+	inner = strings.TrimSpace(inner)
+	inner = strings.TrimPrefix(inner, "=")
+	inner = strings.TrimSpace(inner)
 
-	// Field reference: =$fieldName or =$.fieldName
+	// Field reference: $fieldName or $.fieldName
 	if strings.HasPrefix(inner, "$") {
 		fieldName := strings.TrimPrefix(strings.TrimPrefix(inner, "$"), ".")
 		return func(row map[string]interface{}) interface{} {
@@ -129,19 +142,18 @@ func compileExpr(expr string) (func(row map[string]interface{}) interface{}, err
 		}, nil
 	}
 
-	// Function call: =funcName(arg1, arg2, ...)
+	// Function call: funcName(arg1, arg2, ...)
 	parenIdx := strings.Index(inner, "(")
 	if parenIdx > 0 && strings.HasSuffix(inner, ")") {
 		funcName := strings.ToLower(inner[:parenIdx])
 		argsStr := inner[parenIdx+1 : len(inner)-1]
 		args, err := splitArgs(argsStr)
 		if err != nil {
-			return nil, fmt.Errorf("bad function call %q: %w", expr, err)
+			return nil, fmt.Errorf("bad function call %q: %w", inner, err)
 		}
 		argEvals := make([]func(map[string]interface{}) interface{}, len(args))
 		for i, arg := range args {
-			arg = strings.TrimSpace(arg)
-			eval, err := compileExpr(arg)
+			eval, err := compileInner(strings.TrimSpace(arg))
 			if err != nil {
 				return nil, fmt.Errorf("arg %d of %s: %w", i, funcName, err)
 			}
@@ -171,7 +183,7 @@ func compileExpr(expr string) (func(row map[string]interface{}) interface{}, err
 		return func(_ map[string]interface{}) interface{} { return s }, nil
 	}
 
-	return nil, fmt.Errorf("unrecognized expression: %q", expr)
+	return nil, fmt.Errorf("unrecognized expression: %q", inner)
 }
 
 // splitArgs splits a comma-separated argument list respecting parentheses and quotes.

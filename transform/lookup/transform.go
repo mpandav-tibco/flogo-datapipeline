@@ -27,6 +27,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -204,8 +205,14 @@ func (l *lookupTransform) fetchWithCache(key string) (map[string]interface{}, er
 }
 
 func (l *lookupTransform) fetch(key string) (map[string]interface{}, error) {
-	url := strings.ReplaceAll(l.urlTemplate, "{"+l.keyField+"}", key)
-	req, err := http.NewRequestWithContext(context.Background(), l.method, url, nil)
+	// Accept both {keyField} and ${keyField} so users familiar with the source
+	// path templating (which uses ${date}) aren't surprised. Replace the
+	// ${...} form first so the {...} pass doesn't leave a stray "$".
+	escKey := url.PathEscape(key)
+	target := l.urlTemplate
+	target = strings.ReplaceAll(target, "${"+l.keyField+"}", escKey)
+	target = strings.ReplaceAll(target, "{"+l.keyField+"}", escKey)
+	req, err := http.NewRequestWithContext(context.Background(), l.method, target, nil)
 	if err != nil {
 		return nil, err
 	}

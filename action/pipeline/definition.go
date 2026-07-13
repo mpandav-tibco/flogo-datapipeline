@@ -6,6 +6,8 @@ package pipeline
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"regexp"
 
 	"github.com/project-flogo/core/app/resource"
 )
@@ -458,9 +460,85 @@ func (defLoader) LoadResource(config *resource.Config) (*resource.Resource, erro
 	if err := json.Unmarshal(config.Data, &def); err != nil {
 		return nil, err
 	}
+	// Expand ${ENV_VAR} placeholders in string config values so deployed
+	// pipelines can inject secrets (DSNs, keys, tokens) via environment
+	// variables — e.g. a container references "${DB_PASSWORD}" and Kubernetes
+	// supplies it from a Secret. Unset variables expand to "" (like a shell).
+	def.expandEnv()
 	def.defaults()
 	if err := def.validate(); err != nil {
 		return nil, err
 	}
 	return resource.New(ResType, &def), nil
 }
+
+// envVarRe matches ${NAME} placeholders (NAME = letters, digits, underscore).
+var envVarRe = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
+
+// reservedTemplateVars are engine-internal placeholders expanded elsewhere
+// (incremental high-water mark, date/path templating). They must NOT be treated
+// as environment variables.
+var reservedTemplateVars = map[string]bool{
+	"hwm": true, "date": true, "year": true, "month": true, "day": true,
+	"uuid": true, "runId": true,
+}
+
+// expandEnvString replaces ${VAR} in s with the environment value of VAR — but
+// only when VAR is actually set in the environment and is not a reserved
+// engine template (e.g. ${hwm}, ${date}). Unset / reserved placeholders are
+// left untouched so their dedicated substitution still runs.
+func expandEnvString(s string) string {
+	return envVarRe.ReplaceAllStringFunc(s, func(m string) string {
+		name := envVarRe.FindStringSubmatch(m)[1]
+		if reservedTemplateVars[name] {
+			return m
+		}
+		if v, ok := os.LookupEnv(name); ok {
+			return v
+		}
+		return m
+	})
+}
+
+// expandEnvValue recursively expands ${ENV} placeholders in any string values
+// held in a config value (string, map, or slice).
+func expandEnvValue(v interface{}) interface{} {
+	switch t := v.(type) {
+	case string:
+		return expandEnvString(t)
+	case map[string]interface{}:
+		for k, val := range t {
+			t[k] = expandEnvValue(val)
+		}
+		return t
+	case []interface{}:
+		for i, val := range t {
+			t[i] = expandEnvValue(val)
+		}
+		return t
+	default:
+		return v
+	}
+}
+
+// expandEnv expands ${ENV} placeholders across the source, sink, dlq and
+// transform config maps (and the source path). Structural/numeric fields are
+// left untouched.
+func (d *Definition) expandEnv() {
+	d.Source.Path = expandEnvString(d.Source.Path)
+	if d.Source.Options != nil {
+		expandEnvValue(d.Source.Options)
+	}
+	if d.Sink.Options != nil {
+		expandEnvValue(d.Sink.Options)
+	}
+	if d.DLQ.Options != nil {
+		expandEnvValue(d.DLQ.Options)
+	}
+	for i := range d.Transforms {
+		if d.Transforms[i].Extra != nil {
+			expandEnvValue(d.Transforms[i].Extra)
+		}
+	}
+}
+

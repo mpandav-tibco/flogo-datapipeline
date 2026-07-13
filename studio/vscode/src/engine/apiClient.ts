@@ -52,6 +52,30 @@ export interface DefinitionSummary {
   dlq: string;
 }
 
+export interface StageTestRow {
+  status: 'kept' | 'dropped' | 'failed';
+  input: Record<string, unknown>;
+  output?: Record<string, unknown>;
+  error?: string;
+}
+
+export interface StageTestResult {
+  type: string;
+  columns: string[];
+  rows: StageTestRow[];
+  rowsIn: number;
+  kept: number;
+  dropped: number;
+  failed: number;
+}
+
+export interface IntrospectedColumn {
+  name: string;
+  type: string;
+  dbType?: string;
+  nullable?: boolean;
+}
+
 function request<T>(
   port: number,
   method: string,
@@ -131,8 +155,40 @@ export class ApiClient {
     return request(this.port, 'POST', `/v1/pipelines/${encodeURIComponent(ref)}/preview?limit=${limit}`, {}, 60_000);
   }
 
+  // Sample the rows that ENTER the transform at `stage` (source run through all
+  // preceding transforms) — seeds the atomic stage tester.
+  sampleInput(ref: string, stage: number, limit = 20): Promise<PreviewResult> {
+    return request(this.port, 'POST', `/v1/pipelines/${encodeURIComponent(ref)}/sampleinput`, { stage, limit }, 60_000);
+  }
+
+  // Run a single transform (by index) against supplied input rows in isolation.
+  testStage(
+    ref: string,
+    stage: number,
+    columns: string[],
+    rows: Array<Record<string, unknown>>,
+  ): Promise<StageTestResult> {
+    return request(
+      this.port,
+      'POST',
+      `/v1/pipelines/${encodeURIComponent(ref)}/teststage`,
+      { stage, columns, rows },
+      30_000,
+    );
+  }
+
   definition(ref: string): Promise<DefinitionSummary> {
     return request(this.port, 'GET', `/v1/pipelines/${encodeURIComponent(ref)}/definition`);
+  }
+
+  // List tables reachable through a driver + DSN (live DB introspection).
+  introspectTables(driver: string, dsn: string): Promise<{ tables: string[] }> {
+    return request(this.port, 'POST', '/v1/introspect/tables', { driver, dsn }, 15_000);
+  }
+
+  // Fetch the column schema of a table (mapped to pipeline column types).
+  introspectColumns(driver: string, dsn: string, table: string): Promise<{ columns: IntrospectedColumn[] }> {
+    return request(this.port, 'POST', '/v1/introspect/columns', { driver, dsn, table }, 15_000);
   }
 
   cancel(ref: string, runId: string): Promise<void> {

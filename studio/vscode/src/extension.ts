@@ -6,9 +6,21 @@ import { PipelineEditorProvider, EngineHooks } from './editor/pipelineEditorProv
 import { DataPreviewView } from './panel/dataPreviewView';
 import { SidebarProvider } from './sidebar';
 import { TEMPLATES } from './templates';
+import { ConnectionStore } from './connections/store';
+import { ConnectionsSidebarProvider, ConnectionTreeItem } from './connections/sidebar';
+import { ConnectionEditorProvider } from './connections/editor';
+import {
+  createConnectionFlow,
+  editConnectionFlow,
+  deleteConnectionFlow,
+  testConnectionFlow,
+  revealConnectionsFile,
+} from './connections/commands';
 
 let manager: BinaryManager;
 let sidebar: SidebarProvider;
+let connectionStore: ConnectionStore;
+let connectionsSidebar: ConnectionsSidebarProvider;
 let statusBar: vscode.StatusBarItem;
 let editor: { provider: PipelineEditorProvider; disposable: vscode.Disposable };
 let extContext: vscode.ExtensionContext;
@@ -17,6 +29,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   extContext = context;
   manager = new BinaryManager(context.extensionPath);
   sidebar = new SidebarProvider();
+  connectionStore = new ConnectionStore(context.secrets);
+  context.subscriptions.push(connectionStore);
+  connectionsSidebar = new ConnectionsSidebarProvider(connectionStore);
+  context.subscriptions.push(connectionsSidebar);
+  context.subscriptions.push(ConnectionEditorProvider.register(context, connectionStore));
 
   statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
   statusBar.command = 'flogoDataPipelineStudio.focusSidebar';
@@ -45,7 +62,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.window.registerWebviewViewProvider(DataPreviewView.viewType, dataPreview),
   );
 
-  editor = PipelineEditorProvider.register(context, manager, hooks, dataPreview);
+  editor = PipelineEditorProvider.register(context, manager, hooks, dataPreview, connectionStore);
   context.subscriptions.push(editor.disposable);
 
   manager.onCrash(() => {
@@ -72,6 +89,50 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(sidebar);
   context.subscriptions.push(
     vscode.window.registerTreeDataProvider('flogoDataPipelineStudio.pipelinesExplorer', sidebar),
+    vscode.window.registerTreeDataProvider('flogoDataPipelineStudio.pipelinesExplorerMirror', sidebar),
+  );
+
+  context.subscriptions.push(
+    vscode.window.registerTreeDataProvider('flogoDataPipelineStudio.connectionsExplorer', connectionsSidebar),
+    vscode.window.registerTreeDataProvider('flogoDataPipelineStudio.connectionsExplorerMirror', connectionsSidebar),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('flogoDataPipelineStudio.newConnection', async () => {
+      const record = await createConnectionFlow(connectionStore);
+      if (record) {
+        const p = connectionStore.fsPathFor(record.id);
+        if (p) {
+          await vscode.commands.executeCommand(
+            'vscode.openWith',
+            vscode.Uri.file(p),
+            ConnectionEditorProvider.viewType,
+          );
+        }
+      }
+    }),
+    vscode.commands.registerCommand('flogoDataPipelineStudio.refreshConnections', () => connectionsSidebar.refresh()),
+    vscode.commands.registerCommand('flogoDataPipelineStudio.revealConnectionsFile', () => revealConnectionsFile()),
+    vscode.commands.registerCommand('flogoDataPipelineStudio.editConnection', (item: ConnectionTreeItem) => {
+      if (item?.connId) editConnectionFlow(connectionStore, item.connId);
+    }),
+    vscode.commands.registerCommand('flogoDataPipelineStudio.testConnection', (item: ConnectionTreeItem) => {
+      if (item?.connId) testConnectionFlow(connectionStore, item.connId);
+    }),
+    vscode.commands.registerCommand('flogoDataPipelineStudio.deleteConnection', (item: ConnectionTreeItem) => {
+      if (item?.connId) deleteConnectionFlow(connectionStore, item.connId);
+    }),
+    // Invoked from the webview inspector (by connection id).
+    vscode.commands.registerCommand('flogoDataPipelineStudio.editConnectionById', (id: string) => {
+      if (id) editConnectionFlow(connectionStore, id);
+    }),
+    vscode.commands.registerCommand('flogoDataPipelineStudio.testConnectionById', (id: string) => {
+      if (id) testConnectionFlow(connectionStore, id);
+    }),
+    vscode.commands.registerCommand('flogoDataPipelineStudio.deleteConnectionById', (id: string) => {
+      if (id) deleteConnectionFlow(connectionStore, id);
+    }),
+    vscode.commands.registerCommand('flogoDataPipelineStudio.initProject', () => initProject()),
   );
 
   context.subscriptions.push(
@@ -159,7 +220,65 @@ async function defaultDirUri(uri?: vscode.Uri): Promise<vscode.Uri | undefined> 
       /* fall through */
     }
   }
-  return vscode.workspace.workspaceFolders?.[0]?.uri;
+  // Default new pipelines into a `pipelines/` folder to keep the project tidy
+  // (pipelines/, connections/, data/). Created on demand.
+  const root = vscode.workspace.workspaceFolders?.[0]?.uri;
+  if (!root) return undefined;
+  const pipelinesDir = vscode.Uri.joinPath(root, 'pipelines');
+  try {
+    await vscode.workspace.fs.createDirectory(pipelinesDir);
+    return pipelinesDir;
+  } catch {
+    return root;
+  }
+}
+
+// Scaffold a tidy Data Pipeline project layout in the first workspace folder:
+//   pipelines/     — *.datapipeline flows
+//   connections/   — *.fgconn reusable connections (secrets in Secret Storage)
+//   data/          — local input/output sample data
+// plus a README describing the layout. Idempotent.
+async function initProject(): Promise<void> {
+  const root = vscode.workspace.workspaceFolders?.[0]?.uri;
+  if (!root) {
+    vscode.window.showWarningMessage('Open a folder first to initialize a Data Pipeline project.');
+    return;
+  }
+  for (const f of ['pipelines', 'connections', 'data']) {
+    try {
+      await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(root, f));
+    } catch {
+      /* exists */
+    }
+  }
+  const readme = vscode.Uri.joinPath(root, 'README.md');
+  try {
+    await vscode.workspace.fs.stat(readme);
+  } catch {
+    const body = [
+      '# Data Pipeline Project',
+      '',
+      'Structure:',
+      '',
+      '- `pipelines/` — pipeline flows (`*.datapipeline`), edited in Data Pipeline Studio.',
+      '- `connections/` — reusable connections (`*.fgconn`). Secrets live in VS Code Secret Storage, never in these files.',
+      '- `data/` — local input/output sample data.',
+      '',
+      'Create a pipeline: **Data Pipeline: New Pipeline from Template…**',
+      'Create a connection: the **＋** button on the Connections view.',
+      '',
+    ].join('\n');
+    await vscode.workspace.fs.writeFile(readme, Buffer.from(body, 'utf8'));
+  }
+  sidebar.refresh();
+  connectionsSidebar.refresh();
+  const choice = await vscode.window.showInformationMessage(
+    'Data Pipeline project initialized: pipelines/, connections/, data/.',
+    'New Pipeline',
+  );
+  if (choice === 'New Pipeline') {
+    await vscode.commands.executeCommand('flogoDataPipelineStudio.newFromTemplate');
+  }
 }
 
 async function newPipelineFile(uri?: vscode.Uri): Promise<void> {

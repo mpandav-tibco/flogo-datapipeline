@@ -6,8 +6,7 @@
 
 import type { PipelineDoc } from '../src/model/pipeline';
 import type { HostToWebview, WebviewToHost } from '../src/protocol';
-import type { RunResponse, PreviewResult, StatusResponse } from '../src/engine/apiClient';
-
+import type { RunResponse, PreviewResult, StatusResponse, StageTestResult } from '../src/engine/apiClient';
 interface VsCodeApi {
   postMessage(msg: WebviewToHost): void;
   getState(): unknown;
@@ -69,7 +68,70 @@ const S = {
   previewOn: false,
   issues: [] as { sev: string; label: string; msg: string; anchor: string | null }[],
   tailTimer: 0 as number | 0,
+  conns: [] as ConnSummary[],
+  stageTest: null as StageTest | null,
+  srcSample: null as SrcSample | null,
+  sinkSample: null as SrcSample | null,
+  db: {} as Record<string, DbIntrospect>,
 };
+
+// Live-DB introspection state, keyed by target ('source' | 'sink' | 'dlq').
+interface DbIntrospect {
+  tables: string[] | null;   // fetched table list (null = not fetched)
+  loadingTables: boolean;
+  loadingCols: boolean;
+  autoSchema: boolean;       // auto-fetch columns from DB on table select
+  error: string | null;
+}
+function dbState(target: string): DbIntrospect {
+  if (!S.db[target]) S.db[target] = { tables: null, loadingTables: false, loadingCols: false, autoSchema: true, error: null };
+  return S.db[target];
+}
+function targetOf(node: Node): 'source' | 'sink' | 'dlq' | null {
+  if (node.kind === 'source') return 'source';
+  if (node.kind === 'sink') return 'sink';
+  if (node.kind === 'dlq') return 'dlq';
+  return null;
+}
+
+// Read-only source-sample state for the source node's Test tab, so the user can
+// SEE the rows the pipeline reads before running anything.
+interface SrcSample {
+  columns: string[];
+  rows: Array<Record<string, unknown>>;
+  loading: boolean;
+  read: number;      // rowsRead reported by the engine
+}
+
+// Atomic stage-tester working state for the currently selected transform.
+interface StageTest {
+  stage: number;                              // transforms[] index under test
+  columns: string[];                          // input column order
+  rows: Array<Record<string, unknown>>;       // editable input sample
+  result: StageTestResult | null;             // last run outcome
+  view: 'grid' | 'json';                      // input editor surface
+  seeding: boolean;                           // sample fetch in flight
+  running: boolean;                           // test run in flight
+  jsonDraft: string | null;                   // unsaved JSON textarea buffer
+}
+
+// Connection summary sent by the host (never carries secret values).
+interface ConnSummary { id: string; name: string; type: string; family: string; desc: string; }
+
+// Map a source/sink stage type to a connection family so we offer only
+// compatible connections in the inspector.
+function familyOfType(type: string): string | null {
+  if (['jdbc', 'postgres', 'mysql', 'sqlite'].includes(type)) return 'db';
+  if (type === 'kafka') return 'stream';
+  if (['s3', 'gcs', 'adls', 'objstore'].includes(type)) return 'obj';
+  // Note: the `lookup` transform reads a full templated `url`, which a base-URL
+  // connection can't supply, so it is intentionally not connection-bindable.
+  if (type === 'http') return 'http';
+  return null;
+}
+function familyLabel(fam: string): string {
+  return ({ db: 'database', stream: 'Kafka', obj: 'object-store', http: 'HTTP' } as Record<string, string>)[fam] || fam;
+}
 
 const statusColor: Record<string, string> = { running: 'b', completed: 'g', partial: 'y', failed: 'r', idle: 'd' };
 
@@ -266,15 +328,15 @@ const FIELD_ENUMS: Record<string, string[]> = {
   onConflict: ['insert', 'upsert', 'ignore'],
   // validate / dq
   onViolation: ['route', 'drop', 'fail'],
-  onFail: ['warn', 'fail', 'route'],
+  onFail: ['route', 'fail', 'warn', 'drop'],
   // schemadrift
-  policy: ['additive', 'strict', 'ignore'],
-  onDrift: ['warn', 'fail', 'route'],
+  policy: ['project', 'additive', 'strict', 'drop'],
+  onDrift: ['log', 'alert', 'silent'],
   // hwm
-  valueType: ['int', 'timestamp', 'string'],
+  valueType: ['datetime', 'int', 'string'],
   // lookup
   method: ['GET', 'POST'],
-  onError: ['fail', 'skip', 'default'],
+  onError: ['null', 'skip', 'fail'],
   // dlq
   onFull: ['block', 'drop'],
   // watermark
@@ -285,6 +347,10 @@ const FIELD_HINTS: Record<string, string> = {
   dsn: 'e.g. host=localhost port=5432 dbname=app user=… sslmode=disable',
   expr: "Boolean expression over row fields, e.g. amount > 0 AND status != 'CANCELLED'",
   conflictKey: 'Comma-separated key columns used for upsert matching.',
+  table: 'Destination table. Created automatically if Auto-migrate is on.',
+  onConflict: 'insert = append rows · upsert = insert or update on the conflict key · ignore = skip duplicates.',
+  autoMigrate: 'Create the table if missing and add new columns as they appear (pairs well with additive schema drift).',
+  batchSize: 'Rows per INSERT batch. Higher = faster, more memory. 1000–5000 is typical.',
   fields: 'JSON map of output field → expression.',
   query: 'Full SELECT statement. Overrides table/orderKey when set.',
   brokers: 'Comma-separated host:port list, e.g. broker-1:9092, broker-2:9092',
@@ -292,7 +358,7 @@ const FIELD_HINTS: Record<string, string> = {
   key: 'Object key template, supports ${date}, ${uuid}, ${runId}.',
   rules: 'JSON array of field rules: [{ "field": "amount", "notNull": true }]',
   expectations: 'JSON array of DQ expectations (expectColumnNotNull, expectValuesInSet, …).',
-  url: 'Enrichment endpoint. ${field} placeholders are substituted per row.',
+  url: 'Enrichment endpoint. Use {keyField} as the placeholder, e.g. https://api/enrich/{id} — substituted per row.',
 };
 const SOURCE_TYPES = ['csv', 'tsv', 'fixedwidth', 'parquet', 'xml', 'jsonlines', 'jdbc', 'kafka', 's3', 'gcs', 'adls'];
 const SINK_TYPES = ['jdbc', 'parquet', 'csv', 'jsonlines', 'kafka', 's3', 'gcs', 'adls', 'null'];
@@ -317,7 +383,7 @@ function defaultConfigFor(kind: 'source' | 'sink', type: string): Record<string,
     adls: { bucket: '', prefix: '', format: 'csv' },
   };
   const sink: Record<string, Record<string, unknown>> = {
-    jdbc: { driver: 'postgres', dsn: '', table: '', batchSize: 1000, onConflict: 'insert' },
+    jdbc: { driver: 'postgres', dsn: '', table: '', batchSize: 1000, onConflict: 'insert', autoMigrate: true },
     parquet: { path: './out/output.parquet', compression: 'snappy', rowGroupSize: 100000 },
     csv: { path: './out/output.csv', delimiter: ',', writeHeader: true },
     jsonlines: { path: './out/output.jsonl' },
@@ -405,7 +471,12 @@ function renderField(node: Node, key: string, value: string): HTMLElement {
       if (o === value) op.selected = true;
       sel.appendChild(op);
     });
-    sel.onchange = () => setCfgField(node, key, sel.value);
+    sel.onchange = () => {
+      setCfgField(node, key, sel.value);
+      // Some enums change which other fields apply (e.g. jdbc onConflict decides
+      // whether the conflict-key picker is shown) — refresh the inspector.
+      if (key === 'onConflict') renderEditor();
+    };
     f.appendChild(sel);
     return f;
   }
@@ -464,6 +535,186 @@ function renderField(node: Node, key: string, value: string): HTMLElement {
   return f;
 }
 
+// Config keys that a bound connection supplies — hidden from the generic field
+// list when a connection is selected (the connection owns them, incl. secrets).
+const CONN_MANAGED_KEYS: Record<string, string[]> = {
+  db: ['driver', 'dsn'],
+  stream: ['brokers', 'securityProtocol', 'saslMechanism', 'saslUser', 'saslPassword'],
+  obj: ['bucket', 'region', 'endpoint', 'accessKeyId', 'secretAccessKey', 'projectId', 'credentialsJson', 'account', 'container', 'sasToken'],
+  http: ['baseUrl', 'authHeader'],
+};
+
+// A "Connection" picker for source/sink/dlq stages whose type maps to a
+// connection family. Binding stores `connection: "<name>"` on the stage and the
+// host injects the real DSN/secret fields at run time — so nothing sensitive is
+// ever written to the .datapipeline file. Returns null when the stage type
+// doesn't use a connection (e.g. a CSV file source).
+function renderConnectionSelector(node: Node): HTMLElement | null {
+  const fam = familyOfType(node.type);
+  if (!fam) return null;
+  const target = cfgTarget(node);
+  const bound: string = typeof target.connection === 'string' ? target.connection : '';
+  const matches = S.conns.filter((c) => c.family === fam);
+
+  const f = el('div', 'fld conn-fld');
+  f.appendChild(el('div', 'k', 'Connection'));
+
+  const sel = el('select', 'v') as HTMLSelectElement;
+  const NONE = '__none__';
+  const NEW = '__new__';
+  const add = (val: string, label: string, selected: boolean) => {
+    const op = document.createElement('option');
+    op.value = val; op.textContent = label; op.selected = selected;
+    sel.appendChild(op);
+  };
+  add(NONE, matches.length ? '— none (enter fields manually) —' : '— no ' + familyLabel(fam) + ' connections —', !bound);
+  matches.forEach((c) => add(c.name, `${c.name}  ·  ${c.desc}`, c.name === bound));
+  // A bound connection that no longer exists — keep it visible so it isn't lost.
+  if (bound && !matches.some((c) => c.name === bound)) add(bound, `${bound}  (missing)`, true);
+  add(NEW, '＋ New connection…', false);
+
+  sel.onchange = () => {
+    const v = sel.value;
+    if (v === NEW) {
+      post({ type: 'newConnection', family: fam });
+      renderEditor();
+      return;
+    }
+    if (v === NONE) {
+      delete target.connection;
+      persistAndRebuild();
+      return;
+    }
+    target.connection = v;
+    // Drop any manually-entered managed fields so the connection is the single
+    // source of truth (secrets are injected at run time by the host).
+    for (const k of CONN_MANAGED_KEYS[fam] || []) delete target[k];
+    persistAndRebuild();
+    toast('ok', `Bound ${node.kind} → connection "${v}"`);
+  };
+  f.appendChild(sel);
+
+  if (bound) {
+    const row = el('div', 'conn-actions');
+    const test = el('button', 'browse', '⟿ Test');
+    const conn = S.conns.find((c) => c.name === bound);
+    test.onclick = () => conn ? post({ type: 'testConnection', id: conn.id }) : toast('warn', 'Connection not found');
+    const edit = el('button', 'browse', '✎ Edit');
+    edit.onclick = () => conn ? post({ type: 'editConnection', id: conn.id }) : post({ type: 'newConnection', family: fam });
+    row.appendChild(test); row.appendChild(edit);
+    f.appendChild(row);
+    f.appendChild(el('div', 'hint', 'DSN & secrets come from this connection at run time — never written to the pipeline file.'));
+  } else {
+    f.appendChild(el('div', 'hint', 'Pick a saved connection to avoid typing DSNs/secrets, or enter fields below.'));
+  }
+  return f;
+}
+
+// Live-DB "pick a table" field for JDBC source/sink: a text input plus a
+// dropdown populated from the database (via the connection) and a "Fetch schema"
+// action that auto-populates the columns list. Falls back to plain text entry
+// when the DB can't be reached.
+function renderTableField(node: Node, value: string): HTMLElement {
+  const target = targetOf(node);
+  const f = el('div', 'fld');
+  f.appendChild(el('div', 'k', 'Table'));
+  const st = target ? dbState(target) : null;
+
+  const row = el('div', 'inputrow');
+  const inp = el('input', 'v') as HTMLInputElement;
+  inp.value = value;
+  inp.placeholder = 'schema.table or table';
+  inp.onchange = () => { setCfgField(node, 'table', inp.value); if (st?.autoSchema && node.kind === 'source') fetchCols(node, inp.value); };
+  row.appendChild(inp);
+  const browse = el('button', 'browse', st?.loadingTables ? '…' : '⤓ Tables');
+  browse.title = 'List tables from the database';
+  browse.onclick = () => { if (target) { dbState(target).loadingTables = true; renderEditor(); post({ type: 'fetchDbTables', target }); } };
+  row.appendChild(browse);
+  f.appendChild(row);
+
+  // Table dropdown once fetched.
+  if (st?.tables && st.tables.length) {
+    const sel = el('select', 'v') as HTMLSelectElement;
+    const ph = document.createElement('option'); ph.value = ''; ph.textContent = `— ${st.tables.length} tables — pick one —`; sel.appendChild(ph);
+    st.tables.forEach((t) => { const o = document.createElement('option'); o.value = t; o.textContent = t; if (t === value) o.selected = true; sel.appendChild(o); });
+    sel.style.marginTop = '6px';
+    sel.onchange = () => {
+      if (!sel.value) return;
+      inp.value = sel.value;
+      setCfgField(node, 'table', sel.value);
+      if (st.autoSchema && node.kind === 'source') fetchCols(node, sel.value);
+    };
+    f.appendChild(sel);
+  } else if (st?.tables && !st.tables.length) {
+    f.appendChild(el('div', 'hint', 'No tables found in this database.'));
+  }
+  if (st?.error) f.appendChild(el('div', 'hint', '⚠ ' + st.error));
+
+  // Auto-fetch-schema toggle (source only — sink schema derives from the chain).
+  if (node.kind === 'source' && st) {
+    const t = el('div', 'toggle' + (st.autoSchema ? ' on' : ''));
+    t.style.marginTop = '8px';
+    t.innerHTML = `<span class="sw"></span><span class="lbl">Auto-fetch columns from DB</span>`;
+    t.onclick = () => { st.autoSchema = !st.autoSchema; renderEditor(); };
+    f.appendChild(t);
+    if (value) {
+      const fetchBtn = el('button', 'browse', st.loadingCols ? 'Fetching…' : '⭳ Fetch schema now');
+      fetchBtn.style.marginTop = '6px';
+      fetchBtn.onclick = () => fetchCols(node, value);
+      f.appendChild(fetchBtn);
+    }
+    f.appendChild(el('div', 'hint', 'When on, selecting a table reads its column schema from the database. Turn off to edit columns manually.'));
+  }
+  return f;
+}
+
+// Request the DB column schema for a table into the given node's target.
+function fetchCols(node: Node, table: string) {
+  const target = targetOf(node);
+  if (!target || !table) return;
+  dbState(target).loadingCols = true; renderEditor();
+  post({ type: 'fetchDbColumns', target, table });
+}
+
+// Structured column editor for the source `columns` array.
+// Conflict-key picker for the JDBC sink `conflictKey` — checkboxes over the
+// columns visible at the sink, so users pick the upsert key instead of typing a
+// JSON array. Only shown when onConflict is 'upsert'.
+function renderConflictKeyEditor(node: Node): HTMLElement {
+  const f = el('div', 'fld');
+  f.appendChild(el('div', 'k', 'Conflict key (upsert match)'));
+  const target = cfgTarget(node);
+  const selected: string[] = Array.isArray(target.conflictKey) ? target.conflictKey.map(String) : [];
+  const cols = schemaForNode(node).filter((c) => !c.derived);
+  const box = el('div', 'cols');
+  if (!cols.length) {
+    // No declared columns — fall back to a free-text input.
+    const inp = el('input', 'v') as HTMLInputElement;
+    inp.value = selected.join(', ');
+    inp.placeholder = 'e.g. id, tenant_id';
+    inp.onchange = () => setCfgValue(node, 'conflictKey', inp.value.split(',').map((s) => s.trim()).filter(Boolean));
+    box.appendChild(inp);
+  } else {
+    cols.forEach((c) => {
+      const row = el('label', 'ckrow');
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = selected.includes(c.name);
+      cb.onchange = () => {
+        const next = new Set(selected);
+        if (cb.checked) next.add(c.name); else next.delete(c.name);
+        setCfgValue(node, 'conflictKey', cols.filter((x) => next.has(x.name)).map((x) => x.name));
+      };
+      row.appendChild(cb);
+      row.appendChild(el('span', 'cklbl', `${c.name} <span class="ty">${c.type}</span>`));
+      box.appendChild(row);
+    });
+  }
+  f.appendChild(box);
+  f.appendChild(el('div', 'hint', 'Rows matching these columns are updated instead of duplicated.'));
+  return f;
+}
+
 // Structured column editor for the source `columns` array.
 function renderColumnsEditor(node: Node): HTMLElement {
   const f = el('div', 'fld');
@@ -498,8 +749,32 @@ function renderColumnsEditor(node: Node): HTMLElement {
   add.onclick = () => { cols.push({ name: 'new_column', type: 'string' }); setCfgValue(node, 'columns', cols); renderEditor(); };
   box.appendChild(add);
   f.appendChild(box);
+
+  // Auto-generate columns by sampling the source file (CSV/TSV/JSON-lines).
+  const target2 = cfgTarget(node);
+  const filePath = typeof target2.path === 'string' ? target2.path : '';
+  if (node.kind === 'source' && filePath) {
+    const infer = el('button', 'browse infer-btn', '✨ Infer columns from file');
+    infer.onclick = () => {
+      infer.textContent = 'Sampling file…';
+      inferTargetNode = node;
+      post({
+        type: 'inferSchema',
+        path: filePath,
+        sourceType: node.type,
+        delimiter: typeof target2.delimiter === 'string' ? target2.delimiter : undefined,
+        hasHeader: target2.hasHeader !== false,
+      });
+    };
+    f.appendChild(infer);
+    f.appendChild(el('div', 'hint', 'Reads the header + a sample of rows to guess column names and types.'));
+  }
   return f;
 }
+
+// The source node awaiting an inferSchema response, so we can write the columns
+// back into the right stage when the host replies.
+let inferTargetNode: Node | null = null;
 
 // Builtin mapper functions available to the map transform's expressions. These
 // mirror the engine's `builtins` map (transform/mapper). Each carries a snippet
@@ -990,22 +1265,29 @@ function renderCanvas(m: HTMLElement) {
   add.title = 'Add transform (before the sink)';
   add.onclick = () => addTransform(p.nodes.length - 1);
   row.appendChild(add);
-  cv.appendChild(row);
+  // Wrap the flow + catch lane so the DLQ aligns under the sink end of the flow.
+  const wrap = el('div', 'flowwrap');
+  wrap.appendChild(row);
+  cv.appendChild(wrap);
 
-  // DLQ branch: a separate top-level destination for write-time failures. It
-  // hangs off the main sink and is selectable/configurable in the Inspector.
+  // DLQ: the pipeline's "catch" — a dead-letter handler that captures rows the
+  // main sink rejects (write failures, post-isolation validate rejects). It is
+  // rendered as an error-handler lane beneath the flow, elbow-connected from the
+  // sink, so it reads as a try/catch rather than a disconnected node.
   if (p.hasDlq && p.dlqNode) {
     const dn = p.dlqNode;
-    const br = el('div', 'branch');
-    br.innerHTML = '<div class="down"></div>';
-    const dnode = el('div', 'node dlq' + (S.selNode === 'dlq' ? ' sel' : ''));
-    dnode.style.width = '150px';
-    dnode.innerHTML = `<div class="kind">DLQ · ${dn.type}</div><div class="nm">${dn.nm}</div><div class="meta">${dn.meta}</div>`;
+    const br = el('div', 'catchlane');
+    const col = el('div', 'catchcol');
+    col.innerHTML = '<span class="elbow-line"></span><span class="elbow-tag">⚠ on failure → catch</span>';
+    const dnode = el('div', 'node catch' + (S.selNode === 'dlq' ? ' sel' : ''));
+    dnode.innerHTML = `<div class="kind">dead-letter (catch)</div><div class="nm">${dn.nm}</div><div class="meta">${dn.type} · ${dn.meta}</div>`;
     dnode.tabIndex = 0;
+    dnode.title = 'Rows rejected by the sink are captured here — the main pipeline keeps running.';
     dnode.onclick = () => { S.selNode = 'dlq'; S.inspTab = 'Config'; renderEditor(); };
     dnode.oncontextmenu = (e) => dlqMenu(e);
-    br.appendChild(dnode);
-    cv.appendChild(br);
+    col.appendChild(dnode);
+    br.appendChild(col);
+    wrap.appendChild(br);
   }
 
   const hint = el('div', 'canvas-hint pillrow');
@@ -1109,7 +1391,29 @@ function renderCanvas(m: HTMLElement) {
     // The map transform's `fields` object gets a dedicated structured mapping
     // editor (output field ← expression rows + click-to-insert available data
     // and functions), like the Flogo mapper — instead of a raw JSON textarea.
+    // A "Connection" picker is shown first for stages whose type uses one, so
+    // DSNs/secrets can be bound by name instead of typed into the file.
+    const connSel = renderConnectionSelector(sn);
+    if (connSel) ib.appendChild(connSel);
+    const fam = familyOfType(sn.type);
+    const boundConn = fam && typeof cfgTarget(sn).connection === 'string' && cfgTarget(sn).connection;
+    const hiddenKeys = new Set<string>(['connection']);
+    if (boundConn && fam) for (const k of CONN_MANAGED_KEYS[fam] || []) hiddenKeys.add(k);
     Object.entries(sn.cfg).forEach(([k, v]) => {
+      if (hiddenKeys.has(k)) return;
+      // JDBC: the conflict key only applies to upsert — hide it otherwise, and
+      // render it as a column picker rather than a JSON blob.
+      const isJdbc = sn.type === 'jdbc';
+      if (isJdbc && k === 'conflictKey') {
+        const oc = String((cfgTarget(sn) as any).onConflict || 'insert');
+        if (oc === 'upsert') ib.appendChild(renderConflictKeyEditor(sn));
+        return;
+      }
+      // JDBC table: offer a live "pick from database" dropdown + refresh.
+      if (isJdbc && k === 'table') {
+        ib.appendChild(renderTableField(sn, v));
+        return;
+      }
       if (k === 'columns') ib.appendChild(renderColumnsEditor(sn));
       else if (k === 'fields' && (sn.type === 'map' || sn.type === 'mapper')) ib.appendChild(renderMapEditor(sn));
       else if (k === 'rules' && sn.type === 'validate') ib.appendChild(renderRulesEditor(sn));
@@ -1117,6 +1421,11 @@ function renderCanvas(m: HTMLElement) {
       else if (k === 'expr' && sn.type === 'filter') ib.appendChild(renderFilterEditor(sn));
       else ib.appendChild(renderField(sn, k, v));
     });
+
+    // JDBC upsert selected but no conflictKey field present yet — add the picker.
+    if (sn.type === 'jdbc' && String((cfgTarget(sn) as any).onConflict) === 'upsert' && !('conflictKey' in sn.cfg)) {
+      ib.appendChild(renderConflictKeyEditor(sn));
+    }
 
     if (!Object.keys(sn.cfg).length && sn.kind !== 'source') {
       ib.appendChild(el('div', 'muted', '<div style="font-size:11.5px;padding:4px 0">No configuration for this stage yet.</div>'));
@@ -1256,19 +1565,336 @@ function renderTestTab(ib: HTMLElement, sn: Node) {
     }
     return;
   }
-  const b = el('button', 'btn sm pri', '▷ Test on live sample');
-  b.onclick = () => doPreview();
-  ib.appendChild(b);
-  ib.appendChild(el('div', 'muted', '<div style="font-size:11.5px;margin:8px 0 12px">Reads a bounded sample from the source and runs it through the chain up to this stage — no sink writes. Results appear in the <b style="color:var(--text)">Data Preview</b> panel below.</div>'));
-  const pr = S.preview;
-  if (pr) {
-    ib.appendChild(el('div', 'between', `<span class="muted" style="font-size:11px">Last sample</span><span class="chip ${pr.rowsFailed ? 'warn' : 'ok'}">${pr.rows.length} rows</span>`));
-    ib.appendChild(el('div', 'muted', `<div style="font-size:11px;margin-top:6px">read ${fmt(pr.rowsRead)} · dropped ${fmt(pr.rowsDropped)} · failed ${fmt(pr.rowsFailed)}${pr.truncated ? ' · truncated' : ''}</div>`));
-    const open = el('button', 'btn sm', '⌕ Open Data Preview');
+  // A transform stage is best tested atomically: the stage tester IS the test,
+  // so it's the only thing shown — one clear flow instead of two competing
+  // buttons + paragraphs. (The whole-chain dry-run preview stays reachable from
+  // the canvas ▷ button and the node context menu.)
+  if (sn.kind === 'transform' && typeof sn.ref === 'number') {
+    renderStageTester(ib, sn, sn.ref as number);
+    return;
+  }
+
+  // The SOURCE stage: show the actual rows read from the source inline, so the
+  // user can SEE what data the pipeline is testing with (read-only preview).
+  if (sn.kind === 'source') {
+    renderSourceSample(ib);
+    return;
+  }
+
+  // The SINK stage: show the rows that WOULD be written — the source run through
+  // the full transform chain — inline, so the user sees the final data without
+  // opening a separate panel and without writing anything to the sink.
+  if (sn.kind === 'sink') {
+    renderSinkSample(ib);
+    return;
+  }
+}
+
+// Source Test tab: fetch and show a read-only sample of the rows the source
+// actually reads, right in the inspector — answers "what data are we testing
+// with?" without opening a separate panel.
+function renderSourceSample(ib: HTMLElement) {
+  const s = S.srcSample;
+  ib.appendChild(el('div', 'muted', '<div style="font-size:11.5px;margin:2px 0 12px">Read a live sample straight from the source so you can see exactly what data flows in.</div>'));
+
+  const card = el('div', 'ttcard');
+  const head = el('div', 'ttcard-h');
+  head.appendChild(el('span', 'ttcard-t', s && s.rows.length ? `Source sample · ${s.rows.length} rows` : 'Source sample'));
+  const acts = el('div', 'ttcard-a');
+  const refresh = el('button', 'iconbtn', s && s.loading ? '…' : '↺');
+  refresh.title = 'Read a fresh sample from the source';
+  refresh.onclick = () => sampleSource();
+  acts.appendChild(refresh);
+  head.appendChild(acts);
+  card.appendChild(head);
+
+  if (!s || (!s.rows.length && !s.loading)) {
+    const empty = el('div', 'ttempty');
+    empty.innerHTML = '';
+    const link = el('a', 'link', 'Read a sample');
+    link.onclick = () => sampleSource();
+    empty.appendChild(link);
+    empty.appendChild(document.createTextNode(' from the source.'));
+    card.appendChild(empty);
+  } else if (s.loading && !s.rows.length) {
+    card.appendChild(el('div', 'ttempty', 'Reading sample…'));
+  } else {
+    card.appendChild(renderReadonlyGrid(s.columns, s.rows));
+  }
+  ib.appendChild(card);
+
+  if (s && s.rows.length) {
+    ib.appendChild(el('div', 'muted', `<div style="font-size:11px;margin-top:8px">Showing ${s.rows.length} of ${fmt(s.read)} row${s.read === 1 ? '' : 's'} read. Edit the file to change the sample.</div>`));
+  }
+}
+
+// Sink Test tab: show the rows that would be written (source → all transforms),
+// read-only and side-effect-free, so the user sees the final output data inline.
+function renderSinkSample(ib: HTMLElement) {
+  const s = S.sinkSample;
+  const dlqNote = S.pipe?.hasDlq
+    ? ' Rows that fail validation are routed to the DLQ and are not shown here.'
+    : '';
+  ib.appendChild(el('div', 'muted', `<div style="font-size:11.5px;margin:2px 0 12px">Preview exactly what would be written — the source after the full transform chain. <b style="color:var(--text)">Nothing is written to the sink.</b>${dlqNote}</div>`));
+
+  const card = el('div', 'ttcard');
+  const head = el('div', 'ttcard-h');
+  head.appendChild(el('span', 'ttcard-t', s && s.rows.length ? `Would write · ${s.rows.length} rows` : 'Would write'));
+  const acts = el('div', 'ttcard-a');
+  const refresh = el('button', 'iconbtn', s && s.loading ? '…' : '↺');
+  refresh.title = 'Recompute what would be written';
+  refresh.onclick = () => sampleSink();
+  acts.appendChild(refresh);
+  head.appendChild(acts);
+  card.appendChild(head);
+
+  if (!s || (!s.rows.length && !s.loading)) {
+    const empty = el('div', 'ttempty');
+    const link = el('a', 'link', 'Preview the output');
+    link.onclick = () => sampleSink();
+    empty.appendChild(link);
+    empty.appendChild(document.createTextNode(' of the transform chain.'));
+    card.appendChild(empty);
+  } else if (s.loading && !s.rows.length) {
+    card.appendChild(el('div', 'ttempty', 'Computing output…'));
+  } else if (!s.rows.length) {
+    card.appendChild(el('div', 'ttempty', 'No rows would be written (all dropped or routed).'));
+  } else {
+    card.appendChild(renderReadonlyGrid(s.columns, s.rows));
+  }
+  ib.appendChild(card);
+
+  if (s && s.rows.length) {
+    ib.appendChild(el('div', 'muted', `<div style="font-size:11px;margin-top:8px">Showing ${s.rows.length} of ${fmt(s.read)} row${s.read === 1 ? '' : 's'} processed. Side-effect-free — the sink is not touched.</div>`));
+    const open = el('button', 'btn sm', '⌕ Open in Data Preview');
     open.style.marginTop = '10px';
     open.onclick = () => doPreview();
     ib.appendChild(open);
   }
+}
+
+// A compact read-only table for a set of columns + rows.
+function renderReadonlyGrid(columns: string[], rows: Array<Record<string, unknown>>): HTMLElement {
+  const wrap = el('div', 'ttgrid');
+  const table = document.createElement('table');
+  const thead = document.createElement('thead');
+  const htr = document.createElement('tr');
+  columns.forEach((c) => { const th = document.createElement('th'); th.textContent = c; htr.appendChild(th); });
+  thead.appendChild(htr);
+  table.appendChild(thead);
+  const tbody = document.createElement('tbody');
+  rows.forEach((row) => {
+    const tr = document.createElement('tr');
+    columns.forEach((c) => {
+      const td = document.createElement('td');
+      const v = row[c];
+      td.className = 'rocell';
+      td.textContent = v == null ? '' : String(v);
+      if (v == null) td.classList.add('nullcell');
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+  wrap.appendChild(table);
+  return wrap;
+}
+
+// Request a read-only sample of raw source rows (rows entering the first stage).
+function sampleSource() {
+  S.srcSample = { columns: S.srcSample?.columns ?? [], rows: S.srcSample?.rows ?? [], loading: true, read: S.srcSample?.read ?? 0 };
+  renderEditor();
+  post({ type: 'sampleStageInput', stage: 0, limit: 10 });
+}
+
+// Request the rows that would be written to the sink — the source run through
+// every transform. stage = transform count runs the whole chain (SampleInput
+// applies transforms[:stage]).
+function sampleSink() {
+  const nTransforms = Array.isArray(S.doc.transforms) ? S.doc.transforms.length : 0;
+  S.sinkSample = { columns: S.sinkSample?.columns ?? [], rows: S.sinkSample?.rows ?? [], loading: true, read: S.sinkSample?.read ?? 0 };
+  renderEditor();
+  post({ type: 'sampleStageInput', stage: nTransforms, limit: 10 });
+}
+
+
+// The atomic stage tester: an editable input sample + "run this stage" that
+// exercises one transform in isolation and shows per-row kept/dropped/failed.
+function renderStageTester(ib: HTMLElement, sn: Node, stage: number) {
+  // (Re)initialise working state when switching to a different stage.
+  if (!S.stageTest || S.stageTest.stage !== stage) {
+    S.stageTest = { stage, columns: [], rows: [], result: null, view: 'grid', seeding: false, running: false, jsonDraft: null };
+  }
+  const st = S.stageTest;
+
+  // One short line of intent — no competing headers/paragraphs.
+  ib.appendChild(el('div', 'muted', `<div style="font-size:11.5px;margin:2px 0 12px">Run just the <b style="color:var(--text)">${sn.type}</b> activity on a sample and see what it keeps, changes or drops.</div>`));
+
+  // "Input sample" card: a labelled header with compact icon actions on the
+  // right, then the grid/JSON body — one tidy block instead of a button row.
+  const card = el('div', 'ttcard');
+  const head = el('div', 'ttcard-h');
+  head.appendChild(el('span', 'ttcard-t', 'Input sample'));
+  const acts = el('div', 'ttcard-a');
+  const seed = el('button', 'iconbtn', st.seeding ? '…' : '↺');
+  seed.title = 'Seed with real rows entering this stage';
+  seed.onclick = () => {
+    st.seeding = true; st.result = null; renderEditor();
+    post({ type: 'sampleStageInput', stage, limit: 10 });
+  };
+  acts.appendChild(seed);
+  const addRow = el('button', 'iconbtn', '＋');
+  addRow.title = 'Add a blank row';
+  addRow.onclick = () => {
+    const cols = st.columns.length ? st.columns : upstreamSchema(sn).map((c) => c.name);
+    st.columns = cols;
+    const blank: Record<string, unknown> = {};
+    cols.forEach((c) => (blank[c] = ''));
+    st.rows.push(blank);
+    st.jsonDraft = null;
+    renderEditor();
+  };
+  acts.appendChild(addRow);
+  const toggle = el('button', 'iconbtn', st.view === 'grid' ? '{ }' : '▦');
+  toggle.title = st.view === 'grid' ? 'Edit as JSON' : 'Edit as a table';
+  toggle.onclick = () => {
+    if (st.view === 'grid') { st.jsonDraft = JSON.stringify(st.rows, null, 2); st.view = 'json'; }
+    else { commitJsonDraft(st); st.view = 'grid'; }
+    renderEditor();
+  };
+  acts.appendChild(toggle);
+  head.appendChild(acts);
+  card.appendChild(head);
+
+  // Input body.
+  if (!st.rows.length && st.view === 'grid') {
+    const empty = el('div', 'ttempty');
+    empty.innerHTML = 'No rows yet.';
+    const seedLink = el('a', 'link', 'Seed from source');
+    seedLink.onclick = () => { st.seeding = true; renderEditor(); post({ type: 'sampleStageInput', stage, limit: 10 }); };
+    empty.appendChild(document.createTextNode(' '));
+    empty.appendChild(seedLink);
+    empty.appendChild(document.createTextNode(' or add a row.'));
+    card.appendChild(empty);
+  } else if (st.view === 'json') {
+    const ta = document.createElement('textarea');
+    ta.className = 'v tt-json';
+    ta.value = st.jsonDraft ?? JSON.stringify(st.rows, null, 2);
+    ta.oninput = () => { st.jsonDraft = ta.value; };
+    ta.onblur = () => { commitJsonDraft(st); renderEditor(); };
+    card.appendChild(ta);
+  } else {
+    card.appendChild(renderStageGrid(st));
+  }
+  ib.appendChild(card);
+
+  // One primary action, full width.
+  const run = el('button', 'btn pri ttrun', st.running ? 'Running…' : '▷ Run this stage');
+  run.onclick = () => {
+    if (st.view === 'json') commitJsonDraft(st);
+    if (!st.rows.length) { toast('info', 'Add or seed at least one input row'); return; }
+    st.running = true; renderEditor();
+    post({ type: 'testStage', stage, columns: st.columns, rows: st.rows });
+  };
+  ib.appendChild(run);
+
+  // Output.
+  if (st.result) ib.appendChild(renderStageResult(st.result));
+}
+
+// Commit the JSON textarea buffer back into st.rows (best-effort).
+function commitJsonDraft(st: StageTest) {
+  if (st.jsonDraft == null) return;
+  try {
+    const parsed = JSON.parse(st.jsonDraft);
+    if (Array.isArray(parsed)) {
+      st.rows = parsed;
+      const cols: string[] = [];
+      parsed.forEach((r) => Object.keys(r || {}).forEach((k) => { if (!cols.includes(k)) cols.push(k); }));
+      if (cols.length) st.columns = cols;
+    }
+  } catch {
+    toast('err', 'Input JSON is invalid — fix it before running');
+  }
+  st.jsonDraft = null;
+}
+
+// Editable table grid for the input sample.
+function renderStageGrid(st: StageTest): HTMLElement {
+  const wrap = el('div', 'ttgrid');
+  const table = document.createElement('table');
+  const thead = document.createElement('thead');
+  const htr = document.createElement('tr');
+  st.columns.forEach((c) => { const th = document.createElement('th'); th.textContent = c; htr.appendChild(th); });
+  htr.appendChild(document.createElement('th'));
+  thead.appendChild(htr);
+  table.appendChild(thead);
+  const tbody = document.createElement('tbody');
+  st.rows.forEach((row, ri) => {
+    const tr = document.createElement('tr');
+    st.columns.forEach((c) => {
+      const td = document.createElement('td');
+      const inp = document.createElement('input');
+      inp.value = row[c] == null ? '' : String(row[c]);
+      inp.oninput = () => { row[c] = coerceCell(inp.value); };
+      td.appendChild(inp);
+      tr.appendChild(td);
+    });
+    const del = document.createElement('td');
+    const x = el('span', 'del', '✕');
+    x.onclick = () => { st.rows.splice(ri, 1); renderEditor(); };
+    del.appendChild(x);
+    tr.appendChild(del);
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+  wrap.appendChild(table);
+  return wrap;
+}
+
+// Coerce a cell string into number/bool/null where it clearly is one, so the
+// engine receives realistic typed values (matches source read coercion).
+function coerceCell(v: string): unknown {
+  const t = v.trim();
+  if (t === '') return '';
+  if (t === 'null') return null;
+  if (t === 'true') return true;
+  if (t === 'false') return false;
+  if (/^-?\d+$/.test(t)) return Number(t);
+  if (/^-?\d*\.\d+$/.test(t)) return Number(t);
+  return v;
+}
+
+// Render the per-row test outcome.
+function renderStageResult(r: StageTestResult): HTMLElement {
+  const box = el('div', 'ttresult');
+  box.appendChild(el('div', 'between', `<span class="ttl2">Result</span><span><span class="chip ok">${r.kept} kept</span> <span class="chip ${r.dropped ? 'warn' : 'idle'}">${r.dropped} dropped</span> <span class="chip ${r.failed ? 'err' : 'idle'}">${r.failed} failed</span></span>`));
+  const table = document.createElement('table');
+  table.className = 'ttout';
+  const thead = document.createElement('thead');
+  thead.innerHTML = '<tr><th>status</th><th>output (or reason)</th></tr>';
+  table.appendChild(thead);
+  const tbody = document.createElement('tbody');
+  r.rows.forEach((row) => {
+    const tr = document.createElement('tr');
+    const stCell = document.createElement('td');
+    const cls = row.status === 'kept' ? 'ok' : row.status === 'dropped' ? 'warn' : 'err';
+    stCell.innerHTML = `<span class="chip ${cls}">${row.status}</span>`;
+    tr.appendChild(stCell);
+    const outCell = document.createElement('td');
+    if (row.status === 'kept' && row.output) {
+      outCell.innerHTML = `<code class="ttcode">${escapeHtml(JSON.stringify(row.output))}</code>`;
+    } else if (row.status === 'failed') {
+      outCell.innerHTML = `<span class="ttreason">${escapeHtml(row.error || 'failed')}</span>`;
+    } else {
+      outCell.innerHTML = '<span class="muted" style="font-size:11px">filtered out</span>';
+    }
+    tr.appendChild(outCell);
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+  box.appendChild(table);
+  return box;
 }
 
 function persistAndRebuild() {
@@ -1286,13 +1912,13 @@ const TRANSFORMS: Array<{ type: string; label: string; cfg: Record<string, unkno
   { type: 'validate', label: 'Validate — per-field rules, route to DLQ',
     cfg: { rules: [{ field: 'amount', notNull: true }], onViolation: 'route' } },
   { type: 'lookup', label: 'Lookup — HTTP enrichment with LRU cache',
-    cfg: { keyField: 'id', url: 'https://api.internal/enrich/${id}', method: 'GET', cacheSize: 10000, onError: 'skip' } },
+    cfg: { keyField: 'id', url: 'https://api.internal/enrich/{id}', method: 'GET', cacheSize: 10000, onError: 'skip' } },
   { type: 'hwm', label: 'High-water mark — incremental cursor',
-    cfg: { column: 'updated_at', valueType: 'timestamp' } },
+    cfg: { column: 'updated_at', valueType: 'datetime' } },
   { type: 'dq', label: 'Data quality — expectations + quality score',
     cfg: { expectations: [{ type: 'expectColumnNotNull', column: 'id' }], onFail: 'warn', qualityThreshold: 0.95 } },
   { type: 'schemadrift', label: 'Schema drift — detect column add/remove/type',
-    cfg: { policy: 'additive', onDrift: 'warn' } },
+    cfg: { policy: 'additive', onDrift: 'log' } },
 ];
 function addTransform(index: number) {
   // index is a node index; convert to transforms[] insert position.
@@ -1554,16 +2180,52 @@ function quickPick(title: string, items: string[], onPick: (v: string) => void) 
   const pal = el('div', 'palette');
   const inp = el('input') as HTMLInputElement;
   inp.placeholder = title;
-  inp.readOnly = true;
   pal.appendChild(inp);
   const list = el('div');
-  items.forEach((it) => {
-    const d = el('div', 'pi', `<span class="ic">◦</span>${it}`);
-    d.onclick = () => { closeOverlays(); onPick(it); };
-    list.appendChild(d);
-  });
   pal.appendChild(list);
   document.body.appendChild(pal);
+
+  // Type-to-filter with arrow/Enter selection (matches native quick picks).
+  let active = 0;
+  const rows: HTMLElement[] = [];
+  const pick = (v: string) => { closeOverlays(); onPick(v); };
+
+  const rebuild = () => {
+    const q = inp.value.trim().toLowerCase();
+    const matches = q ? items.filter((it) => it.toLowerCase().includes(q)) : items.slice();
+    list.innerHTML = '';
+    rows.length = 0;
+    if (!matches.length) {
+      list.appendChild(el('div', 'pi dis', '<span class="ic">∅</span>No matching items'));
+      return;
+    }
+    if (active >= matches.length) active = matches.length - 1;
+    if (active < 0) active = 0;
+    matches.forEach((it, idx) => {
+      const d = el('div', 'pi' + (idx === active ? ' sel' : ''), `<span class="ic">◦</span>${escapeHtml(it)}`);
+      d.onmouseenter = () => { active = idx; highlight(); };
+      d.onclick = () => pick(it);
+      rows.push(d);
+      list.appendChild(d);
+    });
+  };
+  const highlight = () => rows.forEach((r, i) => r.classList.toggle('sel', i === active));
+  const currentMatches = () => {
+    const q = inp.value.trim().toLowerCase();
+    return q ? items.filter((it) => it.toLowerCase().includes(q)) : items.slice();
+  };
+
+  inp.oninput = () => { active = 0; rebuild(); };
+  inp.onkeydown = (e) => {
+    const m = currentMatches();
+    if (e.key === 'ArrowDown') { e.preventDefault(); active = Math.min(active + 1, m.length - 1); highlight(); rows[active]?.scrollIntoView({ block: 'nearest' }); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); active = Math.max(active - 1, 0); highlight(); rows[active]?.scrollIntoView({ block: 'nearest' }); }
+    else if (e.key === 'Enter') { e.preventDefault(); if (m[active] != null) pick(m[active]); }
+    else if (e.key === 'Escape') { e.preventDefault(); closeOverlays(); }
+  };
+
+  rebuild();
+  setTimeout(() => inp.focus(), 0);
 }
 
 // ── right-click context menu ──────────────────────────────────────────────────
@@ -1726,6 +2388,105 @@ window.addEventListener('message', (ev: MessageEvent<HostToWebview>) => {
     case 'browseCancelled':
       delete pendingBrowse[msg.id];
       break;
+    case 'connections':
+      S.conns = (msg.items as ConnSummary[]) || [];
+      if (cur()?.type === 'canvas' && S.inspTab === 'Config') renderEditor();
+      break;
+    case 'schemaInferred': {
+      const node = inferTargetNode;
+      inferTargetNode = null;
+      if (node) {
+        setCfgValue(node, 'columns', msg.columns);
+        renderEditor();
+      }
+      toast('ok', `Inferred ${msg.count} column${msg.count === 1 ? '' : 's'} from the sample file`);
+      break;
+    }
+    case 'schemaInferError':
+      inferTargetNode = null;
+      renderEditor();
+      toast('err', 'Could not infer columns: ' + msg.message);
+      break;
+    case 'stageSample':
+      // Route to the source read-only sample when the source node is active,
+      // to the sink "would write" sample when the sink is active, otherwise to
+      // the transform stage tester's editable input.
+      if (S.selNode === 'source') {
+        S.srcSample = { columns: msg.columns, rows: msg.rows.map((r) => ({ ...r })), loading: false, read: msg.rows.length };
+        renderEditor();
+        toast(msg.rows.length ? 'ok' : 'info', `Read ${msg.rows.length} row${msg.rows.length === 1 ? '' : 's'} from the source`);
+        break;
+      }
+      if (S.selNode === 'sink') {
+        S.sinkSample = { columns: msg.columns, rows: msg.rows.map((r) => ({ ...r })), loading: false, read: msg.rows.length };
+        renderEditor();
+        toast(msg.rows.length ? 'ok' : 'info', `${msg.rows.length} row${msg.rows.length === 1 ? '' : 's'} would be written`);
+        break;
+      }
+      if (S.stageTest && S.stageTest.stage === msg.stage) {
+        S.stageTest.seeding = false;
+        S.stageTest.columns = msg.columns.length ? msg.columns : S.stageTest.columns;
+        S.stageTest.rows = msg.rows.map((r) => ({ ...r }));
+        S.stageTest.jsonDraft = null;
+        S.stageTest.result = null;
+        renderEditor();
+        toast(msg.rows.length ? 'ok' : 'info', `Seeded ${msg.rows.length} input row${msg.rows.length === 1 ? '' : 's'}`);
+      }
+      break;
+    case 'stageSampleError':
+      if (S.selNode === 'source' && S.srcSample) { S.srcSample.loading = false; renderEditor(); }
+      if (S.selNode === 'sink' && S.sinkSample) { S.sinkSample.loading = false; renderEditor(); }
+      if (S.stageTest && S.stageTest.stage === msg.stage) { S.stageTest.seeding = false; renderEditor(); }
+      toast('err', 'Could not read sample: ' + msg.message);
+      break;
+    case 'stageTestResult':
+      if (S.stageTest && S.stageTest.stage === msg.stage) {
+        S.stageTest.running = false;
+        S.stageTest.result = msg.result;
+        renderEditor();
+      }
+      break;
+    case 'stageTestError':
+      if (S.stageTest && S.stageTest.stage === msg.stage) { S.stageTest.running = false; renderEditor(); }
+      toast('err', 'Stage test failed: ' + msg.message);
+      break;
+    case 'dbTables': {
+      const st = dbState(msg.target);
+      st.loadingTables = false; st.error = null; st.tables = msg.tables;
+      renderEditor();
+      toast('ok', `Found ${msg.tables.length} table${msg.tables.length === 1 ? '' : 's'}`);
+      break;
+    }
+    case 'dbTablesError': {
+      const st = dbState(msg.target);
+      st.loadingTables = false; st.error = msg.message; st.tables = [];
+      renderEditor();
+      toast('err', 'Could not list tables: ' + msg.message);
+      break;
+    }
+    case 'dbColumns': {
+      const st = dbState(msg.target);
+      st.loadingCols = false; st.error = null;
+      // Write the fetched columns into the stage's `columns` config.
+      const p = S.pipe;
+      const node = msg.target === 'source' ? p?.nodes.find((n) => n.kind === 'source')
+        : msg.target === 'sink' ? p?.nodes.find((n) => n.kind === 'sink')
+        : p?.dlqNode;
+      if (node) {
+        const cols = msg.columns.map((c) => ({ name: c.name, type: c.type }));
+        setCfgValue(node, 'columns', cols);
+      }
+      renderEditor();
+      toast('ok', `Loaded ${msg.columns.length} column${msg.columns.length === 1 ? '' : 's'} from the database`);
+      break;
+    }
+    case 'dbColumnsError': {
+      const st = dbState(msg.target);
+      st.loadingCols = false; st.error = msg.message;
+      renderEditor();
+      toast('err', 'Could not fetch schema: ' + msg.message);
+      break;
+    }
   }
 });
 

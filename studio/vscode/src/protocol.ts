@@ -1,12 +1,14 @@
 // Message protocol between the extension host and the pipeline webview.
 
 import type { PipelineDoc, ValidationIssue } from './model/pipeline';
-import type { RunResponse, PreviewResult, DefinitionSummary } from './engine/apiClient';
+import type { RunResponse, PreviewResult, DefinitionSummary, StageTestResult } from './engine/apiClient';
+import type { ConnectionSummary } from './connections/store';
 
 // Host -> Webview
 export type HostToWebview =
   | { type: 'init'; doc: PipelineDoc; fileName: string; ref: string; nonce: string }
   | { type: 'update'; doc: PipelineDoc }
+  | { type: 'connections'; items: ConnectionSummary[] }
   | { type: 'runStarting' }
   | { type: 'runStarted'; port: number }
   | { type: 'runResult'; result: RunResponse; final: boolean }
@@ -18,7 +20,17 @@ export type HostToWebview =
   | { type: 'definition'; def: DefinitionSummary }
   | { type: 'metricsResult'; data?: unknown; error?: string }
   | { type: 'browseResult'; id: string; path: string }
-  | { type: 'browseCancelled'; id: string };
+  | { type: 'browseCancelled'; id: string }
+  | { type: 'schemaInferred'; columns: Array<{ name: string; type: string }>; count: number }
+  | { type: 'schemaInferError'; message: string }
+  | { type: 'stageSample'; stage: number; columns: string[]; rows: Array<Record<string, unknown>> }
+  | { type: 'stageSampleError'; stage: number; message: string }
+  | { type: 'stageTestResult'; stage: number; result: StageTestResult }
+  | { type: 'stageTestError'; stage: number; message: string }
+  | { type: 'dbTables'; target: 'source' | 'sink' | 'dlq'; tables: string[] }
+  | { type: 'dbTablesError'; target: 'source' | 'sink' | 'dlq'; message: string }
+  | { type: 'dbColumns'; target: 'source' | 'sink' | 'dlq'; columns: Array<{ name: string; type: string; dbType?: string; nullable?: boolean }> }
+  | { type: 'dbColumnsError'; target: 'source' | 'sink' | 'dlq'; message: string };
 
 // Webview -> Host
 export type WebviewToHost =
@@ -36,7 +48,15 @@ export type WebviewToHost =
   | { type: 'showProblems' }
   | { type: 'browse'; id: string; mode?: 'file' | 'folder' }
   | { type: 'newFromTemplate' }
-  | { type: 'newConnection' }
+  | { type: 'newConnection'; family?: string }
+  | { type: 'testConnection'; id: string }
+  | { type: 'editConnection'; id: string }
+  | { type: 'requestConnections' }
+  | { type: 'inferSchema'; path: string; sourceType?: string; delimiter?: string; hasHeader?: boolean }
+  | { type: 'sampleStageInput'; stage: number; limit?: number }
+  | { type: 'testStage'; stage: number; columns: string[]; rows: Array<Record<string, unknown>> }
+  | { type: 'fetchDbTables'; target: 'source' | 'sink' | 'dlq' }
+  | { type: 'fetchDbColumns'; target: 'source' | 'sink' | 'dlq'; table: string }
   | { type: 'deploy'; replicas: number }
   | { type: 'showError'; text: string }
   | { type: 'copyText'; text: string }

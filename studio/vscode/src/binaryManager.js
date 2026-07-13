@@ -64,11 +64,11 @@ class BinaryManager {
   // given port (default: DEFAULT_PORT). Tries up to PORT_RETRY_MAX consecutive
   // ports until one binds cleanly. Resolves with the bound port.
   /** @returns {Promise<number>} */
-  async start(pipelineFile, startPort) {
+  async start(pipelineFile, startPort, workingDir) {
     if (this._externalStop) this.stop()   // tear down any attached external engine first
     if (this._process) return this._port  // already running
     if (this._startingPromise) return this._startingPromise  // concurrent start() — share the in-flight promise
-    this._startingPromise = this._doStart(pipelineFile, startPort)
+    this._startingPromise = this._doStart(pipelineFile, startPort, workingDir)
     try {
       return await this._startingPromise
     } finally {
@@ -77,7 +77,7 @@ class BinaryManager {
   }
 
   /** @returns {Promise<number>} */
-  async _doStart(pipelineFile, startPort) {
+  async _doStart(pipelineFile, startPort, workingDir) {
 
     // Open the output channel first so any error (including NO_BINARY) is visible there.
     this._channel.show(true)
@@ -95,7 +95,7 @@ class BinaryManager {
         continue
       }
 
-      proc = this._spawn(binary, port, pipelineFile)
+      proc = this._spawn(binary, port, pipelineFile, workingDir)
 
       // Give the process 2 s to crash (EADDRINUSE surfaces quickly).
       const crashed = await this._waitForEarlyExit(proc, 2000)
@@ -294,7 +294,7 @@ class BinaryManager {
   // Spawn the engine process. The pipeline file and port are passed via both
   // environment variables (PIPELINE_FILE / PORT) and CLI flags (-port / -f) so
   // either convention works regardless of how the binary was built.
-  _spawn(binary, port, pipelineFile) {
+  _spawn(binary, port, pipelineFile, workingDir) {
     this._prepBinary(binary)
 
     const args = ['-port', String(port)]
@@ -304,11 +304,12 @@ class BinaryManager {
     const env = { ...process.env, PORT: String(port) }
     if (pipelineFile) env.PIPELINE_FILE = pipelineFile
 
-    // Run the engine with the pipeline file's own directory as the working
-    // directory so relative paths inside the .datapipeline (e.g. "./data/x.csv")
-    // resolve against the file's location — what the author intends — rather than
-    // the VS Code extension-host process CWD.
-    const cwd = pipelineFile ? path.dirname(pipelineFile) : undefined
+    // Run the engine with the project (workspace) root as the working directory
+    // when provided, so relative paths inside the .datapipeline (e.g.
+    // "data/x.csv", "out/y.parquet") resolve against the project root regardless
+    // of whether the pipeline lives in a pipelines/ subfolder. Falls back to the
+    // pipeline file's own directory.
+    const cwd = workingDir || (pipelineFile ? path.dirname(pipelineFile) : undefined)
 
     this._channel.appendLine(`[manager] spawning: ${binary} ${args.join(' ')}${cwd ? ` (cwd: ${cwd})` : ''}`)
     const proc = spawn(binary, args, {

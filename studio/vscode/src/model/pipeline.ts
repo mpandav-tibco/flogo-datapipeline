@@ -127,11 +127,11 @@ export function validate(text: string): ValidationIssue[] {
   if (!source.type) {
     issues.push({ sev: 'error', label: 'source', msg: 'Source type is required.', anchor: 'source' });
   } else {
-    if (source.type === 'jdbc' && !source.dsn) {
-      issues.push({ sev: 'error', label: 'source.dsn', msg: 'JDBC source requires a DSN connection string.', anchor: 'dsn' });
+    if (source.type === 'jdbc' && !source.dsn && !source.connection) {
+      issues.push({ sev: 'error', label: 'source.dsn', msg: 'JDBC source requires a DSN or a bound connection.', anchor: 'dsn' });
     }
-    if (source.type === 'kafka' && !source.brokers) {
-      issues.push({ sev: 'error', label: 'source.brokers', msg: 'Kafka source requires at least one broker address.', anchor: 'brokers' });
+    if (source.type === 'kafka' && !source.brokers && !source.connection) {
+      issues.push({ sev: 'error', label: 'source.brokers', msg: 'Kafka source requires brokers or a bound connection.', anchor: 'brokers' });
     }
     if ((source.type === 'csv' || source.type === 'parquet' || source.type === 'xml' || source.type === 'jsonlines' || source.type === 'fixedwidth') && !source.path) {
       issues.push({ sev: 'error', label: 'source.path', msg: `${source.type} source requires a path.`, anchor: 'path' });
@@ -141,11 +141,11 @@ export function validate(text: string): ValidationIssue[] {
   if (!sink.type) {
     issues.push({ sev: 'error', label: 'sink', msg: 'Sink type is required.', anchor: 'sink' });
   } else {
-    if (sink.type === 'jdbc' && !sink.dsn) {
-      issues.push({ sev: 'error', label: 'sink.dsn', msg: 'JDBC sink requires a DSN connection string.', anchor: 'dsn' });
+    if (sink.type === 'jdbc' && !sink.dsn && !sink.connection) {
+      issues.push({ sev: 'error', label: 'sink.dsn', msg: 'JDBC sink requires a DSN or a bound connection.', anchor: 'dsn' });
     }
-    if (sink.type === 'kafka' && !sink.brokers) {
-      issues.push({ sev: 'error', label: 'sink.brokers', msg: 'Kafka sink requires at least one broker address.', anchor: 'brokers' });
+    if (sink.type === 'kafka' && !sink.brokers && !sink.connection) {
+      issues.push({ sev: 'error', label: 'sink.brokers', msg: 'Kafka sink requires brokers or a bound connection.', anchor: 'brokers' });
     }
   }
 

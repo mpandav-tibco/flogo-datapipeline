@@ -1,0 +1,32 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Flogo Data Pipeline Connection",
+  "description": "A reusable data endpoint (database, stream, object store, HTTP). Secrets are NOT stored here — they live in VS Code Secret Storage and are referenced by secretKeys.",
+  "type": "object",
+  "required": ["type", "family"],
+  "properties": {
+    "version": { "type": "integer", "enum": [1] },
+    "id": { "type": "string", "description": "Stable identifier (matches the file name)." },
+    "name": { "type": "string", "description": "Display name bound on source/sink stages." },
+    "type": {
+      "type": "string",
+      "enum": ["postgres", "mysql", "sqlite", "kafka", "s3", "gcs", "adls", "http"]
+    },
+    "family": {
+      "type": "string",
+      "enum": ["db", "stream", "obj", "http"]
+    },
+    "fields": {
+      "type": "object",
+      "description": "Non-secret connection fields (host, port, database, bucket, …).",
+      "additionalProperties": { "type": "string" }
+    },
+    "secretKeys": {
+      "type": "array",
+      "description": "Field keys whose values are held in VS Code Secret Storage.",
+      "items": { "type": "string" }
+    },
+    "_note": { "type": "string" }
+  },
+  "additionalProperties": true
+}

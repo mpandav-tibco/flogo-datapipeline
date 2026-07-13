@@ -23,7 +23,7 @@ export class BinaryManager {
   setOverrideBinaryPath(p: string | null): void;
   onCrash(cb: () => void): void;
   onLog(cb: ((text: string) => void) | null): void;
-  start(pipelineFile: string, startPort?: number): Promise<number>;
+  start(pipelineFile: string, startPort?: number, workingDir?: string): Promise<number>;
   stop(): void;
   findFreePort(startPort?: number): Promise<number>;
   runInTerminal(opts: RunInTerminalOpts): Promise<number>;
