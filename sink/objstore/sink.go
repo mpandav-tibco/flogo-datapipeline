@@ -294,6 +294,9 @@ func buildInnerCfg(cfg map[string]interface{}, format string) map[string]interfa
 		"accessKeyIdEnv": true, "secretAccessKeyEnv": true, "sessionTokenEnv": true,
 		"credentialsFileEnv": true, "project": true,
 		"sasTokenEnv": true, "accountKeyEnv": true, "accountName": true, "serviceURL": true,
+		// Inline credentials (Studio connections / local dev) — never forward to the inner sink.
+		"accessKeyId": true, "secretAccessKey": true, "sessionToken": true,
+		"credentialsJson": true, "sasToken": true, "accountKey": true,
 	}
 	out := make(map[string]interface{}, len(cfg)+2)
 	for k, v := range cfg {

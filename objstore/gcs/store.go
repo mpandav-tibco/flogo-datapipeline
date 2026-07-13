@@ -12,6 +12,9 @@
 //	                               (Workload Identity on GKE, gcloud auth on dev machines).
 //	project               string  GCP project ID (required only when listing all buckets;
 //	                               not needed for single-bucket operations).
+//	endpoint              string  override the API endpoint, e.g. for the fake-gcs-server
+//	                               emulator: "http://127.0.0.1:4443/storage/v1/".
+//	                               When set without credentials, auth is disabled.
 //
 // SECURITY: never embed service-account JSON or literal credential paths in
 // pipeline resource files.  Use credentialsFileEnv and bind the env var from
@@ -50,6 +53,8 @@ func newGCSStore(cfg map[string]interface{}) (objstore.Store, error) {
 	credEnv, _ := cfg["credentialsFileEnv"].(string)
 	// Inline service-account JSON (from a Studio connection).
 	inlineCredJSON, _ := cfg["credentialsJson"].(string)
+	// Optional custom endpoint (e.g. the fake-gcs-server emulator for local dev).
+	endpoint, _ := cfg["endpoint"].(string)
 
 	var opts []option.ClientOption
 	if credEnv != "" {
@@ -62,6 +67,16 @@ func newGCSStore(cfg map[string]interface{}) (objstore.Store, error) {
 		opts = append(opts, option.WithCredentialsJSON([]byte(inlineCredJSON)))
 	}
 	// If no credentials option provided, storage.NewClient uses ADC automatically.
+
+	// A custom endpoint points the client at an emulator (fake-gcs-server) or a
+	// private-service-connect URL. Emulators are unauthenticated, so when an
+	// endpoint is set without explicit credentials we disable auth.
+	if endpoint != "" {
+		opts = append(opts, option.WithEndpoint(endpoint))
+		if credEnv == "" && inlineCredJSON == "" {
+			opts = append(opts, option.WithoutAuthentication())
+		}
+	}
 
 	client, err := storage.NewClient(context.Background(), opts...)
 	if err != nil {

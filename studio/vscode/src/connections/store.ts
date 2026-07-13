@@ -86,7 +86,8 @@ export const CONN_TYPES: ConnType[] = [
     fields: [
       { key: 'bucket', label: 'Bucket', placeholder: 'acme-lake' },
       { key: 'projectId', label: 'Project ID', placeholder: 'acme-prod' },
-      { key: 'serviceAccountJson', label: 'Service account JSON', secret: true },
+      { key: 'serviceAccountJson', label: 'Service account JSON', secret: true, optional: true },
+      { key: 'endpoint', label: 'Endpoint', optional: true, placeholder: 'http://127.0.0.1:4443/storage/v1/ (emulator)' },
     ],
   },
   {
@@ -95,6 +96,7 @@ export const CONN_TYPES: ConnType[] = [
       { key: 'account', label: 'Account', placeholder: 'acmestorage' },
       { key: 'container', label: 'Container', placeholder: 'lake' },
       { key: 'sasToken', label: 'SAS token / key', secret: true },
+      { key: 'serviceURL', label: 'Service URL', optional: true, placeholder: 'http://127.0.0.1:10000/devstoreaccount1 (Azurite)' },
     ],
   },
   {
@@ -447,11 +449,13 @@ function buildStageConfig(type: string, v: Record<string, string>): Record<strin
       if (v.endpoint) cfg.endpoint = v.endpoint;
       if (v.accessKeyId) cfg.accessKeyId = v.accessKeyId;
       if (v.secretAccessKey) cfg.secretAccessKey = v.secretAccessKey;
-      if (v.projectId) cfg.projectId = v.projectId;
+      if (v.projectId) cfg.project = v.projectId;
       if (v.serviceAccountJson) cfg.credentialsJson = v.serviceAccountJson;
-      if (v.account) cfg.account = v.account;
+      // ADLS: engine reads accountName + serviceURL + sasToken/accountKey.
+      if (v.account) cfg.accountName = v.account;
       if (v.container) cfg.container = v.container;
       if (v.sasToken) cfg.sasToken = v.sasToken;
+      if (v.serviceURL) cfg.serviceURL = v.serviceURL;
       return cfg;
     }
     case 'http':
