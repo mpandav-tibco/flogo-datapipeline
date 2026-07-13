@@ -185,11 +185,19 @@ func compileInner(inner string) (func(row map[string]interface{}) interface{}, e
 	inner = strings.TrimPrefix(inner, "=")
 	inner = strings.TrimSpace(inner)
 
-	// Field reference: $fieldName or $.fieldName
+	// Field reference: $fieldName or $.fieldName. A dotted path
+	// ($.properties.amount) traverses nested maps so JSON/XML records can be
+	// flattened; a bare name is a fast direct lookup.
 	if strings.HasPrefix(inner, "$") {
 		fieldName := strings.TrimPrefix(strings.TrimPrefix(inner, "$"), ".")
+		if !strings.Contains(fieldName, ".") {
+			return func(row map[string]interface{}) interface{} {
+				return row[fieldName]
+			}, nil
+		}
+		segments := strings.Split(fieldName, ".")
 		return func(row map[string]interface{}) interface{} {
-			return row[fieldName]
+			return resolvePath(row, segments)
 		}, nil
 	}
 
@@ -235,6 +243,24 @@ func compileInner(inner string) (func(row map[string]interface{}) interface{}, e
 	}
 
 	return nil, fmt.Errorf("unrecognized expression: %q", inner)
+}
+
+// resolvePath traverses a dotted path (e.g. properties.amount) through nested
+// map[string]interface{} values and returns the leaf value, or nil if any
+// segment is missing or not a map.
+func resolvePath(row map[string]interface{}, segments []string) interface{} {
+	var cur interface{} = row
+	for _, seg := range segments {
+		m, ok := cur.(map[string]interface{})
+		if !ok {
+			return nil
+		}
+		cur, ok = m[seg]
+		if !ok {
+			return nil
+		}
+	}
+	return cur
 }
 
 // splitArgs splits a comma-separated argument list respecting parentheses and quotes.
