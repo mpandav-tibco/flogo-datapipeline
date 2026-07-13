@@ -254,8 +254,20 @@ func (s *objstoreSink) uploadTmpFile() error {
 }
 
 // expandKeyMacros replaces date/time macros in the key template with UTC values.
+//
+// Two macro syntaxes are supported and may be mixed freely:
+//
+//   - Brace form (canonical):  {YYYY} {MM} {DD} {HH} {mm} {ss} {ts} {uuid}
+//   - Dollar-brace form:       ${date} ${year} ${month} ${day} ${uuid} ${runId}
+//
+// The dollar-brace form is the syntax surfaced in the Studio field tooltips
+// ("supports ${date}, ${uuid}, ${runId}"), so it is honoured here to keep the
+// authored key templates and the runtime expansion in sync — otherwise a key
+// like "${date}/part-${uuid}.parquet" would be written to the object store
+// verbatim.
 func expandKeyMacros(key string) string {
 	now := time.Now().UTC()
+	uuid := newUUID()
 	r := strings.NewReplacer(
 		"{YYYY}", fmt.Sprintf("%04d", now.Year()),
 		"{MM}", fmt.Sprintf("%02d", int(now.Month())),
@@ -264,7 +276,15 @@ func expandKeyMacros(key string) string {
 		"{mm}", fmt.Sprintf("%02d", now.Minute()),
 		"{ss}", fmt.Sprintf("%02d", now.Second()),
 		"{ts}", fmt.Sprintf("%d", now.Unix()),
-		"{uuid}", newUUID(),
+		"{uuid}", uuid,
+		// Studio dollar-brace forms.
+		"${date}", now.Format("2006-01-02"),
+		"${year}", fmt.Sprintf("%04d", now.Year()),
+		"${month}", fmt.Sprintf("%02d", int(now.Month())),
+		"${day}", fmt.Sprintf("%02d", now.Day()),
+		"${ts}", fmt.Sprintf("%d", now.Unix()),
+		"${uuid}", uuid,
+		"${runId}", uuid,
 	)
 	return r.Replace(key)
 }
