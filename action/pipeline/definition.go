@@ -541,4 +541,3 @@ func (d *Definition) expandEnv() {
 		}
 	}
 }
-

@@ -17,7 +17,9 @@ import (
 
 // handleIntrospectKafkaTopics handles POST /v1/introspect/kafka-topics.
 // Body: { "brokers": ["localhost:9092"], "saslMechanism": "...", "saslUser": "...",
-//         "saslPasswordEnv": "...", "tlsCACertFile": "...", ... }
+//
+//	"saslPasswordEnv": "...", "tlsCACertFile": "...", ... }
+//
 // Returns { "topics": ["orders", "events", ...] } — user topics only (internal
 // topics prefixed with "_" or "__" are hidden).
 func (s *Server) handleIntrospectKafkaTopics(w http.ResponseWriter, r *http.Request) {
@@ -83,7 +85,9 @@ func introspectKafkaTopics(brokers []string, cfg map[string]interface{}) ([]stri
 
 // handleIntrospectSchemaRegistry handles POST /v1/introspect/schema-registry.
 // Body: { "url": "http://localhost:8081", "subject": "orders-value" }
-//   or  { "url": "...", "topic": "orders" }  (subject defaults to "<topic>-value")
+//
+//	or  { "url": "...", "topic": "orders" }  (subject defaults to "<topic>-value")
+//
 // Fetches the latest registered Avro/JSON schema and maps it to pipeline columns.
 func (s *Server) handleIntrospectSchemaRegistry(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {

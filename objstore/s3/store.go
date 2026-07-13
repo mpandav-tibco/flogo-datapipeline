@@ -271,4 +271,3 @@ func (s *s3Store) Delete(ctx context.Context, key string) error {
 // Close is a no-op for S3 — the AWS SDK manages HTTP connection pools
 // independently of any per-client state.
 func (s *s3Store) Close() error { return nil }
-

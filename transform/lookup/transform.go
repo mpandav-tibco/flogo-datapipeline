@@ -18,8 +18,9 @@
 //	}
 //
 // onError: "null" fills enrichment fields with nil on HTTP error (default).
-//          "skip" drops the row.
-//          "fail" aborts the pipeline.
+//
+//	"skip" drops the row.
+//	"fail" aborts the pipeline.
 package lookup
 
 import (
@@ -247,11 +248,11 @@ func (l *lookupTransform) Close() error {
 // Get and Put are concurrent-safe (each acquires c.mu). fetchWithCache uses
 // a singleflight.Group to avoid duplicate in-flight fetches for the same key.
 type lruCache struct {
-	mu       sync.Mutex
-	cap      int
-	items    map[string]*lruNode
-	head     *lruNode // most-recently used sentinel
-	tail     *lruNode // least-recently used sentinel
+	mu    sync.Mutex
+	cap   int
+	items map[string]*lruNode
+	head  *lruNode // most-recently used sentinel
+	tail  *lruNode // least-recently used sentinel
 }
 
 type lruNode struct {

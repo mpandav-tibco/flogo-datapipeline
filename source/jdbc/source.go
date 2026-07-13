@@ -61,11 +61,11 @@ func init() { source.Register("jdbc", newJDBCSource) }
 type jdbcSource struct {
 	db         *sql.DB
 	driver     string
-	baseQuery  string      // SELECT without LIMIT/OFFSET/WHERE-keyset suffix; built once in newJDBCSource
-	orderKey   string      // primary key column for keyset pagination; empty = use LIMIT/OFFSET
+	baseQuery  string // SELECT without LIMIT/OFFSET/WHERE-keyset suffix; built once in newJDBCSource
+	orderKey   string // primary key column for keyset pagination; empty = use LIMIT/OFFSET
 	batchSize  int
 	schema     []record.Column
-	rows       *sql.Rows   // live cursor held between ReadBatch calls; nil between pages (keyset)
+	rows       *sql.Rows // live cursor held between ReadBatch calls; nil between pages (keyset)
 	rowsRead   int64
 	lastKeyVal interface{} // last value of orderKey seen; drives the next keyset page query
 	useKeyset  bool

@@ -1311,11 +1311,13 @@ function renderTabs() {
   if (cur()?.type === 'canvas') {
     const kafka = S.pipe?.nodes[0].type === 'kafka';
     acts.innerHTML =
+      '<button class="btn sm" data-a="help" title="Show all features (F1)">? Features</button>' +
       '<button class="btn sm" data-a="preview">⌕ Dry-run Preview</button>' +
       (kafka ? '<button class="btn sm" data-a="tail">≋ Live Tail</button>' : '') +
       (S.running
         ? '<button class="btn sm" data-a="stop">■ Stop</button>'
         : '<button class="btn sm pri" data-a="run">▷ Run</button>');
+    (acts.querySelector('[data-a="help"]') as HTMLElement).onclick = () => openFeatureGuide();
     (acts.querySelector('[data-a="preview"]') as HTMLElement).onclick = () => doPreview();
     const tl = acts.querySelector('[data-a="tail"]') as HTMLElement | null;
     if (tl) tl.onclick = () => openTab('tail', 'tail');
@@ -1437,7 +1439,7 @@ function renderCanvas(m: HTMLElement) {
   // inspector — the selected node may be the DLQ branch node (not in p.nodes).
   const insp = el('div', 'inspector');
   const sn = (S.selNode === 'dlq' && p.dlqNode) ? p.dlqNode : (p.nodes.find((n) => n.id === S.selNode) || p.nodes[0]);
-  insp.appendChild(el('div', 'ih', 'Inspector — ' + (sn ? sn.type : '')));
+  insp.appendChild(el('div', 'ih', sn ? sn.type : ''));
   const ib = el('div', 'ib');
   const tabs = el('div', 'tabs');
   ['Config', 'Schema', 'Test'].forEach((tn) => {
@@ -2267,6 +2269,7 @@ function renderStatus() {
 
 // ── command palette + quick pick ──────────────────────────────────────────────
 const COMMANDS = [
+  { ic: '?', t: 'Data Pipeline: Show All Features', fn: () => openFeatureGuide() },
   { ic: '▷', t: 'Data Pipeline: Run Pipeline', fn: () => doRun() },
   { ic: '■', t: 'Data Pipeline: Stop Pipeline', fn: () => post({ type: 'stop' }) },
   { ic: '⌕', t: 'Data Pipeline: Dry-run Preview', fn: () => doPreview() },
@@ -2281,8 +2284,85 @@ const COMMANDS = [
   { ic: '{}', t: 'Data Pipeline: Open Raw JSON', fn: () => post({ type: 'openRaw' }) },
 ];
 function closeOverlays() {
-  document.querySelectorAll('.scrim,.palette,.ctxmenu').forEach((x) => x.remove());
+  document.querySelectorAll('.scrim,.palette,.ctxmenu,.guide').forEach((x) => x.remove());
 }
+
+// ── feature guide ─────────────────────────────────────────────────────────────
+// A discoverable, categorised overview of everything the studio can do, so new
+// users can find capabilities that otherwise only appear contextually (inside a
+// node inspector, a right-click menu, or the command palette).
+const FEATURE_GUIDE: Array<{ group: string; items: Array<{ ic: string; t: string; d: string }> }> = [
+  {
+    group: 'Build the pipeline',
+    items: [
+      { ic: '＋', t: 'Add / change stages', d: 'Use the ＋Source / ＋Transform / ＋Sink / ＋DLQ pills under the canvas, the ＋ between nodes, or right-click a node.' },
+      { ic: '⇄', t: '11 sources · 9 sinks', d: 'csv, tsv, fixed-width, parquet, xml, jsonlines, jdbc, kafka, s3, gcs, adls → and jdbc/parquet/csv/jsonlines/kafka/object-store/null sinks. Pick the type from the node dropdown.' },
+      { ic: '⛯', t: '7 transforms', d: 'filter, map, validate, lookup, hwm (high-water mark), dq (data-quality gate), schema-drift — insert any between source and sink.' },
+      { ic: '⛁', t: 'Connections', d: 'Save reusable, secret-safe credentials (DB, Kafka, S3/GCS/ADLS, HTTP) once and bind them on any source/sink. Command palette → New Connection.' },
+    ],
+  },
+  {
+    group: 'Auto-discover schema (in the node inspector)',
+    items: [
+      { ic: '⤓', t: 'Browse DB tables', d: 'JDBC source/sink: the Table field lists tables from the live database and auto-fetches column types.' },
+      { ic: '⭳', t: 'Read schema from source', d: 'Any file source: read the real column schema — Parquet footer, CSV/TSV header, JSON sample.' },
+      { ic: '⤓', t: 'Kafka topics + Schema Registry', d: 'Kafka source: list topics from the cluster, and read Avro/JSON columns from a Schema Registry.' },
+      { ic: '⤓', t: 'Detect XML structure', d: 'XML source: sample the file to auto-fill the record element, field xpaths and types.' },
+      { ic: '⤓', t: 'Browse object storage', d: 'S3/GCS/ADLS: list bucket objects to pick a key/prefix instead of typing it.' },
+    ],
+  },
+  {
+    group: 'Test before you run',
+    items: [
+      { ic: '⌕', t: 'Dry-run Preview', d: 'Top-right ⌕ Dry-run Preview runs the pipeline in memory and shows sample output without writing to the sink.' },
+      { ic: '◲', t: 'Per-stage tester', d: 'Select a transform → Test tab: edit input rows and see exactly which rows are kept / dropped / failed by that one stage.' },
+      { ic: '◱', t: 'Source & sink samples', d: 'Select the source or sink → Test tab shows the real rows the stage reads / would write.' },
+    ],
+  },
+  {
+    group: 'Run, observe, recover',
+    items: [
+      { ic: '▷', t: 'Run + Run Report', d: 'Run streams live counts; the Run Report tab shows the read → dropped → failed → written funnel and per-stage metrics.' },
+      { ic: '≋', t: 'Live Tail', d: 'For Kafka sources, tail records as they flow through the running engine.' },
+      { ic: '⚠', t: 'DLQ (catch)', d: 'Add a dead-letter sink to capture rejected rows; the DLQ tab lists them after a run.' },
+      { ic: '≠', t: 'Schema Drift', d: 'The Schema-Drift transform + tab flag and reconcile columns that appear/disappear over time.' },
+    ],
+  },
+  {
+    group: 'Ship it',
+    items: [
+      { ic: '☁', t: 'Deploy to Kubernetes', d: 'Command palette → Deploy generates a Dockerfile + sharded StatefulSet with secrets templated from your connections.' },
+      { ic: '＋', t: 'Templates', d: 'Command palette → New Pipeline from Template to start from a working example.' },
+      { ic: '{}', t: 'Open Raw JSON', d: 'Edit the underlying .datapipeline JSON directly at any time.' },
+    ],
+  },
+];
+
+function openFeatureGuide() {
+  closeOverlays();
+  const scrim = el('div', 'scrim');
+  scrim.onclick = closeOverlays;
+  document.body.appendChild(scrim);
+  const g = el('div', 'guide');
+  const head = el('div', 'guide-h');
+  head.innerHTML = '<div class="guide-title">◈ Data Pipeline Studio — everything you can do</div><span class="guide-x" title="Close (Esc)">✕</span>';
+  (head.querySelector('.guide-x') as HTMLElement).onclick = closeOverlays;
+  g.appendChild(head);
+  const body = el('div', 'guide-body');
+  FEATURE_GUIDE.forEach((sec) => {
+    body.appendChild(el('div', 'guide-group', sec.group));
+    sec.items.forEach((it) => {
+      const r = el('div', 'guide-item');
+      r.innerHTML = `<span class="gic">${it.ic}</span><div class="gtx"><div class="gt">${it.t}</div><div class="gd">${it.d}</div></div>`;
+      body.appendChild(r);
+    });
+  });
+  g.appendChild(body);
+  const foot = el('div', 'guide-f', 'Tip: press <b>Ctrl/Cmd+Shift+P</b> for the command palette · hover any ⤓ / ⭳ button in a node inspector to auto-discover schema.');
+  g.appendChild(foot);
+  document.body.appendChild(g);
+}
+
 function openPalette() {
   closeOverlays();
   const scrim = el('div', 'scrim');

@@ -17,7 +17,8 @@ import (
 // Samples the file to detect the repeating record element and its child fields
 // so the user doesn't have to hand-write recordElement + the field xpaths.
 // Returns { "recordElement": "product", "fields": [{name, xpath, type}, ...],
-//           "columns": [{name, type}, ...] }.
+//
+//	"columns": [{name, type}, ...] }.
 func (s *Server) handleIntrospectXML(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "use POST")
@@ -149,8 +150,8 @@ func collectXMLFields(path, recordElement string) ([]XMLField, error) {
 	type sample struct {
 		values []string
 	}
-	fieldOrder := []string{}         // xpath order as discovered
-	samples := map[string]*sample{}  // xpath -> sampled string values
+	fieldOrder := []string{}        // xpath order as discovered
+	samples := map[string]*sample{} // xpath -> sampled string values
 	addSample := func(xpath, val string) {
 		s, ok := samples[xpath]
 		if !ok {

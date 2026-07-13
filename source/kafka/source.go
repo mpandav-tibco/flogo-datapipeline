@@ -97,7 +97,7 @@ type kafkaSourceConfig struct {
 	brokers      []string
 	topic        string
 	groupID      string
-	startOffset  int64     // sarama.OffsetNewest, sarama.OffsetOldest, or explicit
+	startOffset  int64 // sarama.OffsetNewest, sarama.OffsetOldest, or explicit
 	pollMs       int
 	deserializer string    // "json" | "avro" | "raw"
 	mode         string    // "streaming" | "batch"
@@ -150,7 +150,6 @@ func (h *consumerGroupHandler) markPartitionDone(partition int32) {
 
 func (h *consumerGroupHandler) Setup(_ sarama.ConsumerGroupSession) error   { return nil }
 func (h *consumerGroupHandler) Cleanup(_ sarama.ConsumerGroupSession) error { return nil }
-
 
 // ConsumeClaim is called by sarama in a dedicated goroutine per partition.
 // It enqueues messages into h.msgCh (blocking on backpressure) and marks
