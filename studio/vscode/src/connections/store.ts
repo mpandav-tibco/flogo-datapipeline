@@ -447,6 +447,11 @@ function buildStageConfig(type: string, v: Record<string, string>): Record<strin
       if (v.bucket) cfg.bucket = v.bucket;
       if (v.region) cfg.region = v.region;
       if (v.endpoint) cfg.endpoint = v.endpoint;
+      // S3-compatible endpoints (MinIO, LocalStack, Ceph) require path-style
+      // addressing: the virtual-host style "<bucket>.<endpoint>" does not resolve
+      // for a custom endpoint, so ListObjectsV2/GetObject fail with StatusCode 0.
+      // Any explicit endpoint means a non-AWS S3, so force path-style there.
+      if (type === 's3' && v.endpoint) cfg.forcePathStyle = true;
       if (v.accessKeyId) cfg.accessKeyId = v.accessKeyId;
       if (v.secretAccessKey) cfg.secretAccessKey = v.secretAccessKey;
       if (v.projectId) cfg.project = v.projectId;
