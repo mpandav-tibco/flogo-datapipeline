@@ -35,6 +35,11 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
   // Path of the resolved (connections-injected) sibling file the engine was
   // last started against, so it can be cleaned up on stop/dispose.
   private resolvedPath: string | null = null;
+  // The pipeline document text the currently-running engine was started with.
+  // The engine loads the pipeline once at boot, so if the document changed
+  // (edited sink/transforms/source), we must restart it before the next run —
+  // otherwise Run silently re-executes the stale, previously-loaded pipeline.
+  private engineStartedFrom: string | null = null;
   // Dedicated native Output channel for run/engine logs (replaces the webview's
   // custom Output tab — full IDE integration).
   private readonly runChannel: vscode.OutputChannel;
@@ -569,7 +574,16 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
     panel: vscode.WebviewPanel,
     revealOutput = true,
   ): Promise<number | null> {
-    if (this.manager.port) return this.manager.port;
+    // Reuse a running engine only if it was started from the CURRENT pipeline
+    // text. The flogo engine loads the pipeline once at boot, so a stale engine
+    // would re-run the previously-loaded pipeline and silently ignore edits
+    // (changed sink/transforms/source). If the document changed, restart it.
+    if (this.manager.port) {
+      if (this.engineStartedFrom === document.getText()) return this.manager.port;
+      this.manager.stop();
+      this.clearResolved();
+      this.hooks.onStopped?.();
+    }
 
     const cfg = vscode.workspace.getConfiguration('flogoDataPipelineStudio');
     const startPort = cfg.get<number>('apiPort') ?? 9080;
@@ -594,6 +608,7 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
       // when the pipeline lives in a pipelines/ subfolder.
       const wsRoot = vscode.workspace.getWorkspaceFolder(document.uri)?.uri.fsPath;
       const port = await this.manager.start(startPath, startPort, wsRoot);
+      this.engineStartedFrom = document.getText();
       this.logRun(`[engine] Ready on port ${port}`);
       this.hooks.onRunning?.(port, path.basename(document.uri.fsPath, '.datapipeline'));
       this.post(panel, { type: 'runStarted', port });
@@ -832,6 +847,7 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
 
   private stopPipeline(panel: vscode.WebviewPanel): void {
     this.manager.stop();
+    this.engineStartedFrom = null;
     this.clearResolved();
     this.hooks.onStopped?.();
     this.post(panel, { type: 'stopped' });
