@@ -58,6 +58,7 @@ const S = {
   pipe: null as Pipe | null,
   selNode: null as string | null,
   inspTab: 'Config',
+  inspClosed: false,
   tabs: [{ id: 'canvas', type: 'canvas' as string }],
   active: 'canvas',
   running: false,
@@ -1381,7 +1382,7 @@ function renderCanvas(m: HTMLElement) {
     nd.style.setProperty('--w', w + '%');
     nd.innerHTML = `<div class="kind">${n.kind}</div><div class="nm">${n.nm}</div><div class="meta">${n.meta}</div><div class="thru"><i></i></div>`;
     nd.tabIndex = 0;
-    nd.onclick = () => { S.selNode = n.id; S.inspTab = 'Config'; renderEditor(); };
+    nd.onclick = () => { S.selNode = n.id; S.inspTab = 'Config'; S.inspClosed = false; renderEditor(); };
     nd.oncontextmenu = (e) => nodeMenu(n, i, e);
     row.appendChild(nd);
   });
@@ -1408,7 +1409,7 @@ function renderCanvas(m: HTMLElement) {
     dnode.innerHTML = `<div class="kind">dead-letter (catch)</div><div class="nm">${dn.nm}</div><div class="meta">${dn.type} · ${dn.meta}</div>`;
     dnode.tabIndex = 0;
     dnode.title = 'Rows rejected by the sink are captured here — the main pipeline keeps running.';
-    dnode.onclick = () => { S.selNode = 'dlq'; S.inspTab = 'Config'; renderEditor(); };
+    dnode.onclick = () => { S.selNode = 'dlq'; S.inspTab = 'Config'; S.inspClosed = false; renderEditor(); };
     dnode.oncontextmenu = (e) => dlqMenu(e);
     col.appendChild(dnode);
     br.appendChild(col);
@@ -1436,10 +1437,26 @@ function renderCanvas(m: HTMLElement) {
   cv.appendChild(hint);
   m.appendChild(c);
 
+  // Inspector is dismissible; when closed, show a slim reopen tab instead.
+  if (S.inspClosed) {
+    const reopen = el('div', 'inspreopen');
+    reopen.title = 'Show config panel';
+    reopen.innerHTML = '<span>⚙</span>';
+    reopen.onclick = () => { S.inspClosed = false; renderEditor(); };
+    m.appendChild(reopen);
+    return;
+  }
+
   // inspector — the selected node may be the DLQ branch node (not in p.nodes).
   const insp = el('div', 'inspector');
   const sn = (S.selNode === 'dlq' && p.dlqNode) ? p.dlqNode : (p.nodes.find((n) => n.id === S.selNode) || p.nodes[0]);
-  insp.appendChild(el('div', 'ih', sn ? sn.type : ''));
+  const ih = el('div', 'ih');
+  ih.appendChild(el('span', 'ihname', sn ? sn.type : ''));
+  const closeBtn = el('span', 'ihx', '✕');
+  closeBtn.title = 'Close config panel';
+  closeBtn.onclick = () => { S.inspClosed = true; renderEditor(); };
+  ih.appendChild(closeBtn);
+  insp.appendChild(ih);
   const ib = el('div', 'ib');
   const tabs = el('div', 'tabs');
   ['Config', 'Schema', 'Test'].forEach((tn) => {
@@ -2128,7 +2145,7 @@ function dlqMenu(e: MouseEvent) {
   e.preventDefault();
   e.stopPropagation();
   contextMenu(e.clientX, e.clientY, [
-    { ic: '⚙', label: 'Configure DLQ', fn: () => { S.selNode = 'dlq'; S.inspTab = 'Config'; renderEditor(); } },
+    { ic: '⚙', label: 'Configure DLQ', fn: () => { S.selNode = 'dlq'; S.inspTab = 'Config'; S.inspClosed = false; renderEditor(); } },
     { ic: '⧉', label: 'Open DLQ run stats', fn: () => openTab('dlq', 'dlq') },
     { sep: true },
     { ic: '✕', label: 'Remove DLQ', fn: () => removeDlq() },
@@ -2483,7 +2500,7 @@ function nodeMenu(n: Node, i: number, e: MouseEvent) {
   e.stopPropagation();
   const isT = n.kind === 'transform';
   const items: Array<{ ic?: string; label?: string; fn?: () => void; sep?: boolean; dis?: boolean }> = [
-    { ic: '⚙', label: 'Configure', fn: () => { S.selNode = n.id; S.inspTab = 'Config'; renderEditor(); } },
+    { ic: '⚙', label: 'Configure', fn: () => { S.selNode = n.id; S.inspTab = 'Config'; S.inspClosed = false; renderEditor(); } },
     { ic: '▷', label: 'Test this stage on sample', fn: () => doPreview() },
     { sep: true },
     { ic: '＋', label: 'Insert transform before', fn: () => addTransform(i) },
@@ -2494,7 +2511,7 @@ function nodeMenu(n: Node, i: number, e: MouseEvent) {
   if (n.kind === 'sink') {
     items.push({ sep: true });
     if (S.pipe?.hasDlq) {
-      items.push({ ic: '⚠', label: 'Configure DLQ', fn: () => { S.selNode = 'dlq'; S.inspTab = 'Config'; renderEditor(); } });
+      items.push({ ic: '⚠', label: 'Configure DLQ', fn: () => { S.selNode = 'dlq'; S.inspTab = 'Config'; S.inspClosed = false; renderEditor(); } });
     } else {
       items.push({ ic: '⚠', label: 'Add DLQ (route write failures)…', fn: () => addDlq() });
     }
