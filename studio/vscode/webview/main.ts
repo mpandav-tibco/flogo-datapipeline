@@ -835,9 +835,12 @@ function renderColumnsEditor(node: Node): HTMLElement {
   const f = el('div', 'fld');
   f.appendChild(el('div', 'k', 'Columns'));
   const target = cfgTarget(node);
-  const cols: Array<{ name?: string; type?: string }> = Array.isArray(target.columns) ? target.columns : [];
+  const cols: Array<{ name?: string; type?: string; start?: number; length?: number }> =
+    Array.isArray(target.columns) ? target.columns : [];
   const box = el('div', 'cols');
   const types = ['string', 'int', 'float', 'bool', 'date', 'decimal'];
+  // Fixed-width columns carry byte start (1-based) + length; expose inputs for them.
+  const isFixed = node.type === 'fixedwidth' || node.type === 'flatfile';
   const save = () => setCfgValue(node, 'columns', cols);
   cols.forEach((c, i) => {
     const row = el('div', 'crow');
@@ -856,14 +859,49 @@ function renderColumnsEditor(node: Node): HTMLElement {
     const del = el('span', 'del', '✕');
     del.onclick = () => { cols.splice(i, 1); save(); renderEditor(); };
     row.appendChild(name);
+    if (isFixed) {
+      const start = document.createElement('input');
+      start.type = 'number';
+      start.className = 'fw-pos';
+      start.title = 'Start (1-based byte position)';
+      start.placeholder = 'start';
+      start.style.width = '58px';
+      if (typeof c.start === 'number') start.value = String(c.start);
+      start.onchange = () => { cols[i].start = start.value === '' ? undefined : Number(start.value); save(); };
+      const len = document.createElement('input');
+      len.type = 'number';
+      len.className = 'fw-pos';
+      len.title = 'Length (byte count)';
+      len.placeholder = 'len';
+      len.style.width = '52px';
+      if (typeof c.length === 'number') len.value = String(c.length);
+      len.onchange = () => { cols[i].length = len.value === '' ? undefined : Number(len.value); save(); };
+      row.appendChild(start);
+      row.appendChild(len);
+    }
     row.appendChild(sel);
     row.appendChild(del);
     box.appendChild(row);
   });
   const add = el('div', 'addcol', '＋ Add column');
-  add.onclick = () => { cols.push({ name: 'new_column', type: 'string' }); setCfgValue(node, 'columns', cols); renderEditor(); };
+  add.onclick = () => {
+    const next: { name: string; type: string; start?: number; length?: number } = { name: 'new_column', type: 'string' };
+    if (isFixed) {
+      // Default the new column's start to just after the previous column.
+      const prev = cols[cols.length - 1];
+      next.start = prev && typeof prev.start === 'number' && typeof prev.length === 'number'
+        ? prev.start + prev.length : 1;
+      next.length = 10;
+    }
+    cols.push(next);
+    setCfgValue(node, 'columns', cols);
+    renderEditor();
+  };
   box.appendChild(add);
   f.appendChild(box);
+  if (isFixed) {
+    f.appendChild(el('div', 'hint', 'Fixed-width: set each column\u2019s Start (1-based byte position) and Length.'));
+  }
 
   // Auto-generate columns by sampling the source file (CSV/TSV/JSON-lines).
   // XML is excluded: it has its own "Detect structure from file" action on the
