@@ -1963,9 +1963,10 @@ function renderCanvas(m: HTMLElement) {
       row.appendChild(cn);
     }
     const w = [92, 94, 94, 89, 89][i] || 90;
-    const nd = el('div', 'node ' + (n.kind === 'source' ? 'src' : n.kind === 'sink' ? 'sink' : '') + (S.ran ? ' ran' : '') + (S.selNode === n.id ? ' sel' : ''));
+    const nd = el('div', 'node ' + (n.kind === 'source' ? 'src' : n.kind === 'sink' ? 'sink' : 'tf') + (S.ran ? ' ran' : '') + (S.selNode === n.id ? ' sel' : ''));
     nd.style.setProperty('--w', w + '%');
-    nd.innerHTML = `<div class="kind">${n.kind}</div><div class="nm">${n.nm}</div><div class="meta">${n.meta}</div><div class="thru"><i></i></div>`;
+    const icon = n.kind === 'source' ? '⇥' : n.kind === 'sink' ? '⇤' : 'ƒ';
+    nd.innerHTML = `<div class="kind"><span class="kico">${icon}</span>${n.kind}</div><div class="nm">${n.nm}</div><div class="meta">${n.meta}</div><div class="thru"><i></i></div>`;
     nd.tabIndex = 0;
     nd.onclick = () => { S.selNode = n.id; S.inspTab = 'Config'; S.inspClosed = false; renderEditor(); };
     nd.oncontextmenu = (e) => nodeMenu(n, i, e);
