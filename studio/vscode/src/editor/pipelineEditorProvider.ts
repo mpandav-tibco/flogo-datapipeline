@@ -40,9 +40,6 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
   // (edited sink/transforms/source), we must restart it before the next run —
   // otherwise Run silently re-executes the stale, previously-loaded pipeline.
   private engineStartedFrom: string | null = null;
-  // Dedicated native Output channel for run/engine logs (replaces the webview's
-  // custom Output tab — full IDE integration).
-  private readonly runChannel: vscode.OutputChannel;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -53,8 +50,6 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
   ) {
     this.diag = vscode.languages.createDiagnosticCollection('flogoDataPipeline');
     context.subscriptions.push(this.diag);
-    this.runChannel = vscode.window.createOutputChannel('Flogo Data Pipeline Run');
-    context.subscriptions.push(this.runChannel);
     if (this.connections) {
       context.subscriptions.push(
         this.connections.onDidChange(() => this.broadcastConnections()),
@@ -245,7 +240,7 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
         break;
 
       case 'showOutput':
-        this.runChannel.show(true);
+        this.manager.channel.show(true);
         break;
 
       case 'showProblems':
@@ -559,10 +554,11 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
     return slug(name);
   }
 
-  // Append a run/engine log line to the native Output channel.
+  // Append a run/engine log line to the single native Output channel (shared
+  // with the engine's own stdout/stderr so there is one unified log view).
   private logRun(line: string): void {
     const ts = new Date().toISOString().slice(11, 23);
-    this.runChannel.appendLine(`${ts}  ${line}`);
+    this.manager.channel.appendLine(`${ts}  ${line}`);
   }
 
   // Ensure the engine is running for this document; start it if necessary.
@@ -593,12 +589,10 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
     this.post(panel, { type: 'runStarting' });
     this.hooks.onStarting?.();
 
-    this.manager.onLog((text) => {
-      text.split(/\r?\n/).forEach((line) => {
-        if (line.trim()) this.runChannel.appendLine(line);
-      });
-    });
-    if (revealOutput) this.runChannel.show(true);
+    // The engine's stdout/stderr is already streamed to the manager's Output
+    // channel by the BinaryManager itself — no separate forwarder needed (that
+    // previously produced a duplicate log in a second channel).
+    if (revealOutput) this.manager.channel.show(true);
     this.logRun(`[engine] Starting flogo-datapipeline on port ${startPort}…`);
 
     try {
@@ -637,8 +631,6 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
           });
       }
       return null;
-    } finally {
-      this.manager.onLog(null);
     }
   }
 
