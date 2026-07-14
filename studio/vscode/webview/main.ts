@@ -1110,11 +1110,20 @@ function stBool(obj: any, key: string, label: string, hint: string): HTMLElement
   return f;
 }
 function stGroup(title: string, subtitle: string, ...fields: HTMLElement[]): HTMLElement {
-  const g = el('div', 'setgroup');
+  // Category accent + glyph keyed off the section title, so each settings group
+  // reads as part of a colour-coded family (execution / reliability / load /
+  // scaling / observability).
+  const cat = /mode/i.test(title) ? 'exec'
+    : /reliab|checkpoint|incremental/i.test(title) ? 'rel'
+    : /load|performance/i.test(title) ? 'perf'
+    : /scal/i.test(title) ? 'scale'
+    : /observ|metric/i.test(title) ? 'obs' : 'exec';
+  const glyph = { exec: '◧', rel: '❖', perf: '⚡', scale: '⤢', obs: '📈' }[cat] || '◧';
+  const g = el('div', 'setgroup sg-' + cat);
   const open = !!(S.setOpen && S.setOpen[title]);
   g.classList.toggle('collapsed', !open);
   const h = el('div', 'setgroup-h');
-  h.innerHTML = `<span class="caret">▸</span><div class="sthead"><span class="stitle">${title}</span>${subtitle ? `<span class="sub">${subtitle}</span>` : ''}</div>`;
+  h.innerHTML = `<span class="caret">▸</span><span class="sgico">${glyph}</span><div class="sthead"><span class="stitle">${title}</span>${subtitle ? `<span class="sub">${subtitle}</span>` : ''}</div>`;
   const body = el('div', 'setgroup-b');
   fields.forEach((f) => body.appendChild(f));
   h.onclick = () => {
@@ -1863,6 +1872,7 @@ function renderTabs() {
       '<button class="btn sm" data-a="settings" title="Reliability, load strategy, scaling, observability & mode">⚙ Pipeline Settings</button>' +
       '<button class="btn sm" data-a="preview">⌕ Dry-run Preview</button>' +
       (kafka ? '<button class="btn sm" data-a="tail">≋ Live Tail</button>' : '') +
+      '<span class="sep"></span>' +
       (S.running
         ? '<button class="btn sm" data-a="running" disabled>⟳ Running…</button>'
         : '<button class="btn sm pri" data-a="run" title="Run on the warm engine (fast re-test — keeps the engine hot)">▷ Run</button>');
@@ -1954,7 +1964,7 @@ function renderCanvas(m: HTMLElement) {
   const row = el('div', 'flowrow');
   p.nodes.forEach((n, i) => {
     if (i > 0) {
-      const cn = el('div', 'conn' + (S.ran ? ' live' : ''));
+      const cn = el('div', 'conn' + (S.running ? ' flow' : S.ran ? ' live' : ''));
       const ins = el('div', 'ins', '＋');
       ins.title = 'Insert transform here';
       ins.onclick = (e) => { e.stopPropagation(); addTransform(i); };
@@ -2872,11 +2882,12 @@ function renderReport(wv: HTMLElement) {
   const rps = r.durationMs ? Math.round(processed / (r.durationMs / 1000)) : 0;
   const cards = el('div', 'cards');
   cards.style.marginBottom = '16px';
+  const statusCls = r.status === 'completed' ? 'ok' : r.status === 'failed' ? 'bad' : 'warn';
   cards.innerHTML =
-    `<div class="card"><div class="cap">Processed</div><div class="kpi">${fmt(processed)}</div><div class="sub">read from source</div></div>` +
-    `<div class="card"><div class="cap">Written</div><div class="kpi" style="color:var(--green)">${fmt(written)}</div><div class="sub">${pct}% to sink</div></div>` +
-    `<div class="card"><div class="cap">Duration</div><div class="kpi">${(r.durationMs / 1000).toFixed(1)}s</div><div class="sub">~${fmtK(rps)} rows/s</div></div>` +
-    `<div class="card"><div class="cap">Status</div><div class="kpi" style="color:${r.status === 'completed' ? 'var(--green)' : r.status === 'failed' ? 'var(--red)' : 'var(--yellow)'}">${r.status}</div><div class="sub">runId ${r.runId.slice(0, 8)}</div></div>`;
+    `<div class="card acc-blue"><div class="cap">Processed</div><div class="kpi">${fmt(processed)}</div><div class="sub">read from source</div></div>` +
+    `<div class="card acc-green"><div class="cap">Written</div><div class="kpi" style="color:var(--green)">${fmt(written)}</div><div class="sub">${pct}% to sink</div></div>` +
+    `<div class="card acc-purple"><div class="cap">Duration</div><div class="kpi">${(r.durationMs / 1000).toFixed(1)}s</div><div class="sub">~${fmtK(rps)} rows/s</div></div>` +
+    `<div class="card acc-${statusCls}"><div class="cap">Status</div><div class="kpi" style="color:${r.status === 'completed' ? 'var(--green)' : r.status === 'failed' ? 'var(--red)' : 'var(--yellow)'}">${r.status}</div><div class="sub">runId ${r.runId.slice(0, 8)}</div></div>`;
   wv.appendChild(cards);
 
   // Effective settings — mirror the engine's run-config echo so the Run Report
