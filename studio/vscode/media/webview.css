@@ -58,6 +58,11 @@ button{font-family:inherit;color:inherit;background:none;border:none;cursor:poin
 .pipehead .pipedesc{background:transparent;border:1px solid transparent;color:var(--mute);font-size:12.5px;line-height:1.5;padding:3px 6px;margin-left:-6px;border-radius:5px;outline:none;resize:none;font-family:inherit;overflow:hidden}
 .pipehead .pipedesc:hover{border-color:var(--border)}
 .pipehead .pipedesc:focus{border-color:#007fd4;background:#1e1e1e;color:var(--text)}
+.pipehead .pipesettings{align-self:flex-start;margin:3px 0 0;background:transparent;border:1px solid var(--border);color:var(--mute);font-size:11.5px;padding:3px 9px;border-radius:5px;cursor:pointer}
+.pipehead .pipesettings:hover{border-color:#007fd4;color:var(--text)}
+.setgroup{margin:2px 0 12px;border:1px solid var(--border);border-radius:8px;padding:9px 11px 11px}
+.setgroup-h{font-size:12px;font-weight:700;color:var(--text);margin:0 0 8px;padding-bottom:6px;border-bottom:1px solid var(--border)}
+.setgroup-h .sub{display:block;font-weight:400;font-size:11px;color:var(--mute);margin-top:2px}
 .node{flex:none;width:150px;background:var(--node);border:1px solid var(--nodeBorder);border-radius:9px;padding:10px 11px;position:relative;cursor:pointer;transition:box-shadow .12s,border-color .12s}
 .node:hover{border-color:#565a60}
 .node.src{border-top:2px solid #4a90d9}.node.sink{border-top:2px solid #4caf7d}.node.dlq{border-style:dashed}

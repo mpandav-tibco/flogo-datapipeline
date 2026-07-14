@@ -395,6 +395,8 @@ const TYPE_LABELS: Record<string, string> = {
 function typeLabel(t: string): string {
   return TYPE_LABELS[t] || t;
 }
+// Special selection id for the pipeline-level settings panel (not a real node).
+const SETTINGS_NODE = '__pipeline_settings__';
 // A DLQ destination is any real sink type (never 'dlq' itself — DLQ is a route,
 // not a sink type).
 const DLQ_DEST_TYPES = ['jdbc', 'parquet', 'csv', 'jsonlines', 's3', 'gcs', 'adls', 'null'];
@@ -981,6 +983,246 @@ function renderTemplateEditor(node: Node): HTMLElement {
   wrap.appendChild(varsWrap);
   wrap.appendChild(el('div', 'hint', FIELD_HINTS['template']));
   return wrap;
+}
+
+// ── pipeline-level settings panel ────────────────────────────────────────────
+// Reliability (checkpoint & incremental HWM), load strategy (performance),
+// scaling, observability/metrics, and execution mode all live at the top of the
+// pipeline document (not on any stage). renderPipelineSettings builds a single
+// inspector with collapsible sections that read/write those top-level objects.
+function settingsSection(obj: any, name: string): any {
+  if (!obj[name] || typeof obj[name] !== 'object') obj[name] = {};
+  return obj[name];
+}
+// Remove pipeline-setting sections that are empty (or contain only empty nested
+// objects) so merely opening the panel never leaves clutter in the file.
+function pruneEmptySettings(): void {
+  const doc: any = S.doc;
+  const isEmpty = (o: any) => o && typeof o === 'object' && Object.keys(o).length === 0;
+  // Nested empties first.
+  if (doc.scaling && isEmpty(doc.scaling.coordinator)) delete doc.scaling.coordinator;
+  if (doc.observability && isEmpty(doc.observability.options)) delete doc.observability.options;
+  for (const k of ['checkpoint', 'incremental', 'performance', 'scaling', 'observability']) {
+    if (isEmpty(doc[k])) delete doc[k];
+  }
+}
+function saveSettings(): void {
+  pruneEmptySettings();
+  S.pipe = buildPipe(S.doc);
+  post({ type: 'save', doc: S.doc });
+  post({ type: 'validate' });
+}
+// Field builders for the settings panel. Each writes into `obj[key]` and saves.
+function stSelect(obj: any, key: string, label: string, options: Array<[string, string]>, hint: string, reRender = false): HTMLElement {
+  const f = el('div', 'fld');
+  f.appendChild(el('div', 'k', label));
+  const sel = el('select', 'v') as HTMLSelectElement;
+  const cur = obj[key] != null ? String(obj[key]) : options[0][0];
+  options.forEach(([val, lbl]) => {
+    const op = document.createElement('option');
+    op.value = val; op.textContent = lbl;
+    if (val === cur) op.selected = true;
+    sel.appendChild(op);
+  });
+  sel.onchange = () => { obj[key] = sel.value; saveSettings(); if (reRender) renderEditor(); };
+  f.appendChild(sel);
+  if (hint) f.appendChild(el('div', 'hint', hint));
+  return f;
+}
+function stNum(obj: any, key: string, label: string, placeholder: string, hint: string): HTMLElement {
+  const f = el('div', 'fld');
+  f.appendChild(el('div', 'k', label));
+  const inp = el('input', 'v') as HTMLInputElement;
+  inp.type = 'number';
+  inp.placeholder = placeholder;
+  if (obj[key] != null && obj[key] !== '') inp.value = String(obj[key]);
+  inp.onchange = () => {
+    if (inp.value.trim() === '') delete obj[key];
+    else obj[key] = Number(inp.value);
+    saveSettings();
+  };
+  f.appendChild(inp);
+  if (hint) f.appendChild(el('div', 'hint', hint));
+  return f;
+}
+function stText(obj: any, key: string, label: string, placeholder: string, hint: string): HTMLElement {
+  const f = el('div', 'fld');
+  f.appendChild(el('div', 'k', label));
+  const inp = el('input', 'v') as HTMLInputElement;
+  inp.placeholder = placeholder;
+  if (obj[key] != null) inp.value = String(obj[key]);
+  inp.onchange = () => {
+    if (inp.value.trim() === '') delete obj[key];
+    else obj[key] = inp.value;
+    saveSettings();
+  };
+  f.appendChild(inp);
+  if (hint) f.appendChild(el('div', 'hint', hint));
+  return f;
+}
+function stBool(obj: any, key: string, label: string, hint: string): HTMLElement {
+  const f = el('div', 'fld');
+  f.appendChild(el('div', 'k', label));
+  const on = obj[key] === true;
+  const t = el('div', 'toggle' + (on ? ' on' : ''));
+  t.innerHTML = `<span class="sw"></span><span class="lbl">${on ? 'true' : 'false'}</span>`;
+  t.onclick = () => {
+    const next = !t.classList.contains('on');
+    t.classList.toggle('on', next);
+    (t.querySelector('.lbl') as HTMLElement).textContent = String(next);
+    obj[key] = next;
+    saveSettings();
+  };
+  f.appendChild(t);
+  if (hint) f.appendChild(el('div', 'hint', hint));
+  return f;
+}
+function stGroup(title: string, subtitle: string, ...fields: HTMLElement[]): HTMLElement {
+  const g = el('div', 'setgroup');
+  g.appendChild(el('div', 'setgroup-h', `${title}${subtitle ? `<span class="sub">${subtitle}</span>` : ''}`));
+  fields.forEach((f) => g.appendChild(f));
+  return g;
+}
+function renderPipelineSettings(): HTMLElement {
+  const insp = el('div', 'inspector');
+  const ih = el('div', 'ih');
+  ih.appendChild(el('span', 'ihname', '⚙ Pipeline Settings'));
+  const closeBtn = el('span', 'ihx', '✕');
+  closeBtn.title = 'Close';
+  closeBtn.onclick = () => { S.selNode = null; renderEditor(); };
+  ih.appendChild(closeBtn);
+  insp.appendChild(ih);
+  const ib = el('div', 'ib');
+  const doc: any = S.doc;
+
+  // ── Execution mode ─────────────────────────────────────────────────────────
+  ib.appendChild(stGroup('Execution mode', 'How the pipeline moves data',
+    stSelect(doc, 'mode', 'Mode', [
+      ['etl', 'ETL — transform before load'],
+      ['el', 'EL — extract & load (no transforms)'],
+      ['elt', 'ELT — load then transform in-target'],
+    ], 'ETL runs the transform chain in-flight; EL/ELT skip or defer it.'),
+  ));
+
+  // ── Reliability: checkpoint & resume ───────────────────────────────────────
+  const cp = settingsSection(doc, 'checkpoint');
+  const cpType = String(cp.type || 'none');
+  const cpFields: HTMLElement[] = [
+    stSelect(cp, 'type', 'Checkpoint store', [
+      ['none', 'None — no resume'],
+      ['file', 'File — local directory'],
+      ['redis', 'Redis — shared store'],
+    ], 'Persist progress so an interrupted run resumes where it left off.', true),
+  ];
+  if (cpType === 'file') cpFields.push(stText(cp, 'path', 'Directory', './.checkpoints', 'Folder where checkpoint files are written.'));
+  if (cpType === 'redis') {
+    cpFields.push(stText(cp, 'addr', 'Redis address', 'localhost:6379', 'host:port of the Redis server.'));
+    cpFields.push(stText(cp, 'keyPrefix', 'Key prefix', 'dp:ckpt:', 'Namespace for checkpoint keys.'));
+    cpFields.push(stText(cp, 'passwordEnv', 'Password env var', 'REDIS_PASSWORD', 'Env var holding the Redis password.'));
+  }
+  if (cpType !== 'none') {
+    cpFields.push(stNum(cp, 'intervalRows', 'Checkpoint every N rows', '10000', 'Save progress after this many rows (0 = default 10000).'));
+    cpFields.push(stNum(cp, 'intervalSeconds', 'Checkpoint every N seconds', '30', 'Also save on this time interval (0 = default 30s).'));
+    cpFields.push(stBool(cp, 'deleteOnSuccess', 'Delete checkpoint on success', 'Remove the checkpoint when the run completes cleanly.'));
+  }
+  ib.appendChild(stGroup('Reliability · Checkpoint & resume', 'Resume an interrupted run', ...cpFields));
+
+  // ── Reliability: incremental (HWM) load ────────────────────────────────────
+  const inc = settingsSection(doc, 'incremental');
+  const incMode = String(inc.mode || 'none');
+  const incFields: HTMLElement[] = [
+    stSelect(inc, 'mode', 'Incremental load', [
+      ['none', 'None — full load every run'],
+      ['hwm', 'High-water mark — read only new rows'],
+    ], 'Delta loading: only read rows newer than the last saved mark (needs an hwm transform).', true),
+  ];
+  if (incMode === 'hwm') {
+    incFields.push(stText(inc, 'column', 'Watermark column', 'updated_at', 'Monotonic column tracked between runs.'));
+    incFields.push(stSelect(inc, 'valueType', 'Value type', [
+      ['datetime', 'datetime'], ['int', 'int'], ['string', 'string'],
+    ], 'How the watermark column is ordered.'));
+    incFields.push(stText(inc, 'initialValue', 'Initial value', '(empty = full first load)', 'Watermark to use on the very first run.'));
+    incFields.push(stSelect(inc, 'storeType', 'Watermark store', [
+      ['file', 'file'], ['redis', 'redis'], ['postgres', 'postgres'],
+    ], 'Backend that persists the last mark between runs.'));
+  }
+  ib.appendChild(stGroup('Reliability · Incremental load', 'Read only new rows each run', ...incFields));
+
+  // ── Performance / load strategy ────────────────────────────────────────────
+  const perf = settingsSection(doc, 'performance');
+  ib.appendChild(stGroup('Load strategy · Performance', 'Throughput & memory tuning',
+    stNum(perf, 'batchSize', 'Batch size (rows)', '5000', 'Rows per in-flight batch. Higher = faster, more memory.'),
+    stNum(perf, 'transformWorkers', 'Transform workers', '1', 'Parallel transform goroutines (1 = ordered, in-order).'),
+    stNum(perf, 'sourceBufferBatches', 'Source buffer (batches)', '4', 'Channel depth between source and transforms.'),
+    stNum(perf, 'sinkBufferBatches', 'Sink buffer (batches)', '4', 'Channel depth between transforms and sink.'),
+    stNum(perf, 'maxMemoryMB', 'Max in-flight memory (MB)', '512', 'Backpressure: block the source above this in-flight size.'),
+    stNum(perf, 'rowGroupParallelism', 'Parquet row-group parallelism', '4', 'Concurrent row-group readers for Parquet sources.'),
+  ));
+
+  // ── Scaling ────────────────────────────────────────────────────────────────
+  const sc = settingsSection(doc, 'scaling');
+  const scMode = String(sc.mode || 'single');
+  const scFields: HTMLElement[] = [
+    stSelect(sc, 'mode', 'Scaling mode', [
+      ['single', 'Single — one instance'],
+      ['sharded', 'Sharded — fixed instance set'],
+      ['distributed', 'Distributed — work-queue coordinator'],
+    ], 'How work is divided across instances.', true),
+  ];
+  if (scMode === 'sharded') {
+    scFields.push(stNum(sc, 'instanceIndex', 'This instance index', '0', '0-based index of this instance.'));
+    scFields.push(stNum(sc, 'instanceCount', 'Total instances', '2', 'Number of instances sharing the load.'));
+    scFields.push(stSelect(sc, 'partitionStrategy', 'Partition by', [
+      ['rowgroup', 'rowgroup'], ['file', 'file'], ['byterange', 'byterange'],
+    ], 'How input is split across shards.'));
+  }
+  if (scMode === 'distributed') {
+    scFields.push(stSelect(sc, 'partitionStrategy', 'Partition by', [
+      ['rowgroup', 'rowgroup'], ['file', 'file'], ['byterange', 'byterange'],
+    ], 'How input is split into claimable partitions.'));
+    scFields.push(stNum(sc, 'partitionsPerClaim', 'Partitions per claim', '1', 'How many partitions an instance claims at once.'));
+    const coord = settingsSection(sc, 'coordinator');
+    const coordType = String(coord.type || 'redis');
+    scFields.push(stSelect(coord, 'type', 'Coordinator', [
+      ['redis', 'Redis'], ['postgres', 'PostgreSQL'],
+    ], 'Shared work-queue backend that hands out partitions.', true));
+    if (coordType === 'redis') {
+      scFields.push(stText(coord, 'addr', 'Redis address', 'localhost:6379', 'host:port of the coordinator Redis.'));
+      scFields.push(stText(coord, 'passwordEnv', 'Password env var', 'REDIS_PASSWORD', 'Env var holding the Redis password.'));
+    } else {
+      scFields.push(stText(coord, 'dsn', 'PostgreSQL DSN', 'host=… dbname=… user=…', 'Connection string for the coordinator DB.'));
+    }
+    scFields.push(stNum(coord, 'leaseSeconds', 'Lease TTL (s)', '120', 'How long a claim is held before it can be reclaimed.'));
+    scFields.push(stNum(coord, 'heartbeatSeconds', 'Heartbeat (s)', '30', 'Lease-renewal interval.'));
+    scFields.push(stNum(coord, 'maxRetries', 'Max retries', '3', 'Partition retry limit before it is marked failed.'));
+  }
+  ib.appendChild(stGroup('Scaling', 'Run across multiple instances', ...scFields));
+
+  // ── Observability / metrics ────────────────────────────────────────────────
+  const obs = settingsSection(doc, 'observability');
+  const obsMetrics = String(obs.metrics || 'none');
+  const obsFields: HTMLElement[] = [
+    stSelect(obs, 'metrics', 'Metrics backend', [
+      ['none', 'None'],
+      ['prometheus', 'Prometheus — /metrics endpoint'],
+      ['otel', 'OpenTelemetry — OTLP export'],
+    ], 'Emit throughput, latency and error metrics.', true),
+  ];
+  const opts = settingsSection(obs, 'options');
+  if (obsMetrics === 'prometheus') {
+    obsFields.push(stText(opts, 'listenAddr', 'Listen address', ':9090', 'Address the Prometheus scrape endpoint binds to.'));
+    obsFields.push(stText(opts, 'path', 'Metrics path', '/metrics', 'HTTP path for the scrape endpoint.'));
+  }
+  if (obsMetrics === 'otel') {
+    obsFields.push(stText(opts, 'endpoint', 'OTLP endpoint', 'localhost:4317', 'gRPC endpoint of the OTel collector.'));
+  }
+  if (obsMetrics !== 'none') {
+    obsFields.push(stNum(obs, 'stallSeconds', 'Stall threshold (s)', '30', 'Emit a stall event when a batch takes longer than this (−1 disables).'));
+  }
+  ib.appendChild(stGroup('Observability · Metrics', 'Monitor the pipeline', ...obsFields));
+
+  insp.appendChild(ib);
+  return insp;
 }
 
 // Structured column editor for the source `columns` array.
@@ -1639,6 +1881,14 @@ function renderCanvas(m: HTMLElement) {
   // Auto-grow the textarea as the user types.
   descIn.oninput = () => { descIn.style.height = 'auto'; descIn.style.height = descIn.scrollHeight + 'px'; };
   head.appendChild(descIn);
+  // Pipeline-level settings (checkpoint/resume, load strategy/performance,
+  // scaling, observability, incremental load, execution mode) — these live at
+  // the top of the pipeline document, not on any stage, so they get a dedicated
+  // settings panel opened from the header.
+  const gear = el('button', 'pipesettings', '⚙ Pipeline Settings');
+  gear.title = 'Reliability, load strategy, scaling, observability & mode';
+  gear.onclick = () => { S.selNode = SETTINGS_NODE; S.inspClosed = false; renderEditor(); };
+  head.appendChild(gear);
   cv.appendChild(head);
 
   const row = el('div', 'flowrow');
@@ -1719,6 +1969,14 @@ function renderCanvas(m: HTMLElement) {
     reopen.innerHTML = '<span>⚙</span>';
     reopen.onclick = () => { S.inspClosed = false; renderEditor(); };
     m.appendChild(reopen);
+    return;
+  }
+
+  // Pipeline-level settings panel (checkpoint, performance, scaling,
+  // observability, incremental, mode) — rendered instead of a node inspector
+  // when the settings entry point is selected.
+  if (S.selNode === SETTINGS_NODE) {
+    m.appendChild(renderPipelineSettings());
     return;
   }
 
