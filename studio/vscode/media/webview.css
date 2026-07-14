@@ -121,6 +121,11 @@ button{font-family:inherit;color:inherit;background:none;border:none;cursor:poin
 .inspgrip:hover,.inspgrip:active{background:var(--blue)}
 .inspector .ih{height:38px;display:flex;align-items:center;gap:8px;padding:0 12px;border-bottom:1px solid var(--border);font-size:14px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--text)}
 .inspector .ih .ihname{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.inspector .ih .ihkind{flex:none;font-size:9.5px;font-weight:700;letter-spacing:.05em;padding:2px 7px;border-radius:4px;text-transform:uppercase;border:1px solid transparent}
+.inspector .ih .ihkind.src{color:#7cb6ec;background:rgba(74,144,217,.16);border-color:rgba(74,144,217,.35)}
+.inspector .ih .ihkind.sink{color:#6fca9d;background:rgba(76,175,125,.16);border-color:rgba(76,175,125,.35)}
+.inspector .ih .ihkind.tf{color:#c39ae8;background:rgba(169,120,217,.16);border-color:rgba(169,120,217,.35)}
+.inspector .ih .ihkind.dlq{color:#e0a13c;background:rgba(224,161,60,.16);border-color:rgba(224,161,60,.35)}
 .inspector .ih .ihx{flex:none;cursor:pointer;color:var(--mute);font-size:13px;font-weight:400;line-height:1;padding:4px 6px;border-radius:4px}
 .inspector .ih .ihx:hover{background:var(--sel);color:var(--text)}
 .inspreopen{width:34px;flex:none;border-left:1px solid var(--border);background:#1b1b1b;display:flex;justify-content:center;padding-top:9px;cursor:pointer;color:var(--mute);font-size:15px}

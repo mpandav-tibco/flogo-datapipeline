@@ -2055,6 +2055,13 @@ function renderCanvas(m: HTMLElement) {
   const insp = el('div', 'inspector');
   const sn = (S.selNode === 'dlq' && p.dlqNode) ? p.dlqNode : (p.nodes.find((n) => n.id === S.selNode) || p.nodes[0]);
   const ih = el('div', 'ih');
+  if (sn) {
+    // A color-coded kind badge (Source / Transform / Sink / DLQ) so it's obvious
+    // whether e.g. a "jdbc" panel is the source or the sink.
+    const kindCls = sn.kind === 'source' ? 'src' : sn.kind === 'sink' ? 'sink' : sn.kind === 'dlq' ? 'dlq' : 'tf';
+    const kindLbl = sn.kind === 'source' ? 'Source' : sn.kind === 'sink' ? 'Sink' : sn.kind === 'dlq' ? 'DLQ' : 'Transform';
+    ih.appendChild(el('span', 'ihkind ' + kindCls, kindLbl));
+  }
   ih.appendChild(el('span', 'ihname', sn ? typeLabel(sn.type) : ''));
   const closeBtn = el('span', 'ihx', '✕');
   closeBtn.title = 'Close config panel';
