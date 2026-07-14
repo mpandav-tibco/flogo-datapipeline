@@ -110,6 +110,7 @@ import (
 
 	// --- Watermarks ---
 	// file watermark is the built-in default; redis and postgres add HA backends.
+	_ "github.com/mpandav-tibco/flogo-datapipeline/watermark/file"     // File-backed watermark store (default)
 	_ "github.com/mpandav-tibco/flogo-datapipeline/watermark/postgres" // PostgreSQL-backed watermark store (upsert)
 	_ "github.com/mpandav-tibco/flogo-datapipeline/watermark/redis"    // Redis-backed watermark store
 

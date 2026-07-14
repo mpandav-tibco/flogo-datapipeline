@@ -142,6 +142,14 @@ func newJDBCSource(cfg map[string]interface{}) (source.Source, error) {
 	var baseQuery string
 	if rawQuery != "" {
 		baseQuery = rawQuery
+		// HWM cannot be safely appended to an arbitrary raw query (it may already
+		// have GROUP BY / ORDER BY / subqueries). Incremental filtering is only
+		// applied in table mode; surface a hint so operators aren't surprised.
+		if col, _ := cfg["hwmColumn"].(string); col != "" {
+			if v, _ := cfg["hwmValue"].(string); v != "" {
+				fmt.Printf("jdbc source: incremental HWM is not applied to a raw 'query' — include the watermark predicate in your query WHERE clause, or use 'table' mode for automatic HWM filtering\n")
+			}
+		}
 	} else {
 		baseQuery = buildBaseQuery(cfg, table, driver)
 	}
@@ -202,12 +210,56 @@ func buildBaseQuery(cfg map[string]interface{}, table, driver string) string {
 	sb.WriteString(" FROM ")
 	sb.WriteString(sqlutil.QuoteIdent(table, driver))
 
+	// Optional user WHERE clause and/or an incremental high-water-mark predicate.
+	// The HWM predicate (col > lastValue) is injected by the engine via the
+	// hwmColumn/hwmValue config keys for incremental.mode=hwm pipelines so the
+	// database only returns rows newer than the last persisted watermark.
+	conds := make([]string, 0, 2)
 	if where, ok := cfg["where"].(string); ok && where != "" {
+		conds = append(conds, where)
+	}
+	if pred := hwmPredicate(cfg, driver); pred != "" {
+		conds = append(conds, pred)
+	}
+	if len(conds) > 0 {
 		sb.WriteString(" WHERE ")
-		sb.WriteString(where)
+		sb.WriteString(strings.Join(conds, " AND "))
 	}
 
 	return sb.String()
+}
+
+// hwmPredicate builds the incremental high-water-mark WHERE predicate
+// ("col" > <literal>) from the hwmColumn / hwmValue / hwmValueType config keys
+// injected by the engine for incremental.mode=hwm pipelines. Returns "" when no
+// watermark is configured or no prior value exists (first full-table load).
+//
+// The value originates from the watermark store (which the pipeline itself
+// wrote from earlier DB rows), not from end-user input; it is nonetheless
+// formatted defensively — numerics are validated, everything else is single-
+// quoted with embedded quotes escaped — so the resulting SQL is always well
+// formed and injection-safe.
+func hwmPredicate(cfg map[string]interface{}, driver string) string {
+	col, _ := cfg["hwmColumn"].(string)
+	val, _ := cfg["hwmValue"].(string)
+	if col == "" || val == "" {
+		return ""
+	}
+	valueType, _ := cfg["hwmValueType"].(string)
+	var lit string
+	switch valueType {
+	case "int":
+		if _, err := strconv.ParseInt(strings.TrimSpace(val), 10, 64); err != nil {
+			// Not a clean integer — fall back to a quoted literal so the query
+			// stays valid rather than embedding an unquoted bad token.
+			lit = "'" + strings.ReplaceAll(val, "'", "''") + "'"
+		} else {
+			lit = strings.TrimSpace(val)
+		}
+	default: // "datetime", "string", or unset — quote as a string literal.
+		lit = "'" + strings.ReplaceAll(val, "'", "''") + "'"
+	}
+	return sqlutil.QuoteIdent(col, driver) + " > " + lit
 }
 
 // Schema returns the column definitions derived from schema inference.
