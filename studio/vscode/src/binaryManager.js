@@ -94,6 +94,17 @@ class BinaryManager {
         port++
         continue
       }
+      // A stale engine from a previous session (or a different tool) may hold the
+      // port on another interface (e.g. IPv6/dual-stack) so that the local
+      // bind-probe above still reports it "free". If something already answers on
+      // the health endpoint, the port is effectively taken — spawning here would
+      // fail to bind and then time out on health. Skip to the next port instead.
+      if (await this._probeHealth(port)) {
+        this._channel.appendLine(
+          `[manager] an engine is already responding on port ${port}, trying ${port + 1}…`)
+        port++
+        continue
+      }
 
       proc = this._spawn(binary, port, pipelineFile, workingDir)
 
@@ -342,6 +353,23 @@ class BinaryManager {
       srv.once('error', () => resolve(false))
       srv.once('listening', () => srv.close(() => resolve(true)))
       srv.listen(port, '127.0.0.1')
+    })
+  }
+
+  // Quick one-shot check: does an engine already answer the health endpoint on
+  // this port? Used to detect a stale/orphaned engine that the plain bind-probe
+  // may miss (e.g. it holds the port on IPv6 while we probe IPv4). Resolves true
+  // when a 200 is received within `timeoutMs`, false otherwise.
+  _probeHealth(port, timeoutMs = 400) {
+    return new Promise(resolve => {
+      let done = false
+      const finish = (v) => { if (!done) { done = true; resolve(v) } }
+      const req = http.get(`http://127.0.0.1:${port}${HEALTH_ENDPOINT}`, res => {
+        res.resume()
+        finish(res.statusCode === 200)
+      })
+      req.on('error', () => finish(false))
+      req.setTimeout(timeoutMs, () => { req.destroy(); finish(false) })
     })
   }
 

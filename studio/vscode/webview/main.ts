@@ -1374,9 +1374,18 @@ function renderTabs() {
 }
 
 // ── editor / canvas ─────────────────────────────────────────────────────────
+// Remembered scroll offset of the inspector body (.ib), restored after each
+// renderEditor() so field edits don't jump the config panel back to the top.
+let inspScrollTop = 0;
+
 function renderEditor() {
   const m = $('#edmain')!;
   const bc = $('#breadcrumb')!;
+  // Preserve the inspector body scroll position across re-renders. Editing any
+  // field triggers a full renderEditor(), which would otherwise reset the config
+  // panel to the top — painful when entering many columns (e.g. fixed-width).
+  const prevIb = m.querySelector('.ib') as HTMLElement | null;
+  if (prevIb) inspScrollTop = prevIb.scrollTop;
   m.innerHTML = '';
   if (S.tailTimer) { clearInterval(S.tailTimer); S.tailTimer = 0; }
   const t = cur();
@@ -1685,6 +1694,9 @@ function renderCanvas(m: HTMLElement) {
   }
   insp.appendChild(ib);
   m.appendChild(insp);
+  // Restore the previously-remembered scroll position now that the inspector
+  // body is in the DOM (see renderEditor()).
+  ib.scrollTop = inspScrollTop;
 }
 
 // Infer the column schema visible at a given stage by walking the doc from the
