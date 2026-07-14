@@ -2855,8 +2855,9 @@ function doPreview() {
 // ── report / dlq / drift / tail / fleet (engine-or-demo) ─────────────────────
 // effectiveSettings summarises the pipeline-level configuration the way the
 // engine's run-config echo does, so the Run Report and the run log agree. Each
-// entry is [label, value, muted?] — muted marks a default/off value.
-function effectiveSettings(doc: any): Array<[string, string, boolean]> {
+// entry is [label, value, muted?, category] — muted marks a default/off value,
+// category drives the colour accent (matches the Pipeline Settings sections).
+function effectiveSettings(doc: any): Array<[string, string, boolean, string]> {
   const d = doc || {};
   const cp = d.checkpoint || {};
   const perf = d.performance || {};
@@ -2868,18 +2869,18 @@ function effectiveSettings(doc: any): Array<[string, string, boolean]> {
   const cpType = String(cp.type || 'none');
   const metrics = String(obs.metrics || 'none');
   const incMode = String(inc.mode || 'none');
-  const out: Array<[string, string, boolean]> = [];
-  out.push(['mode', mode, mode === 'etl']);
-  out.push(['batch', String(perf.batchSize || 5000), !perf.batchSize]);
-  out.push(['scaling', scMode + (scMode === 'sharded' ? ` ${sc.instanceIndex || 0}/${sc.instanceCount || 1}` : ''), scMode === 'single']);
-  out.push(['checkpoint', cpType === 'none' ? 'none' : `${cpType} (${cp.intervalRows || 10000}r/${cp.intervalSeconds || 30}s)`, cpType === 'none']);
-  out.push(['incremental', incMode, incMode === 'none']);
+  const out: Array<[string, string, boolean, string]> = [];
+  out.push(['Mode', mode.toUpperCase(), mode === 'etl', 'exec']);
+  out.push(['Batch size', fmt(perf.batchSize || 5000) + ' rows', !perf.batchSize, 'perf']);
+  out.push(['Scaling', scMode + (scMode === 'sharded' ? ` ${sc.instanceIndex || 0}/${sc.instanceCount || 1}` : ''), scMode === 'single', 'scale']);
+  out.push(['Checkpoint', cpType === 'none' ? 'none' : `${cpType} · ${fmt(cp.intervalRows || 10000)}r / ${cp.intervalSeconds || 30}s`, cpType === 'none', 'rel']);
+  out.push(['Incremental', incMode === 'none' ? 'none' : `${incMode}${inc.column ? ' · ' + inc.column : ''}`, incMode === 'none', 'rel']);
   // Show the address relevant to the chosen backend: Prometheus scrapes a
   // listenAddr, OTel pushes to an endpoint. Reading the wrong key would surface
   // a stale value left in options after switching backends.
   const metricsAddr = metrics === 'prometheus' ? (obs.options && obs.options.listenAddr)
     : metrics === 'otel' ? (obs.options && obs.options.endpoint) : '';
-  out.push(['metrics', metrics === 'none' ? 'none' : `${metrics}${metricsAddr ? ' ' + metricsAddr : ''}`, metrics === 'none']);
+  out.push(['Metrics', metrics === 'none' ? 'none' : `${metrics}${metricsAddr ? ' · ' + metricsAddr : ''}`, metrics === 'none', 'obs']);
   return out;
 }
 
@@ -2914,19 +2915,19 @@ function renderReport(wv: HTMLElement) {
   // and the run log agree on which pipeline-level settings were active. Wrapped
   // defensively so a malformed doc can never blank out the rest of the report.
   try {
-    const setWrap = el('div', 'setbar');
-    setWrap.appendChild(el('span', 'setbar-h', 'Effective settings'));
-    const chips = el('span', 'setchips');
-    effectiveSettings(S.doc as any).forEach(([label, value, muted]) => {
-      const c = el('span', 'setchip' + (muted ? ' muted' : ''));
-      c.innerHTML = `<span class="k">${escapeHtml(label)}</span><span class="v">${escapeHtml(value)}</span>`;
-      chips.appendChild(c);
+    const secHdr = el('div', 'between');
+    secHdr.style.margin = '4px 0 10px';
+    secHdr.innerHTML = '<h3 class="sec" style="margin:0">Effective configuration</h3>'
+      + '<span class="setedit">⚙ Edit settings</span>';
+    (secHdr.querySelector('.setedit') as HTMLElement).onclick = () => { S.selNode = SETTINGS_NODE; S.inspClosed = false; S.active = 'canvas'; renderAll(); };
+    wv.appendChild(secHdr);
+    const grid = el('div', 'setgrid');
+    effectiveSettings(S.doc as any).forEach(([label, value, muted, cat]) => {
+      const tile = el('div', 'settile cat-' + cat + (muted ? ' off' : ''));
+      tile.innerHTML = `<div class="stk">${escapeHtml(label)}</div><div class="stv">${escapeHtml(value)}</div>`;
+      grid.appendChild(tile);
     });
-    setWrap.appendChild(chips);
-    setWrap.title = 'Open Pipeline Settings';
-    setWrap.style.cursor = 'pointer';
-    setWrap.onclick = () => { S.selNode = SETTINGS_NODE; S.inspClosed = false; S.active = 'canvas'; renderAll(); };
-    wv.appendChild(setWrap);
+    wv.appendChild(grid);
   } catch (e) { /* never let settings summary break the report */ }
 
   wv.appendChild(el('h3', 'sec', 'Row funnel'));
