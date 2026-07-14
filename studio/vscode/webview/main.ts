@@ -144,7 +144,9 @@ const statusColor: Record<string, string> = { running: 'b', completed: 'g', part
 
 // ── build a Pipe from the real doc ────────────────────────────────────────
 function metaFor(kind: string, type: string, cfg: any): string {
-  const bits: string[] = [type];
+  // Show the friendly display label (e.g. "Text Document" for the sectioned
+  // source), falling back to the raw engine id for types without a label.
+  const bits: string[] = [typeLabel(type)];
   if (cfg.path) bits.push(String(cfg.path).split(/[\\/]/).pop() || '');
   if (cfg.table) bits.push(cfg.table);
   if (cfg.topic) bits.push(cfg.topic);
@@ -172,7 +174,7 @@ function buildPipe(doc: PipelineDoc): Pipe {
     id: 'source',
     kind: 'source',
     type: src.type || 'source',
-    nm: (src.path && String(src.path).split(/[\\/]/).pop()) || src.type || 'source',
+    nm: (src.path && String(src.path).split(/[\\/]/).pop()) || typeLabel(src.type) || 'source',
     meta: metaFor('source', src.type || '—', src),
     cfg: cfgOf(src),
     ref: 'source',
@@ -192,7 +194,7 @@ function buildPipe(doc: PipelineDoc): Pipe {
     id: 'sink',
     kind: 'sink',
     type: sink.type || 'sink',
-    nm: sink.table || sink.type || 'sink',
+    nm: sink.table || typeLabel(sink.type) || 'sink',
     meta: metaFor('sink', sink.type || '—', sink),
     cfg: cfgOf(sink),
     ref: 'sink',
@@ -1588,7 +1590,7 @@ function renderEditor() {
   }
   if (t.type === 'canvas') {
     const sn = (S.selNode === 'dlq' && S.pipe.dlqNode) ? S.pipe.dlqNode : (S.pipe.nodes.find((n) => n.id === S.selNode) || S.pipe.nodes[0]);
-    bc.innerHTML = `◈ ${S.pipe.name} <span class="sep">›</span> ${sn ? sn.type + ': ' + sn.nm : ''} <span class="sep">›</span> <span class="chip plain" style="padding:1px 7px">${S.pipe.mode}</span>`;
+    bc.innerHTML = `◈ ${S.pipe.name} <span class="sep">›</span> ${sn ? typeLabel(sn.type) + ': ' + sn.nm : ''} <span class="sep">›</span> <span class="chip plain" style="padding:1px 7px">${S.pipe.mode}</span>`;
     renderCanvas(m);
   } else {
     bc.innerHTML = tabMeta(t).label;
@@ -1724,7 +1726,7 @@ function renderCanvas(m: HTMLElement) {
   const insp = el('div', 'inspector');
   const sn = (S.selNode === 'dlq' && p.dlqNode) ? p.dlqNode : (p.nodes.find((n) => n.id === S.selNode) || p.nodes[0]);
   const ih = el('div', 'ih');
-  ih.appendChild(el('span', 'ihname', sn ? sn.type : ''));
+  ih.appendChild(el('span', 'ihname', sn ? typeLabel(sn.type) : ''));
   const closeBtn = el('span', 'ihx', '✕');
   closeBtn.title = 'Close config panel';
   closeBtn.onclick = () => { S.inspClosed = true; renderEditor(); };
@@ -1783,7 +1785,7 @@ function renderCanvas(m: HTMLElement) {
       typeRow.appendChild(sel);
     } else {
       typeRow.appendChild(el('span', 'badge', 'transform'));
-      typeRow.appendChild(el('span', 'chip plain', sn.type));
+      typeRow.appendChild(el('span', 'chip plain', typeLabel(sn.type)));
     }
     ib.appendChild(typeRow);
 
