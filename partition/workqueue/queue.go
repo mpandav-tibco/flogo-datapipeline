@@ -488,25 +488,39 @@ func (q *PostgresQueue) EnqueueWithLock(ctx context.Context, partitions []source
 		return nil
 	}
 
-	// Step 2: check whether any rows already exist for this pipeline run.
-	// If they do, a prior enqueue (from this or an earlier instance) has
-	// already seeded the queue — release the lock (by committing the empty
-	// transaction) and return nil.
-	var rowCount int
+	// Step 2: check whether an ACTIVE run already owns this queue. Only PENDING
+	// or IN_PROGRESS items mean work is still outstanding — in that case a prior
+	// enqueue (from this or an earlier instance) has already seeded the queue, so
+	// release the lock (by committing) and proceed to ClaimLoop to help drain it.
+	var activeCount int
 	if err := tx.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM `+postgresQueueTable+`
-		 WHERE pipeline_id=$1 AND status IN ('PENDING','IN_PROGRESS','DONE','FAILED')`,
+		 WHERE pipeline_id=$1 AND status IN ('PENDING','IN_PROGRESS')`,
 		q.pipelineID,
-	).Scan(&rowCount); err != nil {
+	).Scan(&activeCount); err != nil {
 		return fmt.Errorf("workqueue: queue presence check: %w", err)
 	}
-	if rowCount > 0 {
-		// Queue already seeded by a previous run or a concurrent winner. Commit
-		// to release the advisory lock and let this instance proceed to ClaimLoop.
+	if activeCount > 0 {
+		// Queue actively being drained by a previous enqueue or a concurrent
+		// winner. Commit to release the advisory lock and proceed to ClaimLoop.
 		return tx.Commit()
 	}
 
-	// Step 3: we hold the lock and the queue is empty — this instance is the
+	// Step 2b: no active items — this is a fresh run (the queue is either empty
+	// or holds only terminal DONE/FAILED items from a previous completed run).
+	// Clear any terminal leftovers so this run starts from a clean slate; without
+	// this, a re-run of the same pipeline would find every partition already DONE
+	// and process zero rows. Safe under the advisory lock: no other instance can
+	// be enqueuing, and there are no active claims to disturb.
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM `+postgresQueueTable+`
+		 WHERE pipeline_id=$1 AND status IN ('DONE','FAILED')`,
+		q.pipelineID,
+	); err != nil {
+		return fmt.Errorf("workqueue: clear terminal items: %w", err)
+	}
+
+	// Step 3: we hold the lock and the queue is clean — this instance is the
 	// enqueue leader. Insert all partitions using the same ON CONFLICT DO NOTHING
 	// semantics as the base Enqueue method.
 	for _, p := range partitions {

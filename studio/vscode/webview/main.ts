@@ -30,6 +30,35 @@ function post(msg: WebviewToHost) {
   vscode.postMessage(msg);
 }
 
+// Make an inspector panel resizable: applies the remembered width and adds a
+// left-edge drag grip that updates S.inspWidth live (clamped to a sane range).
+function attachResize(insp: HTMLElement): void {
+  insp.style.width = (S.inspWidth || 300) + 'px';
+  const grip = el('div', 'inspgrip');
+  grip.title = 'Drag to resize panel';
+  grip.onmousedown = (e: MouseEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = insp.getBoundingClientRect().width;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    const move = (ev: MouseEvent) => {
+      const w = Math.max(260, Math.min(760, startW + (startX - ev.clientX)));
+      insp.style.width = w + 'px';
+      S.inspWidth = w;
+    };
+    const up = () => {
+      document.removeEventListener('mousemove', move);
+      document.removeEventListener('mouseup', up);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', up);
+  };
+  insp.appendChild(grip);
+}
+
 // ── node model ────────────────────────────────────────────────────────────
 interface Node {
   id: string;
@@ -60,6 +89,8 @@ const S = {
   selNode: null as string | null,
   inspTab: 'Config',
   inspClosed: false,
+  inspWidth: 300,
+  setOpen: null as Record<string, boolean> | null,
   tabs: [{ id: 'canvas', type: 'canvas' as string }],
   active: 'canvas',
   running: false,
@@ -1079,8 +1110,19 @@ function stBool(obj: any, key: string, label: string, hint: string): HTMLElement
 }
 function stGroup(title: string, subtitle: string, ...fields: HTMLElement[]): HTMLElement {
   const g = el('div', 'setgroup');
-  g.appendChild(el('div', 'setgroup-h', `${title}${subtitle ? `<span class="sub">${subtitle}</span>` : ''}`));
-  fields.forEach((f) => g.appendChild(f));
+  const open = !!(S.setOpen && S.setOpen[title]);
+  g.classList.toggle('collapsed', !open);
+  const h = el('div', 'setgroup-h');
+  h.innerHTML = `<span class="caret">▸</span><div class="sthead"><span class="stitle">${title}</span>${subtitle ? `<span class="sub">${subtitle}</span>` : ''}</div>`;
+  const body = el('div', 'setgroup-b');
+  fields.forEach((f) => body.appendChild(f));
+  h.onclick = () => {
+    const nowCollapsed = g.classList.toggle('collapsed');
+    if (!S.setOpen) S.setOpen = {};
+    S.setOpen[title] = !nowCollapsed;
+  };
+  g.appendChild(h);
+  g.appendChild(body);
   return g;
 }
 function renderPipelineSettings(): HTMLElement {
@@ -1094,6 +1136,20 @@ function renderPipelineSettings(): HTMLElement {
   insp.appendChild(ih);
   const ib = el('div', 'ib');
   const doc: any = S.doc;
+
+  // First open: expand Execution mode plus any section that already has config,
+  // so users land on what's configured and can collapse the rest.
+  if (!S.setOpen) {
+    const has = (k: string) => doc[k] && typeof doc[k] === 'object' && Object.keys(doc[k]).length > 0;
+    S.setOpen = {
+      'Execution mode': true,
+      'Reliability · Checkpoint & resume': has('checkpoint'),
+      'Reliability · Incremental load': has('incremental'),
+      'Load strategy · Performance': has('performance'),
+      'Scaling': has('scaling'),
+      'Observability · Metrics': has('observability'),
+    };
+  }
 
   // ── Execution mode ─────────────────────────────────────────────────────────
   ib.appendChild(stGroup('Execution mode', 'How the pipeline moves data',
@@ -1152,11 +1208,11 @@ function renderPipelineSettings(): HTMLElement {
   const perf = settingsSection(doc, 'performance');
   ib.appendChild(stGroup('Load strategy · Performance', 'Throughput & memory tuning',
     stNum(perf, 'batchSize', 'Batch size (rows)', '5000', 'Rows per in-flight batch. Higher = faster, more memory.'),
-    stNum(perf, 'transformWorkers', 'Transform workers', '1', 'Parallel transform goroutines (1 = ordered, in-order).'),
-    stNum(perf, 'sourceBufferBatches', 'Source buffer (batches)', '4', 'Channel depth between source and transforms.'),
-    stNum(perf, 'sinkBufferBatches', 'Sink buffer (batches)', '4', 'Channel depth between transforms and sink.'),
-    stNum(perf, 'maxMemoryMB', 'Max in-flight memory (MB)', '512', 'Backpressure: block the source above this in-flight size.'),
-    stNum(perf, 'rowGroupParallelism', 'Parquet row-group parallelism', '4', 'Concurrent row-group readers for Parquet sources.'),
+    stNum(perf, 'sourceBufferBatches', 'Read-ahead buffer (batches)', '4', 'Depth of the read-ahead buffer — the source reads ahead this many batches so reads overlap transform+write.'),
+    stNum(perf, 'maxMemoryMB', 'Max in-flight memory (MB)', '512', 'Backpressure: the reader blocks when buffered in-flight bytes exceed this, bounding memory.'),
+    stNum(perf, 'transformWorkers', 'Transform workers', '1', 'Reads are already overlapped via read-ahead. Ordered processing is enforced for checkpoint/HWM/DQ correctness, so >1 does not add parallel transform threads.'),
+    stNum(perf, 'sinkBufferBatches', 'Sink buffer (batches)', '4', 'Reserved. Sink writes stay ordered so checkpoints remain consistent.'),
+    stNum(perf, 'rowGroupParallelism', 'Parquet row-group parallelism', '4', 'Concurrent row-group readers — used by the Parquet source.'),
   ));
 
   // ── Scaling ────────────────────────────────────────────────────────────────
@@ -1182,16 +1238,11 @@ function renderPipelineSettings(): HTMLElement {
     ], 'How input is split into claimable partitions.'));
     scFields.push(stNum(sc, 'partitionsPerClaim', 'Partitions per claim', '1', 'How many partitions an instance claims at once.'));
     const coord = settingsSection(sc, 'coordinator');
-    const coordType = String(coord.type || 'redis');
+    if (!coord.type) coord.type = 'postgres';
     scFields.push(stSelect(coord, 'type', 'Coordinator', [
-      ['redis', 'Redis'], ['postgres', 'PostgreSQL'],
-    ], 'Shared work-queue backend that hands out partitions.', true));
-    if (coordType === 'redis') {
-      scFields.push(stText(coord, 'addr', 'Redis address', 'localhost:6379', 'host:port of the coordinator Redis.'));
-      scFields.push(stText(coord, 'passwordEnv', 'Password env var', 'REDIS_PASSWORD', 'Env var holding the Redis password.'));
-    } else {
-      scFields.push(stText(coord, 'dsn', 'PostgreSQL DSN', 'host=… dbname=… user=…', 'Connection string for the coordinator DB.'));
-    }
+      ['postgres', 'PostgreSQL'],
+    ], 'Shared work-queue backend that hands out partitions. PostgreSQL is the supported coordinator.', true));
+    scFields.push(stText(coord, 'dsn', 'PostgreSQL DSN', 'host=… dbname=… user=…', 'Connection string for the coordinator DB.'));
     scFields.push(stNum(coord, 'leaseSeconds', 'Lease TTL (s)', '120', 'How long a claim is held before it can be reclaimed.'));
     scFields.push(stNum(coord, 'heartbeatSeconds', 'Heartbeat (s)', '30', 'Lease-renewal interval.'));
     scFields.push(stNum(coord, 'maxRetries', 'Max retries', '3', 'Partition retry limit before it is marked failed.'));
@@ -1222,6 +1273,7 @@ function renderPipelineSettings(): HTMLElement {
   ib.appendChild(stGroup('Observability · Metrics', 'Monitor the pipeline', ...obsFields));
 
   insp.appendChild(ib);
+  attachResize(insp);
   return insp;
 }
 
@@ -1794,12 +1846,14 @@ function renderTabs() {
     const kafka = S.pipe?.nodes[0].type === 'kafka';
     acts.innerHTML =
       '<button class="btn sm" data-a="help" title="Show all features (F1)">? Features</button>' +
+      '<button class="btn sm" data-a="settings" title="Reliability, load strategy, scaling, observability & mode">⚙ Pipeline Settings</button>' +
       '<button class="btn sm" data-a="preview">⌕ Dry-run Preview</button>' +
       (kafka ? '<button class="btn sm" data-a="tail">≋ Live Tail</button>' : '') +
       (S.running
         ? '<button class="btn sm" data-a="running" disabled>⟳ Running…</button>'
         : '<button class="btn sm pri" data-a="run" title="Run on the warm engine (fast re-test — keeps the engine hot)">▷ Run</button>');
     (acts.querySelector('[data-a="help"]') as HTMLElement).onclick = () => openFeatureGuide();
+    (acts.querySelector('[data-a="settings"]') as HTMLElement).onclick = () => { S.selNode = SETTINGS_NODE; S.inspClosed = false; renderEditor(); };
     (acts.querySelector('[data-a="preview"]') as HTMLElement).onclick = () => doPreview();
     const tl = acts.querySelector('[data-a="tail"]') as HTMLElement | null;
     if (tl) tl.onclick = () => openTab('tail', 'tail');
@@ -1881,14 +1935,6 @@ function renderCanvas(m: HTMLElement) {
   // Auto-grow the textarea as the user types.
   descIn.oninput = () => { descIn.style.height = 'auto'; descIn.style.height = descIn.scrollHeight + 'px'; };
   head.appendChild(descIn);
-  // Pipeline-level settings (checkpoint/resume, load strategy/performance,
-  // scaling, observability, incremental load, execution mode) — these live at
-  // the top of the pipeline document, not on any stage, so they get a dedicated
-  // settings panel opened from the header.
-  const gear = el('button', 'pipesettings', '⚙ Pipeline Settings');
-  gear.title = 'Reliability, load strategy, scaling, observability & mode';
-  gear.onclick = () => { S.selNode = SETTINGS_NODE; S.inspClosed = false; renderEditor(); };
-  head.appendChild(gear);
   cv.appendChild(head);
 
   const row = el('div', 'flowrow');
@@ -2160,6 +2206,7 @@ function renderCanvas(m: HTMLElement) {
     renderTestTab(ib, sn);
   }
   insp.appendChild(ib);
+  attachResize(insp);
   m.appendChild(insp);
   // Restore the previously-remembered scroll position now that the inspector
   // body is in the DOM (see renderEditor()).

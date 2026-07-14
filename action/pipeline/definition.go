@@ -331,8 +331,19 @@ type ObservabilityDef struct {
 // Definition is the declarative pipeline spec carried by a "pipeline:" resource.
 // All fields map directly to the JSON structure of the pipeline resource file.
 type Definition struct {
-	Name        string         `json:"name,omitempty"`
-	Description string         `json:"description,omitempty"`
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
+	// Mode selects the execution strategy for the transform stage:
+	//   "etl"  — Extract, Transform (in-flight), Load. Default. Transforms run
+	//            between source and sink.
+	//   "el"   — Extract, Load only. The in-flight transform pipeline is
+	//            bypassed and rows are written to the sink exactly as read.
+	//            Any declared transforms are ignored (a warning is logged).
+	//   "elt"  — Extract, Load, then Transform in-target. Behaves like "el" for
+	//            the movement stage (raw load); declared transforms are NOT run
+	//            in-flight because they are expected to execute in the target
+	//            system. A notice is logged so operators are not surprised.
+	Mode        string         `json:"mode,omitempty"`
 	Source      SourceDef      `json:"source"`
 	Transforms  []TransformDef `json:"transforms,omitempty"`
 	Sink        SinkDef        `json:"sink"`
@@ -369,6 +380,9 @@ func (d *Definition) Validate() error { return d.validate() }
 
 // defaults fills in zero values with sensible production-ready defaults.
 func (d *Definition) defaults() {
+	if d.Mode == "" {
+		d.Mode = "etl"
+	}
 	if d.Performance.BatchSize == 0 {
 		d.Performance.BatchSize = 5000
 	}
@@ -426,6 +440,12 @@ func (d *Definition) validate() error {
 	}
 	if d.Sink.Type == "" {
 		return fmt.Errorf("pipeline definition: sink.type is required")
+	}
+	switch d.Mode {
+	case "", "etl", "el", "elt":
+		// valid
+	default:
+		return fmt.Errorf("pipeline definition: mode must be 'etl', 'el', or 'elt'")
 	}
 	if d.Incremental.Mode == "hwm" {
 		if d.Incremental.Column == "" {
