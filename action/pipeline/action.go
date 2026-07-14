@@ -571,6 +571,13 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 					saveCheckpoint(runLog, ckpt, ckptKey, def.Source.Type, out.RowsProcessed, pSrc)
 					a.recorder.CheckpointSaved(a.ref)
 					saveWatermark(runLog, wmStore, hwmProvider, def, a.ref)
+					// Surface the checkpoint so operators can see progress being
+					// persisted and which trigger fired (row count vs. time).
+					reason := "rows"
+					if timeTrigger && !rowTrigger {
+						reason = "time"
+					}
+					runLog.Infof("checkpoint saved — %d rows processed (trigger=%s)", out.RowsProcessed, reason)
 					rowsSinceCkpt = 0
 					lastCkpt = time.Now()
 				}

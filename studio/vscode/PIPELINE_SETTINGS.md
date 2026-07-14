@@ -127,6 +127,8 @@ hand-edited JSON) and, where observable, verified against a running engine.
 | Performance `batchSize` | 5000 | run-config echo + batch metrics |
 | Scaling | `single`, `sharded`, `distributed` | sharded "instance 0/2 owns 1 of 2" (500/1000); distributed postgres work-queue, 1000 rows |
 | Observability | `prometheus`, `otel` | prometheus `/metrics` on custom `:9095`; otel → collector received `flogo.pipeline.runs` / `batch.duration` |
+| `observability.stallSeconds` | `1` | slow batch (7s via `pg_sleep`) → `stall detected in stage "read" — batch took 7.01s (threshold 1s)` |
+| `checkpoint.intervalSeconds` | `1` | same slow batch → `checkpoint saved — 7 rows processed (trigger=time)` (row interval 10000 never reached) |
 | Run Report | effective-settings bar | mirrors the run-config echo line |
 
 **Bugs found and fixed during this validation** (each committed):
@@ -144,12 +146,12 @@ hand-edited JSON) and, where observable, verified against a running engine.
 6. Watermark redis/postgres stores were unconfigurable (no connection fields in
    the UI). Added conditional `storeOptions` fields.
 
-**Wired + UI-configurable, but wall-clock-triggered** (fire only when a single
-batch exceeds the threshold in seconds, which the fast test datasets never
-reach; verified by code + configuration, not by a live trigger):
+**Wall-clock-triggered — validated live** by building a standalone binary and
+running a jdbc source whose query includes `pg_sleep(1)` so a batch takes ~7s:
 
-- `checkpoint.intervalSeconds` — time-based checkpoint save (row-based verified).
-- `observability.stallSeconds` — stall warning + `flogo_pipeline_stalls_total`.
+- `observability.stallSeconds=1` → `stall detected in stage "read"` warning.
+- `checkpoint.intervalSeconds=1` → `checkpoint saved (trigger=time)` (the row
+  interval of 10000 was never reached, so only the time trigger could fire it).
 
 **Wired but not stress-observed** (no visible effect on small, in-memory-fast
 datasets): `performance.sourceBufferBatches`, `sinkBufferBatches`,
