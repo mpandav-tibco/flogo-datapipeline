@@ -450,7 +450,7 @@ function defaultConfigFor(kind: 'source' | 'sink', type: string): Record<string,
     parquet: { path: './data/input.parquet', rowGroupParallelism: 4 },
     xml: { path: './data/input.xml', recordElement: 'record' },
     jsonlines: { path: './data/input.jsonl' },
-    jdbc: { driver: 'postgres', dsn: '', table: '', orderKey: '', batchSize: 5000 },
+    jdbc: { driver: 'postgres', dsn: '', table: '', where: '', orderKey: '', batchSize: 5000 },
     kafka: { brokers: '', topic: '', groupId: 'dp-consumer', startOffset: 'earliest', deserializer: 'json', mode: 'batch', stopAtCurrentEnd: true },
     s3: { bucket: '', prefix: '', region: 'us-east-1', format: 'csv' },
     gcs: { bucket: '', prefix: '', format: 'csv' },
@@ -2843,7 +2843,12 @@ function effectiveSettings(doc: any): Array<[string, string, boolean]> {
   out.push(['scaling', scMode + (scMode === 'sharded' ? ` ${sc.instanceIndex || 0}/${sc.instanceCount || 1}` : ''), scMode === 'single']);
   out.push(['checkpoint', cpType === 'none' ? 'none' : `${cpType} (${cp.intervalRows || 10000}r/${cp.intervalSeconds || 30}s)`, cpType === 'none']);
   out.push(['incremental', incMode, incMode === 'none']);
-  out.push(['metrics', metrics === 'none' ? 'none' : `${metrics}${obs.options && obs.options.listenAddr ? ' ' + obs.options.listenAddr : ''}`, metrics === 'none']);
+  // Show the address relevant to the chosen backend: Prometheus scrapes a
+  // listenAddr, OTel pushes to an endpoint. Reading the wrong key would surface
+  // a stale value left in options after switching backends.
+  const metricsAddr = metrics === 'prometheus' ? (obs.options && obs.options.listenAddr)
+    : metrics === 'otel' ? (obs.options && obs.options.endpoint) : '';
+  out.push(['metrics', metrics === 'none' ? 'none' : `${metrics}${metricsAddr ? ' ' + metricsAddr : ''}`, metrics === 'none']);
   return out;
 }
 
