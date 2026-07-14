@@ -109,3 +109,50 @@ Exposed metrics include `flogo_pipeline_rows_read/transformed/written_total`,
 `curl http://localhost:9095/metrics` returned live
 `flogo_pipeline_batch_duration_seconds` histograms — the custom port set in the
 UI was honored end-to-end.
+
+---
+
+## UI validation coverage
+
+Every setting below was configured **entirely through the Studio UI** (no
+hand-edited JSON) and, where observable, verified against a running engine.
+
+| Setting | Value(s) verified | How |
+|---|---|---|
+| Execution mode | `etl`, `el`, `elt` | `etl` written=4, `el` written=7 (transforms ignored warn), `elt` "not run in-flight" log |
+| Checkpoint store | `file`, `redis` | file → `*.ckpt.json`; redis → keys `uatckpt::<runid>` on `:56379` |
+| Checkpoint `deleteOnSuccess` | `true` | checkpoint keys absent after a clean run; watermark retained |
+| Incremental HWM | full cycle | 5-row full load → 0 delta → +1 row → reads exactly 1; watermark advances |
+| Watermark store | `file`, `redis` | file `.hwm.json`; redis key `flogo:pipeline:hwm:<ref>` on `:56379` |
+| Performance `batchSize` | 5000 | run-config echo + batch metrics |
+| Scaling | `single`, `sharded`, `distributed` | sharded "instance 0/2 owns 1 of 2" (500/1000); distributed postgres work-queue, 1000 rows |
+| Observability | `prometheus`, `otel` | prometheus `/metrics` on custom `:9095`; otel → collector received `flogo.pipeline.runs` / `batch.duration` |
+| Run Report | effective-settings bar | mirrors the run-config echo line |
+
+**Bugs found and fixed during this validation** (each committed):
+
+1. `mode` (etl/el/elt) was accepted in JSON but there was no `Mode` field on the
+   engine `Definition` — transforms always ran. Added the field + gating.
+2. Distributed scaling was defined but never invoked by the executor; wired
+   sharded + distributed partition execution.
+3. Distributed re-run processed 0 rows — the work queue counted terminal
+   `DONE`/`FAILED` items as an active queue. Now clears terminal items on a fresh run.
+4. jdbc source ignored the engine-injected watermark, so incremental HWM re-read
+   the whole table. Added the `col > <mark>` predicate.
+5. The `file` watermark store was never registered (`watermark/file` blank import
+   missing) — file-backed incremental failed at runtime. Added the import.
+6. Watermark redis/postgres stores were unconfigurable (no connection fields in
+   the UI). Added conditional `storeOptions` fields.
+
+**Wired + UI-configurable, but wall-clock-triggered** (fire only when a single
+batch exceeds the threshold in seconds, which the fast test datasets never
+reach; verified by code + configuration, not by a live trigger):
+
+- `checkpoint.intervalSeconds` — time-based checkpoint save (row-based verified).
+- `observability.stallSeconds` — stall warning + `flogo_pipeline_stalls_total`.
+
+**Wired but not stress-observed** (no visible effect on small, in-memory-fast
+datasets): `performance.sourceBufferBatches`, `sinkBufferBatches`,
+`maxMemoryMB` (backpressure only engages under memory pressure),
+`transformWorkers` (ordered-processing enforced for correctness).
+
