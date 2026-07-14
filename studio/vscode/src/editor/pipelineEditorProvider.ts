@@ -211,7 +211,7 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
       }
 
       case 'run':
-        await this.runPipeline(doc, panel);
+        await this.runPipeline(doc, panel, msg.fresh === true);
         break;
 
       case 'stop':
@@ -639,7 +639,6 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
   // the on-disk .datapipeline). Returns the path the engine should start from.
   private async materializeResolved(document: vscode.TextDocument): Promise<string> {
     this.clearResolved();
-    if (!this.connections) return document.uri.fsPath;
 
     let app: any;
     try {
@@ -651,37 +650,57 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
     if (!pipe || typeof pipe !== 'object') return document.uri.fsPath;
 
     // Collect stages that may carry a `connection` binding.
-    const stages: any[] = [];
-    if (pipe.source) stages.push(pipe.source);
-    if (pipe.sink) stages.push(pipe.sink);
-    if (pipe.dlq?.options) stages.push(pipe.dlq.options);
-    if (Array.isArray(pipe.transforms)) for (const t of pipe.transforms) if (t && typeof t === 'object') stages.push(t);
-
     let injected = 0;
-    for (const stage of stages) {
-      const name = stage.connection;
-      if (!name || typeof name !== 'string') continue;
-      const conn = await this.connections.getByName(name);
-      if (!conn) {
-        this.logRun(`[connections] WARNING: bound connection "${name}" not found — leaving stage unresolved.`);
-        continue;
+    if (this.connections) {
+      const stages: any[] = [];
+      if (pipe.source) stages.push(pipe.source);
+      if (pipe.sink) stages.push(pipe.sink);
+      if (pipe.dlq?.options) stages.push(pipe.dlq.options);
+      if (Array.isArray(pipe.transforms)) for (const t of pipe.transforms) if (t && typeof t === 'object') stages.push(t);
+
+      for (const stage of stages) {
+        const name = stage.connection;
+        if (!name || typeof name !== 'string') continue;
+        const conn = await this.connections.getByName(name);
+        if (!conn) {
+          this.logRun(`[connections] WARNING: bound connection "${name}" not found — leaving stage unresolved.`);
+          continue;
+        }
+        const resolved = await this.connections.resolveStageConfig(conn.id);
+        Object.assign(stage, resolved);
+        delete stage.connection;
+        injected++;
       }
-      const resolved = await this.connections.resolveStageConfig(conn.id);
-      Object.assign(stage, resolved);
-      delete stage.connection;
-      injected++;
     }
 
-    if (injected === 0) return document.uri.fsPath;
+    // Neutralize the boot timer in the run copy so the pipeline does NOT auto-fire
+    // on engine start. The Studio drives every run explicitly through the REST
+    // API (POST /v1/pipelines/{ref}/run); leaving the timer's startDelay at 0
+    // would produce a second, phantom run on each fresh engine start (the source
+    // of the "two runIds per click" behaviour). The user's saved .datapipeline is
+    // untouched, so standalone `flogo-datapipeline -f …` and deploy artifacts keep
+    // their normal auto-firing timer.
+    let timerNeutralized = false;
+    const trigger = Array.isArray(app?.triggers) ? app.triggers[0] : undefined;
+    if (trigger && trigger.settings && typeof trigger.settings === 'object') {
+      trigger.settings.startDelay = 315360000000; // ~10 years — never during a session
+      trigger.settings.repeating = false;
+      timerNeutralized = true;
+    }
+
+    // If there was nothing to rewrite, run the original file directly.
+    if (injected === 0 && !timerNeutralized) return document.uri.fsPath;
 
     const dir = path.dirname(document.uri.fsPath);
     const base = path.basename(document.uri.fsPath, '.datapipeline');
     const target = path.join(dir, `.${base}.resolved.datapipeline`);
     await vscode.workspace.fs.writeFile(vscode.Uri.file(target), Buffer.from(JSON.stringify(app, null, 2), 'utf8'));
     this.resolvedPath = target;
-    this.logRun(
-      `[connections] Injected ${injected} connection(s) into a resolved run file (secrets stay out of ${base}.datapipeline).`,
-    );
+    if (injected > 0) {
+      this.logRun(
+        `[connections] Injected ${injected} connection(s) into a resolved run file (secrets stay out of ${base}.datapipeline).`,
+      );
+    }
     return target;
   }
 
@@ -751,13 +770,24 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
     this.resolvedPath = null;
   }
 
-  private async runPipeline(document: vscode.TextDocument, panel: vscode.WebviewPanel): Promise<void> {
+  private async runPipeline(document: vscode.TextDocument, panel: vscode.WebviewPanel, fresh = false): Promise<void> {
     if (this.runInFlight) {
       this.post(panel, { type: 'runError', message: 'Another pipeline run is already in progress.' });
       return;
     }
     this.runInFlight = true;
     try {
+      // Fresh run (bottom status-bar "Run"): always tear down any running engine
+      // first so the run starts from a brand-new engine process — a clean, single
+      // app lifecycle whose full boot→run→done log is visible in the Output panel.
+      // Warm run (top-right "Run"): reuse the running engine for a fast re-test;
+      // ensureEngine still restarts it automatically if the pipeline text changed.
+      if (fresh && this.manager.port) {
+        this.manager.stop();
+        this.engineStartedFrom = null;
+        this.clearResolved();
+        this.hooks.onStopped?.();
+      }
       const port = await this.ensureEngine(document, panel);
       if (!port) return;
 

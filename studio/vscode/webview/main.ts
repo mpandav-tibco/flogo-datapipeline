@@ -1359,16 +1359,14 @@ function renderTabs() {
       '<button class="btn sm" data-a="preview">⌕ Dry-run Preview</button>' +
       (kafka ? '<button class="btn sm" data-a="tail">≋ Live Tail</button>' : '') +
       (S.running
-        ? '<button class="btn sm" data-a="stop">■ Stop</button>'
-        : '<button class="btn sm pri" data-a="run">▷ Run</button>');
+        ? '<button class="btn sm" data-a="running" disabled>⟳ Running…</button>'
+        : '<button class="btn sm pri" data-a="run" title="Run on the warm engine (fast re-test — keeps the engine hot)">▷ Run</button>');
     (acts.querySelector('[data-a="help"]') as HTMLElement).onclick = () => openFeatureGuide();
     (acts.querySelector('[data-a="preview"]') as HTMLElement).onclick = () => doPreview();
     const tl = acts.querySelector('[data-a="tail"]') as HTMLElement | null;
     if (tl) tl.onclick = () => openTab('tail', 'tail');
     const rb = acts.querySelector('[data-a="run"]') as HTMLElement | null;
     if (rb) rb.onclick = () => doRun();
-    const sb = acts.querySelector('[data-a="stop"]') as HTMLElement | null;
-    if (sb) sb.onclick = () => post({ type: 'stop' });
   }
   bar.appendChild(acts);
 }
@@ -2272,10 +2270,20 @@ function dlqMenu(e: MouseEvent) {
 }
 
 // ── run / preview (native VS Code panels) ────────────────────────────────────
+// Warm run (top-right ▷ Run): reuse the already-running engine for a fast
+// re-test. The host restarts the engine only if the pipeline text changed.
 function doRun() {
   if (S.running) return;
   post({ type: 'showOutput' }); // reveal native Output channel
   post({ type: 'run' });
+}
+// Fresh run (bottom status-bar ▷ Run): tear down any running engine and start a
+// brand-new one, so the run is a clean single app lifecycle with a full
+// boot→run→done log. The button then becomes ■ Stop (engine lifecycle).
+function doRunFresh() {
+  if (S.running) return;
+  post({ type: 'showOutput' });
+  post({ type: 'run', fresh: true });
 }
 function doPreview() {
   S.previewOn = true;
@@ -2391,12 +2399,29 @@ function renderStatus() {
   const problems = el('div', 'sbi', `<span style="color:var(--red)">⊗ ${errs}</span> <span style="color:var(--yellow)">⚠ ${warns}</span>`);
   problems.onclick = () => post({ type: 'showProblems' });
   sb.appendChild(problems);
-  const eng = el('div', 'sbi', S.running ? `◈ engine :${S.port}` : '◈ engine: stopped');
+  const eng = el('div', 'sbi', S.port ? `◈ engine :${S.port}` : '◈ engine: stopped');
   eng.onclick = () => post({ type: 'showOutput' });
   sb.appendChild(eng);
   sb.appendChild(el('div', 'grow'));
-  const runItem = el('div', 'sbi run', S.running ? '⟳ running…' : '▷ Run');
-  runItem.onclick = () => (S.running ? post({ type: 'showOutput' }) : doRun());
+  // Bottom Run/Stop = engine lifecycle. Runs on a fresh engine, then toggles to
+  // Stop; click Stop to tear the engine down. (Top-right ▷ Run does warm re-tests.)
+  let runLabel: string;
+  let runAction: () => void;
+  if (S.running) {
+    runLabel = '⟳ running…';
+    runAction = () => post({ type: 'showOutput' });
+  } else if (S.port) {
+    runLabel = '■ Stop';
+    runAction = () => post({ type: 'stop' });
+  } else {
+    runLabel = '▷ Run';
+    runAction = () => doRunFresh();
+  }
+  const runItem = el('div', 'sbi run', runLabel);
+  runItem.title = S.port
+    ? 'Stop the engine (frees the port). Click Run again for a fresh run.'
+    : 'Start a fresh engine and run the pipeline (full boot→run→done log)';
+  runItem.onclick = runAction;
   sb.appendChild(runItem);
   const pal = el('div', 'sbi', 'Data Pipeline');
   pal.onclick = () => openPalette();

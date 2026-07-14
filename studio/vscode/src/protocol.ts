@@ -46,7 +46,7 @@ export type HostToWebview =
 export type WebviewToHost =
   | { type: 'ready' }
   | { type: 'save'; doc: PipelineDoc }
-  | { type: 'run' }
+  | { type: 'run'; fresh?: boolean }
   | { type: 'stop' }
   | { type: 'validate' }
   | { type: 'preview'; limit?: number }
