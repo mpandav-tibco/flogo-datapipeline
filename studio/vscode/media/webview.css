@@ -260,6 +260,14 @@ table.grid tr.click:hover td{background:var(--hover)}
 .spark{display:flex;align-items:flex-end;gap:3px;height:52px}
 .spark i{flex:1;background:#cdd9ea55;border-radius:2px 2px 0 0}.spark i.hi{background:var(--blue)}
 h3.sec{font-size:14px;margin:2px 0 12px}
+.setbar{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:0 0 16px}
+.setbar-h{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.05em;margin-right:2px}
+.setchips{display:inline-flex;flex-wrap:wrap;gap:8px}
+.setchip{display:inline-flex;align-items:stretch;border:1px solid var(--border);border-radius:6px;overflow:hidden;font-size:11.5px}
+.setchip .k{background:var(--sel);color:var(--mute);padding:3px 7px;text-transform:uppercase;letter-spacing:.03em;font-size:10px;display:flex;align-items:center}
+.setchip .v{color:var(--text);padding:3px 8px;font-family:var(--mono);display:flex;align-items:center}
+.setchip.muted{opacity:.55}
+.setbar:hover .setchip{border-color:#3a3f45}
 
 .panel{border-top:1px solid var(--border);background:var(--chrome);display:flex;flex-direction:column;flex:none;height:var(--ph,210px)}
 .panel.collapsed{height:35px}

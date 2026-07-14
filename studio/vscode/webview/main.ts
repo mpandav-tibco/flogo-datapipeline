@@ -2808,6 +2808,31 @@ function doPreview() {
 }
 
 // ── report / dlq / drift / tail / fleet (engine-or-demo) ─────────────────────
+// effectiveSettings summarises the pipeline-level configuration the way the
+// engine's run-config echo does, so the Run Report and the run log agree. Each
+// entry is [label, value, muted?] — muted marks a default/off value.
+function effectiveSettings(doc: any): Array<[string, string, boolean]> {
+  const d = doc || {};
+  const cp = d.checkpoint || {};
+  const perf = d.performance || {};
+  const sc = d.scaling || {};
+  const obs = d.observability || {};
+  const inc = d.incremental || {};
+  const mode = String(d.mode || 'etl');
+  const scMode = String(sc.mode || 'single');
+  const cpType = String(cp.type || 'none');
+  const metrics = String(obs.metrics || 'none');
+  const incMode = String(inc.mode || 'none');
+  const out: Array<[string, string, boolean]> = [];
+  out.push(['mode', mode, mode === 'etl']);
+  out.push(['batch', String(perf.batchSize || 5000), !perf.batchSize]);
+  out.push(['scaling', scMode + (scMode === 'sharded' ? ` ${sc.instanceIndex || 0}/${sc.instanceCount || 1}` : ''), scMode === 'single']);
+  out.push(['checkpoint', cpType === 'none' ? 'none' : `${cpType} (${cp.intervalRows || 10000}r/${cp.intervalSeconds || 30}s)`, cpType === 'none']);
+  out.push(['incremental', incMode, incMode === 'none']);
+  out.push(['metrics', metrics === 'none' ? 'none' : `${metrics}${obs.options && obs.options.listenAddr ? ' ' + obs.options.listenAddr : ''}`, metrics === 'none']);
+  return out;
+}
+
 function renderReport(wv: HTMLElement) {
   wv.innerHTML = '';
   const r = S.lastRun;
@@ -2833,6 +2858,25 @@ function renderReport(wv: HTMLElement) {
     `<div class="card"><div class="cap">Duration</div><div class="kpi">${(r.durationMs / 1000).toFixed(1)}s</div><div class="sub">~${fmtK(rps)} rows/s</div></div>` +
     `<div class="card"><div class="cap">Status</div><div class="kpi" style="color:${r.status === 'completed' ? 'var(--green)' : r.status === 'failed' ? 'var(--red)' : 'var(--yellow)'}">${r.status}</div><div class="sub">runId ${r.runId.slice(0, 8)}</div></div>`;
   wv.appendChild(cards);
+
+  // Effective settings — mirror the engine's run-config echo so the Run Report
+  // and the run log agree on which pipeline-level settings were active. Wrapped
+  // defensively so a malformed doc can never blank out the rest of the report.
+  try {
+    const setWrap = el('div', 'setbar');
+    setWrap.appendChild(el('span', 'setbar-h', 'Effective settings'));
+    const chips = el('span', 'setchips');
+    effectiveSettings(S.doc as any).forEach(([label, value, muted]) => {
+      const c = el('span', 'setchip' + (muted ? ' muted' : ''));
+      c.innerHTML = `<span class="k">${escapeHtml(label)}</span><span class="v">${escapeHtml(value)}</span>`;
+      chips.appendChild(c);
+    });
+    setWrap.appendChild(chips);
+    setWrap.title = 'Open Pipeline Settings';
+    setWrap.style.cursor = 'pointer';
+    setWrap.onclick = () => { S.selNode = SETTINGS_NODE; S.inspClosed = false; S.active = 'canvas'; renderAll(); };
+    wv.appendChild(setWrap);
+  } catch (e) { /* never let settings summary break the report */ }
 
   wv.appendChild(el('h3', 'sec', 'Row funnel'));
   const fn = el('div', 'funnel');
