@@ -422,7 +422,14 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 			t1 := time.Now()
 			transformed, txErr := txPipeline.Apply(batch)
 			txDur := time.Since(t1)
-			record.Put(batch)
+			// Return the source batch to the pool once transforms are done with it,
+			// but NOT when the transform pipeline passed it straight through
+			// (transformed == batch, e.g. a pipeline with zero transforms). Recycling
+			// it in that case would clear the very rows the sink is about to write,
+			// silently producing written=0.
+			if transformed != batch {
+				record.Put(batch)
+			}
 
 			if txErr != nil {
 				runLog.Warnf("transform error on batch of %d rows (routing to failed): %v", batchLen, txErr)
