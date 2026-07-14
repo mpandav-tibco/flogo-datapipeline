@@ -1033,6 +1033,7 @@ function pruneEmptySettings(): void {
   // Nested empties first.
   if (doc.scaling && isEmpty(doc.scaling.coordinator)) delete doc.scaling.coordinator;
   if (doc.observability && isEmpty(doc.observability.options)) delete doc.observability.options;
+  if (doc.incremental && isEmpty(doc.incremental.storeOptions)) delete doc.incremental.storeOptions;
   for (const k of ['checkpoint', 'incremental', 'performance', 'scaling', 'observability']) {
     if (isEmpty(doc[k])) delete doc[k];
   }
@@ -1198,9 +1199,22 @@ function renderPipelineSettings(): HTMLElement {
       ['datetime', 'datetime'], ['int', 'int'], ['string', 'string'],
     ], 'How the watermark column is ordered.'));
     incFields.push(stText(inc, 'initialValue', 'Initial value', '(empty = full first load)', 'Watermark to use on the very first run.'));
+    const incStore = String(inc.storeType || 'file');
     incFields.push(stSelect(inc, 'storeType', 'Watermark store', [
       ['file', 'file'], ['redis', 'redis'], ['postgres', 'postgres'],
-    ], 'Backend that persists the last mark between runs.'));
+    ], 'Backend that persists the last mark between runs.', true));
+    // Backend-specific connection settings live under storeOptions so the redis
+    // and postgres watermark stores can actually reach their backend.
+    const incOpts = settingsSection(inc, 'storeOptions');
+    if (incStore === 'file') {
+      incFields.push(stText(incOpts, 'path', 'Directory', '(system temp dir)', 'Folder where the .hwm.json watermark file is written.'));
+    } else if (incStore === 'redis') {
+      incFields.push(stText(incOpts, 'addr', 'Redis address', 'localhost:6379', 'host:port of the Redis server holding the watermark.'));
+      incFields.push(stText(incOpts, 'keyPrefix', 'Key prefix', 'flogo:pipeline:hwm', 'Namespace for the watermark key.'));
+      incFields.push(stText(incOpts, 'passwordEnv', 'Password env var', 'REDIS_PASSWORD', 'Env var holding the Redis password.'));
+    } else if (incStore === 'postgres') {
+      incFields.push(stText(incOpts, 'dsn', 'PostgreSQL DSN', 'host=… dbname=… user=…', 'Connection string for the watermark table.'));
+    }
   }
   ib.appendChild(stGroup('Reliability · Incremental load', 'Read only new rows each run', ...incFields));
 
