@@ -303,6 +303,12 @@ const FIELD_LABELS: Record<string, string> = {
   envelopeColumn: 'Error envelope column', maxRowsPerBatch: 'Max rows per batch', onFull: 'On full',
   // filter / map
   expr: 'Filter expression', fieldOrder: 'Field order',
+  // sectioned (Text Document) source
+  headerKVRegex: 'Header key/value pattern', bodyColumnMarker: 'Table header line',
+  bodyDelimiter: 'Column separator', broadcastHeader: 'Attach header fields to every row',
+  formatPreset: 'Format preset',
+  // template (Custom Text) sink
+  template: 'Template', templatePath: 'Template file', templateSource: 'Template from',
   // validate
   rules: 'Validation rules', onViolation: 'On violation',
   errorSinkType: 'Error sink type', errorSinkConfig: 'Error sink config',
@@ -368,9 +374,25 @@ const FIELD_HINTS: Record<string, string> = {
   rules: 'JSON array of field rules: [{ "field": "amount", "notNull": true }]',
   expectations: 'JSON array of DQ expectations (expectColumnNotNull, expectValuesInSet, …).',
   url: 'Enrichment endpoint. Use {keyField} as the placeholder, e.g. https://api/enrich/{id} — substituted per row.',
+  headerKVRegex: 'Regex with two capture groups (key, value) matching each header line. Default handles “Key  <2+ spaces>  Value”.',
+  bodyColumnMarker: 'Regex identifying the line that names the table columns, e.g. ^MEASUREMENT\\s',
+  bodyDelimiter: 'Regex that splits each body row into fields. Default \\s+ handles whitespace-aligned tables.',
+  broadcastHeader: 'Stamp every header attribute onto each body row so downstream transforms and the sink see file-level context.',
+  template: 'Go text/template. Available: .Rows (each row as a map), .Count, .Columns, .Attr (header fields). Helpers: rpad, lpad, padc, sci, upper, lower, trim, add, seq.',
+  templatePath: 'Path to a .tmpl file. Overrides the inline template when set.',
 };
-const SOURCE_TYPES = ['csv', 'tsv', 'fixedwidth', 'parquet', 'xml', 'jsonlines', 'jdbc', 'kafka', 's3', 'gcs', 'adls'];
-const SINK_TYPES = ['jdbc', 'parquet', 'csv', 'jsonlines', 'kafka', 's3', 'gcs', 'adls', 'null'];
+const SOURCE_TYPES = ['csv', 'tsv', 'fixedwidth', 'sectioned', 'parquet', 'xml', 'jsonlines', 'jdbc', 'kafka', 's3', 'gcs', 'adls'];
+const SINK_TYPES = ['jdbc', 'parquet', 'csv', 'jsonlines', 'template', 'kafka', 's3', 'gcs', 'adls', 'null'];
+// Friendly, generic display labels for stage types whose engine id is jargon.
+// The engine id (used in the .datapipeline file) is unchanged; only the picker
+// label differs. Types without an entry fall back to their raw id.
+const TYPE_LABELS: Record<string, string> = {
+  sectioned: 'Text Document',
+  template: 'Custom Text',
+};
+function typeLabel(t: string): string {
+  return TYPE_LABELS[t] || t;
+}
 // A DLQ destination is any real sink type (never 'dlq' itself — DLQ is a route,
 // not a sink type).
 const DLQ_DEST_TYPES = ['jdbc', 'parquet', 'csv', 'jsonlines', 's3', 'gcs', 'adls', 'null'];
@@ -382,6 +404,14 @@ function defaultConfigFor(kind: 'source' | 'sink', type: string): Record<string,
     csv: { path: './data/input.csv', hasHeader: true, delimiter: ',', columns: [] },
     tsv: { path: './data/input.tsv', hasHeader: true, columns: [] },
     fixedwidth: { path: './data/input.dat', encoding: 'utf-8', recordLength: 0, columns: [] },
+    sectioned: {
+      path: './data/input.txt',
+      headerKVRegex: '^(\\S[\\S ]*?)\\s{2,}(.*?)\\s*$',
+      bodyColumnMarker: '^COLUMNS\\s',
+      bodyDelimiter: '\\s+',
+      broadcastHeader: true,
+      columns: [],
+    },
     parquet: { path: './data/input.parquet', rowGroupParallelism: 4 },
     xml: { path: './data/input.xml', recordElement: 'record' },
     jsonlines: { path: './data/input.jsonl' },
@@ -396,6 +426,7 @@ function defaultConfigFor(kind: 'source' | 'sink', type: string): Record<string,
     parquet: { path: './out/output.parquet', compression: 'snappy', rowGroupSize: 100000 },
     csv: { path: './out/output.csv', delimiter: ',', writeHeader: true },
     jsonlines: { path: './out/output.jsonl' },
+    template: { path: './out/{{index .Attr "id"}}.txt', template: '{{range .Rows}}{{.}}\n{{end}}' },
     kafka: { brokers: '', topic: '', ackMode: 'all', serializer: 'json' },
     s3: { bucket: '', key: '${date}/part-${uuid}.parquet', format: 'parquet' },
     gcs: { bucket: '', key: '${date}/part-${uuid}.parquet', format: 'parquet' },
@@ -791,6 +822,165 @@ function renderXmlRecordField(node: Node, value: string): HTMLElement {
   return f;
 }
 
+// Format presets for the Text Document (sectioned) source: each fills the three
+// regexes for a common document shape so users rarely need to write a regex.
+const SECTIONED_PRESETS: Record<string, { headerKVRegex: string; bodyColumnMarker: string; bodyDelimiter: string; note: string }> = {
+  'Instrument / metrology': {
+    headerKVRegex: '^(\\S[\\S ]*?)\\s{2,}(.*?)\\s*$',
+    bodyColumnMarker: '^MEASUREMENT\\s',
+    bodyDelimiter: '\\s+',
+    note: 'Key <2+ spaces> Value header; a MEASUREMENT line names the table columns.',
+  },
+  'Whitespace table': {
+    headerKVRegex: '^(\\S[\\S ]*?)\\s{2,}(.*?)\\s*$',
+    bodyColumnMarker: '^COLUMNS\\s',
+    bodyDelimiter: '\\s+',
+    note: 'Generic whitespace-aligned table; a COLUMNS line names the columns.',
+  },
+  'Colon key/value + CSV body': {
+    headerKVRegex: '^([^:]+):\\s*(.*?)\\s*$',
+    bodyColumnMarker: '^DATA,',
+    bodyDelimiter: ',',
+    note: 'Header lines like "Key: Value"; a DATA, line names comma-separated columns.',
+  },
+  'Pipe-delimited body': {
+    headerKVRegex: '^(\\S[\\S ]*?)\\s{2,}(.*?)\\s*$',
+    bodyColumnMarker: '^HEADER\\|',
+    bodyDelimiter: '\\|',
+    note: 'A HEADER|… line names pipe-separated columns.',
+  },
+};
+
+// Format-preset selector for the sectioned source. Applying a preset writes the
+// three regex fields; "Custom" leaves them as-is for manual editing below.
+function renderSectionedPreset(node: Node): HTMLElement {
+  const f = el('div', 'fld');
+  f.appendChild(el('div', 'k', humanize('formatPreset')));
+  const sel = el('select', 'v') as HTMLSelectElement;
+  const names = Object.keys(SECTIONED_PRESETS);
+  const cur = cfgTarget(node);
+  // Detect which preset (if any) currently matches the config.
+  let match = 'Custom';
+  for (const n of names) {
+    const p = SECTIONED_PRESETS[n];
+    if (cur.headerKVRegex === p.headerKVRegex && cur.bodyColumnMarker === p.bodyColumnMarker && cur.bodyDelimiter === p.bodyDelimiter) { match = n; break; }
+  }
+  ['Custom', ...names].forEach((n) => {
+    const op = document.createElement('option');
+    op.value = n; op.textContent = n;
+    if (n === match) op.selected = true;
+    sel.appendChild(op);
+  });
+  sel.onchange = () => {
+    const p = SECTIONED_PRESETS[sel.value];
+    if (p) {
+      const t = cfgTarget(node);
+      t.headerKVRegex = p.headerKVRegex;
+      t.bodyColumnMarker = p.bodyColumnMarker;
+      t.bodyDelimiter = p.bodyDelimiter;
+      S.pipe = buildPipe(S.doc);
+      post({ type: 'save', doc: S.doc });
+    }
+    renderEditor();
+  };
+  f.appendChild(sel);
+  const noteText = match !== 'Custom' ? SECTIONED_PRESETS[match].note : 'Pick a preset to fill the patterns below, or edit them by hand.';
+  f.appendChild(el('div', 'hint', noteText));
+  return f;
+}
+
+// Combined editor for the Custom Text (template) sink: an Inline/File toggle
+// plus a monospace template textarea (or a template-file path picker), and a
+// click-to-insert reference strip of the template variables and helper funcs.
+const TEMPLATE_VARS = ['{{range .Rows}}…{{end}}', '{{.Count}}', '{{index .Attr "id"}}', '{{.Columns}}'];
+const TEMPLATE_HELPERS = ['rpad', 'lpad', 'padc', 'sci', 'upper', 'lower', 'trim', 'add', 'seq'];
+function renderTemplateEditor(node: Node): HTMLElement {
+  const wrap = el('div', 'fld');
+  const cur = cfgTarget(node);
+  const usingFile = typeof cur.templatePath === 'string' && cur.templatePath.trim() !== '';
+
+  // Source toggle: Inline template vs Template file.
+  wrap.appendChild(el('div', 'k', humanize('templateSource')));
+  const seg = el('div', 'inputrow');
+  const mkBtn = (label: string, on: boolean, fn: () => void) => {
+    const b = el('button', 'browse' + (on ? ' pri' : ''), label);
+    b.onclick = fn;
+    return b;
+  };
+  seg.appendChild(mkBtn('Inline template', !usingFile, () => {
+    const t = cfgTarget(node);
+    delete t.templatePath;
+    if (typeof t.template !== 'string') t.template = '';
+    S.pipe = buildPipe(S.doc); post({ type: 'save', doc: S.doc }); renderEditor();
+  }));
+  seg.appendChild(mkBtn('Template file', usingFile, () => {
+    const t = cfgTarget(node);
+    if (typeof t.templatePath !== 'string') t.templatePath = './layout.tmpl';
+    S.pipe = buildPipe(S.doc); post({ type: 'save', doc: S.doc }); renderEditor();
+  }));
+  wrap.appendChild(seg);
+
+  if (usingFile) {
+    const row = el('div', 'inputrow');
+    const inp = el('input', 'v') as HTMLInputElement;
+    inp.value = String(cur.templatePath || '');
+    inp.placeholder = './layout.tmpl';
+    inp.onchange = () => setCfgField(node, 'templatePath', inp.value);
+    const btn = el('button', 'browse', '📂 Browse');
+    btn.onclick = () => requestBrowse('file', (p) => { inp.value = p; setCfgField(node, 'templatePath', p); });
+    row.appendChild(inp);
+    row.appendChild(btn);
+    wrap.appendChild(row);
+    wrap.appendChild(el('div', 'hint', FIELD_HINTS['templatePath']));
+    return wrap;
+  }
+
+  // Inline: monospace textarea for the template body.
+  const ta = document.createElement('textarea');
+  ta.className = 'v';
+  ta.style.fontFamily = 'var(--vscode-editor-font-family, monospace)';
+  ta.style.minHeight = '120px';
+  ta.style.whiteSpace = 'pre';
+  ta.value = String(cur.template || '');
+  ta.onchange = () => setCfgValue(node, 'template', ta.value);
+  wrap.appendChild(ta);
+
+  const insert = (snippet: string) => {
+    const start = ta.selectionStart ?? ta.value.length;
+    const end = ta.selectionEnd ?? ta.value.length;
+    ta.value = ta.value.slice(0, start) + snippet + ta.value.slice(end);
+    const caret = start + snippet.length;
+    ta.setSelectionRange(caret, caret);
+    ta.focus();
+    setCfgValue(node, 'template', ta.value);
+  };
+
+  // Reference strip: variables then helper functions, click-to-insert.
+  const varsWrap = el('div', 'mhelp');
+  varsWrap.appendChild(el('div', 'lbl', 'Variables'));
+  const vchips = el('div', 'chips');
+  TEMPLATE_VARS.forEach((v) => {
+    const c = el('span', 'chip2', escapeHtml(v));
+    c.title = 'Insert ' + v;
+    c.onclick = () => insert(v);
+    vchips.appendChild(c);
+  });
+  varsWrap.appendChild(vchips);
+  varsWrap.appendChild(el('div', 'lbl', 'Helpers'));
+  const hchips = el('div', 'chips');
+  TEMPLATE_HELPERS.forEach((h) => {
+    const c = el('span', 'chip2 fn', `ƒ ${h}`);
+    c.title = 'Insert ' + h + ' helper';
+    c.onclick = () => insert(`{{${h} }}`);
+    hchips.appendChild(c);
+  });
+  varsWrap.appendChild(hchips);
+  varsWrap.appendChild(el('div', 'focushint', 'Click in the template, then a variable or helper to insert at the caret.'));
+  wrap.appendChild(varsWrap);
+  wrap.appendChild(el('div', 'hint', FIELD_HINTS['template']));
+  return wrap;
+}
+
 // Structured column editor for the source `columns` array.
 // Conflict-key picker for the JDBC sink `conflictKey` — checkboxes over the
 // columns visible at the sink, so users pick the upsert key instead of typing a
@@ -954,6 +1144,10 @@ const MAP_FUNCTIONS: Array<{ name: string; snippet: string; hint: string }> = [
   { name: 'coalesce', snippet: 'coalesce($1, $2)', hint: 'First non-null value' },
   { name: 'multiply', snippet: 'multiply($1, $2)', hint: 'Numeric a × b' },
   { name: 'divide', snippet: 'divide($1, $2)', hint: 'Numeric a ÷ b' },
+  { name: 'scientific', snippet: 'scientific($1)', hint: 'Signed scientific notation, e.g. +1.234E-05' },
+  { name: 'lpad', snippet: 'lpad($1, $2)', hint: 'Left-pad value to width (right-aligned)' },
+  { name: 'rpad', snippet: 'rpad($1, $2)', hint: 'Right-pad value to width (left-aligned)' },
+  { name: 'clamp', snippet: 'clamp($1, $2, $3)', hint: 'Constrain a number between min and max' },
 ];
 
 // The currently focused mapping-expression input, so Available-data / Function
@@ -1503,14 +1697,14 @@ function renderCanvas(m: HTMLElement) {
     quickPick('Change source type', SOURCE_TYPES, (v) => {
       (S.doc.source as any) = { type: v, ...defaultConfigFor('source', v) };
       persistAndRebuild();
-      toast('ok', `Source type → ${v}`);
-    });
+      toast('ok', `Source type → ${typeLabel(v)}`);
+    }, typeLabel);
   (hint.querySelector('[data-h="sink"]') as HTMLElement).onclick = () =>
     quickPick('Change sink type', SINK_TYPES, (v) => {
       (S.doc.sink as any) = { type: v, ...defaultConfigFor('sink', v) };
       persistAndRebuild();
-      toast('ok', `Sink type → ${v}`);
-    });
+      toast('ok', `Sink type → ${typeLabel(v)}`);
+    }, typeLabel);
   const dlqBtn = hint.querySelector('[data-h="dlq"]') as HTMLElement | null;
   if (dlqBtn) dlqBtn.onclick = () => addDlq();
   cv.appendChild(hint);
@@ -1555,7 +1749,7 @@ function renderCanvas(m: HTMLElement) {
       const list = opts.includes(sn.type) ? opts : [sn.type, ...opts];
       list.forEach((o) => {
         const op = document.createElement('option');
-        op.value = o; op.textContent = o;
+        op.value = o; op.textContent = typeLabel(o);
         if (o === sn.type) op.selected = true;
         sel.appendChild(op);
       });
@@ -1595,6 +1789,12 @@ function renderCanvas(m: HTMLElement) {
 
     if (sn.kind === 'dlq') {
       ib.appendChild(el('div', 'muted', '<div style="font-size:11.5px;padding:0 0 8px">Rows that still fail after per-row isolation are written here with an error-envelope column — the main sink is unaffected.</div>'));
+    }
+
+    // Text Document (sectioned) source: a friendly "Format preset" that fills the
+    // three regexes for common document shapes, so most users never touch a regex.
+    if (sn.kind === 'source' && sn.type === 'sectioned') {
+      ib.appendChild(renderSectionedPreset(sn));
     }
 
     // Transform stages get an editable name; source/sink names are derived.
@@ -1654,6 +1854,15 @@ function renderCanvas(m: HTMLElement) {
       if (sn.type === 'xml' && k === 'recordElement') {
         ib.appendChild(renderXmlRecordField(sn, v));
         return;
+      }
+      // Custom Text (template) sink: fold template + templatePath into one editor
+      // with an Inline/File toggle and a variable/helper reference strip.
+      if (sn.type === 'template' && k === 'template') {
+        ib.appendChild(renderTemplateEditor(sn));
+        return;
+      }
+      if (sn.type === 'template' && k === 'templatePath') {
+        return; // handled inside renderTemplateEditor
       }
       if (k === 'columns') ib.appendChild(renderColumnsEditor(sn));
       else if (k === 'fields' && (sn.type === 'map' || sn.type === 'mapper')) ib.appendChild(renderMapEditor(sn));
@@ -2563,7 +2772,8 @@ function openPalette() {
   draw();
   setTimeout(() => { inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); }, 10);
 }
-function quickPick(title: string, items: string[], onPick: (v: string) => void) {
+function quickPick(title: string, items: string[], onPick: (v: string) => void, labelFn?: (v: string) => string) {
+  const label = labelFn || ((v: string) => v);
   closeOverlays();
   const scrim = el('div', 'scrim');
   scrim.onclick = closeOverlays;
@@ -2583,7 +2793,9 @@ function quickPick(title: string, items: string[], onPick: (v: string) => void) 
 
   const rebuild = () => {
     const q = inp.value.trim().toLowerCase();
-    const matches = q ? items.filter((it) => it.toLowerCase().includes(q)) : items.slice();
+    // Filter on both the engine id and the friendly label so "text" finds the
+    // Text Document / Custom Text types as well as their raw ids.
+    const matches = q ? items.filter((it) => it.toLowerCase().includes(q) || label(it).toLowerCase().includes(q)) : items.slice();
     list.innerHTML = '';
     rows.length = 0;
     if (!matches.length) {
@@ -2593,7 +2805,8 @@ function quickPick(title: string, items: string[], onPick: (v: string) => void) 
     if (active >= matches.length) active = matches.length - 1;
     if (active < 0) active = 0;
     matches.forEach((it, idx) => {
-      const d = el('div', 'pi' + (idx === active ? ' sel' : ''), `<span class="ic">◦</span>${escapeHtml(it)}`);
+      const lbl = label(it) === it ? escapeHtml(it) : `${escapeHtml(label(it))} <span class="muted" style="opacity:.6">${escapeHtml(it)}</span>`;
+      const d = el('div', 'pi' + (idx === active ? ' sel' : ''), `<span class="ic">◦</span>${lbl}`);
       d.onmouseenter = () => { active = idx; highlight(); };
       d.onclick = () => pick(it);
       rows.push(d);
@@ -2603,7 +2816,7 @@ function quickPick(title: string, items: string[], onPick: (v: string) => void) 
   const highlight = () => rows.forEach((r, i) => r.classList.toggle('sel', i === active));
   const currentMatches = () => {
     const q = inp.value.trim().toLowerCase();
-    return q ? items.filter((it) => it.toLowerCase().includes(q)) : items.slice();
+    return q ? items.filter((it) => it.toLowerCase().includes(q) || label(it).toLowerCase().includes(q)) : items.slice();
   };
 
   inp.oninput = () => { active = 0; rebuild(); };
