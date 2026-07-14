@@ -13,6 +13,7 @@ import (
 	"github.com/project-flogo/core/action"
 	"github.com/project-flogo/core/app/resource"
 	"github.com/project-flogo/core/data/metadata"
+	"github.com/project-flogo/core/engine"
 	corelog "github.com/project-flogo/core/support/log"
 
 	"github.com/mpandav-tibco/flogo-datapipeline/checkpoint"
@@ -82,14 +83,32 @@ func shortName(ref string) string {
 	return strings.TrimPrefix(ref, "res://pipeline:")
 }
 
-// newRunLog builds a per-run child logger that permanently binds the pipeline
-// name and run ID as structured fields — identical to the flogo-agent pattern
-// where every log line carries {"agent": "...", "session": "..."}.
+// newRunLog builds a per-run logger following the OOTB Flogo Integration flow
+// logging convention (see project-flogo/flow instance.TaskInst, which attaches
+// activity.name / flow.name / flow.id / app.name / app.version /
+// deployment.environment as structured fields).
+//
+// The pipeline identity (pipeline.name + pipeline.runId — the analogues of the
+// flow's named logger + flow.id) is always bound so every run is correlatable.
+// The richer app/deployment metadata is attached only when contextual logging
+// is enabled (FLOGO_LOG_CTX=true / log.CtxLoggingEnabled()), exactly as a Flogo
+// flow only decorates its activity logger with that metadata when ctx logging
+// is on — keeping the default console output clean.
 func newRunLog(pipelineRef, runID string) corelog.Logger {
-	return corelog.ChildLoggerWithFields(flog,
-		corelog.FieldString("pipeline", shortName(pipelineRef)),
-		corelog.FieldString("runId", runID),
-	)
+	fields := []corelog.Field{
+		corelog.FieldString("pipeline.name", shortName(pipelineRef)),
+		corelog.FieldString("pipeline.runId", runID),
+	}
+	if corelog.CtxLoggingEnabled() {
+		fields = append(fields,
+			corelog.FieldString("app.name", engine.GetAppName()),
+			corelog.FieldString("app.version", engine.GetAppVersion()),
+		)
+		if env := engine.GetEnvName(); env != "" {
+			fields = append(fields, corelog.FieldString("deployment.environment", env))
+		}
+	}
+	return corelog.ChildLoggerWithFields(flog, fields...)
 }
 
 // RunDirect executes the pipeline synchronously in the calling goroutine and
