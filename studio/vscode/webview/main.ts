@@ -422,6 +422,7 @@ const SINK_TYPES = ['jdbc', 'parquet', 'csv', 'jsonlines', 'template', 'kafka', 
 const TYPE_LABELS: Record<string, string> = {
   sectioned: 'Text Document',
   template: 'Custom Text',
+  null: 'Null (discard)',
 };
 function typeLabel(t: string): string {
   return TYPE_LABELS[t] || t;
@@ -1910,7 +1911,8 @@ function renderEditor() {
   }
   if (t.type === 'canvas') {
     const sn = (S.selNode === 'dlq' && S.pipe.dlqNode) ? S.pipe.dlqNode : (S.pipe.nodes.find((n) => n.id === S.selNode) || S.pipe.nodes[0]);
-    bc.innerHTML = `◈ ${S.pipe.name} <span class="sep">›</span> ${sn ? typeLabel(sn.type) + ': ' + sn.nm : ''} <span class="sep">›</span> <span class="chip plain" style="padding:1px 7px">${S.pipe.mode}</span>`;
+    const snLabel = sn ? (sn.nm && sn.nm !== typeLabel(sn.type) && sn.nm !== sn.type ? `${typeLabel(sn.type)}: ${sn.nm}` : typeLabel(sn.type)) : '';
+    bc.innerHTML = `◈ ${S.pipe.name} <span class="sep">›</span> ${snLabel} <span class="sep">›</span> <span class="chip plain" style="padding:1px 7px">${S.pipe.mode}</span>`;
     renderCanvas(m);
   } else {
     bc.innerHTML = tabMeta(t).label;
@@ -1976,7 +1978,18 @@ function renderCanvas(m: HTMLElement) {
     const nd = el('div', 'node ' + (n.kind === 'source' ? 'src' : n.kind === 'sink' ? 'sink' : 'tf') + (S.ran ? ' ran' : '') + (S.selNode === n.id ? ' sel' : ''));
     nd.style.setProperty('--w', w + '%');
     const icon = n.kind === 'source' ? '⇥' : n.kind === 'sink' ? '⇤' : 'ƒ';
-    nd.innerHTML = `<div class="kind"><span class="kico">${icon}</span>${n.kind}</div><div class="nm">${n.nm}</div><div class="meta">${n.meta}</div><div class="thru"><i></i></div>`;
+    // Avoid repeating the same word twice (e.g. a null sink whose name defaults
+    // to its type — "null / null"). The bold title is the custom name when set,
+    // otherwise the friendly type label; the meta line is only shown when it
+    // carries extra detail beyond that title.
+    const label = typeLabel(n.type);
+    const hasCustomName = n.nm && n.nm !== label && n.nm !== n.type;
+    const title = hasCustomName ? n.nm : label;
+    const showMeta = n.meta && n.meta !== title && n.meta !== label;
+    nd.innerHTML = `<div class="kind"><span class="kico">${icon}</span>${n.kind}</div>`
+      + `<div class="nm">${title}</div>`
+      + (showMeta ? `<div class="meta">${n.meta}</div>` : '')
+      + `<div class="thru"><i></i></div>`;
     nd.tabIndex = 0;
     nd.onclick = () => { S.selNode = n.id; S.inspTab = 'Config'; S.inspClosed = false; renderEditor(); };
     nd.oncontextmenu = (e) => nodeMenu(n, i, e);

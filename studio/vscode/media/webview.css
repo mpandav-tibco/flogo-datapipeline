@@ -49,10 +49,10 @@ button{font-family:inherit;color:inherit;background:none;border:none;cursor:poin
 .chip.warn{color:var(--yellow);background:var(--yellowA)}.chip.err{color:var(--red);background:var(--redA)}
 .chip.idle{color:var(--dim);background:#2a2a2a}.chip.plain{color:var(--mute);background:#2a2a2a}.chip.plain::before{display:none}
 
-.canvas{position:absolute;inset:0;overflow:auto;padding:22px 20px;background:radial-gradient(#2a2a2a 1px,transparent 1px) 0 0/22px 22px,var(--editor)}
+.canvas{position:absolute;inset:0;overflow:auto;padding:22px 20px;background:radial-gradient(#2a2a2a 1px,transparent 1px) 0 0/22px 22px,var(--editor);display:flex;flex-direction:column}
 .flowrow{display:flex;align-items:center;flex-wrap:nowrap;padding:10px 2px}
 /* pipeline header (editable name + description, persisted in the file) */
-.pipehead{max-width:680px;margin:0 0 6px;display:flex;flex-direction:column;gap:2px}
+.pipehead{max-width:680px;margin:0 0 4px;padding-bottom:16px;border-bottom:1px solid var(--border);display:flex;flex-direction:column;gap:2px;flex:none}
 .pipehead .pipename{background:transparent;border:1px solid transparent;color:var(--text);font-size:17px;font-weight:700;padding:3px 6px;margin-left:-6px;border-radius:5px;outline:none}
 .pipehead .pipename:hover{border-color:var(--border)}
 .pipehead .pipename:focus{border-color:#007fd4;background:#1e1e1e}
@@ -101,7 +101,7 @@ button{font-family:inherit;color:inherit;background:none;border:none;cursor:poin
 .branch{margin:12px 0 0 186px;display:flex;flex-direction:column;align-items:center}
 .branch .down{width:2px;height:22px;background:#7a3c34}
 /* DLQ as a "catch" error-handler lane under the sink end of the flow */
-.flowwrap{display:inline-block}
+.flowwrap{display:inline-block;align-self:flex-start;margin:auto 0}
 .catchlane{display:flex;justify-content:flex-end;padding-right:64px;margin-top:0}
 .catchcol{display:flex;flex-direction:column;align-items:center}
 .catchlane .elbow-line{width:2px;height:24px;background:repeating-linear-gradient(#c9903f 0 5px,transparent 5px 9px)}
