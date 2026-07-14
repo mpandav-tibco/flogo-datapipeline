@@ -23,9 +23,11 @@ package mapper
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/mpandav-tibco/flogo-datapipeline/record"
 	"github.com/mpandav-tibco/flogo-datapipeline/transform"
@@ -66,13 +68,31 @@ func newMapperTransform(cfg map[string]interface{}) (transform.Transform, error)
 	for k := range fieldsMap {
 		keys = append(keys, k)
 	}
-	if ordered, ok := cfg["fieldOrder"].([]interface{}); ok && len(ordered) == len(keys) {
-		keys = keys[:0]
-		for _, v := range ordered {
-			if s, ok := v.(string); ok {
-				keys = append(keys, s)
-			}
+	if ordered, ok := cfg["fieldOrder"].([]interface{}); ok {
+		// fieldOrder must be a permutation of the fields keys: same count, same
+		// names, no duplicates. A length-only check would let a typo silently map to
+		// an empty expression — dropping the intended field and emitting a blank
+		// column — corrupting the output schema with no error.
+		if len(ordered) != len(fieldsMap) {
+			return nil, fmt.Errorf("map transform: 'fieldOrder' has %d entries but 'fields' has %d", len(ordered), len(fieldsMap))
 		}
+		collected := make([]string, 0, len(ordered))
+		seen := make(map[string]bool, len(ordered))
+		for _, v := range ordered {
+			s, ok := v.(string)
+			if !ok {
+				return nil, fmt.Errorf("map transform: 'fieldOrder' must be an array of strings; element %v is not a string", v)
+			}
+			if _, isField := fieldsMap[s]; !isField {
+				return nil, fmt.Errorf("map transform: 'fieldOrder' entry %q is not a key in 'fields'", s)
+			}
+			if seen[s] {
+				return nil, fmt.Errorf("map transform: 'fieldOrder' has duplicate entry %q", s)
+			}
+			seen[s] = true
+			collected = append(collected, s)
+		}
+		keys = collected
 	} else {
 		sort.Strings(keys)
 	}
@@ -141,9 +161,20 @@ func compileExpr(expr string) (func(row map[string]interface{}) interface{}, err
 		argEvals := make([]func(map[string]interface{}) interface{}, len(args))
 		for i, arg := range args {
 			arg = strings.TrimSpace(arg)
-			eval, err := compileExpr(arg)
+			// Function arguments are value expressions: a leading "=" is
+			// implicit inside a call, so a bare $field resolves to the row
+			// value, numbers and 'quoted' text become literals, and nested
+			// func(...) calls compile recursively. Both =upper(=$x) and
+			// =upper($x) therefore work. If the arg isn't a recognizable
+			// expression (a bareword), fall back to a static string constant.
+			toCompile := arg
+			if !strings.HasPrefix(arg, "=") {
+				toCompile = "=" + arg
+			}
+			eval, err := compileExpr(toCompile)
 			if err != nil {
-				return nil, fmt.Errorf("arg %d of %s: %w", i, funcName, err)
+				lit := arg
+				eval = func(_ map[string]interface{}) interface{} { return lit }
 			}
 			argEvals[i] = eval
 		}
@@ -258,6 +289,34 @@ var builtins = map[string]func([]interface{}) interface{}{
 		}
 		return strings.TrimSpace(fmt.Sprintf("%v", args[0]))
 	},
+	"scientific": func(args []interface{}) interface{} {
+		// Signed 6-digit scientific notation, e.g. +1.332668E+04. Common in
+		// instrument/report layouts. Value formatting belongs in the transform
+		// stage, not the sink — so this is a first-class mapper builtin.
+		if len(args) < 1 {
+			return nil
+		}
+		f, ok := toFloat64(args[0])
+		if !ok {
+			return nil
+		}
+		return fmt.Sprintf("%+.6E", f)
+	},
+	"lpad": func(args []interface{}) interface{} { return padArg(args, true) },
+	"rpad": func(args []interface{}) interface{} { return padArg(args, false) },
+	"clamp": func(args []interface{}) interface{} {
+		// clamp(v, lo, hi) → v when lo<=v<=hi, else nil (route/drop invalids).
+		if len(args) < 3 {
+			return nil
+		}
+		v, ok1 := toFloat64(args[0])
+		lo, ok2 := toFloat64(args[1])
+		hi, ok3 := toFloat64(args[2])
+		if !ok1 || !ok2 || !ok3 || v < lo || v > hi {
+			return nil
+		}
+		return v
+	},
 	"coalesce": func(args []interface{}) interface{} {
 		for _, a := range args {
 			if a != nil {
@@ -266,6 +325,29 @@ var builtins = map[string]func([]interface{}) interface{}{
 		}
 		return nil
 	},
+}
+
+// padArg pads args[0] (stringified) to width args[1] with spaces; left=true
+// left-justifies within the field (right-pad → text left), matching fixed-width
+// report layouts. Padding is a formatting op, reusable across any pipeline.
+func padArg(args []interface{}, leftJustify bool) interface{} {
+	if len(args) < 2 {
+		return nil
+	}
+	s := fmt.Sprintf("%v", args[0])
+	w, ok := toFloat64(args[1])
+	if !ok {
+		return s
+	}
+	width := int(w)
+	if len(s) >= width {
+		return s
+	}
+	fill := strings.Repeat(" ", width-len(s))
+	if leftJustify {
+		return s + fill
+	}
+	return fill + s
 }
 
 func toFloat64(v interface{}) (float64, bool) {
@@ -284,4 +366,334 @@ func toFloat64(v interface{}) (float64, bool) {
 		}
 	}
 	return 0, false
+}
+
+// --- extended (namespaced) function library ---
+//
+// The legacy flat builtins above (concat, upper, divide, …) remain registered
+// for backward compatibility with existing pipelines. registerExtendedBuiltins
+// adds a Flogo-style namespaced library (string.*, number.*, math.*, coerce.*,
+// datetime.*, plus logic helpers) so the Studio function palette and the runtime
+// stay in lock-step — every function the designer offers actually evaluates.
+// Keys are stored lowercased because compileExpr lowercases the function name
+// before lookup, so "string.toUpper" resolves via key "string.toupper".
+
+func init() { registerExtendedBuiltins() }
+
+func argStr(args []interface{}, i int) string {
+	if i >= len(args) || args[i] == nil {
+		return ""
+	}
+	return fmt.Sprintf("%v", args[i])
+}
+
+func argFloat(args []interface{}, i int) (float64, bool) {
+	if i >= len(args) {
+		return 0, false
+	}
+	return toFloat64(args[i])
+}
+
+func argInt(args []interface{}, i int) (int, bool) {
+	f, ok := argFloat(args, i)
+	return int(f), ok
+}
+
+func truthy(v interface{}) bool {
+	switch x := v.(type) {
+	case nil:
+		return false
+	case bool:
+		return x
+	case string:
+		return x != ""
+	case int:
+		return x != 0
+	case int64:
+		return x != 0
+	case float32:
+		return x != 0
+	case float64:
+		return x != 0
+	}
+	return true
+}
+
+func padStr(s string, args []interface{}, left bool) string {
+	w, ok := argInt(args, 1)
+	if !ok {
+		return s
+	}
+	ch := " "
+	if c := argStr(args, 2); c != "" {
+		ch = string([]rune(c)[0:1])
+	}
+	for len([]rune(s)) < w {
+		if left {
+			s = ch + s
+		} else {
+			s = s + ch
+		}
+	}
+	return s
+}
+
+func parseTimeLoose(s string) (time.Time, bool) {
+	if s == "" {
+		return time.Time{}, false
+	}
+	layouts := []string{
+		time.RFC3339,
+		"2006-01-02T15:04:05",
+		"2006-01-02 15:04:05",
+		"2006-01-02",
+		"01/02/2006",
+		"2006/01/02",
+	}
+	for _, l := range layouts {
+		if t, err := time.Parse(l, s); err == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
+}
+
+func registerExtendedBuiltins() {
+	reg := func(names []string, fn func([]interface{}) interface{}) {
+		for _, n := range names {
+			builtins[strings.ToLower(n)] = fn
+		}
+	}
+
+	// ── string.* ──
+	reg([]string{"string.concat"}, builtins["concat"])
+	reg([]string{"string.trim"}, builtins["trim"])
+	reg([]string{"string.toUpper"}, builtins["upper"])
+	reg([]string{"string.toLower"}, builtins["lower"])
+	reg([]string{"string.length"}, func(a []interface{}) interface{} {
+		return len([]rune(argStr(a, 0)))
+	})
+	reg([]string{"string.substring"}, func(a []interface{}) interface{} {
+		r := []rune(argStr(a, 0))
+		start, _ := argInt(a, 1)
+		end := len(r)
+		if e, ok := argInt(a, 2); ok {
+			end = e
+		}
+		if start < 0 {
+			start = 0
+		}
+		if end > len(r) {
+			end = len(r)
+		}
+		if start > end {
+			return ""
+		}
+		return string(r[start:end])
+	})
+	reg([]string{"string.replace"}, func(a []interface{}) interface{} {
+		return strings.ReplaceAll(argStr(a, 0), argStr(a, 1), argStr(a, 2))
+	})
+	reg([]string{"string.indexOf"}, func(a []interface{}) interface{} {
+		return strings.Index(argStr(a, 0), argStr(a, 1))
+	})
+	reg([]string{"string.startsWith"}, func(a []interface{}) interface{} {
+		return strings.HasPrefix(argStr(a, 0), argStr(a, 1))
+	})
+	reg([]string{"string.endsWith"}, func(a []interface{}) interface{} {
+		return strings.HasSuffix(argStr(a, 0), argStr(a, 1))
+	})
+	reg([]string{"string.contains"}, func(a []interface{}) interface{} {
+		return strings.Contains(argStr(a, 0), argStr(a, 1))
+	})
+	reg([]string{"string.padLeft"}, func(a []interface{}) interface{} {
+		return padStr(argStr(a, 0), a, true)
+	})
+	reg([]string{"string.padRight"}, func(a []interface{}) interface{} {
+		return padStr(argStr(a, 0), a, false)
+	})
+
+	// ── number.* / math.* ──
+	reg([]string{"number.parseInt", "integer.parseInt"}, func(a []interface{}) interface{} {
+		f, ok := argFloat(a, 0)
+		if !ok {
+			return nil
+		}
+		return int(f)
+	})
+	reg([]string{"number.parseFloat"}, func(a []interface{}) interface{} {
+		f, ok := argFloat(a, 0)
+		if !ok {
+			return nil
+		}
+		return f
+	})
+	reg([]string{"number.round", "math.round"}, func(a []interface{}) interface{} {
+		f, ok := argFloat(a, 0)
+		if !ok {
+			return nil
+		}
+		dec, _ := argInt(a, 1)
+		p := math.Pow(10, float64(dec))
+		return math.Round(f*p) / p
+	})
+	reg([]string{"number.floor", "math.floor"}, func(a []interface{}) interface{} {
+		f, ok := argFloat(a, 0)
+		if !ok {
+			return nil
+		}
+		return math.Floor(f)
+	})
+	reg([]string{"number.ceil", "math.ceil"}, func(a []interface{}) interface{} {
+		f, ok := argFloat(a, 0)
+		if !ok {
+			return nil
+		}
+		return math.Ceil(f)
+	})
+	reg([]string{"number.abs", "math.abs"}, func(a []interface{}) interface{} {
+		f, ok := argFloat(a, 0)
+		if !ok {
+			return nil
+		}
+		return math.Abs(f)
+	})
+	reg([]string{"number.min", "math.min"}, func(a []interface{}) interface{} {
+		x, ok1 := argFloat(a, 0)
+		y, ok2 := argFloat(a, 1)
+		if !ok1 || !ok2 {
+			return nil
+		}
+		return math.Min(x, y)
+	})
+	reg([]string{"number.max", "math.max"}, func(a []interface{}) interface{} {
+		x, ok1 := argFloat(a, 0)
+		y, ok2 := argFloat(a, 1)
+		if !ok1 || !ok2 {
+			return nil
+		}
+		return math.Max(x, y)
+	})
+	reg([]string{"number.mod", "math.mod"}, func(a []interface{}) interface{} {
+		x, ok1 := argFloat(a, 0)
+		y, ok2 := argFloat(a, 1)
+		if !ok1 || !ok2 || y == 0 {
+			return nil
+		}
+		return math.Mod(x, y)
+	})
+	reg([]string{"number.add"}, func(a []interface{}) interface{} {
+		x, ok1 := argFloat(a, 0)
+		y, ok2 := argFloat(a, 1)
+		if !ok1 || !ok2 {
+			return nil
+		}
+		return x + y
+	})
+	reg([]string{"number.subtract"}, func(a []interface{}) interface{} {
+		x, ok1 := argFloat(a, 0)
+		y, ok2 := argFloat(a, 1)
+		if !ok1 || !ok2 {
+			return nil
+		}
+		return x - y
+	})
+	reg([]string{"number.divide"}, builtins["divide"])
+	reg([]string{"number.multiply"}, builtins["multiply"])
+
+	// ── coerce.* ──
+	reg([]string{"coerce.toInt"}, func(a []interface{}) interface{} {
+		f, ok := argFloat(a, 0)
+		if !ok {
+			return nil
+		}
+		return int(f)
+	})
+	reg([]string{"coerce.toFloat"}, func(a []interface{}) interface{} {
+		f, ok := argFloat(a, 0)
+		if !ok {
+			return nil
+		}
+		return f
+	})
+	reg([]string{"coerce.toString"}, func(a []interface{}) interface{} {
+		return argStr(a, 0)
+	})
+	reg([]string{"coerce.toBool"}, func(a []interface{}) interface{} {
+		if len(a) > 0 {
+			if b, ok := a[0].(bool); ok {
+				return b
+			}
+		}
+		s := strings.ToLower(strings.TrimSpace(argStr(a, 0)))
+		return s == "true" || s == "1" || s == "yes" || s == "y"
+	})
+
+	// ── datetime.* ──
+	reg([]string{"datetime.now"}, func(a []interface{}) interface{} {
+		return time.Now().UTC().Format(time.RFC3339)
+	})
+	reg([]string{"datetime.today"}, func(a []interface{}) interface{} {
+		return time.Now().UTC().Format("2006-01-02")
+	})
+	reg([]string{"datetime.format"}, func(a []interface{}) interface{} {
+		t, ok := parseTimeLoose(argStr(a, 0))
+		if !ok {
+			return argStr(a, 0)
+		}
+		layout := argStr(a, 1)
+		if layout == "" {
+			layout = time.RFC3339
+		}
+		return t.Format(layout)
+	})
+	reg([]string{"datetime.year"}, func(a []interface{}) interface{} {
+		if t, ok := parseTimeLoose(argStr(a, 0)); ok {
+			return t.Year()
+		}
+		return nil
+	})
+	reg([]string{"datetime.month"}, func(a []interface{}) interface{} {
+		if t, ok := parseTimeLoose(argStr(a, 0)); ok {
+			return int(t.Month())
+		}
+		return nil
+	})
+	reg([]string{"datetime.day"}, func(a []interface{}) interface{} {
+		if t, ok := parseTimeLoose(argStr(a, 0)); ok {
+			return t.Day()
+		}
+		return nil
+	})
+	reg([]string{"datetime.addDays"}, func(a []interface{}) interface{} {
+		t, ok := parseTimeLoose(argStr(a, 0))
+		if !ok {
+			return nil
+		}
+		n, _ := argInt(a, 1)
+		return t.AddDate(0, 0, n).Format(time.RFC3339)
+	})
+
+	// ── logic / conditional ──
+	reg([]string{"iif"}, func(a []interface{}) interface{} {
+		if len(a) < 3 {
+			return nil
+		}
+		if truthy(a[0]) {
+			return a[1]
+		}
+		return a[2]
+	})
+	reg([]string{"isNull"}, func(a []interface{}) interface{} {
+		return len(a) == 0 || a[0] == nil
+	})
+	reg([]string{"isEmpty"}, func(a []interface{}) interface{} {
+		return argStr(a, 0) == ""
+	})
+	reg([]string{"equals"}, func(a []interface{}) interface{} {
+		return argStr(a, 0) == argStr(a, 1)
+	})
+	reg([]string{"notEquals"}, func(a []interface{}) interface{} {
+		return argStr(a, 0) != argStr(a, 1)
+	})
 }

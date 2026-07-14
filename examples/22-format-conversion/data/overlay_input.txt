@@ -1,0 +1,31 @@
+Tool-ID  DaVinci200_1_PM1
+LotID  LOT12345.06
+WaferID  LOT12345___004_
+CarrierID  LOT12345.06
+Recipe  EPA_80\PROC1\OVL_LAYER
+Slot  04
+Station  2
+Operator  jdoe
+Date  06.02.2023  16:44:57
+Comment  synthetic overlay run
+
+STATION  2
+SLOT     4
+OVL_MEASUREMENT
+MEASUREMENT      CHIP_X      CHIP_Y  OVL_RESULT_X  OVL_RESULT_Y
+          1           3          11        -0.132         0.119
+          2           3          11        -0.053        -0.002
+          3           3          11        -0.118        -0.005
+          4           3          11        -0.150         0.078
+          1           3           9        -0.275         0.193
+          2           3           9        -0.174         0.195
+          3           3           9        -0.151         0.111
+          4           3           9        -0.366         0.224
+          1           7           9         0.357         0.149
+          2           7           9         0.473         0.171
+          3           7           9         0.287         0.112
+          4           7           9         0.222         0.158
+          1          10           7         0.051        -0.145
+          2          10           7         0.116        -0.075
+          3          10           7         0.178        -0.153
+          4          10           7         0.190        -0.038

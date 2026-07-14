@@ -1,0 +1,112 @@
+{
+  "name": "davinci-to-mc300",
+  "type": "flogo:app",
+  "version": "1.0.0",
+  "description": "Generic file-format conversion: a multi-section instrument file (key/value header + measurement table) is parsed by the 'sectioned' source and rendered to a custom MC300/KLM-style text layout by the 'template' sink. Triggered on a timer for this demo; swap in a file/JMS trigger in production.",
+  "appModel": "1.1.1",
+  "imports": [
+    "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+    "github.com/project-flogo/contrib/trigger/timer"
+  ],
+  "triggers": [
+    {
+      "id": "conversion-timer",
+      "ref": "github.com/project-flogo/contrib/trigger/timer",
+      "settings": {
+        "repeating": true,
+        "startDelay": 0,
+        "interval": 86400000
+      },
+      "handlers": [
+        {
+          "settings": {},
+          "action": {
+            "ref": "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+            "settings": {
+              "pipelineRef": "res://pipeline:davinci-to-mc300"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "resources": [
+    {
+      "id": "pipeline:davinci-to-mc300",
+      "data": {
+        "name": "davinci-to-mc300",
+        "description": "Sectioned source (header KV + measurement table) → template sink (MC300/KLM layout).",
+        "version": "1.0.0",
+        "source": {
+          "type": "sectioned",
+          "path": "./data/overlay_input.txt",
+          "options": {
+            "headerKVRegex": "^(\\S[\\S ]*?)\\s{2,}(.*?)\\s*$",
+            "bodyColumnMarker": "^MEASUREMENT\\s",
+            "bodyDelimiter": "\\s+",
+            "broadcastHeader": true
+          }
+        },
+        "transforms": [
+          {
+            "type": "map",
+            "fieldOrder": [
+              "chip_x",
+              "chip_y",
+              "measnr",
+              "ovl_x",
+              "ovl_y",
+              "WaferID",
+              "Date",
+              "Recipe",
+              "LotID",
+              "Comment",
+              "ToolID"
+            ],
+            "fields": {
+              "chip_x": "=scientific(=$CHIP_X)",
+              "chip_y": "=scientific(=$CHIP_Y)",
+              "measnr": "=scientific(=$MEASUREMENT)",
+              "ovl_x": "=scientific(=$OVL_RESULT_X)",
+              "ovl_y": "=scientific(=$OVL_RESULT_Y)",
+              "WaferID": "=$WaferID",
+              "Date": "=$Date",
+              "Recipe": "=$Recipe",
+              "LotID": "=$LotID",
+              "Comment": "=$Comment",
+              "ToolID": "=$Tool_ID"
+            }
+          }
+        ],
+        "sink": {
+          "type": "template",
+          "path": "./out/{{index .Attr \"WaferID\"}}.mc300",
+          "templatePath": "./mc300.tmpl"
+        },
+        "performance": {
+          "batchSize": 1000,
+          "maxMemoryMB": 128
+        },
+        "scaling": {
+          "mode": "single"
+        },
+        "ui": {
+          "source": {
+            "x": 112,
+            "y": 98
+          },
+          "transforms": [
+            {
+              "x": 529,
+              "y": 100
+            }
+          ],
+          "sink": {
+            "x": 910,
+            "y": 100
+          }
+        }
+      }
+    }
+  ]
+}
