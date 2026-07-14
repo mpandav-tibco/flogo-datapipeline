@@ -4,8 +4,13 @@
 *.dll
 *.so
 *.dylib
-flogo-datapipeline
-flogo-datapipeline.exe
+# Built engine binaries — anchored to repo root so the cmd/flogo-datapipeline/
+# SOURCE package (main.go, doc.go, …) stays tracked. Also ignore any built
+# binary that happens to sit next to the source package.
+/flogo-datapipeline
+/flogo-datapipeline.exe
+cmd/flogo-datapipeline/flogo-datapipeline
+cmd/flogo-datapipeline/flogo-datapipeline.exe
 
 # Go test artifacts
 *.test
