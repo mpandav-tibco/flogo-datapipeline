@@ -1,0 +1,25 @@
+{{- $a := .Attr -}}
+{{index $a "WaferID"}}
+{{index $a "Date"}}/eqc
+OVERLAY
+-
+DONOR 
+-
+FAB1
+{{index $a "Recipe"}}
+{{index $a "LotID"}}
+{{index $a "WaferID"}}
+{{.Count}}
+0
+{{index $a "Comment"}}
+{{index $a "ToolID"}}
+
+5
+ChipNr
+{{rpad 3 "T1"}}{{lpad 13 "CHIP_X"}}{{lpad 8 "-"}}{{lpad 8 "-"}}{{lpad 8 "C"}}{{lpad 8 "-"}}{{lpad 8 "-"}}{{lpad 8 "-"}}{{lpad 8 "-"}}{{lpad 8 "-"}}{{lpad 8 "-"}}
+{{rpad 3 "T2"}}{{lpad 13 "CHIP_Y"}}{{lpad 8 "-"}}{{lpad 8 "-"}}{{lpad 8 "C"}}{{lpad 8 "-"}}{{lpad 8 "-"}}{{lpad 8 "-"}}{{lpad 8 "-"}}{{lpad 8 "-"}}{{lpad 8 "-"}}
+{{rpad 3 "T3"}}{{lpad 13 "MEASNR"}}{{lpad 8 "-"}}{{lpad 8 "-"}}{{lpad 8 "C"}}{{lpad 8 "-"}}{{lpad 8 "-"}}{{lpad 8 "-"}}{{lpad 8 "-"}}{{lpad 8 "-"}}{{lpad 8 "-"}}
+{{rpad 3 "T4"}}{{lpad 13 "OVL_X"}}{{lpad 8 "-"}}{{lpad 8 "-"}}{{lpad 8 "C"}}{{lpad 8 "-"}}{{lpad 8 "-"}}{{lpad 8 "-"}}{{lpad 8 "-"}}{{lpad 8 "-"}}{{lpad 8 "-"}}
+{{rpad 3 "T5"}}{{lpad 13 "OVL_Y"}}{{lpad 8 "-"}}{{lpad 8 "-"}}{{lpad 8 "C"}}{{lpad 8 "-"}}{{lpad 8 "-"}}{{lpad 8 "-"}}{{lpad 8 "-"}}{{lpad 8 "-"}}{{lpad 8 "-"}}
+{{range $i, $r := .Rows}} {{sci (add $i 1)}} {{index $r "chip_x"}} {{index $r "chip_y"}} {{index $r "measnr"}} {{index $r "ovl_x"}} {{index $r "ovl_y"}} °  
+{{end -}}
