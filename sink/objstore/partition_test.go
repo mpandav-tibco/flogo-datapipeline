@@ -2,10 +2,13 @@ package objstore
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/mpandav-tibco/flogo-datapipeline/objstore"
@@ -137,6 +140,73 @@ func TestSingleObjectPathUnchanged(t *testing.T) {
 		t.Fatal("template without field placeholders must use the single-object path")
 	}
 	_ = s.Close()
+}
+
+// TestRollBySize writes enough rows to force multiple object rolls and asserts
+// each rolled object has a manifest sidecar, and the manifests account for
+// every row (the audit guarantee).
+func TestRollBySize(t *testing.T) {
+	root := t.TempDir()
+	s, err := newObjstoreSink("testfile", map[string]interface{}{
+		"key":          "logs/part.ndjson", // no {seq} → inserted automatically
+		"format":       "jsonlines",
+		"root":         root,
+		"rollMaxBytes": 200, // small, forces several rolls
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s.(*rollingObjstoreSink); !ok {
+		t.Fatalf("expected a rolling sink, got %T", s)
+	}
+
+	total := 20
+	for i := 0; i < total; i++ {
+		batch := &record.RecordBatch{
+			Columns: []record.Column{{Name: "msg", Type: record.TypeString}},
+			Rows:    [][]interface{}{{fmt.Sprintf("log line number %02d with some padding text", i)}},
+		}
+		if err := s.WriteBatch(batch); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	var objects, manifests []string
+	var recordSum int64
+	_ = filepath.Walk(root, func(p string, info os.FileInfo, _ error) error {
+		if info == nil || info.IsDir() {
+			return nil
+		}
+		rel, _ := filepath.Rel(root, p)
+		rel = filepath.ToSlash(rel)
+		if strings.HasSuffix(rel, ".manifest.json") {
+			manifests = append(manifests, rel)
+			data, _ := os.ReadFile(p)
+			var m map[string]interface{}
+			if err := json.Unmarshal(data, &m); err != nil {
+				t.Errorf("manifest %s not valid JSON: %v", rel, err)
+			}
+			if rc, ok := m["record_count"].(float64); ok {
+				recordSum += int64(rc)
+			}
+		} else {
+			objects = append(objects, rel)
+		}
+		return nil
+	})
+
+	if len(objects) < 2 {
+		t.Fatalf("expected multiple rolled objects, got %d: %v", len(objects), objects)
+	}
+	if len(manifests) != len(objects) {
+		t.Errorf("expected %d manifests (one per object), got %d", len(objects), len(manifests))
+	}
+	if recordSum != int64(total) {
+		t.Errorf("manifest record_count sum = %d, want %d (no row unaccounted)", recordSum, total)
+	}
 }
 
 func countLines(s string) int {

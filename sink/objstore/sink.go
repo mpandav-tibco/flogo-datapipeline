@@ -37,6 +37,7 @@ package objstore
 import (
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -91,6 +92,7 @@ type objstoreSink struct {
 	pw         io.WriteCloser // write end of the pipe (streaming path)
 	uploadDone chan error     // receives the upload goroutine result (streaming path)
 	streaming  bool
+	records    int64 // rows written to this object (for the manifest record_count)
 }
 
 func newObjstoreSink(provider string, cfg map[string]interface{}) (sink.Sink, error) {
@@ -105,10 +107,39 @@ func newObjstoreSink(provider string, cfg map[string]interface{}) (sink.Sink, er
 	if fields := keyFieldPlaceholders(keyTemplate); len(fields) > 0 {
 		return newPartitionedSink(provider, cfg, keyTemplate, fields)
 	}
-	return newSingleObjstoreSink(provider, cfg)
+	return newLeafSink(provider, cfg)
 }
 
-func newSingleObjstoreSink(provider string, cfg map[string]interface{}) (sink.Sink, error) {
+// newLeafSink builds a non-partitioned destination sink: a rolling sink when
+// roll thresholds (rollMaxBytes / rollMaxSeconds) are configured, otherwise a
+// plain single-object sink. Used both at the top level and as the per-key child
+// of the partitioned sink, so namespace partitions also roll.
+func newLeafSink(provider string, cfg map[string]interface{}) (sink.Sink, error) {
+	maxBytes := int64FromCfg(cfg, "rollMaxBytes")
+	maxSeconds := int64FromCfg(cfg, "rollMaxSeconds")
+	if maxBytes > 0 || maxSeconds > 0 {
+		return newRollingObjstoreSink(provider, cfg, maxBytes, maxSeconds)
+	}
+	s, err := newSingleObjstoreSink(provider, cfg)
+	if err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+func int64FromCfg(cfg map[string]interface{}, k string) int64 {
+	switch v := cfg[k].(type) {
+	case int:
+		return int64(v)
+	case int64:
+		return v
+	case float64:
+		return int64(v)
+	}
+	return 0
+}
+
+func newSingleObjstoreSink(provider string, cfg map[string]interface{}) (*objstoreSink, error) {
 	keyTemplate, _ := cfg["key"].(string)
 	if keyTemplate == "" {
 		return nil, fmt.Errorf("%s sink: 'key' (destination object key) is required", provider)
@@ -211,11 +242,30 @@ func newSingleObjstoreSink(provider string, cfg map[string]interface{}) (sink.Si
 }
 
 func (s *objstoreSink) WriteBatch(batch *record.RecordBatch) error {
-	return s.inner.WriteBatch(batch)
+	if err := s.inner.WriteBatch(batch); err != nil {
+		return err
+	}
+	s.records += int64(batch.Len())
+	return nil
 }
 
 func (s *objstoreSink) Flush() error {
 	return s.inner.Flush()
+}
+
+// currentBytes flushes the inner sink and returns the current on-disk size of
+// the buffered object (temp-file path). Used by the rolling sink to decide when
+// to roll. Returns 0 for the streaming path (no temp file).
+func (s *objstoreSink) currentBytes() int64 {
+	if s.tmpPath == "" {
+		return 0
+	}
+	_ = s.inner.Flush()
+	fi, err := os.Stat(s.tmpPath)
+	if err != nil {
+		return 0
+	}
+	return fi.Size()
 }
 
 func (s *objstoreSink) Close() error {
@@ -400,7 +450,7 @@ func (p *partitionedObjstoreSink) child(resolvedKey string) (sink.Sink, error) {
 		childCfg[k] = v
 	}
 	childCfg["key"] = resolvedKey
-	c, err := newSingleObjstoreSink(p.provider, childCfg)
+	c, err := newLeafSink(p.provider, childCfg)
 	if err != nil {
 		return nil, err
 	}
@@ -459,6 +509,174 @@ func (p *partitionedObjstoreSink) Close() error {
 	}
 	return errors.Join(errs...)
 }
+
+// rollingObjstoreSink writes a sequence of size/time-bounded objects. When the
+// current object exceeds rollMaxBytes or has been open longer than
+// rollMaxSeconds, it is closed (uploaded), a manifest sidecar is written, and a
+// new object is started with the next sequence number. The key template must
+// contain a {seq} placeholder (a zero-padded roll counter); if absent, "-{seq}"
+// is inserted before the file extension so rolled objects never collide.
+type rollingObjstoreSink struct {
+	provider   string
+	cfg        map[string]interface{}
+	keyTmpl    string
+	maxBytes   int64
+	maxSeconds int64
+
+	seq     int
+	cur     *objstoreSink
+	curKey  string
+	started time.Time
+}
+
+func newRollingObjstoreSink(provider string, cfg map[string]interface{}, maxBytes, maxSeconds int64) (sink.Sink, error) {
+	keyTmpl, _ := cfg["key"].(string)
+	if keyTmpl == "" {
+		return nil, fmt.Errorf("%s sink: 'key' is required", provider)
+	}
+	if !strings.Contains(keyTmpl, "{seq}") {
+		keyTmpl = insertSeqBeforeExt(keyTmpl)
+	}
+	r := &rollingObjstoreSink{
+		provider:   provider,
+		cfg:        cfg,
+		keyTmpl:    keyTmpl,
+		maxBytes:   maxBytes,
+		maxSeconds: maxSeconds,
+	}
+	// Objects are opened lazily on first write, so a run that rolls on its last
+	// batch does not leave an empty trailing object (and spurious manifest).
+	return r, nil
+}
+
+// insertSeqBeforeExt turns "logs/part.ndjson" into "logs/part-{seq}.ndjson".
+func insertSeqBeforeExt(key string) string {
+	slash := strings.LastIndexByte(key, '/')
+	base := key[slash+1:]
+	dot := strings.LastIndexByte(base, '.')
+	if dot < 0 {
+		return key + "-{seq}"
+	}
+	return key[:slash+1] + base[:dot] + "-{seq}" + base[dot:]
+}
+
+func (r *rollingObjstoreSink) openNext() error {
+	key := strings.ReplaceAll(r.keyTmpl, "{seq}", fmt.Sprintf("%04d", r.seq))
+	childCfg := make(map[string]interface{}, len(r.cfg))
+	for k, v := range r.cfg {
+		childCfg[k] = v
+	}
+	childCfg["key"] = key
+	c, err := newSingleObjstoreSink(r.provider, childCfg)
+	if err != nil {
+		return err
+	}
+	r.cur = c
+	r.curKey = c.key // fully macro-expanded key
+	r.started = time.Now()
+	return nil
+}
+
+func (r *rollingObjstoreSink) shouldRoll() bool {
+	if r.maxSeconds > 0 && time.Since(r.started) >= time.Duration(r.maxSeconds)*time.Second {
+		return true
+	}
+	if r.maxBytes > 0 && r.cur.currentBytes() >= r.maxBytes {
+		return true
+	}
+	return false
+}
+
+func (r *rollingObjstoreSink) roll() error {
+	records := r.cur.records
+	bytes := r.cur.currentBytes()
+	key := r.curKey
+	started := r.started
+	// Close (upload) the current object, then write its manifest sidecar.
+	if err := r.cur.Close(); err != nil {
+		return err
+	}
+	r.cur = nil // next write opens a fresh object lazily
+	if err := r.writeManifest(key, records, bytes, started); err != nil {
+		return err
+	}
+	r.seq++
+	return nil
+}
+
+func (r *rollingObjstoreSink) WriteBatch(batch *record.RecordBatch) error {
+	if r.cur == nil {
+		if err := r.openNext(); err != nil {
+			return err
+		}
+	}
+	if err := r.cur.WriteBatch(batch); err != nil {
+		return err
+	}
+	if r.shouldRoll() {
+		return r.roll()
+	}
+	return nil
+}
+
+func (r *rollingObjstoreSink) Flush() error {
+	if r.cur == nil {
+		return nil
+	}
+	return r.cur.Flush()
+}
+
+func (r *rollingObjstoreSink) Close() error {
+	if r.cur == nil {
+		return nil
+	}
+	records := r.cur.records
+	bytes := r.cur.currentBytes()
+	key := r.curKey
+	started := r.started
+	if err := r.cur.Close(); err != nil {
+		return err
+	}
+	r.cur = nil
+	if records > 0 {
+		return r.writeManifest(key, records, bytes, started)
+	}
+	return nil
+}
+
+// writeManifest writes an audit-grade sidecar next to the object: <key>.manifest.json
+// with the object key, record count, byte size, and open/close timestamps, so an
+// auditor can reconcile "what the node saw" against "what landed" object by object.
+func (r *rollingObjstoreSink) writeManifest(objectKey string, records, bytes int64, started time.Time) error {
+	manifest := map[string]interface{}{
+		"object":       objectKey,
+		"record_count": records,
+		"bytes":        bytes,
+		"opened_at":    started.UTC().Format(time.RFC3339),
+		"closed_at":    time.Now().UTC().Format(time.RFC3339),
+	}
+	data, err := json.Marshal(manifest)
+	if err != nil {
+		return err
+	}
+	store, err := objstore.New(r.provider, r.cfg)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	w, err := store.PutWriter(context.Background(), objectKey+".manifest.json")
+	if err != nil {
+		return fmt.Errorf("%s sink: open manifest writer: %w", r.provider, err)
+	}
+	if _, err := w.Write(data); err != nil {
+		_ = w.Close()
+		return fmt.Errorf("%s sink: write manifest: %w", r.provider, err)
+	}
+	return w.Close()
+}
+
+var _ sink.Sink = (*rollingObjstoreSink)(nil)
+
 
 // newUUID returns a random RFC-4122 v4 UUID string. Used to make object keys
 // unique per run (e.g. "orders-{uuid}.parquet") so concurrent writers and
