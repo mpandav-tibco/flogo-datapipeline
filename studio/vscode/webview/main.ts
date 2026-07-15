@@ -1615,20 +1615,94 @@ function renderColumnsEditor(node: Node): HTMLElement {
 let inferTargetNode: Node | null = null;
 
 // Builtin mapper functions available to the map transform's expressions. These
-// mirror the engine's `builtins` map (transform/mapper). Each carries a snippet
-// with a ${} cursor marker so clicking inserts a ready-to-fill call.
-const MAP_FUNCTIONS: Array<{ name: string; snippet: string; hint: string }> = [
-  { name: 'concat', snippet: 'concat($1, $2)', hint: 'Join values into a string' },
-  { name: 'upper', snippet: 'upper($1)', hint: 'Uppercase a string' },
-  { name: 'lower', snippet: 'lower($1)', hint: 'Lowercase a string' },
-  { name: 'trim', snippet: 'trim($1)', hint: 'Strip surrounding whitespace' },
-  { name: 'coalesce', snippet: 'coalesce($1, $2)', hint: 'First non-null value' },
-  { name: 'multiply', snippet: 'multiply($1, $2)', hint: 'Numeric a × b' },
-  { name: 'divide', snippet: 'divide($1, $2)', hint: 'Numeric a ÷ b' },
-  { name: 'scientific', snippet: 'scientific($1)', hint: 'Signed scientific notation, e.g. +1.234E-05' },
-  { name: 'lpad', snippet: 'lpad($1, $2)', hint: 'Left-pad value to width (right-aligned)' },
-  { name: 'rpad', snippet: 'rpad($1, $2)', hint: 'Right-pad value to width (left-aligned)' },
-  { name: 'clamp', snippet: 'clamp($1, $2, $3)', hint: 'Constrain a number between min and max' },
+// mirror the engine's `builtins` map (transform/mapper) — every function offered
+// here actually evaluates at runtime. Grouped by category for the palette. Each
+// snippet uses $1/$2/$3 caret markers so clicking inserts a ready-to-fill call.
+const MAP_FUNCTIONS: Array<{ name: string; snippet: string; hint: string; cat: string }> = [
+  // ── String ──
+  { cat: 'String', name: 'concat', snippet: 'concat($1, $2)', hint: 'Join values into a string' },
+  { cat: 'String', name: 'upper', snippet: 'upper($1)', hint: 'Uppercase a string' },
+  { cat: 'String', name: 'lower', snippet: 'lower($1)', hint: 'Lowercase a string' },
+  { cat: 'String', name: 'title', snippet: 'string.title($1)', hint: 'Title-case each word' },
+  { cat: 'String', name: 'trim', snippet: 'trim($1)', hint: 'Strip surrounding whitespace' },
+  { cat: 'String', name: 'length', snippet: 'string.length($1)', hint: 'Character count' },
+  { cat: 'String', name: 'substring', snippet: 'string.substring($1, $2, $3)', hint: 'Slice by start/end index' },
+  { cat: 'String', name: 'substringBefore', snippet: 'string.substringBefore($1, $2)', hint: 'Text before a separator' },
+  { cat: 'String', name: 'substringAfter', snippet: 'string.substringAfter($1, $2)', hint: 'Text after a separator' },
+  { cat: 'String', name: 'replace', snippet: 'string.replace($1, $2, $3)', hint: 'Replace all occurrences' },
+  { cat: 'String', name: 'split', snippet: 'string.split($1, $2, $3)', hint: 'Split by separator, take Nth token' },
+  { cat: 'String', name: 'join', snippet: 'string.join($1, $2, $3)', hint: 'Join values with a separator' },
+  { cat: 'String', name: 'indexOf', snippet: 'string.indexOf($1, $2)', hint: 'Position of substring (-1 if absent)' },
+  { cat: 'String', name: 'contains', snippet: 'string.contains($1, $2)', hint: 'True if substring present' },
+  { cat: 'String', name: 'startsWith', snippet: 'string.startsWith($1, $2)', hint: 'True if prefix matches' },
+  { cat: 'String', name: 'endsWith', snippet: 'string.endsWith($1, $2)', hint: 'True if suffix matches' },
+  { cat: 'String', name: 'trimPrefix', snippet: 'string.trimPrefix($1, $2)', hint: 'Remove a leading prefix' },
+  { cat: 'String', name: 'trimSuffix', snippet: 'string.trimSuffix($1, $2)', hint: 'Remove a trailing suffix' },
+  { cat: 'String', name: 'padLeft', snippet: 'string.padLeft($1, $2, $3)', hint: 'Left-pad to width (fill char)' },
+  { cat: 'String', name: 'padRight', snippet: 'string.padRight($1, $2, $3)', hint: 'Right-pad to width (fill char)' },
+  { cat: 'String', name: 'repeat', snippet: 'string.repeat($1, $2)', hint: 'Repeat a string N times' },
+  { cat: 'String', name: 'reverse', snippet: 'string.reverse($1)', hint: 'Reverse the characters' },
+  { cat: 'String', name: 'equalsIgnoreCase', snippet: 'string.equalsIgnoreCase($1, $2)', hint: 'Case-insensitive equality' },
+  // ── Regex ──
+  { cat: 'Regex', name: 'match', snippet: 'regex.match($1, $2)', hint: 'True if pattern matches' },
+  { cat: 'Regex', name: 'replace', snippet: 'regex.replace($1, $2, $3)', hint: 'Regex search-and-replace' },
+  { cat: 'Regex', name: 'extract', snippet: 'regex.extract($1, $2, $3)', hint: 'Return a capture group' },
+  // ── Number / Math ──
+  { cat: 'Number', name: 'add', snippet: 'number.add($1, $2)', hint: 'a + b' },
+  { cat: 'Number', name: 'subtract', snippet: 'number.subtract($1, $2)', hint: 'a − b' },
+  { cat: 'Number', name: 'multiply', snippet: 'multiply($1, $2)', hint: 'a × b' },
+  { cat: 'Number', name: 'divide', snippet: 'divide($1, $2)', hint: 'a ÷ b' },
+  { cat: 'Number', name: 'mod', snippet: 'math.mod($1, $2)', hint: 'Remainder a mod b' },
+  { cat: 'Number', name: 'round', snippet: 'number.round($1, $2)', hint: 'Round to N decimals' },
+  { cat: 'Number', name: 'floor', snippet: 'math.floor($1)', hint: 'Round down' },
+  { cat: 'Number', name: 'ceil', snippet: 'math.ceil($1)', hint: 'Round up' },
+  { cat: 'Number', name: 'trunc', snippet: 'math.trunc($1)', hint: 'Drop the fraction' },
+  { cat: 'Number', name: 'abs', snippet: 'math.abs($1)', hint: 'Absolute value' },
+  { cat: 'Number', name: 'sign', snippet: 'math.sign($1)', hint: '-1, 0 or 1' },
+  { cat: 'Number', name: 'pow', snippet: 'math.pow($1, $2)', hint: 'a to the power b' },
+  { cat: 'Number', name: 'sqrt', snippet: 'math.sqrt($1)', hint: 'Square root' },
+  { cat: 'Number', name: 'min', snippet: 'math.min($1, $2)', hint: 'Smaller of two' },
+  { cat: 'Number', name: 'max', snippet: 'math.max($1, $2)', hint: 'Larger of two' },
+  { cat: 'Number', name: 'clamp', snippet: 'clamp($1, $2, $3)', hint: 'Constrain between min and max' },
+  { cat: 'Number', name: 'random', snippet: 'number.random($1)', hint: 'Random int below limit' },
+  { cat: 'Number', name: 'scientific', snippet: 'scientific($1)', hint: 'Signed scientific notation' },
+  // ── Date / Time ──
+  { cat: 'Date/Time', name: 'now', snippet: 'datetime.now()', hint: 'Current UTC timestamp (RFC3339)' },
+  { cat: 'Date/Time', name: 'today', snippet: 'datetime.today()', hint: "Today's date (YYYY-MM-DD)" },
+  { cat: 'Date/Time', name: 'parse', snippet: 'datetime.parse($1, $2)', hint: 'Parse to RFC3339 (optional layout)' },
+  { cat: 'Date/Time', name: 'format', snippet: 'datetime.format($1, $2)', hint: 'Format with a Go layout' },
+  { cat: 'Date/Time', name: 'year', snippet: 'datetime.year($1)', hint: 'Extract the year' },
+  { cat: 'Date/Time', name: 'month', snippet: 'datetime.month($1)', hint: 'Extract the month (1-12)' },
+  { cat: 'Date/Time', name: 'day', snippet: 'datetime.day($1)', hint: 'Extract the day of month' },
+  { cat: 'Date/Time', name: 'hour', snippet: 'datetime.hour($1)', hint: 'Extract the hour' },
+  { cat: 'Date/Time', name: 'dayOfWeek', snippet: 'datetime.dayOfWeek($1)', hint: 'Weekday name' },
+  { cat: 'Date/Time', name: 'addDays', snippet: 'datetime.addDays($1, $2)', hint: 'Add N days' },
+  { cat: 'Date/Time', name: 'addHours', snippet: 'datetime.addHours($1, $2)', hint: 'Add N hours' },
+  { cat: 'Date/Time', name: 'diffDays', snippet: 'datetime.diffDays($1, $2)', hint: 'Whole days between two dates' },
+  { cat: 'Date/Time', name: 'epoch', snippet: 'datetime.epoch($1)', hint: 'Unix seconds since epoch' },
+  { cat: 'Date/Time', name: 'fromEpoch', snippet: 'datetime.fromEpoch($1)', hint: 'Unix seconds → RFC3339' },
+  // ── Convert ──
+  { cat: 'Convert', name: 'toInt', snippet: 'coerce.toInt($1)', hint: 'Cast to integer' },
+  { cat: 'Convert', name: 'toFloat', snippet: 'coerce.toFloat($1)', hint: 'Cast to float' },
+  { cat: 'Convert', name: 'toString', snippet: 'coerce.toString($1)', hint: 'Cast to string' },
+  { cat: 'Convert', name: 'toBool', snippet: 'coerce.toBool($1)', hint: 'Cast to boolean' },
+  // ── Hash / Encode / Mask ──
+  { cat: 'Hash & Encode', name: 'md5', snippet: 'hash.md5($1)', hint: 'MD5 hex digest (surrogate key)' },
+  { cat: 'Hash & Encode', name: 'sha256', snippet: 'hash.sha256($1)', hint: 'SHA-256 hex digest' },
+  { cat: 'Hash & Encode', name: 'base64Encode', snippet: 'encoding.base64Encode($1)', hint: 'Base64 encode' },
+  { cat: 'Hash & Encode', name: 'base64Decode', snippet: 'encoding.base64Decode($1)', hint: 'Base64 decode' },
+  { cat: 'Hash & Encode', name: 'uuid', snippet: 'util.uuid()', hint: 'Random UUID v4' },
+  { cat: 'Hash & Encode', name: 'mask', snippet: 'util.mask($1, $2)', hint: 'Mask all but last N chars' },
+  // ── Logic / Null ──
+  { cat: 'Logic', name: 'iif', snippet: 'iif($1, $2, $3)', hint: 'If cond then a else b' },
+  { cat: 'Logic', name: 'coalesce', snippet: 'coalesce($1, $2)', hint: 'First non-null value' },
+  { cat: 'Logic', name: 'nvl', snippet: 'nvl($1, $2)', hint: 'Value, or fallback when null/empty' },
+  { cat: 'Logic', name: 'nullif', snippet: 'nullif($1, $2)', hint: 'Null when the two are equal' },
+  { cat: 'Logic', name: 'decode', snippet: 'decode($1, $2, $3)', hint: 'Value map (Oracle DECODE)' },
+  { cat: 'Logic', name: 'equals', snippet: 'equals($1, $2)', hint: 'String equality' },
+  { cat: 'Logic', name: 'between', snippet: 'between($1, $2, $3)', hint: 'True if lo ≤ v ≤ hi' },
+  { cat: 'Logic', name: 'isNull', snippet: 'isNull($1)', hint: 'True when null' },
+  { cat: 'Logic', name: 'isEmpty', snippet: 'isEmpty($1)', hint: 'True when empty string' },
 ];
 
 // The currently focused mapping-expression input, so Available-data / Function
@@ -1639,6 +1713,10 @@ let mapFocusedInput: HTMLInputElement | null = null;
 // expression is shown/edited in the third (Mapping) pane. Persists across
 // re-renders so selection survives a mapping edit.
 let mapSelectedTarget: string | null = null;
+
+// Free-text filter for the function palette, so the (large) function library
+// stays quick to scan.
+let mapFnFilter = '';
 
 // The map transform stores dynamic expressions with a leading "=" (e.g.
 // "=$order_date"), which the engine uses to distinguish an expression from a
@@ -1670,7 +1748,7 @@ function insertIntoMapExpr(text: string) {
   // Place caret: if the snippet has a $1 marker, select it; else after text.
   const marker = text.indexOf('$1');
   if (marker >= 0) {
-    inp.value = inp.value.replace('$1', '').replace('$2', '');
+    inp.value = inp.value.replace('$1', '').replace('$2', '').replace('$3', '');
     inp.setSelectionRange(start + marker, start + marker);
   } else {
     inp.setSelectionRange(start + text.length, start + text.length);
@@ -1847,18 +1925,45 @@ function renderMapEditor(node: Node): HTMLElement {
       fields[sel] = exprForStore(ta.value); persist(); renderEditor();
     };
     mapBody.appendChild(ta);
-    // Function palette inserts into this expression.
+    // Function palette — grouped by category, with a filter box. Clicking a chip
+    // inserts a ready-to-fill call into the expression above.
     const fnwrap = el('div', 'mmapfns');
-    fnwrap.appendChild(el('div', 'lbl', 'Functions'));
-    const fchips = el('div', 'chips');
-    MAP_FUNCTIONS.forEach((fn) => {
-      const chip = el('span', 'chip2 fn', `ƒ ${fn.name}`);
-      chip.title = fn.hint;
-      chip.onmousedown = (e) => e.preventDefault();
-      chip.onclick = () => { mapFocusedInput = ta as unknown as HTMLInputElement; insertIntoMapExpr(fn.snippet); ta.dispatchEvent(new Event('change')); };
-      fchips.appendChild(chip);
-    });
-    fnwrap.appendChild(fchips);
+    const fnhdr = el('div', 'mmapfns-hdr');
+    fnhdr.appendChild(el('span', 'lbl', 'Functions'));
+    const filter = document.createElement('input');
+    filter.className = 'mfnfilter';
+    filter.placeholder = 'filter…';
+    filter.value = mapFnFilter;
+    filter.oninput = () => { mapFnFilter = filter.value; renderGroups(); filter.focus(); };
+    fnhdr.appendChild(filter);
+    fnwrap.appendChild(fnhdr);
+    const groupsHost = el('div', 'mfngroups');
+    fnwrap.appendChild(groupsHost);
+    const renderGroups = () => {
+      groupsHost.innerHTML = '';
+      const q = mapFnFilter.trim().toLowerCase();
+      const cats: string[] = [];
+      for (const fn of MAP_FUNCTIONS) if (!cats.includes(fn.cat)) cats.push(fn.cat);
+      cats.forEach((cat) => {
+        const items = MAP_FUNCTIONS.filter((fn) => fn.cat === cat &&
+          (!q || fn.name.toLowerCase().includes(q) || fn.hint.toLowerCase().includes(q) || cat.toLowerCase().includes(q)));
+        if (!items.length) return;
+        const grp = el('div', 'mfngroup');
+        grp.appendChild(el('div', 'mfncat', cat));
+        const chips = el('div', 'chips');
+        items.forEach((fn) => {
+          const chip = el('span', 'chip2 fn', `ƒ ${fn.name}`);
+          chip.title = fn.hint;
+          chip.onmousedown = (e) => e.preventDefault();
+          chip.onclick = () => { mapFocusedInput = ta as unknown as HTMLInputElement; insertIntoMapExpr(fn.snippet); ta.dispatchEvent(new Event('change')); };
+          chips.appendChild(chip);
+        });
+        grp.appendChild(chips);
+        groupsHost.appendChild(grp);
+      });
+      if (!groupsHost.childElementCount) groupsHost.appendChild(el('div', 'focushint', 'No functions match.'));
+    };
+    renderGroups();
     mapBody.appendChild(fnwrap);
     mapBody.appendChild(el('div', 'focushint', 'Drag a Source field here or type it. = is implicit — $field, upper($field); plain text is a constant.'));
   } else {
