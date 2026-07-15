@@ -409,6 +409,17 @@ func (s *jdbcSource) ReadBatch(size int) (*record.RecordBatch, error) {
 		record.Put(batch)
 		return nil, io.EOF
 	}
+
+	// Keyset mode opens one cursor per page (LIMIT size). When the page fills to
+	// exactly `size` rows the loop above exits without the cursor reaching
+	// exhaustion, leaving s.rows open on a now-drained LIMIT query. Close it here
+	// so the next ReadBatch opens a fresh cursor seeded with the updated
+	// lastKeyVal (WHERE orderKey > lastKeyVal). Without this the next call would
+	// read the drained cursor, get zero rows, and stop after a single page.
+	if s.useKeyset && s.rows != nil {
+		s.rows.Close()
+		s.rows = nil
+	}
 	return batch, nil
 }
 
