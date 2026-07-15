@@ -1680,7 +1680,6 @@ function insertIntoMapExpr(text: string) {
 // blocks as the Flogo mapper, right-sized for the flat map model.
 function renderMapEditor(node: Node): HTMLElement {
   const f = el('div', 'fld');
-  f.appendChild(el('div', 'k', 'Field mappings'));
   const target = cfgTarget(node);
   const fields: Record<string, string> = (target.fields && typeof target.fields === 'object') ? target.fields : {};
   // Preserve a stable, user-visible order via fieldOrder (backend honours it).
@@ -1740,15 +1739,14 @@ function renderMapEditor(node: Node): HTMLElement {
     renderEditor();
   };
   box.appendChild(add);
-  f.appendChild(box);
 
-  // ── Available data (upstream columns) — the input schema, like the OOTB
-  // Flogo mapper's left-hand tree. Click a field to map it: if an expression
-  // input is focused it inserts =$field at the caret; otherwise it ADDS a new
-  // "field ← =$field" mapping row (the drag-to-output equivalent).
-  const help = el('div', 'mhelp');
+  // ── Available data (upstream columns) — rendered FIRST, like the OOTB Flogo
+  // mapper's left-hand input tree, so users see the source fields before the
+  // mappings. Click a field to map it: if an expression input is focused it
+  // inserts $field at the caret; otherwise it ADDS a new "field ← $field" row.
+  const dataSec = el('div', 'mhelp');
   const cols = upstreamSchema(node);
-  help.appendChild(el('div', 'lbl', 'Available data' + (cols.length ? ` · ${cols.length} field${cols.length === 1 ? '' : 's'}` : '')));
+  dataSec.appendChild(el('div', 'lbl', 'Available data' + (cols.length ? ` · ${cols.length} field${cols.length === 1 ? '' : 's'}` : '')));
   if (cols.length) {
     // "Map all" — one click creates a full passthrough projection (every input
     // field → same-named output), the fastest way to start from a valid map.
@@ -1763,7 +1761,7 @@ function renderMapEditor(node: Node): HTMLElement {
       renderEditor();
     };
     bar.appendChild(allBtn);
-    help.appendChild(bar);
+    dataSec.appendChild(bar);
 
     const chips = el('div', 'chips');
     cols.forEach((c) => {
@@ -1792,7 +1790,7 @@ function renderMapEditor(node: Node): HTMLElement {
       };
       chips.appendChild(chip);
     });
-    help.appendChild(chips);
+    dataSec.appendChild(chips);
   } else {
     // No declared/known schema (self-describing source, no preview yet). Offer a
     // one-click preview so the palette fills with live columns.
@@ -1802,10 +1800,16 @@ function renderMapEditor(node: Node): HTMLElement {
     b.style.marginTop = '8px';
     b.onclick = () => doPreview();
     empty.appendChild(b);
-    help.appendChild(empty);
+    dataSec.appendChild(empty);
   }
+  f.appendChild(dataSec);
 
-  // ── Functions — click to insert a call snippet ───────────────────────────
+  // ── Field mappings (output ← expression rows) ────────────────────────────
+  f.appendChild(el('div', 'k', 'Field mappings'));
+  f.appendChild(box);
+
+  // ── Functions — click to insert a call snippet at the focused expression ─
+  const help = el('div', 'mhelp');
   help.appendChild(el('div', 'lbl', 'Functions'));
   const fchips = el('div', 'chips');
   MAP_FUNCTIONS.forEach((fn) => {
