@@ -60,3 +60,6 @@ examples/08-parquet-columnar/data/*.parquet
 .env
 *.env
 secrets/
+
+# dp-build transient codegen dir
+.dpbuild/

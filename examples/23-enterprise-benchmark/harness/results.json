@@ -26,10 +26,13 @@
   "failed": 0,
   "dropped": 0,
   "routed": 0,
-  "duration_ms": 33769,
-  "rows_per_sec": 1569487,
+  "duration_ms": 33776,
+  "rows_per_sec": 1569162,
   "status": "completed",
-  "err": ""
+  "err": "",
+  "peak_rss_mb": 56.5,
+  "cpu_seconds": 49.3,
+  "cpu_cores": 1.46
  },
  "el09_jsonl_parquet": {
   "cat": "EL",
@@ -181,10 +184,13 @@
   "failed": 0,
   "dropped": 0,
   "routed": 0,
-  "duration_ms": 93488,
-  "rows_per_sec": 566918,
+  "duration_ms": 95220,
+  "rows_per_sec": 556606,
   "status": "completed",
-  "err": ""
+  "err": "",
+  "peak_rss_mb": 204.5,
+  "cpu_seconds": 180.8,
+  "cpu_cores": 1.9
  },
  "ent01_dlq_isolation": {
   "cat": "ENT",

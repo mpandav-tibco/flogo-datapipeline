@@ -77,16 +77,48 @@ python3 harness/gen_reports.py             # -> SUMMARY.md, reports/*.md
 
 Run a single case while iterating: `python3 harness/run_matrix.py el14_kafka_parquet`.
 
+## Lean per-app binaries (import-driven build)
+
+The `bin/dp` used above is the **all-in-one** engine — it links every source,
+sink, transform and driver so one binary can run all 30 cases. That is a test
+harness, not a deployment artifact.
+
+A *deployed* pipeline ships as its own **lean binary** containing only the
+components it references — the same import-driven model as Flogo flow and the
+Flogo agents. The core derivation lives in [build/imports.go](../../build/imports.go)
+and is driven by [cmd/dp-build](../../cmd/dp-build):
+
+```bash
+./scripts/build-lean.sh                     # build lean binaries for sample pipes
+./bin/dp-build -n -f pipes/el04_csv_s3.datapipeline   # show the derived imports
+./bin/dp-build -f pipes/el04_csv_s3.datapipeline -o bin/orders   # build one
+```
+
+Each app links only what it uses, is CGO-free unless it needs sqlite, and ships
+as one small static file (see the *Footprint & TCO* table in
+[SUMMARY.md](SUMMARY.md)):
+
+| Deployed pipeline | Binary |
+|-------------------|-------:|
+| csv → null | ~7.5 MB |
+| csv → postgres | ~8 MB |
+| csv → s3 | ~14 MB |
+| all-in-one benchmark engine | ~58 MB |
+
 ## Layout
 
 ```
 pipes/       30 pipeline definitions (the showcase) + 4 _prep loaders
 harness/     gen_pipes, seed, run_matrix, run_elt, run_enterprise, gen_reports, lib
-scripts/     setup-infra, build, gen-data, run-benchmark
+scripts/     setup-infra, build, build-lean, gen-data, run-benchmark, teardown-infra
 sql/         warehouse schema (orders_raw / _sink / _clean / _rejects)
 reports/     generated result tables      SUMMARY.md  headline
 data/        generated dataset (git-ignored; regenerate with gen-data.sh)
 ```
+
+The import-driven lean builder is part of the repo core, not this example:
+[build/imports.go](../../build/imports.go) (derivation) and
+[cmd/dp-build](../../cmd/dp-build) (the `flogo build`-style command).
 
 The dataset is deterministic (seed 42) and regenerates byte-for-byte, so results
 are reproducible on any machine.

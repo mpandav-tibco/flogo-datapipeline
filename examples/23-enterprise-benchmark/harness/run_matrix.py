@@ -140,9 +140,10 @@ def main():
         res = run(name)
         results[name] = dict(cases[name], **res)
         json.dump(results, open(RESULTS, "w"), indent=1)  # persist after every case
-        print("%-32s %-4s %-10s proc=%8d wr=%8d dur=%7dms thr=%9d/s %s" % (
+        print("%-32s %-4s %-10s proc=%8d wr=%8d dur=%7dms thr=%9d/s rss=%6.0fMB cpu=%4.1fc %s" % (
             name, cases[name]["cat"], res["status"], res["processed"], res["written"],
-            res["duration_ms"], res["rows_per_sec"], res["err"]))
+            res["duration_ms"], res["rows_per_sec"], res.get("peak_rss_mb", 0),
+            res.get("cpu_cores", 0), res["err"]))
     json.dump(results, open(RESULTS, "w"), indent=1)
     print("\nDONE -> %s" % RESULTS)
 

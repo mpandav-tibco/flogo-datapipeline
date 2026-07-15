@@ -12,13 +12,45 @@ showcases.
 | Dataset | **53,000,000 rows** (CSV 5.2G / JSONL 11.7G / Parquet 1.7G) |
 | Matrix cases passed | **30 / 30** |
 | Total rows moved (matrix) | **1,590,000,000** |
-| Peak throughput | **1,569,487/s** (`el05_csv_null`) |
+| Peak throughput | **1,556,260/s** (`el05_csv_null`) |
 | Sources | csv, jsonl, parquet, postgres, kafka, s3 |
 | Sinks | parquet, postgres, kafka, s3, null |
 | Transforms | filter, map, validate, schemadrift, dq, hwm, lookup |
 
 See [reports/matrix.md](reports/matrix.md), [reports/elt.md](reports/elt.md)
 and [reports/enterprise.md](reports/enterprise.md) for the full tables.
+
+## Footprint & TCO
+
+Every case above is a **single process** (`scaling.mode=single`) — one
+statically-linked binary, no cluster, no JVM, no external runtime.
+
+| Metric | Value |
+|--------|-------|
+| Instances | **1** (single-instance; sharded/distributed modes exist but were not needed) |
+| Binary size | **57.9 MB** (one file, statically linked) |
+| Host | Apple Silicon · 0 cores · 0 GB RAM |
+| Peak memory (RSS) across matrix | **39–204 MB** |
+| CPU used (avg cores) across matrix | **1.4–1.9 of 0 cores** |
+
+53,000,000 rows were moved by one ~57.9 MB process holding **single-digit-GB RAM** and a
+fraction of the host's cores — no cluster to provision, license, or scale.
+
+### Per-app binary size (import-driven `dp-build`)
+
+A deployed pipeline is compiled with `dp-build`, which links ONLY the
+components the app references — the datapipeline analogue of `flogo build`
+(see `build/imports.go`). Each app ships far smaller than the all-in-one
+engine, and CGO-free unless it uses the sqlite driver.
+
+| Deployed pipeline | Binary |
+|-------------------|-------:|
+| `csv -> null` | **7.5 MB** |
+| `csv -> postgres (+lib/pq)` | **8.0 MB** |
+| `csv -> s3 (+AWS SDK +parquet)` | **13.9 MB** |
+| `kafka -> parquet (+sarama)` | **13.4 MB** |
+| `csv -> filter/validate/map -> s3` | **14.0 MB** |
+| _all-in-one benchmark binary (every source x sink)_ | 57.9 MB |
 
 ## ELT round
 
