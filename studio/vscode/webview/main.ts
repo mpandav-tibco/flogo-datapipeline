@@ -1769,11 +1769,17 @@ function renderMapEditor(node: Node): HTMLElement {
     cols.forEach((c) => {
       const mapped = fields[c.name] === `=$${c.name}`;
       const chip = el('span', 'chip2 data' + (mapped ? ' used' : ''), `${c.name}`);
-      chip.title = mapFocusedInput
-        ? `Insert $${c.name} at the caret`
-        : `Add mapping ${c.name} ← $${c.name}`;
+      chip.title = `Click to map ${c.name} (or insert $${c.name} when an expression is focused)`;
+      // Preserve the focused expression input across the click so the "insert at
+      // caret" path is reliable — clicking a non-focusable span would otherwise
+      // blur the input first, breaking insert. The onclick then checks the LIVE
+      // active element (not a stale variable) to decide insert-vs-add-row.
+      chip.onmousedown = (e) => { e.preventDefault(); };
       chip.onclick = () => {
-        if (mapFocusedInput) {
+        const active = document.activeElement as HTMLElement | null;
+        const exprFocused = active && active.classList && active.classList.contains('expr') && active.isConnected;
+        if (exprFocused) {
+          mapFocusedInput = active as HTMLInputElement;
           // "=" is implicit in the input — insert the bare $field reference.
           insertIntoMapExpr(`$${c.name}`);
         } else {
@@ -2555,24 +2561,42 @@ function upstreamSchema(node: Node): Array<{ name: string; type: string; derived
   return cols;
 }
 
-// Scan every stage up to index `stop` for $field references in expressions
-// (filter expr, map field expressions, parse source) and return the distinct
-// field names. Used as the Available-data fallback when no schema is declared.
+// Scan every stage up to index `stop` for field references and return the
+// distinct field names. Map/parse use $field tokens; filter uses BARE field
+// names in a boolean expression (e.g. status != 'CANCELLED'), so both forms are
+// harvested. Used as the Available-data fallback when no schema is declared.
 function harvestFieldRefs(stop: number): string[] {
   const seen = new Set<string>();
-  const add = (s: string) => {
+  const addDollar = (s: string) => {
     if (typeof s !== 'string') return;
     const re = /\$([A-Za-z_][A-Za-z0-9_]*)/g;
     let m: RegExpExecArray | null;
     while ((m = re.exec(s)) !== null) seen.add(m[1]);
   };
+  // Reserved words in filter expressions that are NOT field names.
+  const KW = new Set(['AND', 'OR', 'NOT', 'IN', 'LIKE', 'IS', 'NULL', 'TRUE', 'FALSE']);
+  const addBare = (s: string) => {
+    if (typeof s !== 'string') return;
+    // Strip single/double-quoted string literals so their words aren't harvested.
+    const noStr = s.replace(/'[^']*'/g, ' ').replace(/"[^"]*"/g, ' ');
+    const re = /[A-Za-z_][A-Za-z0-9_.]*/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(noStr)) !== null) {
+      const w = m[0];
+      // Skip keywords and function-call names (identifier immediately followed by "(").
+      if (KW.has(w.toUpperCase())) continue;
+      const after = noStr.slice(m.index + w.length).trimStart();
+      if (after.startsWith('(')) continue; // function name, not a field
+      seen.add(w);
+    }
+  };
   const transforms = Array.isArray(S.doc.transforms) ? S.doc.transforms : [];
   for (let i = 0; i < stop && i < transforms.length; i++) {
     const t: any = transforms[i];
     if (!t) continue;
-    if (t.type === 'filter') add(String(t.expr || ''));
+    if (t.type === 'filter') addBare(String(t.expr || ''));
     if ((t.type === 'map' || t.type === 'mapper') && t.fields && typeof t.fields === 'object') {
-      for (const v of Object.values(t.fields)) add(String(v));
+      for (const v of Object.values(t.fields)) addDollar(String(v));
     }
     if (t.type === 'parse' && typeof t.source === 'string') seen.add(t.source);
   }
