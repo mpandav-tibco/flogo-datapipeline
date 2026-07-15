@@ -244,6 +244,80 @@ func TestResumeFromRegistry(t *testing.T) {
 	}
 }
 
+// TestRotationRestartsFromZero verifies containerd-style rotation (a fresh file
+// at the same path, detected by a changed fingerprint) resets the read offset to
+// 0 so no rotated-in data is skipped — Acceptance criterion #4.
+func TestRotationRestartsFromZero(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "ns_pod_uid", "c")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	logPath := filepath.Join(dir, "0.log")
+	// First file content (>256 bytes so the fingerprint prefix is stable).
+	original := "2026-07-14T10:00:00.10Z stdout F original line one padded to exceed the 256-byte fingerprint window for stable rotation detection here\n2026-07-14T10:00:00.20Z stdout F original line two padded to exceed the 256-byte fingerprint window for stable rotation detection\n"
+	if err := os.WriteFile(logPath, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	posFile := filepath.Join(t.TempDir(), "positions.json")
+	if r := drainAll(t, root, posFile); len(r) != 2 {
+		t.Fatalf("first pass should read 2 lines, got %d", len(r))
+	}
+
+	// Rotate: replace the file at the same path with entirely different content
+	// (containerd renames the old file and creates a fresh one). The new file has
+	// a different fingerprint, so the collector must read it from offset 0.
+	rotated := "2026-07-14T11:00:00.10Z stdout F ROTATED line one with completely different leading bytes so the fingerprint no longer matches the prior file at all here\n2026-07-14T11:00:00.20Z stdout F ROTATED line two with completely different leading bytes so the fingerprint no longer matches\n2026-07-14T11:00:00.30Z stdout F ROTATED line three\n"
+	if err := os.WriteFile(logPath, []byte(rotated), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	rows := drainAll(t, root, posFile)
+	if len(rows) != 3 {
+		t.Fatalf("after rotation the collector must read all 3 new lines from offset 0, got %d", len(rows))
+	}
+	// Confirm the content is the rotated file's, not the original's.
+	schema := podlogColumns
+	msgCol := -1
+	for i, c := range schema {
+		if c.Name == "message" {
+			msgCol = i
+		}
+	}
+	if got, _ := rows[0][msgCol].(string); got != "ROTATED line one with completely different leading bytes so the fingerprint no longer matches the prior file at all here" {
+		t.Errorf("expected rotated content, got %q", got)
+	}
+}
+
+// TestTruncationRestartsFromZero verifies in-place truncation (size regression
+// below the saved offset) resets the read to 0.
+func TestTruncationRestartsFromZero(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "ns_pod_uid", "c")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	logPath := filepath.Join(dir, "0.log")
+	original := "2026-07-14T10:00:00.10Z stdout F line one padded to exceed the 256-byte fingerprint window for stable detection across the truncation boundary here now\n2026-07-14T10:00:00.20Z stdout F line two padded to exceed the 256-byte window\n"
+	if err := os.WriteFile(logPath, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	posFile := filepath.Join(t.TempDir(), "positions.json")
+	if r := drainAll(t, root, posFile); len(r) != 2 {
+		t.Fatalf("first pass should read 2 lines, got %d", len(r))
+	}
+
+	// Truncate in place to a shorter content (size < saved offset).
+	truncated := "2026-07-14T12:00:00.10Z stdout F fresh short line\n"
+	if err := os.WriteFile(logPath, []byte(truncated), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rows := drainAll(t, root, posFile)
+	if len(rows) != 1 {
+		t.Fatalf("after truncation the collector must read the 1 new line from offset 0, got %d", len(rows))
+	}
+}
+
 func drainAll(t *testing.T, root, posFile string) [][]interface{} {
 	t.Helper()
 	src, err := newPodlogSource(map[string]interface{}{

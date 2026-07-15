@@ -173,5 +173,23 @@ export function validate(text: string): ValidationIssue[] {
   if (mode === 'etl' && transforms.length === 0) {
     issues.push({ sev: 'warn', label: 'mode', msg: 'ETL mode is selected but no transforms are defined. Add a transform or switch to EL mode.', anchor: 'transforms' });
   }
+
+  // Streaming sources (podlog tailer, Kafka) run unbounded. Without a checkpoint
+  // their delivery position is never persisted mid-run, so a restart replays from
+  // the very beginning (or loses the position entirely) — a silent-loss / full-
+  // replay risk. A time-based checkpoint is required for at-least-once delivery.
+  const streamingSources = new Set(['podlog', 'kafka']);
+  const isStreaming = streamingSources.has(String(source.type));
+  const bounded = source.options && source.options.bounded === true;
+  const checkpoint: any = doc.checkpoint || {};
+  const cpType = String(checkpoint.type || 'none');
+  if (isStreaming && !bounded && (cpType === 'none' || cpType === '')) {
+    issues.push({
+      sev: 'warn',
+      label: 'checkpoint',
+      msg: `A streaming '${source.type}' source without a checkpoint never persists its delivery position — a restart replays from the beginning (risking loss/duplication). Add a checkpoint (e.g. file, intervalSeconds) for at-least-once delivery.`,
+      anchor: 'checkpoint',
+    });
+  }
   return issues;
 }
