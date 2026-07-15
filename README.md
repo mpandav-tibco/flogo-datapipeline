@@ -2,6 +2,10 @@
 
 A lightweight, embeddable data pipeline engine built on the [Project Flogo](https://github.com/project-flogo/core) runtime, with a visual authoring experience inside VS Code.
 
+> **Full feature reference:** see [`docs/FEATURES.md`](docs/FEATURES.md) for a
+> code-level catalog of every registered source, sink, transform, backend, and
+> config key.
+
 ---
 
 ## Why we are building this
@@ -74,25 +78,29 @@ See [`studio/vscode/README.md`](studio/vscode/README.md) for full details.
 | Cloud Object Store | Files from S3, Google Cloud Storage, or Azure ADLS Gen2 |
 | Text Document (sectioned) | Flat files with a key/value header block plus a delimited body table |
 
-### Sinks (5 + DLQ)
+### Sinks (8 + DLQ)
 
 | Sink | What it writes |
 |---|---|
-| JDBC | Bulk insert / upsert into PostgreSQL, MySQL, or SQLite; configurable conflict strategy |
-| Parquet | Row-group-aligned Parquet output |
-| Kafka | Producer with exactly-once semantics via transactions |
-| Cloud Object Store | S3, GCS, or Azure Blob; output key supports date macros |
+| CSV / TSV | Delimited text files with optional header row |
+| JSON Lines / NDJSON | One JSON object per line |
+| JDBC | Bulk insert / upsert into PostgreSQL, MySQL, or SQLite; configurable conflict strategy, optional auto-migrate |
+| Parquet | Row-group-aligned Parquet output; snappy / gzip / zstd compression |
+| Kafka | SyncProducer with configurable acks, compression, and JSON / AVRO serialization |
+| Cloud Object Store | S3, GCS, or Azure Blob; output key supports date/uuid macros |
+| Template | Go `text/template` rendering for fixed-width and legacy layouts |
 | Null | Discards all rows (benchmarking and dry-run) |
-| **Dead Letter Queue (DLQ)** | Captures rows rejected by the validate transform; can be any supported sink type |
+| **Dead Letter Queue (DLQ)** | Wraps any sink type; captures rejected rows with an error envelope |
 
-### Transforms (7)
+### Transforms (8)
 
 | Transform | What it does |
 |---|---|
 | Filter | Row-level boolean expression; non-matching rows are dropped |
 | Map | Field projection, rename, type coercion, and expression-derived columns |
 | Validate | Per-field rules (not-null, min, max, pattern, enum); violations route to DLQ or fail-fast |
-| Lookup | HTTP enrichment with LRU cache; appends columns from an external API call |
+| Lookup / Enrich | HTTP enrichment with LRU cache; appends columns from an external API call |
+| Parse | Extracts columns from a text field via regex named groups or JSON |
 | High-Water Mark (HWM) | Tracks the maximum value of a column per batch for incremental load patterns |
 | Schema Drift | Detects column additions, removals, and type changes at runtime; policies: `additive`, `project`, `strict`, `drop` |
 | Data Quality (DQ) | Evaluates per-column expectations; produces a DQ report with pass/fail scores |
