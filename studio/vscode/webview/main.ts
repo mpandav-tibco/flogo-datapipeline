@@ -1883,7 +1883,7 @@ function renderTabs() {
       (kafka ? '<button class="btn sm" data-a="tail">≋ Live Tail</button>' : '') +
       '<span class="sep"></span>' +
       (S.running
-        ? '<button class="btn sm" data-a="running" disabled>⟳ Running…</button>'
+        ? '<button class="btn sm" data-a="stop" title="Stop the running engine">■ Stop</button>'
         : '<button class="btn sm pri" data-a="run" title="Run on the warm engine (fast re-test — keeps the engine hot)">▷ Run</button>');
     (acts.querySelector('[data-a="help"]') as HTMLElement).onclick = () => openFeatureGuide();
     (acts.querySelector('[data-a="settings"]') as HTMLElement).onclick = () => { S.selNode = SETTINGS_NODE; S.inspClosed = false; renderEditor(); };
@@ -1892,6 +1892,8 @@ function renderTabs() {
     if (tl) tl.onclick = () => openTab('tail', 'tail');
     const rb = acts.querySelector('[data-a="run"]') as HTMLElement | null;
     if (rb) rb.onclick = () => doRun();
+    const sb = acts.querySelector('[data-a="stop"]') as HTMLElement | null;
+    if (sb) sb.onclick = () => doStop();
   }
   bar.appendChild(acts);
 }
@@ -2854,6 +2856,15 @@ function doRunFresh() {
   post({ type: 'showOutput' });
   post({ type: 'run', fresh: true });
 }
+// Stop the running engine from the canvas toolbar. Optimistically flip the
+// local running flag so the button returns to ▷ Run immediately; the host also
+// broadcasts a 'stopped' message which reconciles state.
+function doStop() {
+  if (!S.running) return;
+  S.running = false;
+  renderStatus();
+  post({ type: 'stop' });
+}
 function doPreview() {
   S.previewOn = true;
   // The host reveals the native Data Preview panel and streams rows there.
@@ -3028,8 +3039,8 @@ function renderStatus() {
   let runLabel: string;
   let runAction: () => void;
   if (S.running) {
-    runLabel = '⟳ running…';
-    runAction = () => post({ type: 'showOutput' });
+    runLabel = '■ Stop';
+    runAction = () => doStop();
   } else if (S.port) {
     runLabel = '■ Stop';
     runAction = () => post({ type: 'stop' });
@@ -3038,7 +3049,9 @@ function renderStatus() {
     runAction = () => doRunFresh();
   }
   const runItem = el('div', 'sbi run', runLabel);
-  runItem.title = S.port
+  runItem.title = S.running
+    ? 'Stop the running pipeline (tears the engine down).'
+    : S.port
     ? 'Stop the engine (frees the port). Click Run again for a fresh run.'
     : 'Start a fresh engine and run the pipeline (full boot→run→done log)';
   runItem.onclick = runAction;

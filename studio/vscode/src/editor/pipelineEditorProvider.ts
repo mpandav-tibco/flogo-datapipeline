@@ -31,6 +31,10 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
   private activeUri: vscode.Uri | null = null;
   private ignoreNextChange = false;
   private runInFlight = false;
+  // Set when the user stops the pipeline while a run's status-polling loop is
+  // active, so the loop breaks out immediately and releases runInFlight instead
+  // of spinning on failed status polls until the 30-minute safety cap.
+  private runCancelled = false;
   private readonly diag: vscode.DiagnosticCollection;
   // Path of the resolved (connections-injected) sibling file the engine was
   // last started against, so it can be cleaned up on stop/dispose.
@@ -81,6 +85,7 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
   }
 
   broadcastStopped(): void {
+    this.runCancelled = true;
     this.clearResolved();
     for (const p of this.panels) {
       try {
@@ -776,6 +781,7 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
       return;
     }
     this.runInFlight = true;
+    this.runCancelled = false;
     try {
       // Fresh run (bottom status-bar "Run"): always tear down any running engine
       // first so the run starts from a brand-new engine process — a clean, single
@@ -813,6 +819,10 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
       // eslint-disable-next-line no-constant-condition
       while (true) {
         await delay(700);
+        if (this.runCancelled) {
+          this.logRun('[run] stopped by user');
+          break;
+        }
         if (Date.now() > deadline) {
           this.post(panel, { type: 'runError', message: 'Run polling timed out after 30 minutes.' });
           break;
@@ -821,6 +831,7 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
         try {
           st = await client.status(ref);
         } catch (err) {
+          if (this.runCancelled) break;
           this.logRun(`[run] status poll error: ${errText(err)}`);
           continue;
         }
@@ -868,6 +879,7 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
   }
 
   private stopPipeline(panel: vscode.WebviewPanel): void {
+    this.runCancelled = true;
     this.manager.stop();
     this.engineStartedFrom = null;
     this.clearResolved();
