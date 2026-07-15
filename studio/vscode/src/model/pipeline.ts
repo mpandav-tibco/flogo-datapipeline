@@ -17,6 +17,9 @@ export interface PipelineDoc {
   performance?: PipelineStageConfig;
   scaling?: PipelineStageConfig;
   checkpoint?: PipelineStageConfig;
+  // Selected invocation trigger (timer/rest/kafka/filepoller). Stored inline in
+  // the pipeline resource data; materialised into app triggers[] at deploy.
+  trigger?: { kind?: string; settings?: Record<string, unknown> };
   [key: string]: unknown;
 }
 
@@ -51,6 +54,19 @@ export function extractPipelineData(appDoc: any): PipelineDoc {
 export function wrapInAppJson(pd: PipelineDoc): any {
   const name = pd.name || 'untitled-pipeline';
   const resourceId = 'pipeline:' + slug(name);
+  // The runnable file always keeps a boot-safe timer trigger (the bundled Studio
+  // engine only registers the timer trigger, and Studio drives runs through the
+  // REST management API). When the user's selected trigger is the timer, honour
+  // its interval/delay here; other trigger kinds are materialised at deploy.
+  const t = pd.trigger;
+  const timerSettings =
+    t && t.kind === 'timer' && t.settings
+      ? {
+          repeating: t.settings.repeating != null ? t.settings.repeating : true,
+          startDelay: t.settings.startDelay != null ? Number(t.settings.startDelay) : 0,
+          interval: t.settings.interval != null ? Number(t.settings.interval) : 86400000,
+        }
+      : { repeating: true, startDelay: 0, interval: 86400000 };
   return {
     name,
     type: 'flogo:app',
@@ -62,7 +78,7 @@ export function wrapInAppJson(pd: PipelineDoc): any {
       {
         id: 'pipeline-timer',
         ref: TIMER_TRIGGER_REF,
-        settings: { repeating: true, startDelay: 0, interval: 86400000 },
+        settings: timerSettings,
         handlers: [
           {
             settings: {},

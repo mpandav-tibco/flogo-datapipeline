@@ -11,6 +11,7 @@ import {
   PipelineDoc,
   ValidationIssue,
 } from '../model/pipeline';
+import { applyTriggerToApp } from '../model/triggers';
 import { ApiClient } from '../engine/apiClient';
 import { DataPreviewView } from '../panel/dataPreviewView';
 import { ConnectionStore } from '../connections/store';
@@ -962,6 +963,10 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
 
     const dir = path.dirname(doc.uri.fsPath);
     const target = path.join(dir, deployFileName);
+    // Materialise the pipeline's selected trigger (timer/rest/kafka/filepoller)
+    // into the deploy app's triggers[] + imports. The editable file keeps its
+    // boot-safe timer; the deployed app runs under the real trigger.
+    applyTriggerToApp(app);
     await vscode.workspace.fs.writeFile(vscode.Uri.file(target), Buffer.from(JSON.stringify(app, null, 2), 'utf8'));
 
     if (env.length) {

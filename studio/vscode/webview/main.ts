@@ -7,6 +7,7 @@
 import type { PipelineDoc } from '../src/model/pipeline';
 import type { HostToWebview, WebviewToHost } from '../src/protocol';
 import type { RunResponse, PreviewResult, StatusResponse, StageTestResult } from '../src/engine/apiClient';
+import { TRIGGER_CATALOG, triggerDef } from '../src/model/triggers';
 interface VsCodeApi {
   postMessage(msg: WebviewToHost): void;
   getState(): unknown;
@@ -1115,11 +1116,12 @@ function stGroup(title: string, subtitle: string, ...fields: HTMLElement[]): HTM
   // reads as part of a colour-coded family (execution / reliability / load /
   // scaling / observability).
   const cat = /mode/i.test(title) ? 'exec'
+    : /trigger/i.test(title) ? 'trig'
     : /reliab|checkpoint|incremental/i.test(title) ? 'rel'
     : /load|performance/i.test(title) ? 'perf'
     : /scal/i.test(title) ? 'scale'
     : /observ|metric/i.test(title) ? 'obs' : 'exec';
-  const glyph = { exec: '◧', rel: '❖', perf: '⚡', scale: '⤢', obs: '📈' }[cat] || '◧';
+  const glyph = { exec: '◧', trig: '⇥', rel: '❖', perf: '⚡', scale: '⤢', obs: '📈' }[cat] || '◧';
   const g = el('div', 'setgroup sg-' + cat);
   const open = !!(S.setOpen && S.setOpen[title]);
   g.classList.toggle('collapsed', !open);
@@ -1136,6 +1138,63 @@ function stGroup(title: string, subtitle: string, ...fields: HTMLElement[]): HTM
   g.appendChild(body);
   return g;
 }
+// Build the fields for the Trigger settings group. The pipeline stores its
+// chosen trigger inline as doc.trigger = { kind, settings }. Changing the kind
+// resets the settings to that trigger's defaults. Non-public trigger kinds show
+// a build-time note. The trigger→pipeline wiring is applied at deploy.
+function triggerGroupFields(doc: any): HTMLElement[] {
+  if (!doc.trigger || typeof doc.trigger !== 'object') doc.trigger = { kind: 'timer', settings: {} };
+  const tr = doc.trigger;
+  if (!tr.kind) tr.kind = 'timer';
+  if (!tr.settings || typeof tr.settings !== 'object') tr.settings = {};
+  const def = triggerDef(tr.kind);
+
+  const fields: HTMLElement[] = [];
+  // Trigger kind picker — resets settings to the new kind's defaults.
+  const kindFld = el('div', 'fld');
+  kindFld.appendChild(el('div', 'k', 'Trigger'));
+  const sel = el('select', 'v') as HTMLSelectElement;
+  TRIGGER_CATALOG.forEach((t) => {
+    const op = document.createElement('option');
+    op.value = t.kind; op.textContent = t.label;
+    if (t.kind === tr.kind) op.selected = true;
+    sel.appendChild(op);
+  });
+  sel.onchange = () => {
+    const nd = triggerDef(sel.value);
+    const settings: Record<string, unknown> = {};
+    nd.fields.forEach((f) => { if (f.default !== undefined) settings[f.name] = f.default; });
+    doc.trigger = { kind: nd.kind, settings };
+    saveSettings();
+    renderEditor();
+  };
+  kindFld.appendChild(sel);
+  kindFld.appendChild(el('div', 'hint', def.summary));
+  fields.push(kindFld);
+
+  if (!def.available) {
+    const warn = el('div', 'fld');
+    warn.appendChild(el('div', 'hint', `⚠ ${def.note || 'This trigger needs an external module at build time.'} The wiring is generated in the deploy artifacts; local Run uses the timer/REST management path.`));
+    fields.push(warn);
+  }
+
+  // Dynamic settings fields for the selected trigger.
+  def.fields.forEach((f) => {
+    const hint = f.hint || '';
+    if (f.type === 'boolean') {
+      if (tr.settings[f.name] === undefined && f.default !== undefined) tr.settings[f.name] = f.default;
+      fields.push(stBool(tr.settings, f.name, f.label, hint));
+    } else if (f.type === 'number') {
+      fields.push(stNum(tr.settings, f.name, f.label, String(f.placeholder ?? f.default ?? ''), hint));
+    } else if (f.type === 'select' && f.options) {
+      fields.push(stSelect(tr.settings, f.name, f.label, f.options, hint));
+    } else {
+      fields.push(stText(tr.settings, f.name, f.label, String(f.placeholder ?? ''), hint));
+    }
+  });
+  return fields;
+}
+
 function renderPipelineSettings(): HTMLElement {
   const insp = el('div', 'inspector');
   const ih = el('div', 'ih');
@@ -1148,17 +1207,18 @@ function renderPipelineSettings(): HTMLElement {
   const ib = el('div', 'ib');
   const doc: any = S.doc;
 
-  // First open: expand Execution mode plus any section that already has config,
-  // so users land on what's configured and can collapse the rest.
+  // First open: all sections start collapsed so the panel is a compact index —
+  // users scan the group titles and expand only the one they need. Section
+  // open/collapse state is remembered in S.setOpen thereafter.
   if (!S.setOpen) {
-    const has = (k: string) => doc[k] && typeof doc[k] === 'object' && Object.keys(doc[k]).length > 0;
     S.setOpen = {
-      'Execution mode': true,
-      'Reliability · Checkpoint & resume': has('checkpoint'),
-      'Reliability · Incremental load': has('incremental'),
-      'Load strategy · Performance': has('performance'),
-      'Scaling': has('scaling'),
-      'Observability · Metrics': has('observability'),
+      'Execution mode': false,
+      'Trigger · Invocation': false,
+      'Reliability · Checkpoint & resume': false,
+      'Reliability · Incremental load': false,
+      'Load strategy · Performance': false,
+      'Scaling': false,
+      'Observability · Metrics': false,
     };
   }
 
@@ -1170,6 +1230,10 @@ function renderPipelineSettings(): HTMLElement {
       ['elt', 'ELT — load then transform in-target'],
     ], 'ETL runs the transform chain in-flight; EL/ELT skip or defer it.'),
   ));
+
+  // ── Trigger · invocation ───────────────────────────────────────────────────
+  ib.appendChild(stGroup('Trigger · Invocation', 'How the pipeline is kicked off',
+    ...triggerGroupFields(doc)));
 
   // ── Reliability: checkpoint & resume ───────────────────────────────────────
   const cp = settingsSection(doc, 'checkpoint');
@@ -1942,7 +2006,7 @@ function renderEditor() {
 function renderCanvas(m: HTMLElement) {
   const p = S.pipe!;
   const c = el('div', 'edcontent');
-  const cv = el('div', 'canvas');
+  const cv = el('div', 'canvas' + (S.running ? ' running' : ''));
   c.appendChild(cv);
 
   // Pipeline header — editable name + description that live in the pipeline file

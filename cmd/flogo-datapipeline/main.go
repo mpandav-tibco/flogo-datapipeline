@@ -127,6 +127,10 @@ import (
 
 	// --- Flogo trigger (timer fires the pipeline on a schedule) ---
 	_ "github.com/project-flogo/contrib/trigger/timer"
+	// REST trigger — lets a deployed app expose an HTTP endpoint that invokes the
+	// pipeline. Selectable from the Studio's Pipeline Settings → Trigger tab and
+	// materialised into the deploy app JSON. Inert unless referenced by a trigger.
+	_ "github.com/project-flogo/contrib/trigger/rest"
 )
 
 var mlog = corelog.ChildLogger(corelog.RootLogger(), "main")
