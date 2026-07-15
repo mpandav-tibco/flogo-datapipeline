@@ -216,7 +216,7 @@ function buildPipe(doc: PipelineDoc): Pipe {
       id: 't' + i,
       kind: 'transform',
       type: t.type || 'transform',
-      nm: t.name || t.type || 'transform',
+      nm: t.name || transformLabel(t.type) || 'transform',
       meta: metaFor('transform', t.type || '—', t),
       cfg: cfgOf(t),
       ref: i,
@@ -453,6 +453,24 @@ const TYPE_LABELS: Record<string, string> = {
 };
 function typeLabel(t: string): string {
   return TYPE_LABELS[t] || t;
+}
+
+// Friendly display names for transform stage types, so a node/breadcrumb shows
+// "Data Quality" instead of the raw config key "dq". Falls back to the raw type
+// for anything not listed.
+const TF_LABELS: Record<string, string> = {
+  filter: 'Filter',
+  map: 'Map',
+  mapper: 'Map',
+  validate: 'Validate',
+  lookup: 'Lookup',
+  hwm: 'High-Water Mark',
+  dq: 'Data Quality',
+  schemadrift: 'Schema Drift',
+  parse: 'Parse',
+};
+function transformLabel(t: string): string {
+  return TF_LABELS[t] || t;
 }
 
 // Fixed emitted schemas for sources whose columns are NOT declared in the
@@ -2486,7 +2504,7 @@ function renderCanvas(m: HTMLElement) {
     const kindLbl = sn.kind === 'source' ? 'Source' : sn.kind === 'sink' ? 'Sink' : sn.kind === 'dlq' ? 'DLQ' : 'Transform';
     ih.appendChild(el('span', 'ihkind ' + kindCls, kindLbl));
   }
-  ih.appendChild(el('span', 'ihname', sn ? typeLabel(sn.type) : ''));
+  ih.appendChild(el('span', 'ihname', sn ? (sn.kind === 'transform' ? transformLabel(sn.type) : typeLabel(sn.type)) : ''));
   const closeBtn = el('span', 'ihx', '✕');
   closeBtn.title = 'Close config panel';
   closeBtn.onclick = () => { S.inspClosed = true; renderEditor(); };
@@ -2545,7 +2563,7 @@ function renderCanvas(m: HTMLElement) {
       typeRow.appendChild(sel);
     } else {
       typeRow.appendChild(el('span', 'badge', 'transform'));
-      typeRow.appendChild(el('span', 'chip plain', typeLabel(sn.type)));
+      typeRow.appendChild(el('span', 'chip plain', transformLabel(sn.type)));
     }
     ib.appendChild(typeRow);
 
