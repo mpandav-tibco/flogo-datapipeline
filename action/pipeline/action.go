@@ -323,6 +323,14 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 		return out, fmt.Errorf("source open: %w", err)
 	}
 	defer src.Close()
+	// Inject the active metrics Recorder into the source when it opts in via the
+	// RecorderAware interface, so component-specific metrics (e.g. a tailing
+	// source's reconciliation counters) emit through the configured backend
+	// (prometheus/otel/none) instead of a hard-wired one — discovered by type
+	// assertion, exactly like checkpoint.CursorProvider.
+	if ra, ok := src.(metrics.RecorderAware); ok {
+		ra.SetRecorder(a.recorder)
+	}
 
 	// --- transforms ---
 	// Build the user-declared transform configs.

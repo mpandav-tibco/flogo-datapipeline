@@ -43,6 +43,7 @@ import (
 
 	"encoding/json"
 
+	"github.com/mpandav-tibco/flogo-datapipeline/metrics"
 	"github.com/mpandav-tibco/flogo-datapipeline/record"
 	"github.com/mpandav-tibco/flogo-datapipeline/source"
 )
@@ -177,6 +178,11 @@ func newPodlogSource(cfg map[string]interface{}) (source.Source, error) {
 }
 
 func (s *podlogSource) Schema() []record.Column { return s.schema }
+
+// SetRecorder implements metrics.RecorderAware. The action injects the active
+// metrics Recorder so reconciliation counters emit through the configured
+// backend (prometheus/otel/none). Called once, before the first ReadBatch.
+func (s *podlogSource) SetRecorder(rec metrics.Recorder) { s.recon.setRecorder(rec) }
 
 // Skip is a no-op: the position registry (not a row count) owns resume for a
 // tailing, unbounded, multi-file collector.

@@ -3,8 +3,7 @@ package podlog
 import (
 	"sync/atomic"
 
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/mpandav-tibco/flogo-datapipeline/metrics"
 )
 
 // Reconciliation metrics — the customer's core requirement ("prove nothing was
@@ -13,57 +12,43 @@ import (
 // express the read == written + dlq invariant. Together they let an operator
 // alert on drift per node/namespace instead of discovering loss by accident.
 //
-// The collectors are registered on the Prometheus DEFAULT registry via promauto
-// at package init. They cost nothing when no metrics backend is configured (the
-// counters simply accumulate in memory). When observability.metrics=prometheus
-// is enabled, the shared /metrics server gathers the default registry too (see
-// metrics/prometheus), so these appear on the same endpoint automatically — the
-// source stays decoupled from any specific backend.
-var (
-	// podlog_lines_read_total{node,namespace} — logical records emitted by the
-	// source after CRI reassembly + multiline stitching. This is the left-hand
-	// side of the reconciliation invariant read == written + dlq.
-	metricLinesRead = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "podlog_lines_read_total",
-		Help: "Logical log records emitted by the podlog source (after CRI reassembly and multiline stitching), by node and namespace.",
-	}, []string{"node", "namespace"})
-
-	// podlog_bytes_committed_total{node} — bytes durably delivered, advanced only
-	// when the position registry is persisted after the sink acknowledges.
-	metricBytesCommitted = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "podlog_bytes_committed_total",
-		Help: "File bytes durably delivered (position-registry advance after sink ack), by node.",
-	}, []string{"node"})
-
-	// podlog_files_open{node} — number of CRI log files currently being tailed.
-	metricFilesOpen = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "podlog_files_open",
-		Help: "CRI log files currently being tailed, by node.",
-	}, []string{"node"})
-
-	// podlog_rotations_total{node} — detected log rotations/truncations (a fresh
-	// file at the same path, or size regression), by node.
-	metricRotations = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "podlog_rotations_total",
-		Help: "Detected CRI log rotations/truncations, by node.",
-	}, []string{"node"})
+// Metrics are emitted through the pipeline's pluggable metrics.Recorder (injected
+// by the action via RecorderAware.SetRecorder), so they honour the configured
+// backend — prometheus, otel, or none — exactly like the built-in pipeline
+// metrics. The source never imports a concrete backend. When no recorder is set
+// (e.g. unit tests, or metrics=none), the counters still accumulate in memory
+// for the always-on shutdown reconciliation summary.
+const (
+	metricLinesRead      = "podlog_lines_read_total"
+	metricBytesCommitted = "podlog_bytes_committed_total"
+	metricFilesOpen      = "podlog_files_open"
+	metricRotations      = "podlog_rotations_total"
 )
 
 // reconCounters holds process-local atomic totals so the source can log a final
-// reconciliation summary even when Prometheus is disabled — the operator always
-// gets an auditable "read=N committedBytes=M rotations=R" line at shutdown.
+// reconciliation summary even when metrics are disabled — the operator always
+// gets an auditable "read=N committedBytes=M rotations=R" line at shutdown. It
+// also forwards each change to the active Recorder (nil-safe) so the same
+// numbers appear in prometheus/otel when a backend is configured.
 type reconCounters struct {
+	rec metrics.Recorder // nil until the action injects it; nil = summary-only
+
 	linesRead      atomic.Int64
 	bytesCommitted atomic.Int64
 	rotations      atomic.Int64
 }
+
+func (r *reconCounters) setRecorder(rec metrics.Recorder) { r.rec = rec }
 
 func (r *reconCounters) addLinesRead(node, namespace string, n int) {
 	if n <= 0 {
 		return
 	}
 	r.linesRead.Add(int64(n))
-	metricLinesRead.WithLabelValues(node, namespace).Add(float64(n))
+	if r.rec != nil {
+		r.rec.Counter(metricLinesRead, "Logical log records emitted by the podlog source, by node and namespace.",
+			map[string]string{"node": node, "namespace": namespace}, float64(n))
+	}
 }
 
 func (r *reconCounters) addBytesCommitted(node string, n int64) {
@@ -71,14 +56,23 @@ func (r *reconCounters) addBytesCommitted(node string, n int64) {
 		return
 	}
 	r.bytesCommitted.Add(n)
-	metricBytesCommitted.WithLabelValues(node).Add(float64(n))
+	if r.rec != nil {
+		r.rec.Counter(metricBytesCommitted, "File bytes durably delivered (position-registry advance after sink ack), by node.",
+			map[string]string{"node": node}, float64(n))
+	}
 }
 
 func (r *reconCounters) addRotation(node string) {
 	r.rotations.Add(1)
-	metricRotations.WithLabelValues(node).Inc()
+	if r.rec != nil {
+		r.rec.Counter(metricRotations, "Detected CRI log rotations/truncations, by node.",
+			map[string]string{"node": node}, 1)
+	}
 }
 
-func setFilesOpen(node string, n int) {
-	metricFilesOpen.WithLabelValues(node).Set(float64(n))
+func (r *reconCounters) setFilesOpen(node string, n int) {
+	if r.rec != nil {
+		r.rec.Gauge(metricFilesOpen, "CRI log files currently being tailed, by node.",
+			map[string]string{"node": node}, float64(n))
+	}
 }

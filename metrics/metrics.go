@@ -61,6 +61,18 @@ type Recorder interface {
 	// ("read", "transform", or "write").
 	Stall(pipelineRef, stage string, dur time.Duration)
 
+	// Counter adds delta to a named cumulative counter with the given labels.
+	// This is the generic escape hatch that lets a source or sink emit its own
+	// component-specific metrics (e.g. a tailing source's reconciliation counters)
+	// THROUGH the configured backend, so they honour prometheus/otel/none exactly
+	// like the built-in pipeline metrics. Implementations must lazily create the
+	// underlying instrument on first use, keyed by name + the sorted label keys.
+	Counter(name, help string, labels map[string]string, delta float64)
+
+	// Gauge sets a named gauge to value with the given labels. Same lazy-creation
+	// and backend-routing semantics as Counter.
+	Gauge(name, help string, labels map[string]string, value float64)
+
 	// Shutdown flushes any buffered telemetry and releases backend resources.
 	// Called from the pipeline action's Close/lifecycle hook on process exit.
 	// Must be idempotent and safe to call after the first call returns.
@@ -71,14 +83,27 @@ type Recorder interface {
 // Used when no metrics backend is configured.
 type NoopRecorder struct{}
 
-func (NoopRecorder) BatchRead(_, _ string, _ int, _ time.Duration)                          {}
-func (NoopRecorder) BatchTransformed(_ string, _, _ int, _ time.Duration)                   {}
-func (NoopRecorder) BatchWritten(_, _ string, _ int, _ time.Duration)                       {}
-func (NoopRecorder) BatchFailed(_ string, _ int)                                            {}
-func (NoopRecorder) CheckpointSaved(_ string)                                               {}
-func (NoopRecorder) PipelineComplete(_, _ string, _, _, _ int64, _ time.Duration)           {}
-func (NoopRecorder) Stall(_, _ string, _ time.Duration)                                     {}
-func (NoopRecorder) Shutdown(_ context.Context) error                                       { return nil }
+func (NoopRecorder) BatchRead(_, _ string, _ int, _ time.Duration)                {}
+func (NoopRecorder) BatchTransformed(_ string, _, _ int, _ time.Duration)         {}
+func (NoopRecorder) BatchWritten(_, _ string, _ int, _ time.Duration)             {}
+func (NoopRecorder) BatchFailed(_ string, _ int)                                  {}
+func (NoopRecorder) CheckpointSaved(_ string)                                     {}
+func (NoopRecorder) PipelineComplete(_, _ string, _, _, _ int64, _ time.Duration) {}
+func (NoopRecorder) Stall(_, _ string, _ time.Duration)                           {}
+func (NoopRecorder) Counter(_, _ string, _ map[string]string, _ float64)          {}
+func (NoopRecorder) Gauge(_, _ string, _ map[string]string, _ float64)            {}
+func (NoopRecorder) Shutdown(_ context.Context) error                             { return nil }
+
+// RecorderAware is an optional interface a source or sink may implement to
+// receive the pipeline's active metrics Recorder. The action injects the
+// recorder (via SetRecorder) right after constructing the component, exactly as
+// it discovers checkpoint.CursorProvider by type assertion — so components can
+// emit their own metrics through the pluggable backend without importing any
+// concrete backend package. Components that do not implement this simply never
+// receive a recorder and emit nothing (a clean no-op).
+type RecorderAware interface {
+	SetRecorder(Recorder)
+}
 
 // Factory constructs a Recorder from a generic config map.
 // The map is the "options" block from the pipeline ObservabilityDef.

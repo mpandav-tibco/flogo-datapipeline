@@ -210,7 +210,7 @@ func (t *tailer) scan() {
 		}
 	}
 	if t.recon != nil {
-		setFilesOpen(t.node, len(t.open))
+		t.recon.setFilesOpen(t.node, len(t.open))
 	}
 }
 
