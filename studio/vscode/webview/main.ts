@@ -1635,6 +1635,11 @@ const MAP_FUNCTIONS: Array<{ name: string; snippet: string; hint: string }> = [
 // chips insert at the caret of the row the user is editing.
 let mapFocusedInput: HTMLInputElement | null = null;
 
+// The output field currently selected in the mapper's Target pane, whose
+// expression is shown/edited in the third (Mapping) pane. Persists across
+// re-renders so selection survives a mapping edit.
+let mapSelectedTarget: string | null = null;
+
 // The map transform stores dynamic expressions with a leading "=" (e.g.
 // "=$order_date"), which the engine uses to distinguish an expression from a
 // static string literal. For a cleaner experience the "=" is IMPLICIT in the
@@ -1720,15 +1725,17 @@ function renderMapEditor(node: Node): HTMLElement {
       const caret = complex ? '<span class="mcaret">▸</span>' : '<span class="mcaret ph"></span>';
       item.innerHTML = `${caret}<span class="mfname">${escapeHtml(fld.name)}</span><span class="mtype">${escapeHtml(fld.type)}</span>`;
       item.setAttribute('draggable', 'true');
-      item.title = `Drag onto a target field, or click to map. Path: $${fld.path}`;
+      item.title = `Drag onto a target field or the Mapping box, or click to map into the selected target. Path: $${fld.path}`;
       item.ondragstart = (e) => { e.dataTransfer?.setData('text/plain', fld.path); (e.dataTransfer || {} as any).effectAllowed = 'copy'; item.classList.add('dragging'); };
       item.ondragend = () => item.classList.remove('dragging');
-      // Click: map into a same-named leaf output field (drag-to-output shortcut).
+      // Click: map into the SELECTED target field if one is selected; otherwise
+      // create/fill a same-named output (drag-to-output shortcut).
       item.onclick = (e) => {
         if ((e.target as HTMLElement).classList.contains('mcaret') && complex) {
           item.classList.toggle('open'); kids.classList.toggle('show'); return;
         }
-        mapInto(fld.name, fld.path);
+        if (mapSelectedTarget) { fields[mapSelectedTarget] = `=$${fld.path}`; persist(); renderEditor(); }
+        else { mapInto(fld.name, fld.path); }
       };
       into.appendChild(item);
       const kids = el('div', 'mkids');
@@ -1749,70 +1756,119 @@ function renderMapEditor(node: Node): HTMLElement {
   }
   srcPane.appendChild(srcBody);
 
-  // RIGHT: target output fields (drop zones + editable expression).
+  // Ensure a selected target exists so the Mapping pane has something to show.
+  if (mapSelectedTarget && !order.includes(mapSelectedTarget)) mapSelectedTarget = null;
+  if (!mapSelectedTarget && order.length) mapSelectedTarget = order[0];
+
+  // MIDDLE: target output field names — click to select (its expression shows in
+  // the Mapping pane); drop a source here to set/create the mapping directly.
   const tgtPane = el('div', 'mpane mtgt');
   const tgtHead = el('div', 'mphead');
-  tgtHead.innerHTML = `<span>Target</span><span class="cnt">${order.length}</span>`;
+  tgtHead.innerHTML = `<span>Target field</span><span class="cnt">${order.length}</span>`;
   tgtPane.appendChild(tgtHead);
   const tgtBody = el('div', 'mpbody');
   order.forEach((outName, i) => {
-    const row = el('div', 'mrow2');
+    const row = el('div', 'trow' + (outName === mapSelectedTarget ? ' sel' : ''));
     row.ondragover = (e) => { e.preventDefault(); row.classList.add('drop'); };
     row.ondragleave = () => row.classList.remove('drop');
     row.ondrop = (e) => {
       e.preventDefault(); row.classList.remove('drop');
       const p = e.dataTransfer?.getData('text/plain');
-      if (p) { fields[outName] = `=$${p}`; persist(); renderEditor(); }
+      if (p) { fields[outName] = `=$${p}`; mapSelectedTarget = outName; persist(); renderEditor(); }
     };
+    const mapped = !!(fields[outName] && String(fields[outName]).trim());
     const out = document.createElement('input');
-    out.className = 'out';
+    out.className = 'tname';
     out.value = outName;
     out.title = 'Output field name';
+    out.onfocus = () => { mapSelectedTarget = outName; };
     out.onchange = () => {
       const nn = out.value.trim();
       if (!nn || nn === outName) return;
       const val = fields[outName];
       delete fields[outName]; fields[nn] = val; order[i] = nn;
+      if (mapSelectedTarget === outName) mapSelectedTarget = nn;
       persist(); renderEditor();
     };
-    const expr = document.createElement('input');
-    expr.className = 'expr';
-    expr.value = exprForDisplay(fields[outName]);
-    expr.placeholder = 'drag a source field, or type $field';
-    expr.title = 'Mapping expression (= is implicit; plain text is a constant)';
-    expr.onfocus = () => { mapFocusedInput = expr; };
-    expr.onchange = () => { fields[outName] = exprForStore(expr.value); persist(); };
+    const dot = el('span', 'tdot' + (mapped ? ' on' : ''));
+    dot.title = mapped ? 'Mapped' : 'Unmapped';
     const del = el('span', 'del', '✕');
     del.title = 'Remove field';
-    del.onclick = () => { delete fields[outName]; order = order.filter((k) => k !== outName); persist(); renderEditor(); };
-    const top = el('div', 'mrow2-top');
-    top.appendChild(out); top.appendChild(del);
-    row.appendChild(top);
-    const bot = el('div', 'mrow2-bot');
-    bot.appendChild(el('span', 'eq', '←')); bot.appendChild(expr);
-    row.appendChild(bot);
+    del.onclick = (e) => { e.stopPropagation(); delete fields[outName]; order = order.filter((k) => k !== outName); if (mapSelectedTarget === outName) mapSelectedTarget = null; persist(); renderEditor(); };
+    row.appendChild(dot); row.appendChild(out); row.appendChild(del);
+    row.onclick = (e) => { if (e.target === row || (e.target as HTMLElement).classList.contains('tdot')) { mapSelectedTarget = outName; renderEditor(); } };
     tgtBody.appendChild(row);
   });
-  // Add-field drop zone: dropping a source field here creates a same-named output.
   const addZone = el('div', 'maddzone');
-  addZone.textContent = '＋ Add field (or drop a source here)';
+  addZone.textContent = '＋ Add field (or drop a source)';
   addZone.ondragover = (e) => { e.preventDefault(); addZone.classList.add('drop'); };
   addZone.ondragleave = () => addZone.classList.remove('drop');
   addZone.ondrop = (e) => {
     e.preventDefault(); addZone.classList.remove('drop');
     const p = e.dataTransfer?.getData('text/plain');
-    if (p) { const leaf = p.split('.').pop() || p; mapInto(leaf, p); }
+    if (p) { const leaf = p.split('.').pop() || p; mapInto(leaf, p); mapSelectedTarget = leaf; }
   };
   addZone.onclick = () => {
     let base = 'new_field', n = base, c = 1;
     while (n in fields) n = base + '_' + c++;
-    fields[n] = ''; order.push(n); persist(); renderEditor();
+    fields[n] = ''; order.push(n); mapSelectedTarget = n; persist(); renderEditor();
   };
   tgtBody.appendChild(addZone);
   tgtPane.appendChild(tgtBody);
 
+  // RIGHT: the Mapping pane — a large expression editor for the SELECTED target
+  // field, plus a function palette. Drop a source field here to insert its path.
+  const mapPane = el('div', 'mpane mmap');
+  const mapHead = el('div', 'mphead');
+  mapHead.innerHTML = `<span>Mapping</span>` + (mapSelectedTarget ? `<span class="cnt">${escapeHtml(mapSelectedTarget)}</span>` : '');
+  mapPane.appendChild(mapHead);
+  const mapBody = el('div', 'mpbody mmapbody');
+  if (mapSelectedTarget) {
+    const sel = mapSelectedTarget;
+    mapBody.appendChild(el('div', 'mmaplbl', `${escapeHtml(sel)} ←`));
+    const ta = document.createElement('textarea');
+    ta.className = 'mexpr';
+    ta.value = exprForDisplay(fields[sel]);
+    ta.placeholder = 'drag a Source field here, or type: $field, upper($field), "constant"';
+    ta.rows = 3;
+    ta.onfocus = () => { mapFocusedInput = ta as unknown as HTMLInputElement; };
+    ta.onchange = () => { fields[sel] = exprForStore(ta.value); persist(); renderEditor(); };
+    ta.ondragover = (e) => { e.preventDefault(); ta.classList.add('drop'); };
+    ta.ondragleave = () => ta.classList.remove('drop');
+    ta.ondrop = (e) => {
+      e.preventDefault(); ta.classList.remove('drop');
+      const p = e.dataTransfer?.getData('text/plain');
+      if (!p) return;
+      // Insert at caret if focused/has selection, else replace.
+      const cur = ta.value;
+      const at = ta.selectionStart ?? cur.length;
+      const token = `$${p}`;
+      ta.value = cur.slice(0, at) + token + cur.slice(ta.selectionEnd ?? at);
+      fields[sel] = exprForStore(ta.value); persist(); renderEditor();
+    };
+    mapBody.appendChild(ta);
+    // Function palette inserts into this expression.
+    const fnwrap = el('div', 'mmapfns');
+    fnwrap.appendChild(el('div', 'lbl', 'Functions'));
+    const fchips = el('div', 'chips');
+    MAP_FUNCTIONS.forEach((fn) => {
+      const chip = el('span', 'chip2 fn', `ƒ ${fn.name}`);
+      chip.title = fn.hint;
+      chip.onmousedown = (e) => e.preventDefault();
+      chip.onclick = () => { mapFocusedInput = ta as unknown as HTMLInputElement; insertIntoMapExpr(fn.snippet); ta.dispatchEvent(new Event('change')); };
+      fchips.appendChild(chip);
+    });
+    fnwrap.appendChild(fchips);
+    mapBody.appendChild(fnwrap);
+    mapBody.appendChild(el('div', 'focushint', 'Drag a Source field here or type it. = is implicit — $field, upper($field); plain text is a constant.'));
+  } else {
+    mapBody.appendChild(el('div', 'muted', '<div style="font-size:11px;padding:8px;color:var(--dim)">Select a Target field (or add one) to edit its mapping here.</div>'));
+  }
+  mapPane.appendChild(mapBody);
+
   mapper.appendChild(srcPane);
   mapper.appendChild(tgtPane);
+  mapper.appendChild(mapPane);
 
   f.appendChild(el('div', 'k', 'Field mapping'));
   if (hasSchema) {
@@ -1824,23 +1880,9 @@ function renderMapEditor(node: Node): HTMLElement {
     f.appendChild(allBtn);
   }
   f.appendChild(mapper);
-
-  // ── Functions — click to insert into the focused expression ──────────────
-  const help = el('div', 'mhelp');
-  help.appendChild(el('div', 'lbl', 'Functions'));
-  const fchips = el('div', 'chips');
-  MAP_FUNCTIONS.forEach((fn) => {
-    const chip = el('span', 'chip2 fn', `ƒ ${fn.name}`);
-    chip.title = fn.hint;
-    chip.onmousedown = (e) => e.preventDefault();
-    chip.onclick = () => insertIntoMapExpr(fn.snippet);
-    fchips.appendChild(chip);
-  });
-  help.appendChild(fchips);
-  help.appendChild(el('div', 'focushint', 'Drag a Source field onto a Target field to map it (nested objects expand). Or click a source to map by name, or type in the expression: $field, upper($field); plain text is a constant.'));
-  f.appendChild(help);
   return f;
 }
+
 
 
 // Structured rule editor for the `validate` transform. Each rule is a card with

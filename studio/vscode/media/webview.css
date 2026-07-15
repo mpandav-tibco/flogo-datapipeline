@@ -247,12 +247,12 @@ select.v{appearance:none;cursor:pointer;background-image:linear-gradient(45deg,t
 .mhelp .mapall{margin:0 0 6px}
 .mhelp .mapempty{background:#202020;border:1px dashed var(--inputBorder);border-radius:6px;padding:10px}
 .mhelp .focushint{font-size:10.5px;color:var(--dim);margin-top:6px}
-/* ── classic two-pane mapper (Source | Target) ─────────────────────────── */
+/* ── classic three-pane mapper (Source | Target field | Mapping) ───────── */
 .mapallbtn{margin:0 0 8px;width:100%}
-.mapper2{display:grid;grid-template-columns:1fr 1fr;gap:8px;align-items:start}
+.mapper2{display:grid;grid-template-columns:1fr 1fr 1.15fr;gap:6px;align-items:start}
 .mapper2 .mpane{border:1px solid var(--inputBorder);border-radius:6px;overflow:hidden;background:#1c1c1c;min-width:0}
-.mapper2 .mphead{display:flex;justify-content:space-between;align-items:center;padding:5px 8px;background:#242424;border-bottom:1px solid var(--inputBorder);font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--dim)}
-.mapper2 .mphead .cnt{background:#333;border-radius:8px;padding:0 6px;color:var(--text)}
+.mapper2 .mphead{display:flex;justify-content:space-between;align-items:center;gap:4px;padding:5px 8px;background:#242424;border-bottom:1px solid var(--inputBorder);font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--dim)}
+.mapper2 .mphead .cnt{background:#333;border-radius:8px;padding:0 6px;color:var(--text);font-family:var(--mono);text-transform:none;letter-spacing:0;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .mapper2 .mpbody{max-height:340px;overflow:auto;padding:4px}
 /* left: source field tree (draggable) */
 .msrc .mfield{display:flex;align-items:center;gap:5px;padding:4px 6px;border-radius:4px;cursor:grab;user-select:none}
@@ -267,20 +267,32 @@ select.v{appearance:none;cursor:pointer;background-image:linear-gradient(45deg,t
 .msrc .mfield .mtype{flex:none;font-size:9.5px;color:var(--dim);background:#2a2a2a;border-radius:3px;padding:0 4px}
 .msrc .mkids{display:none}
 .msrc .mkids.show{display:block}
-/* right: target output fields (drop zones) */
-.mtgt .mrow2{border:1px solid transparent;border-radius:5px;padding:5px;margin-bottom:4px;background:#202020}
-.mtgt .mrow2.drop{border-color:var(--blue);background:#1e2a3a}
-.mtgt .mrow2-top{display:flex;gap:4px;align-items:center;margin-bottom:4px}
-.mtgt .mrow2-top .out{flex:1;min-width:0;background:var(--input);border:1px solid var(--inputBorder);border-radius:4px;padding:4px 6px;font:11.5px var(--mono);color:var(--blueHi)}
-.mtgt .mrow2-top .del{flex:none;color:var(--dim);cursor:pointer;padding:0 3px;font-size:12px}
-.mtgt .mrow2-top .del:hover{color:var(--red)}
-.mtgt .mrow2-bot{display:flex;gap:4px;align-items:center}
-.mtgt .mrow2-bot .eq{flex:none;color:var(--dim);font:12px var(--mono)}
-.mtgt .mrow2-bot .expr{flex:1;min-width:0;background:var(--input);border:1px solid var(--inputBorder);border-radius:4px;padding:4px 6px;font:11px var(--mono);color:var(--text)}
-.mtgt .mrow2 .out:focus,.mtgt .mrow2 .expr:focus{border-color:var(--blue);outline:none}
-.mtgt .maddzone{text-align:center;padding:7px;font-size:11px;color:var(--blueHi);background:#202020;border:1px dashed var(--inputBorder);border-radius:5px;cursor:pointer}
+/* middle: target field names (click to select) */
+.mtgt .trow{display:flex;align-items:center;gap:5px;padding:3px 5px;border:1px solid transparent;border-radius:5px;margin-bottom:3px;background:#202020;cursor:pointer}
+.mtgt .trow:hover{background:#262b33}
+.mtgt .trow.sel{border-color:var(--blue);background:#1e2a3a}
+.mtgt .trow.drop{border-color:var(--blue);border-style:dashed;background:#1e2a3a}
+.mtgt .trow .tdot{flex:none;width:7px;height:7px;border-radius:50%;background:#555}
+.mtgt .trow .tdot.on{background:#4caf7d}
+.mtgt .trow .tname{flex:1;min-width:0;background:transparent;border:none;padding:2px 3px;font:11.5px var(--mono);color:var(--blueHi)}
+.mtgt .trow .tname:focus{outline:none;background:var(--input);border-radius:3px}
+.mtgt .trow .del{flex:none;color:var(--dim);cursor:pointer;padding:0 3px;font-size:12px}
+.mtgt .trow .del:hover{color:var(--red)}
+.mtgt .maddzone{text-align:center;padding:6px;font-size:11px;color:var(--blueHi);background:#202020;border:1px dashed var(--inputBorder);border-radius:5px;cursor:pointer}
 .mtgt .maddzone:hover{background:var(--hover)}
 .mtgt .maddzone.drop{border-color:var(--blue);border-style:solid;background:#1e2a3a}
+/* right: mapping expression editor for the selected target */
+.mmapbody{padding:8px}
+.mmap .mmaplbl{font:11.5px var(--mono);color:var(--blueHi);margin-bottom:5px}
+.mmap .mexpr{width:100%;box-sizing:border-box;background:var(--input);border:1px solid var(--inputBorder);border-radius:5px;padding:6px 8px;font:12px var(--mono);color:var(--text);resize:vertical;min-height:52px}
+.mmap .mexpr:focus{border-color:var(--blue);outline:none}
+.mmap .mexpr.drop{border-color:var(--blue);border-style:dashed;background:#1e2a3a}
+.mmap .mmapfns{margin-top:8px}
+.mmap .mmapfns .lbl{font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--dim);margin:0 0 5px}
+.mmap .mmapfns .chips{display:flex;flex-wrap:wrap;gap:5px}
+.mmap .mmapfns .chip2{font:11px var(--mono);color:var(--orange);background:#2a2a2a;border:1px solid var(--inputBorder);border-radius:5px;padding:2px 7px;cursor:pointer}
+.mmap .mmapfns .chip2:hover{background:#33608f;color:#fff;border-color:#33608f}
+.mmap .focushint{font-size:10.5px;color:var(--dim);margin-top:8px}
 /* rule / expectation cards (validate + dq) */
 .rcards{display:flex;flex-direction:column;gap:8px}
 .rcard{border:1px solid var(--inputBorder);border-radius:6px;background:#202020;padding:8px}
