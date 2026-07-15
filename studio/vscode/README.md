@@ -26,6 +26,56 @@ connections, live run metrics, dry-run preview, and native VS Code integration
 
 ---
 
+## The canvas
+
+Each pipeline renders as a left-to-right flow of stage cards connected by
+directional links:
+
+- **Stage cards** are colour-accented by role — **Source** (blue), **Transform**
+  (purple), **Sink** (green), **DLQ** (dashed/amber) — and carry a small kind icon
+  so a `jdbc` source is instantly distinguishable from a `jdbc` sink. The card
+  title is the stage's custom name (or a friendly type label such as
+  `Null (discard)`), with connection/table/path detail on the meta line.
+- **Connectors** show flow direction with an arrowhead. After a run they light up
+  blue and animate a travelling streak so you can see data moved through the
+  pipeline; while a run is in progress the streak animates faster.
+- **Inspector** (right panel) opens when you select a stage. Its header shows a
+  colour-coded **Source / Sink / Transform / DLQ** badge next to the type, so the
+  config you are editing is never ambiguous. Drag the panel's left edge to
+  resize it.
+- The **＋** pills (bottom-left) add a Source, Transform, Sink, or DLQ, and the
+  in-line **＋** on a connector inserts a transform at that position.
+
+## Pipeline Settings panel
+
+The **⚙ Pipeline Settings** button (top toolbar) opens a dedicated panel for the
+pipeline-level settings that don't belong to any single stage. Sections are
+collapsible and colour-coded by category:
+
+| Section | Controls |
+|---|---|
+| **Execution mode** | `etl` (transform in-flight) · `el` (extract-load, no transforms) · `elt` (load raw, transform in-target) |
+| **Reliability · Checkpoint & resume** | store (none / file / redis), directory or address, checkpoint every N rows / N seconds, delete-on-success |
+| **Reliability · Incremental load (HWM)** | watermark column, value type, initial value, and the store backend (file / redis / postgres) with its connection options |
+| **Load strategy · Performance** | batch size, read-ahead buffer depth, max in-flight memory (backpressure), transform workers, Parquet row-group parallelism |
+| **Scaling** | `single` · `sharded` (instance index / count) · `distributed` (PostgreSQL coordinator DSN, lease, heartbeat, retries) |
+| **Observability · Metrics** | `prometheus` (listen address / path) or `otel` (OTLP endpoint), plus a stall-detection threshold |
+
+Every setting is written into the `.datapipeline` file and echoed back in the
+run log, so what you configure here is exactly what the engine runs. See
+[PIPELINE_SETTINGS.md](PIPELINE_SETTINGS.md) for the full behaviour reference.
+
+## Run Report
+
+After a run, the **Run Report** tab shows colour-accented KPI cards (processed,
+written, duration, status), a row-funnel (read → dropped → failed → written), any
+data-quality report, and an **Effective configuration** grid that mirrors the
+engine's run-config log line — the active mode, batch size, scaling, checkpoint,
+incremental, and metrics settings, each colour-coded to its Settings section.
+Click **⚙ Edit settings** on that grid to jump straight back to the panel.
+
+---
+
 ## Project structure
 
 The extension encourages a tidy layout. Run **Data Pipeline: Initialize Project

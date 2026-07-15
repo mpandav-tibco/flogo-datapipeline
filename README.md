@@ -59,7 +59,7 @@ See [`studio/vscode/README.md`](studio/vscode/README.md) for full details.
 
 ## What is available today
 
-### Sources (9)
+### Sources (10)
 
 | Source | What it reads |
 |---|---|
@@ -69,9 +69,10 @@ See [`studio/vscode/README.md`](studio/vscode/README.md) for full details.
 | Parquet | Columnar Parquet files with row-group parallelism and column/predicate pushdown |
 | XML | Streaming SAX-style XML; one record per named element |
 | JSON Lines / NDJSON | Newline-delimited JSON, one object per row |
-| JDBC | SQL query over PostgreSQL, MySQL, or SQLite with keyset-pagination chunking |
+| JDBC | SQL query over PostgreSQL, MySQL, or SQLite with keyset-pagination chunking and high-water-mark predicate injection |
 | Kafka | Consumer group-based consumption with offset checkpointing |
 | Cloud Object Store | Files from S3, Google Cloud Storage, or Azure ADLS Gen2 |
+| Text Document (sectioned) | Flat files with a key/value header block plus a delimited body table |
 
 ### Sinks (5 + DLQ)
 
@@ -100,10 +101,11 @@ See [`studio/vscode/README.md`](studio/vscode/README.md) for full details.
 
 | Feature | Backends available |
 |---|---|
+| Execution mode | `etl` (transform in-flight), `el` (extract-load, no transforms), `elt` (load raw, transform in-target) |
 | Checkpointing (resume after interruption) | Local file, Redis |
 | Watermarking (incremental high-water marks) | Local file, Redis, PostgreSQL |
 | Metrics | Prometheus endpoint (`/metrics`) + OpenTelemetry OTLP gRPC export |
-| Distributed scaling | In-memory work queue with lease-based claim and configurable retry |
+| Distributed scaling | Sharded (static partition assignment) or distributed (PostgreSQL work-queue coordinator with lease-based claim, heartbeat, and retry) |
 
 ### Pipeline templates (6)
 
@@ -126,7 +128,7 @@ Working examples covering every source type, every transform type, incremental l
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  VS Code Extension  (pipelineCanvas.js / WebView)       │
+│  VS Code Extension  (TypeScript + WebView canvas)       │
 │  Visual editor → serialises to .datapipeline JSON        │
 └───────────────────────┬─────────────────────────────────┘
                         │  file on disk
@@ -232,7 +234,7 @@ These are honest work items — not committed roadmap, but the next things we in
 - [ ] **MSSQL and Oracle JDBC drivers** — PostgreSQL, MySQL, SQLite are current; these are the next priority enterprise databases
 - [ ] **SFTP and local directory watch sources** — file-arrival triggered ingestion without cron
 - [ ] **Avro source and sink** — Avro is common in Kafka-based enterprise architectures
-- [ ] **Redis-backed distributed work queue** — the current partition/workqueue is in-memory only; a Redis-backed version is needed for multi-process horizontal scaling
+- [ ] **Redis-backed distributed work queue** — distributed scaling currently uses the PostgreSQL work-queue coordinator; a Redis-backed coordinator is planned as a lighter-weight alternative
 
 ### VS Code extension
 
