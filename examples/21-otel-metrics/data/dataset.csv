@@ -1,0 +1,11 @@
+id,value,label,category,ts
+1,1395.39,premium_unit_1,clothing,2024-01-01T03:43:00Z
+2,297.98,standard_set_2,health,2024-01-02T06:14:00Z
+3,842.10,deluxe_pack_3,grocery,2024-01-03T09:20:00Z
+4,55.00,basic_item_4,clothing,2024-01-04T11:05:00Z
+5,1203.75,premium_unit_5,electronics,2024-01-05T14:30:00Z
+6,678.42,standard_set_6,health,2024-01-06T16:45:00Z
+7,912.88,deluxe_pack_7,grocery,2024-01-07T18:10:00Z
+8,145.20,basic_item_8,clothing,2024-01-08T20:25:00Z
+9,1567.90,premium_unit_9,electronics,2024-01-09T22:40:00Z
+10,433.15,standard_set_10,health,2024-01-10T01:55:00Z

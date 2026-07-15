@@ -118,9 +118,9 @@ Ready-to-run templates in the VS Code extension:
 - Mainframe EBCDIC → PostgreSQL
 - Extract & Load only (EL mode, no transforms)
 
-### Examples (19)
+### Examples (21)
 
-Working examples covering every source type, every transform type, incremental loading, schema drift, data quality, Prometheus metrics, checkpoint/resume, horizontal scaling, Kafka streaming, and a full production pipeline composition.
+Working examples covering every source type, every transform type, incremental loading (with file / Redis / PostgreSQL watermark backends), schema drift, data quality, Prometheus and OpenTelemetry metrics, checkpoint/resume, horizontal scaling (sharded and distributed), Kafka streaming, and a full production pipeline composition.
 
 ---
 
