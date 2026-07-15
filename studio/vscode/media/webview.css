@@ -298,7 +298,13 @@ select.v{appearance:none;cursor:pointer;background-image:linear-gradient(45deg,t
 .mmap .mfnfilter:focus{border-color:var(--blue);outline:none}
 .mmap .mfngroups{max-height:210px;overflow:auto;padding-right:2px}
 .mmap .mfngroup{margin-bottom:7px}
-.mmap .mfncat{font-size:9.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--blueHi);opacity:.75;margin:0 0 3px}
+.mmap .mfncat{display:flex;align-items:center;gap:5px;font-size:9.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--blueHi);opacity:.8;margin:0 0 3px;cursor:pointer;user-select:none;padding:1px 0}
+.mmap .mfncat:hover{opacity:1}
+.mmap .mfncat .mfncaret{font-size:8px;transition:transform .12s;display:inline-block}
+.mmap .mfngroup.collapsed .mfncaret{transform:rotate(-90deg)}
+.mmap .mfncat .mfncatname{flex:1}
+.mmap .mfncat .mfncount{background:#2a2a2a;border-radius:8px;padding:0 5px;font-size:9px;opacity:.7}
+.mmap .mfngroup.collapsed .chips{display:none}
 .mmap .focushint{font-size:10.5px;color:var(--dim);margin-top:8px}
 /* rule / expectation cards (validate + dq) */
 .rcards{display:flex;flex-direction:column;gap:8px}

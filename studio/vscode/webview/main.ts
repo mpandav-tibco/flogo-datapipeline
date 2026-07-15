@@ -1718,6 +1718,10 @@ let mapSelectedTarget: string | null = null;
 // stays quick to scan.
 let mapFnFilter = '';
 
+// Categories the user has collapsed in the function palette. Persists across
+// re-renders. An active filter overrides this and expands matching groups.
+const mapFnCollapsed = new Set<string>();
+
 // The map transform stores dynamic expressions with a leading "=" (e.g.
 // "=$order_date"), which the engine uses to distinguish an expression from a
 // static string literal. For a cleaner experience the "=" is IMPLICIT in the
@@ -1948,8 +1952,17 @@ function renderMapEditor(node: Node): HTMLElement {
         const items = MAP_FUNCTIONS.filter((fn) => fn.cat === cat &&
           (!q || fn.name.toLowerCase().includes(q) || fn.hint.toLowerCase().includes(q) || cat.toLowerCase().includes(q)));
         if (!items.length) return;
-        const grp = el('div', 'mfngroup');
-        grp.appendChild(el('div', 'mfncat', cat));
+        // A group is collapsed when the user has toggled it shut — but an active
+        // filter force-expands every matching group so results are always visible.
+        const collapsed = !q && mapFnCollapsed.has(cat);
+        const grp = el('div', 'mfngroup' + (collapsed ? ' collapsed' : ''));
+        const head = el('div', 'mfncat');
+        head.innerHTML = `<span class="mfncaret">▾</span><span class="mfncatname">${escapeHtml(cat)}</span><span class="mfncount">${items.length}</span>`;
+        head.onclick = () => {
+          if (mapFnCollapsed.has(cat)) mapFnCollapsed.delete(cat); else mapFnCollapsed.add(cat);
+          renderGroups();
+        };
+        grp.appendChild(head);
         const chips = el('div', 'chips');
         items.forEach((fn) => {
           const chip = el('span', 'chip2 fn', `ƒ ${fn.name}`);
