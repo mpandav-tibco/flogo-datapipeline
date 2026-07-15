@@ -443,6 +443,44 @@ const TYPE_LABELS: Record<string, string> = {
 function typeLabel(t: string): string {
   return TYPE_LABELS[t] || t;
 }
+
+// Fixed emitted schemas for sources whose columns are NOT declared in the
+// .datapipeline JSON (the engine knows them internally). Surfacing them here
+// means the map editor's "Available data" palette is populated immediately —
+// users see the $fields to map from without first running a preview. Keyed by
+// source type.
+const SOURCE_FIXED_SCHEMA: Record<string, Array<{ name: string; type: string }>> = {
+  podlog: [
+    { name: 'namespace', type: 'string' },
+    { name: 'pod', type: 'string' },
+    { name: 'container', type: 'string' },
+    { name: 'uid', type: 'string' },
+    { name: 'stream', type: 'string' },
+    { name: 'log_time', type: 'string' },
+    { name: 'message', type: 'string' },
+    { name: 'node', type: 'string' },
+    { name: 'idempotency_key', type: 'string' },
+  ],
+};
+
+// Columns a `parse` transform appends: regex named-capture groups, or the JSON
+// field allow-list (with optional prefix). Empty when unknown (json without an
+// explicit fields list), matching the runtime.
+function parseProducedColumns(t: any): string[] {
+  if (!t || t.type !== 'parse') return [];
+  const out: string[] = [];
+  if (String(t.mode || 'regex') === 'json') {
+    const prefix = typeof t.prefix === 'string' ? t.prefix : '';
+    if (Array.isArray(t.fields)) for (const f of t.fields) out.push(prefix + String(f));
+  } else {
+    const pat = String(t.pattern || '');
+    const re = /\(\?P<([A-Za-z_][A-Za-z0-9_]*)>/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(pat)) !== null) out.push(m[1]);
+  }
+  if (String(t.onError) === 'route') out.push('_parse_error');
+  return out;
+}
 // Special selection id for the pipeline-level settings panel (not a real node).
 const SETTINGS_NODE = '__pipeline_settings__';
 // A DLQ destination is any real sink type (never 'dlq' itself — DLQ is a route,
@@ -1650,22 +1688,60 @@ function renderMapEditor(node: Node): HTMLElement {
   box.appendChild(add);
   f.appendChild(box);
 
-  // ── Available data (upstream columns) — click to insert =$field ──────────
-  // Show the schema visible ENTERING this map (i.e. produced by everything
-  // before it), so users insert the source fields they map from — not the
-  // map's own output fields.
+  // ── Available data (upstream columns) — the input schema, like the OOTB
+  // Flogo mapper's left-hand tree. Click a field to map it: if an expression
+  // input is focused it inserts =$field at the caret; otherwise it ADDS a new
+  // "field ← =$field" mapping row (the drag-to-output equivalent).
   const help = el('div', 'mhelp');
   const cols = upstreamSchema(node);
+  help.appendChild(el('div', 'lbl', 'Available data' + (cols.length ? ` · ${cols.length} field${cols.length === 1 ? '' : 's'}` : '')));
   if (cols.length) {
-    help.appendChild(el('div', 'lbl', 'Available data'));
+    // "Map all" — one click creates a full passthrough projection (every input
+    // field → same-named output), the fastest way to start from a valid map.
+    const bar = el('div', 'mapall');
+    const allBtn = el('span', 'chip2 act', '⧉ Map all fields');
+    allBtn.title = 'Add a passthrough mapping for every input field';
+    allBtn.onclick = () => {
+      cols.forEach((c) => {
+        if (!(c.name in fields)) { fields[c.name] = `=$${c.name}`; order.push(c.name); }
+      });
+      persist();
+      renderEditor();
+    };
+    bar.appendChild(allBtn);
+    help.appendChild(bar);
+
     const chips = el('div', 'chips');
     cols.forEach((c) => {
-      const chip = el('span', 'chip2', c.name);
-      chip.title = `Insert =$${c.name}`;
-      chip.onclick = () => insertIntoMapExpr(`=$${c.name}`);
+      const mapped = fields[c.name] === `=$${c.name}`;
+      const chip = el('span', 'chip2 data' + (mapped ? ' used' : ''), `${c.name}`);
+      chip.title = mapFocusedInput
+        ? `Insert =$${c.name} at the caret`
+        : `Add mapping ${c.name} ← =$${c.name}`;
+      chip.onclick = () => {
+        if (mapFocusedInput) {
+          insertIntoMapExpr(`=$${c.name}`);
+        } else {
+          // Drag-to-output equivalent: add a passthrough row for this field.
+          if (!(c.name in fields)) { fields[c.name] = `=$${c.name}`; order.push(c.name); }
+          else { fields[c.name] = `=$${c.name}`; }
+          persist();
+          renderEditor();
+        }
+      };
       chips.appendChild(chip);
     });
     help.appendChild(chips);
+  } else {
+    // No declared/known schema (self-describing source, no preview yet). Offer a
+    // one-click preview so the palette fills with live columns.
+    const empty = el('div', 'mapempty');
+    empty.appendChild(el('div', 'muted', '<div style="font-size:11.5px;line-height:1.5">No input fields to show yet. For self-describing sources (Parquet/JSON) or a source without declared columns, load the live schema:</div>'));
+    const b = el('button', 'btn sm', '⌕ Load fields from preview');
+    b.style.marginTop = '8px';
+    b.onclick = () => doPreview();
+    empty.appendChild(b);
+    help.appendChild(empty);
   }
 
   // ── Functions — click to insert a call snippet ───────────────────────────
@@ -1678,7 +1754,7 @@ function renderMapEditor(node: Node): HTMLElement {
     fchips.appendChild(chip);
   });
   help.appendChild(fchips);
-  help.appendChild(el('div', 'focushint', 'Click an expression field, then a data column or function to insert at the caret. Prefix literals with =, reference fields with =$name.'));
+  help.appendChild(el('div', 'focushint', 'Click a field to map it (adds a row, or inserts at the caret when an expression is focused). Click a function to insert it. Reference fields as =$name, literals as plain text.'));
   f.appendChild(help);
   return f;
 }
@@ -2355,7 +2431,7 @@ function schemaForNode(node: Node): Array<{ name: string; type: string; derived?
   const src: any = S.doc.source || {};
   let cols: Array<{ name: string; type: string; derived?: boolean }> = Array.isArray(src.columns)
     ? src.columns.map((c: any) => ({ name: c.name, type: c.type || 'string' }))
-    : [];
+    : (SOURCE_FIXED_SCHEMA[String(src.type)] || []).map((c) => ({ name: c.name, type: c.type }));
   const transforms = Array.isArray(S.doc.transforms) ? S.doc.transforms : [];
   // Source sees no transforms; sink/dlq see the full chain; a transform sees up
   // to its own index.
@@ -2367,10 +2443,15 @@ function schemaForNode(node: Node): Array<{ name: string; type: string; derived?
       // map replaces the projected set with its output fields
       cols = Object.keys(t.fields).map((k) => ({ name: k, type: 'derived', derived: true }));
     }
-    // filter/validate/hwm/dq/lookup/schemadrift are passthrough for schema purposes
-    // (lookup appends outputFields)
+    // filter/validate/hwm/dq/schemadrift are passthrough for schema purposes.
+    // lookup and parse APPEND columns to the existing set.
     if (t.type === 'lookup' && Array.isArray(t.outputFields)) {
       t.outputFields.forEach((f: any) => cols.push({ name: String(f), type: 'derived', derived: true }));
+    }
+    if (t.type === 'parse') {
+      parseProducedColumns(t).forEach((n) => {
+        if (!cols.some((c) => c.name === n)) cols.push({ name: n, type: 'derived', derived: true });
+      });
     }
   }
   return cols;
@@ -2383,7 +2464,7 @@ function upstreamSchema(node: Node): Array<{ name: string; type: string; derived
   const src: any = S.doc.source || {};
   let cols: Array<{ name: string; type: string; derived?: boolean }> = Array.isArray(src.columns)
     ? src.columns.map((c: any) => ({ name: c.name, type: c.type || 'string' }))
-    : [];
+    : (SOURCE_FIXED_SCHEMA[String(src.type)] || []).map((c) => ({ name: c.name, type: c.type }));
   const transforms = Array.isArray(S.doc.transforms) ? S.doc.transforms : [];
   const stop = typeof node.ref === 'number' ? (node.ref as number) : transforms.length;
   for (let i = 0; i < stop; i++) {
@@ -2394,6 +2475,11 @@ function upstreamSchema(node: Node): Array<{ name: string; type: string; derived
     }
     if (t.type === 'lookup' && Array.isArray(t.outputFields)) {
       t.outputFields.forEach((f: any) => cols.push({ name: String(f), type: 'derived', derived: true }));
+    }
+    if (t.type === 'parse') {
+      parseProducedColumns(t).forEach((n) => {
+        if (!cols.some((c) => c.name === n)) cols.push({ name: n, type: 'derived', derived: true });
+      });
     }
   }
   // If a preview ran, prefer its live columns for the very first map (source
@@ -2832,7 +2918,9 @@ const TRANSFORMS: Array<{ type: string; label: string; cfg: Record<string, unkno
 // complete, valid projection.
 function upstreamColumnsAt(insertIndex: number): string[] {
   const src: any = S.doc.source || {};
-  let cols: string[] = Array.isArray(src.columns) ? src.columns.map((c: any) => String(c.name)) : [];
+  let cols: string[] = Array.isArray(src.columns)
+    ? src.columns.map((c: any) => String(c.name))
+    : (SOURCE_FIXED_SCHEMA[String(src.type)] || []).map((c) => c.name);
   const transforms = Array.isArray(S.doc.transforms) ? S.doc.transforms : [];
   for (let i = 0; i < insertIndex && i < transforms.length; i++) {
     const t: any = transforms[i];
@@ -2842,6 +2930,9 @@ function upstreamColumnsAt(insertIndex: number): string[] {
     }
     if (t.type === 'lookup' && Array.isArray(t.outputFields)) {
       t.outputFields.forEach((f: any) => cols.push(String(f)));
+    }
+    if (t.type === 'parse') {
+      parseProducedColumns(t).forEach((n) => { if (!cols.includes(n)) cols.push(n); });
     }
   }
   if (!cols.length && S.preview && S.preview.columns.length) cols = S.preview.columns.slice();

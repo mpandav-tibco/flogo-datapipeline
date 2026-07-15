@@ -237,6 +237,15 @@ select.v{appearance:none;cursor:pointer;background-image:linear-gradient(45deg,t
 .mhelp .chip2{font:11px var(--mono);color:var(--text);background:#2a2a2a;border:1px solid var(--inputBorder);border-radius:5px;padding:2px 7px;cursor:pointer}
 .mhelp .chip2:hover{background:#33608f;color:#fff;border-color:#33608f}
 .mhelp .chip2.fn{color:var(--orange)}
+/* input-field chips carry a subtle "$" affordance and a mapped/used state */
+.mhelp .chip2.data{color:var(--blueHi)}
+.mhelp .chip2.data::before{content:"$";opacity:.5;margin-right:1px}
+.mhelp .chip2.data.used{background:#1e3a2a;border-color:#2f5c3f;color:#7fd6a0}
+.mhelp .chip2.data.used::after{content:" ✓";opacity:.8}
+.mhelp .chip2.act{color:#fff;background:#33608f;border-color:#33608f}
+.mhelp .chip2.act:hover{background:var(--blue);border-color:var(--blue)}
+.mhelp .mapall{margin:0 0 6px}
+.mhelp .mapempty{background:#202020;border:1px dashed var(--inputBorder);border-radius:6px;padding:10px}
 .mhelp .focushint{font-size:10.5px;color:var(--dim);margin-top:6px}
 /* rule / expectation cards (validate + dq) */
 .rcards{display:flex;flex-direction:column;gap:8px}
