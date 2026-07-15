@@ -357,6 +357,8 @@ const FIELD_LABELS: Record<string, string> = {
   // lookup
   keyField: 'Key field', url: 'URL', method: 'HTTP method', concurrency: 'Concurrency',
   cacheSize: 'Cache size', timeoutMs: 'Timeout (ms)', onError: 'On error', outputFields: 'Output fields',
+  // parse (mode/prefix labels are shared with kafka/objstore above)
+  source: 'Source field', pattern: 'Regex pattern', keepSource: 'Keep source field',
   // checkpoint / watermark shared
   addr: 'Address', keyPrefix: 'Key prefix', backend: 'Backend', nullable: 'Nullable',
 };
@@ -391,6 +393,16 @@ const FIELD_ENUMS: Record<string, string[]> = {
   // watermark
   backend: ['file', 'redis', 'postgres'],
 };
+// Per-stage-type enum overrides — used when a field name is shared across stage
+// types with different allowed values (e.g. `mode` is streaming/batch for kafka
+// but regex/json for parse; `onError` is null/skip/fail for lookup but
+// keep/drop/route for parse). Keyed by stage type, then field name.
+const FIELD_ENUMS_BY_TYPE: Record<string, Record<string, string[]>> = {
+  parse: {
+    mode: ['regex', 'json'],
+    onError: ['keep', 'drop', 'route'],
+  },
+};
 const FIELD_HINTS: Record<string, string> = {
   path: 'Local path or glob. Supports ${date}/${year} templating.',
   dsn: 'e.g. host=localhost port=5432 dbname=app user=… sslmode=disable',
@@ -414,8 +426,11 @@ const FIELD_HINTS: Record<string, string> = {
   broadcastHeader: 'Stamp every header attribute onto each body row so downstream transforms and the sink see file-level context.',
   template: 'Go text/template. Available: .Rows (each row as a map), .Count, .Columns, .Attr (header fields). Helpers: rpad, lpad, padc, sci, upper, lower, trim, add, seq.',
   templatePath: 'Path to a .tmpl file. Overrides the inline template when set.',
-};
-const SOURCE_TYPES = ['csv', 'tsv', 'fixedwidth', 'sectioned', 'parquet', 'xml', 'jsonlines', 'jdbc', 'kafka', 's3', 'gcs', 'adls'];
+  source: 'Name of the text field to structure into columns (e.g. message).',
+  pattern: 'Regex with named groups (?P<name>…); each group becomes a column. Use (?s) to span multiline stack traces.',
+  prefix: 'Optional prefix added to each extracted column name (JSON mode), e.g. log_.',
+  keepSource: 'Keep the original source field alongside the extracted columns.',
+};const SOURCE_TYPES = ['csv', 'tsv', 'fixedwidth', 'sectioned', 'parquet', 'xml', 'jsonlines', 'jdbc', 'kafka', 's3', 'gcs', 'adls'];
 const SINK_TYPES = ['jdbc', 'parquet', 'csv', 'jsonlines', 'template', 'kafka', 's3', 'gcs', 'adls', 'null'];
 // Friendly, generic display labels for stage types whose engine id is jargon.
 // The engine id (used in the .datapipeline file) is unchanged; only the picker
@@ -536,10 +551,12 @@ function renderField(node: Node, key: string, value: string): HTMLElement {
     return f;
   }
 
-  // Enum → dropdown
-  if (FIELD_ENUMS[key]) {
+  // Enum → dropdown. A per-stage-type override wins over the shared FIELD_ENUMS
+  // so fields like `mode`/`onError` show the right options for this stage type.
+  const enumOpts = (FIELD_ENUMS_BY_TYPE[node.type] && FIELD_ENUMS_BY_TYPE[node.type][key]) || FIELD_ENUMS[key];
+  if (enumOpts) {
     const sel = el('select', 'v') as HTMLSelectElement;
-    const opts = FIELD_ENUMS[key].slice();
+    const opts = enumOpts.slice();
     if (!opts.includes(value) && value) opts.unshift(value);
     opts.forEach((o) => {
       const op = document.createElement('option');
@@ -2805,6 +2822,8 @@ const TRANSFORMS: Array<{ type: string; label: string; cfg: Record<string, unkno
     cfg: { expectations: [{ type: 'expectColumnNotNull', column: 'id' }], onFail: 'warn', qualityThreshold: 0.95 } },
   { type: 'schemadrift', label: 'Schema drift — detect column add/remove/type',
     cfg: { policy: 'additive', onDrift: 'log' } },
+  { type: 'parse', label: 'Parse — structure a text field into columns (regex/JSON)',
+    cfg: { source: 'message', mode: 'regex', pattern: '^(?P<level>\\w+)\\s+(?P<msg>.*)$', onError: 'keep', keepSource: true } },
 ];
 
 // Compute the column names visible at a given transforms[] insert position,

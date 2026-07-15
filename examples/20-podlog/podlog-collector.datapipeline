@@ -63,8 +63,19 @@
               "message": "=$message",
               "node": "=$node",
               "idempotency_key": "=$idempotency_key",
-              "ingest_time": "=datetime.now()"
+              "ingest_time": "=datetime.now()",
+              "ingest_date": "=datetime.today()",
+              "environment": "production",
+              "collector": "flogo-datapipeline"
             }
+          },
+          {
+            "type": "parse",
+            "source": "message",
+            "mode": "regex",
+            "pattern": "(?s)^(?P<log_ts>\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2})\\s+(?P<log_level>\\w+)\\s+\\[(?P<log_thread>[^\\]]+)\\]\\s+(?P<log_text>.*)$",
+            "onError": "keep",
+            "keepSource": true
           },
           {
             "type": "validate",

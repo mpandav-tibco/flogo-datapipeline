@@ -70,6 +70,40 @@ Each record carries a stable **idempotency key**
 `sha256(node + file + fingerprint + end-offset)` so a downstream consumer can
 dedupe replays.
 
+### Adding fields & structuring the message (Fluent Bit-style)
+
+Just like Fluentd's `record_transformer` and Fluent Bit's `parser`, you enrich
+and structure records with transforms — no source change needed. This example's
+chain does both:
+
+- **`map`** adds fields: `ingest_time` (`=datetime.now()`), `ingest_date`
+  (`=datetime.today()`), and static tags `environment`/`collector`. Any
+  expression works — literals, `datetime.*`, string/number functions, computed
+  values, or `$property[…]`.
+- **`parse`** structures the raw `message` into typed columns via a regex with
+  named capture groups — the Fluent Bit `parser` equivalent:
+
+  ```jsonc
+  {
+    "type": "parse",
+    "source": "message",
+    "mode": "regex",
+    "pattern": "(?s)^(?P<log_ts>\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2})\\s+(?P<log_level>\\w+)\\s+\\[(?P<log_thread>[^\\]]+)\\]\\s+(?P<log_text>.*)$",
+    "onError": "keep"       // keep | drop | route(→DLQ)
+  }
+  ```
+
+  Each `(?P<name>…)` group becomes a column (`log_ts`, `log_level`,
+  `log_thread`, `log_text`). `(?s)` lets `.` span newlines so a multiline stack
+  trace is captured whole in `log_text`. For JSON logs, use `"mode": "json"`
+  with a `fields` allow-list to lift keys into columns.
+
+  A parsed record then looks like:
+  ```json
+  { …, "log_level": "ERROR", "log_thread": "worker-3",
+        "log_text": "Unhandled exception …\n\tat com.tibco.bw.OrderFlow…" }
+  ```
+
 ---
 
 ## Configuration
