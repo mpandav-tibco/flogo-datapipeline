@@ -24,6 +24,9 @@ vendor/
 # Build output
 dist/
 build/
+# ...but keep the top-level build/ Go package (import-derivation source for dp-build)
+!/build/
+!/build/*.go
 
 # IDE
 .idea/
@@ -60,3 +63,10 @@ examples/08-parquet-columnar/data/*.parquet
 .env
 *.env
 secrets/
+
+# dp-build transient codegen dir
+.dpbuild/
+
+# Local Go workspace (machine-specific replaces)
+go.work
+go.work.sum

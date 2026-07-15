@@ -5,6 +5,10 @@
  "appModel": "1.1.1",
  "imports": [
   "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+  "github.com/mpandav-tibco/flogo-datapipeline/objstore/s3",
+  "github.com/mpandav-tibco/flogo-datapipeline/sink/parquet",
+  "github.com/mpandav-tibco/flogo-datapipeline/source/objstore",
+  "github.com/mpandav-tibco/flogo-datapipeline/source/parquet",
   "github.com/project-flogo/contrib/trigger/timer"
  ],
  "triggers": [

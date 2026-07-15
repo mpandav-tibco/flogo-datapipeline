@@ -5,10 +5,72 @@ engine idles). We start the process, read stdout until the "pipeline run
 completed/failed" line (which carries the row counts and engine-measured
 duration), then terminate it.
 """
+import os
 import re
 import subprocess
 import threading
 import time
+
+
+def ensure_dp_build(repo, dp_build):
+    """Compile cmd/dp-build (the import-driven lean builder) if it is missing."""
+    if not os.path.exists(dp_build):
+        subprocess.run(["go", "build", "-o", dp_build, "./cmd/dp-build"], cwd=repo, check=True)
+    return dp_build
+
+
+def ensure_lean_bin(dp_build, pipe_path, out_dir):
+    """Build (once, cached) a lean per-pipeline binary for pipe_path via dp-build
+    and return its path. The binary links only the components that pipeline uses
+    — the same artifact you would deploy — so the benchmark runs on lean binaries
+    rather than a monolith. Rebuilds only when the pipe is newer than the binary.
+    """
+    os.makedirs(out_dir, exist_ok=True)
+    name = os.path.splitext(os.path.basename(pipe_path))[0]
+    out = os.path.join(out_dir, "dp-" + name)
+    if os.path.exists(out) and os.path.getmtime(out) >= os.path.getmtime(pipe_path):
+        return out
+    r = subprocess.run([dp_build, "-f", pipe_path, "-o", out], capture_output=True, text=True)
+    if r.returncode != 0 or not os.path.exists(out):
+        raise RuntimeError("dp-build failed for %s:\n%s" % (pipe_path, r.stderr or r.stdout))
+    return out
+
+
+def _parse_cputime(s):
+    """Parse a `ps` cputime string (MM:SS.ss / HH:MM:SS / DD-HH:MM:SS) to seconds."""
+    s = s.strip()
+    if not s:
+        return 0.0
+    days = 0
+    if "-" in s:
+        d, s = s.split("-", 1)
+        days = int(d)
+    sec = 0.0
+    for part in s.split(":"):
+        sec = sec * 60 + float(part)
+    return days * 86400 + sec
+
+
+def _sample_resources(pid, stop_evt, state):
+    """Poll RSS (KiB) and cumulative CPU time for pid; keep peak RSS and last cputime.
+
+    state is a dict shared with the caller: {"peak_rss_kib": int, "cpu_s": float}.
+    """
+    while not stop_evt.is_set():
+        try:
+            out = subprocess.run(["ps", "-o", "rss=,cputime=", "-p", str(pid)],
+                                 capture_output=True, text=True).stdout.strip()
+            if out:
+                parts = out.split()
+                kib = int(parts[0])
+                if kib > state["peak_rss_kib"]:
+                    state["peak_rss_kib"] = kib
+                if len(parts) > 1:
+                    state["cpu_s"] = _parse_cputime(parts[1])
+        except (ValueError, OSError, IndexError):
+            pass
+        stop_evt.wait(0.2)
+
 
 _LINE = re.compile(
     r"run (completed|failed) .*?processed=(\d+) written=(\d+) failed=(\d+)"
@@ -16,16 +78,25 @@ _LINE = re.compile(
 
 
 def run_pipe(binary, pipe_path, env=None, cwd=None, max_seconds=3600):
-    """Run one pipe; return a result dict with counts, duration_ms, rows_per_sec, status.
+    """Run one pipe; return a result dict with counts, duration_ms, rows_per_sec,
+    peak_rss_mb, cpu_seconds, cpu_cores, status.
 
     A watchdog thread force-terminates the daemon at ``max_seconds`` so a silent
     hang (no stdout) is still capped — the blocking ``for line in proc.stdout``
-    loop cannot check the clock on its own.
+    loop cannot check the clock on its own. A second thread samples the process
+    RSS and cumulative CPU time so we can report the memory + CPU footprint
+    (the TCO metrics) for this single-instance run.
     """
     proc = subprocess.Popen([binary, "-f", pipe_path], stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, text=True, bufsize=1, env=env, cwd=cwd)
     res, t0 = None, time.time()
     timed_out = threading.Event()
+
+    stop_sampler = threading.Event()
+    rstate = {"peak_rss_kib": 0, "cpu_s": 0.0}
+    sampler = threading.Thread(target=_sample_resources, args=(proc.pid, stop_sampler, rstate))
+    sampler.daemon = True
+    sampler.start()
 
     def _watchdog():
         proc.terminate()
@@ -49,11 +120,14 @@ def run_pipe(binary, pipe_path, env=None, cwd=None, max_seconds=3600):
                 break
     finally:
         wd.cancel()
+        stop_sampler.set()
         proc.terminate()
         try:
             proc.wait(timeout=15)
         except subprocess.TimeoutExpired:
             proc.kill()
+    peak_rss_mb = round(rstate["peak_rss_kib"] / 1024.0, 1)
+    cpu_seconds = round(rstate["cpu_s"], 1)
     if res is None and timed_out.is_set():
         res = {"processed": 0, "written": 0, "failed": 0, "dropped": 0, "routed": 0,
                "duration_ms": 0, "rows_per_sec": 0, "status": "timeout",
@@ -61,4 +135,9 @@ def run_pipe(binary, pipe_path, env=None, cwd=None, max_seconds=3600):
     if res is None:
         res = {"processed": 0, "written": 0, "failed": 0, "dropped": 0, "routed": 0,
                "duration_ms": 0, "rows_per_sec": 0, "status": "no-output", "err": "no completion line"}
+    res["peak_rss_mb"] = peak_rss_mb
+    res["cpu_seconds"] = cpu_seconds
+    # Average CPU cores utilised over the wall-clock run (>1.0 = multi-core).
+    wall_s = res["duration_ms"] / 1000.0
+    res["cpu_cores"] = round(cpu_seconds / wall_s, 2) if wall_s > 0 else 0.0
     return res

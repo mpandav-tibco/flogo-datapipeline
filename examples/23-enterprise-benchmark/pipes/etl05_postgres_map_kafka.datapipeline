@@ -4,7 +4,11 @@
  "version": "1.0.0",
  "appModel": "1.1.1",
  "imports": [
+  "github.com/lib/pq",
   "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+  "github.com/mpandav-tibco/flogo-datapipeline/sink/kafka",
+  "github.com/mpandav-tibco/flogo-datapipeline/source/jdbc",
+  "github.com/mpandav-tibco/flogo-datapipeline/transform/mapper",
   "github.com/project-flogo/contrib/trigger/timer"
  ],
  "triggers": [

@@ -7,7 +7,7 @@ valid rows continue to the sink. No row is silently lost.
 
 | Processed | Good (sink) | Rejected (DLQ) | Conserved | Throughput |
 |----------:|------------:|---------------:|:---------:|-----------:|
-| 53,000,000 | 50,589,628 | 2,410,372 | yes | 274,939/s |
+| 53,000,000 | 50,589,628 | 2,410,372 | yes | 110,911/s |
 
 ## ent02 - Checkpoint / resume
 
@@ -16,5 +16,5 @@ committed row-checkpoint instead of restarting from zero.
 
 | Run 1 | Committed @ kill | Run 2 (resume) | Rows processed on resume |
 |-------|-----------------:|----------------|-------------------------:|
-| timeout | 10,000,000 | completed | 53,000,000 |
+| timeout | 3,000,000 | completed | 53,000,000 |
 
