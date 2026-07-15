@@ -19,6 +19,7 @@ package otel
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -38,6 +39,7 @@ func init() {
 // otelRecorder implements metrics.Recorder using OpenTelemetry instruments.
 type otelRecorder struct {
 	provider *sdkmetric.MeterProvider
+	meter    metric.Meter
 
 	// Counters
 	rowsRead        metric.Int64Counter
@@ -53,6 +55,13 @@ type otelRecorder struct {
 
 	// Gauges
 	throughput metric.Float64Gauge
+
+	// Dynamic component instruments (Recorder.Counter/Gauge), lazily created on
+	// first use and keyed by metric name, so sources/sinks emit their own metrics
+	// through the OTEL backend.
+	dynMu       sync.Mutex
+	dynCounters map[string]metric.Float64Counter
+	dynGauges   map[string]metric.Float64Gauge
 }
 
 func newOtelRecorder(cfg map[string]interface{}) (met.Recorder, error) {
@@ -115,7 +124,7 @@ func newOtelRecorder(cfg map[string]interface{}) (met.Recorder, error) {
 		metric.WithInstrumentationVersion("v1"),
 	)
 
-	r := &otelRecorder{provider: provider}
+	r := &otelRecorder{provider: provider, meter: meter}
 
 	r.rowsRead, err = meter.Int64Counter("flogo.pipeline.rows.read",
 		metric.WithDescription("Total rows read from source."),
@@ -251,6 +260,53 @@ func (r *otelRecorder) PipelineComplete(pipeline, status string, rowsProcessed, 
 func (r *otelRecorder) Stall(pipeline, stage string, dur time.Duration) {
 	r.stallsTotal.Add(context.Background(), 1, attrs("pipeline", pipeline, "stage", stage))
 	_ = dur
+}
+
+// labelAttrs builds an OTEL measurement option from a label map.
+func labelAttrs(labels map[string]string) metric.MeasurementOption {
+	set := make([]attribute.KeyValue, 0, len(labels))
+	for k, v := range labels {
+		set = append(set, attribute.String(k, v))
+	}
+	return metric.WithAttributeSet(attribute.NewSet(set...))
+}
+
+func (r *otelRecorder) Counter(name, help string, labels map[string]string, delta float64) {
+	r.dynMu.Lock()
+	if r.dynCounters == nil {
+		r.dynCounters = map[string]metric.Float64Counter{}
+	}
+	c, ok := r.dynCounters[name]
+	if !ok {
+		var err error
+		c, err = r.meter.Float64Counter(name, metric.WithDescription(help))
+		if err != nil {
+			r.dynMu.Unlock()
+			return
+		}
+		r.dynCounters[name] = c
+	}
+	r.dynMu.Unlock()
+	c.Add(context.Background(), delta, labelAttrs(labels))
+}
+
+func (r *otelRecorder) Gauge(name, help string, labels map[string]string, value float64) {
+	r.dynMu.Lock()
+	if r.dynGauges == nil {
+		r.dynGauges = map[string]metric.Float64Gauge{}
+	}
+	g, ok := r.dynGauges[name]
+	if !ok {
+		var err error
+		g, err = r.meter.Float64Gauge(name, metric.WithDescription(help))
+		if err != nil {
+			r.dynMu.Unlock()
+			return
+		}
+		r.dynGauges[name] = g
+	}
+	r.dynMu.Unlock()
+	g.Record(context.Background(), value, labelAttrs(labels))
 }
 
 // Shutdown flushes the OTEL metric exporter and shuts down the provider.

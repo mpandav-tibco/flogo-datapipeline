@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sort"
 	"sync"
 	"time"
 
@@ -50,6 +51,14 @@ var shared struct {
 	stallsTotal     *prom.CounterVec
 	throughputGauge *prom.GaugeVec
 	checkpoints     *prom.CounterVec
+
+	// Dynamic component instruments (Recorder.Counter/Gauge). Sources and sinks
+	// emit their own metrics through these, lazily created on first use and keyed
+	// by metric name. The registry is the same isolated one the /metrics server
+	// gathers, so component metrics honour the configured backend.
+	dynMu       sync.Mutex
+	dynCounters map[string]*prom.CounterVec
+	dynGauges   map[string]*prom.GaugeVec
 }
 
 func initShared(listenAddr, path string) error {
@@ -207,6 +216,71 @@ func (r *promRecorder) PipelineComplete(pipeline, status string, rowsProcessed, 
 func (r *promRecorder) Stall(pipeline, stage string, dur time.Duration) {
 	shared.stallsTotal.WithLabelValues(pipeline, stage).Inc()
 	_ = dur
+}
+
+// sortedLabelKeys returns the label names in deterministic order, so a metric's
+// label set is stable across calls (Prometheus requires a fixed label schema per
+// metric name).
+func sortedLabelKeys(labels map[string]string) []string {
+	keys := make([]string, 0, len(labels))
+	for k := range labels {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func (r *promRecorder) Counter(name, help string, labels map[string]string, delta float64) {
+	keys := sortedLabelKeys(labels)
+	shared.dynMu.Lock()
+	if shared.dynCounters == nil {
+		shared.dynCounters = map[string]*prom.CounterVec{}
+	}
+	cv, ok := shared.dynCounters[name]
+	if !ok {
+		cv = prom.NewCounterVec(prom.CounterOpts{Name: name, Help: help}, keys)
+		if err := shared.reg.Register(cv); err != nil {
+			// Already registered by a racing caller: reuse the existing collector.
+			if are, isARE := err.(prom.AlreadyRegisteredError); isARE {
+				if existing, castOK := are.ExistingCollector.(*prom.CounterVec); castOK {
+					cv = existing
+				}
+			}
+		}
+		shared.dynCounters[name] = cv
+	}
+	shared.dynMu.Unlock()
+	vals := make([]string, len(keys))
+	for i, k := range keys {
+		vals[i] = labels[k]
+	}
+	cv.WithLabelValues(vals...).Add(delta)
+}
+
+func (r *promRecorder) Gauge(name, help string, labels map[string]string, value float64) {
+	keys := sortedLabelKeys(labels)
+	shared.dynMu.Lock()
+	if shared.dynGauges == nil {
+		shared.dynGauges = map[string]*prom.GaugeVec{}
+	}
+	gv, ok := shared.dynGauges[name]
+	if !ok {
+		gv = prom.NewGaugeVec(prom.GaugeOpts{Name: name, Help: help}, keys)
+		if err := shared.reg.Register(gv); err != nil {
+			if are, isARE := err.(prom.AlreadyRegisteredError); isARE {
+				if existing, castOK := are.ExistingCollector.(*prom.GaugeVec); castOK {
+					gv = existing
+				}
+			}
+		}
+		shared.dynGauges[name] = gv
+	}
+	shared.dynMu.Unlock()
+	vals := make([]string, len(keys))
+	for i, k := range keys {
+		vals[i] = labels[k]
+	}
+	gv.WithLabelValues(vals...).Set(value)
 }
 
 // Shutdown gracefully stops the shared HTTP server.

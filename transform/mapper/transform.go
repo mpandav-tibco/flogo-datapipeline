@@ -22,11 +22,20 @@
 package mapper
 
 import (
+	"crypto/md5"
+	"crypto/rand"
+	"crypto/sha1"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"math"
+	mathrand "math/rand"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mpandav-tibco/flogo-datapipeline/record"
@@ -785,4 +794,472 @@ func registerExtendedBuiltins() {
 	reg([]string{"notEquals"}, func(a []interface{}) interface{} {
 		return argStr(a, 0) != argStr(a, 1)
 	})
+}
+
+// --- comprehensive ETL function library ---
+//
+// registerEtlBuiltins rounds out the namespaced library with the functions ETL
+// designers reach for most: extended string ops (split/regex/case), math
+// (pow/sqrt/sign), rich datetime arithmetic (add/diff/epoch/parts), surrogate-
+// key & masking helpers (hash.*, encoding.*, util.uuid), and null/conditional
+// logic (nvl/nullif/between/decode). Every entry mirrors a Flogo OOTB function
+// family (string.*, number.*, math.*, datetime.*, coerce.*) so the Studio
+// palette and the runtime stay in lock-step. Names are registered lowercased
+// because compileExpr lowercases before lookup.
+func init() { registerEtlBuiltins() }
+
+// regexCache memoizes compiled patterns; row-level transforms call these per
+// record, so compiling once per distinct pattern avoids a hot-path recompile.
+var (
+	regexCache   = map[string]*regexp.Regexp{}
+	regexCacheMu sync.RWMutex
+)
+
+func cachedRegex(pattern string) *regexp.Regexp {
+	regexCacheMu.RLock()
+	re := regexCache[pattern]
+	regexCacheMu.RUnlock()
+	if re != nil {
+		return re
+	}
+	compiled, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil
+	}
+	regexCacheMu.Lock()
+	regexCache[pattern] = compiled
+	regexCacheMu.Unlock()
+	return compiled
+}
+
+func registerEtlBuiltins() {
+	reg := func(names []string, fn func([]interface{}) interface{}) {
+		for _, n := range names {
+			builtins[strings.ToLower(n)] = fn
+		}
+	}
+
+	// ── string.* (extended) ──
+	reg([]string{"string.split"}, func(a []interface{}) interface{} {
+		// split(s, sep [, index]) → the whole []string, or the nth token when an
+		// index is given (a very common ETL "take the 3rd CSV field" pattern).
+		parts := strings.Split(argStr(a, 0), argStr(a, 1))
+		if idx, ok := argInt(a, 2); ok {
+			if idx < 0 || idx >= len(parts) {
+				return nil
+			}
+			return parts[idx]
+		}
+		out := make([]interface{}, len(parts))
+		for i, p := range parts {
+			out[i] = p
+		}
+		return out
+	})
+	reg([]string{"string.join"}, func(a []interface{}) interface{} {
+		// join(sep, v1, v2, …) — join the trailing values with the first arg.
+		if len(a) == 0 {
+			return ""
+		}
+		sep := argStr(a, 0)
+		parts := make([]string, 0, len(a)-1)
+		for i := 1; i < len(a); i++ {
+			parts = append(parts, argStr(a, i))
+		}
+		return strings.Join(parts, sep)
+	})
+	reg([]string{"string.title", "string.capitalize"}, func(a []interface{}) interface{} {
+		return strings.Title(strings.ToLower(argStr(a, 0)))
+	})
+	reg([]string{"string.reverse"}, func(a []interface{}) interface{} {
+		r := []rune(argStr(a, 0))
+		for i, j := 0, len(r)-1; i < j; i, j = i+1, j-1 {
+			r[i], r[j] = r[j], r[i]
+		}
+		return string(r)
+	})
+	reg([]string{"string.repeat"}, func(a []interface{}) interface{} {
+		n, _ := argInt(a, 1)
+		if n < 0 {
+			n = 0
+		}
+		return strings.Repeat(argStr(a, 0), n)
+	})
+	reg([]string{"string.lastIndexOf"}, func(a []interface{}) interface{} {
+		return strings.LastIndex(argStr(a, 0), argStr(a, 1))
+	})
+	reg([]string{"string.equalsIgnoreCase"}, func(a []interface{}) interface{} {
+		return strings.EqualFold(argStr(a, 0), argStr(a, 1))
+	})
+	reg([]string{"string.count"}, func(a []interface{}) interface{} {
+		return strings.Count(argStr(a, 0), argStr(a, 1))
+	})
+	reg([]string{"string.trimLeft"}, func(a []interface{}) interface{} {
+		cut := argStr(a, 1)
+		if cut == "" {
+			return strings.TrimLeft(argStr(a, 0), " \t\n\r")
+		}
+		return strings.TrimLeft(argStr(a, 0), cut)
+	})
+	reg([]string{"string.trimRight"}, func(a []interface{}) interface{} {
+		cut := argStr(a, 1)
+		if cut == "" {
+			return strings.TrimRight(argStr(a, 0), " \t\n\r")
+		}
+		return strings.TrimRight(argStr(a, 0), cut)
+	})
+	reg([]string{"string.trimPrefix"}, func(a []interface{}) interface{} {
+		return strings.TrimPrefix(argStr(a, 0), argStr(a, 1))
+	})
+	reg([]string{"string.trimSuffix"}, func(a []interface{}) interface{} {
+		return strings.TrimSuffix(argStr(a, 0), argStr(a, 1))
+	})
+	reg([]string{"string.substringBefore"}, func(a []interface{}) interface{} {
+		s, sep := argStr(a, 0), argStr(a, 1)
+		if i := strings.Index(s, sep); i >= 0 {
+			return s[:i]
+		}
+		return s
+	})
+	reg([]string{"string.substringAfter"}, func(a []interface{}) interface{} {
+		s, sep := argStr(a, 0), argStr(a, 1)
+		if i := strings.Index(s, sep); i >= 0 {
+			return s[i+len(sep):]
+		}
+		return ""
+	})
+
+	// ── regex.* ──
+	reg([]string{"regex.match", "string.match"}, func(a []interface{}) interface{} {
+		re := cachedRegex(argStr(a, 1))
+		if re == nil {
+			return false
+		}
+		return re.MatchString(argStr(a, 0))
+	})
+	reg([]string{"regex.replace", "string.replaceRegex"}, func(a []interface{}) interface{} {
+		re := cachedRegex(argStr(a, 1))
+		if re == nil {
+			return argStr(a, 0)
+		}
+		return re.ReplaceAllString(argStr(a, 0), argStr(a, 2))
+	})
+	reg([]string{"regex.extract"}, func(a []interface{}) interface{} {
+		// extract(s, pattern [, group]) → the matched group (0 = whole match).
+		re := cachedRegex(argStr(a, 1))
+		if re == nil {
+			return nil
+		}
+		m := re.FindStringSubmatch(argStr(a, 0))
+		if m == nil {
+			return nil
+		}
+		grp, _ := argInt(a, 2)
+		if grp < 0 || grp >= len(m) {
+			return nil
+		}
+		return m[grp]
+	})
+
+	// ── math.* (extended) ──
+	reg([]string{"math.pow", "number.pow"}, func(a []interface{}) interface{} {
+		x, ok1 := argFloat(a, 0)
+		y, ok2 := argFloat(a, 1)
+		if !ok1 || !ok2 {
+			return nil
+		}
+		return math.Pow(x, y)
+	})
+	reg([]string{"math.sqrt", "number.sqrt"}, func(a []interface{}) interface{} {
+		x, ok := argFloat(a, 0)
+		if !ok || x < 0 {
+			return nil
+		}
+		return math.Sqrt(x)
+	})
+	reg([]string{"math.sign", "number.sign"}, func(a []interface{}) interface{} {
+		x, ok := argFloat(a, 0)
+		if !ok {
+			return nil
+		}
+		switch {
+		case x > 0:
+			return 1
+		case x < 0:
+			return -1
+		default:
+			return 0
+		}
+	})
+	reg([]string{"math.trunc", "number.trunc"}, func(a []interface{}) interface{} {
+		x, ok := argFloat(a, 0)
+		if !ok {
+			return nil
+		}
+		return math.Trunc(x)
+	})
+	reg([]string{"math.log", "number.log"}, func(a []interface{}) interface{} {
+		x, ok := argFloat(a, 0)
+		if !ok || x <= 0 {
+			return nil
+		}
+		return math.Log(x)
+	})
+	reg([]string{"math.log10"}, func(a []interface{}) interface{} {
+		x, ok := argFloat(a, 0)
+		if !ok || x <= 0 {
+			return nil
+		}
+		return math.Log10(x)
+	})
+	reg([]string{"math.exp"}, func(a []interface{}) interface{} {
+		x, ok := argFloat(a, 0)
+		if !ok {
+			return nil
+		}
+		return math.Exp(x)
+	})
+	reg([]string{"number.random", "math.random"}, func(a []interface{}) interface{} {
+		if limit, ok := argInt(a, 0); ok && limit > 0 {
+			return mathrand.Intn(limit)
+		}
+		return mathrand.Float64()
+	})
+
+	// ── datetime.* (extended) ──
+	reg([]string{"datetime.addHours"}, func(a []interface{}) interface{} {
+		t, ok := parseTimeLoose(argStr(a, 0))
+		if !ok {
+			return nil
+		}
+		n, _ := argInt(a, 1)
+		return t.Add(time.Duration(n) * time.Hour).Format(time.RFC3339)
+	})
+	reg([]string{"datetime.addMinutes"}, func(a []interface{}) interface{} {
+		t, ok := parseTimeLoose(argStr(a, 0))
+		if !ok {
+			return nil
+		}
+		n, _ := argInt(a, 1)
+		return t.Add(time.Duration(n) * time.Minute).Format(time.RFC3339)
+	})
+	reg([]string{"datetime.addSeconds"}, func(a []interface{}) interface{} {
+		t, ok := parseTimeLoose(argStr(a, 0))
+		if !ok {
+			return nil
+		}
+		n, _ := argInt(a, 1)
+		return t.Add(time.Duration(n) * time.Second).Format(time.RFC3339)
+	})
+	reg([]string{"datetime.diffDays"}, func(a []interface{}) interface{} {
+		t1, ok1 := parseTimeLoose(argStr(a, 0))
+		t2, ok2 := parseTimeLoose(argStr(a, 1))
+		if !ok1 || !ok2 {
+			return nil
+		}
+		return int(t1.Sub(t2).Hours() / 24)
+	})
+	reg([]string{"datetime.diffSeconds"}, func(a []interface{}) interface{} {
+		t1, ok1 := parseTimeLoose(argStr(a, 0))
+		t2, ok2 := parseTimeLoose(argStr(a, 1))
+		if !ok1 || !ok2 {
+			return nil
+		}
+		return int(t1.Sub(t2).Seconds())
+	})
+	reg([]string{"datetime.hour"}, func(a []interface{}) interface{} {
+		if t, ok := parseTimeLoose(argStr(a, 0)); ok {
+			return t.Hour()
+		}
+		return nil
+	})
+	reg([]string{"datetime.minute"}, func(a []interface{}) interface{} {
+		if t, ok := parseTimeLoose(argStr(a, 0)); ok {
+			return t.Minute()
+		}
+		return nil
+	})
+	reg([]string{"datetime.second"}, func(a []interface{}) interface{} {
+		if t, ok := parseTimeLoose(argStr(a, 0)); ok {
+			return t.Second()
+		}
+		return nil
+	})
+	reg([]string{"datetime.dayOfWeek", "datetime.weekday"}, func(a []interface{}) interface{} {
+		if t, ok := parseTimeLoose(argStr(a, 0)); ok {
+			return t.Weekday().String()
+		}
+		return nil
+	})
+	reg([]string{"datetime.epoch", "datetime.unix", "datetime.toEpoch"}, func(a []interface{}) interface{} {
+		if t, ok := parseTimeLoose(argStr(a, 0)); ok {
+			return t.Unix()
+		}
+		return nil
+	})
+	reg([]string{"datetime.fromEpoch"}, func(a []interface{}) interface{} {
+		sec, ok := argFloat(a, 0)
+		if !ok {
+			return nil
+		}
+		return time.Unix(int64(sec), 0).UTC().Format(time.RFC3339)
+	})
+	reg([]string{"datetime.parse"}, func(a []interface{}) interface{} {
+		// parse(s [, layout]) → normalize to RFC3339. With a Go layout, parse
+		// exactly; otherwise best-effort across common layouts.
+		s := argStr(a, 0)
+		if layout := argStr(a, 1); layout != "" {
+			if t, err := time.Parse(layout, s); err == nil {
+				return t.UTC().Format(time.RFC3339)
+			}
+			return nil
+		}
+		if t, ok := parseTimeLoose(s); ok {
+			return t.UTC().Format(time.RFC3339)
+		}
+		return nil
+	})
+
+	// ── hash.* / encoding.* — surrogate keys, masking, dedup fingerprints ──
+	reg([]string{"hash.md5"}, func(a []interface{}) interface{} {
+		sum := md5.Sum([]byte(concatArgs(a)))
+		return hex.EncodeToString(sum[:])
+	})
+	reg([]string{"hash.sha1"}, func(a []interface{}) interface{} {
+		sum := sha1.Sum([]byte(concatArgs(a)))
+		return hex.EncodeToString(sum[:])
+	})
+	reg([]string{"hash.sha256"}, func(a []interface{}) interface{} {
+		sum := sha256.Sum256([]byte(concatArgs(a)))
+		return hex.EncodeToString(sum[:])
+	})
+	reg([]string{"encoding.base64Encode", "encoding.encodeBase64"}, func(a []interface{}) interface{} {
+		return base64.StdEncoding.EncodeToString([]byte(argStr(a, 0)))
+	})
+	reg([]string{"encoding.base64Decode", "encoding.decodeBase64"}, func(a []interface{}) interface{} {
+		b, err := base64.StdEncoding.DecodeString(argStr(a, 0))
+		if err != nil {
+			return nil
+		}
+		return string(b)
+	})
+	reg([]string{"encoding.hexEncode"}, func(a []interface{}) interface{} {
+		return hex.EncodeToString([]byte(argStr(a, 0)))
+	})
+	reg([]string{"util.uuid", "uuid"}, func(a []interface{}) interface{} {
+		return newUUIDv4()
+	})
+	reg([]string{"util.mask"}, func(a []interface{}) interface{} {
+		// mask(s [, keepLast]) → replace all but the last N chars with '*'.
+		s := []rune(argStr(a, 0))
+		keep, _ := argInt(a, 1)
+		if keep < 0 {
+			keep = 0
+		}
+		if keep >= len(s) {
+			return string(s)
+		}
+		for i := 0; i < len(s)-keep; i++ {
+			s[i] = '*'
+		}
+		return string(s)
+	})
+
+	// ── logic / null handling (SQL-style) ──
+	reg([]string{"nvl", "ifNull"}, func(a []interface{}) interface{} {
+		if len(a) > 0 && a[0] != nil && argStr(a, 0) != "" {
+			return a[0]
+		}
+		if len(a) > 1 {
+			return a[1]
+		}
+		return nil
+	})
+	reg([]string{"nullif"}, func(a []interface{}) interface{} {
+		if len(a) >= 2 && argStr(a, 0) == argStr(a, 1) {
+			return nil
+		}
+		if len(a) > 0 {
+			return a[0]
+		}
+		return nil
+	})
+	reg([]string{"between"}, func(a []interface{}) interface{} {
+		v, ok0 := argFloat(a, 0)
+		lo, ok1 := argFloat(a, 1)
+		hi, ok2 := argFloat(a, 2)
+		if !ok0 || !ok1 || !ok2 {
+			return false
+		}
+		return v >= lo && v <= hi
+	})
+	reg([]string{"greaterThan"}, func(a []interface{}) interface{} {
+		x, ok1 := argFloat(a, 0)
+		y, ok2 := argFloat(a, 1)
+		return ok1 && ok2 && x > y
+	})
+	reg([]string{"lessThan"}, func(a []interface{}) interface{} {
+		x, ok1 := argFloat(a, 0)
+		y, ok2 := argFloat(a, 1)
+		return ok1 && ok2 && x < y
+	})
+	reg([]string{"and"}, func(a []interface{}) interface{} {
+		for _, v := range a {
+			if !truthy(v) {
+				return false
+			}
+		}
+		return len(a) > 0
+	})
+	reg([]string{"or"}, func(a []interface{}) interface{} {
+		for _, v := range a {
+			if truthy(v) {
+				return true
+			}
+		}
+		return false
+	})
+	reg([]string{"not"}, func(a []interface{}) interface{} {
+		return len(a) > 0 && !truthy(a[0])
+	})
+	reg([]string{"decode"}, func(a []interface{}) interface{} {
+		// decode(expr, s1,r1, s2,r2, … [, default]) — Oracle-style value map.
+		if len(a) < 3 {
+			return nil
+		}
+		key := argStr(a, 0)
+		i := 1
+		for ; i+1 < len(a); i += 2 {
+			if argStr(a, i) == key {
+				return a[i+1]
+			}
+		}
+		if i < len(a) { // trailing default
+			return a[i]
+		}
+		return nil
+	})
+}
+
+// concatArgs stringifies and joins all args — used by the hash.* helpers so a
+// composite surrogate key can be built from several columns in one call.
+func concatArgs(args []interface{}) string {
+	var sb strings.Builder
+	for _, a := range args {
+		if a != nil {
+			sb.WriteString(fmt.Sprintf("%v", a))
+		}
+	}
+	return sb.String()
+}
+
+// newUUIDv4 returns a random RFC-4122 v4 UUID without pulling in a dependency.
+func newUUIDv4() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return ""
+	}
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }

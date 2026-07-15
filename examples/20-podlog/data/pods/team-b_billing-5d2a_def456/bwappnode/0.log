@@ -1,0 +1,3 @@
+2026-07-14T10:00:00.500000000Z stdout F 2026-07-14 10:00:00 INFO  [main] Billing service ready
+2026-07-14T10:00:01.600000000Z stdout F 2026-07-14 10:00:01 WARN  [sched] Invoice queue depth high: 421
+2026-07-14T10:00:02.700000000Z stdout F 2026-07-14 10:00:02 INFO  [sched] Drained invoice queue

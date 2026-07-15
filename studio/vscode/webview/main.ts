@@ -216,7 +216,7 @@ function buildPipe(doc: PipelineDoc): Pipe {
       id: 't' + i,
       kind: 'transform',
       type: t.type || 'transform',
-      nm: t.name || t.type || 'transform',
+      nm: t.name || transformLabel(t.type) || 'transform',
       meta: metaFor('transform', t.type || '—', t),
       cfg: cfgOf(t),
       ref: i,
@@ -357,6 +357,8 @@ const FIELD_LABELS: Record<string, string> = {
   // lookup
   keyField: 'Key field', url: 'URL', method: 'HTTP method', concurrency: 'Concurrency',
   cacheSize: 'Cache size', timeoutMs: 'Timeout (ms)', onError: 'On error', outputFields: 'Output fields',
+  // parse (mode/prefix labels are shared with kafka/objstore above)
+  source: 'Source field', pattern: 'Regex pattern', keepSource: 'Keep source field',
   // checkpoint / watermark shared
   addr: 'Address', keyPrefix: 'Key prefix', backend: 'Backend', nullable: 'Nullable',
 };
@@ -391,6 +393,27 @@ const FIELD_ENUMS: Record<string, string[]> = {
   // watermark
   backend: ['file', 'redis', 'postgres'],
 };
+// Per-stage-type enum overrides — used when a field name is shared across stage
+// types with different allowed values (e.g. `mode` is streaming/batch for kafka
+// but regex/json for parse; `onError` is null/skip/fail for lookup but
+// keep/drop/route for parse). Keyed by stage type, then field name.
+const FIELD_ENUMS_BY_TYPE: Record<string, Record<string, string[]>> = {
+  parse: {
+    mode: ['regex', 'json'],
+    onError: ['keep', 'drop', 'route'],
+  },
+};
+
+// Config keys that reference an INPUT field name (not free text). For these we
+// render an autocomplete input backed by the upstream schema — so users pick
+// from the available fields instead of guessing the exact name — while still
+// allowing a custom value (self-describing sources, computed names). Keyed by
+// stage type, then the set of field-name config keys.
+const FIELD_NAME_KEYS: Record<string, Set<string>> = {
+  parse: new Set(['source']),
+  hwm: new Set(['column']),
+  lookup: new Set(['keyField']),
+};
 const FIELD_HINTS: Record<string, string> = {
   path: 'Local path or glob. Supports ${date}/${year} templating.',
   dsn: 'e.g. host=localhost port=5432 dbname=app user=… sslmode=disable',
@@ -414,8 +437,11 @@ const FIELD_HINTS: Record<string, string> = {
   broadcastHeader: 'Stamp every header attribute onto each body row so downstream transforms and the sink see file-level context.',
   template: 'Go text/template. Available: .Rows (each row as a map), .Count, .Columns, .Attr (header fields). Helpers: rpad, lpad, padc, sci, upper, lower, trim, add, seq.',
   templatePath: 'Path to a .tmpl file. Overrides the inline template when set.',
-};
-const SOURCE_TYPES = ['csv', 'tsv', 'fixedwidth', 'sectioned', 'parquet', 'xml', 'jsonlines', 'jdbc', 'kafka', 's3', 'gcs', 'adls'];
+  source: 'Name of the text field to structure into columns (e.g. message).',
+  pattern: 'Regex with named groups (?P<name>…); each group becomes a column. Use (?s) to span multiline stack traces.',
+  prefix: 'Optional prefix added to each extracted column name (JSON mode), e.g. log_.',
+  keepSource: 'Keep the original source field alongside the extracted columns.',
+};const SOURCE_TYPES = ['csv', 'tsv', 'fixedwidth', 'sectioned', 'parquet', 'xml', 'jsonlines', 'jdbc', 'kafka', 's3', 'gcs', 'adls'];
 const SINK_TYPES = ['jdbc', 'parquet', 'csv', 'jsonlines', 'template', 'kafka', 's3', 'gcs', 'adls', 'null'];
 // Friendly, generic display labels for stage types whose engine id is jargon.
 // The engine id (used in the .datapipeline file) is unchanged; only the picker
@@ -427,6 +453,62 @@ const TYPE_LABELS: Record<string, string> = {
 };
 function typeLabel(t: string): string {
   return TYPE_LABELS[t] || t;
+}
+
+// Friendly display names for transform stage types, so a node/breadcrumb shows
+// "Data Quality" instead of the raw config key "dq". Falls back to the raw type
+// for anything not listed.
+const TF_LABELS: Record<string, string> = {
+  filter: 'Filter',
+  map: 'Map',
+  mapper: 'Map',
+  validate: 'Validate',
+  lookup: 'Lookup',
+  hwm: 'High-Water Mark',
+  dq: 'Data Quality',
+  schemadrift: 'Schema Drift',
+  parse: 'Parse',
+};
+function transformLabel(t: string): string {
+  return TF_LABELS[t] || t;
+}
+
+// Fixed emitted schemas for sources whose columns are NOT declared in the
+// .datapipeline JSON (the engine knows them internally). Surfacing them here
+// means the map editor's "Available data" palette is populated immediately —
+// users see the $fields to map from without first running a preview. Keyed by
+// source type.
+const SOURCE_FIXED_SCHEMA: Record<string, Array<{ name: string; type: string }>> = {
+  podlog: [
+    { name: 'namespace', type: 'string' },
+    { name: 'pod', type: 'string' },
+    { name: 'container', type: 'string' },
+    { name: 'uid', type: 'string' },
+    { name: 'stream', type: 'string' },
+    { name: 'log_time', type: 'string' },
+    { name: 'message', type: 'string' },
+    { name: 'node', type: 'string' },
+    { name: 'idempotency_key', type: 'string' },
+  ],
+};
+
+// Columns a `parse` transform appends: regex named-capture groups, or the JSON
+// field allow-list (with optional prefix). Empty when unknown (json without an
+// explicit fields list), matching the runtime.
+function parseProducedColumns(t: any): string[] {
+  if (!t || t.type !== 'parse') return [];
+  const out: string[] = [];
+  if (String(t.mode || 'regex') === 'json') {
+    const prefix = typeof t.prefix === 'string' ? t.prefix : '';
+    if (Array.isArray(t.fields)) for (const f of t.fields) out.push(prefix + String(f));
+  } else {
+    const pat = String(t.pattern || '');
+    const re = /\(\?P<([A-Za-z_][A-Za-z0-9_]*)>/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(pat)) !== null) out.push(m[1]);
+  }
+  if (String(t.onError) === 'route') out.push('_parse_error');
+  return out;
 }
 // Special selection id for the pipeline-level settings panel (not a real node).
 const SETTINGS_NODE = '__pipeline_settings__';
@@ -536,10 +618,12 @@ function renderField(node: Node, key: string, value: string): HTMLElement {
     return f;
   }
 
-  // Enum → dropdown
-  if (FIELD_ENUMS[key]) {
+  // Enum → dropdown. A per-stage-type override wins over the shared FIELD_ENUMS
+  // so fields like `mode`/`onError` show the right options for this stage type.
+  const enumOpts = (FIELD_ENUMS_BY_TYPE[node.type] && FIELD_ENUMS_BY_TYPE[node.type][key]) || FIELD_ENUMS[key];
+  if (enumOpts) {
     const sel = el('select', 'v') as HTMLSelectElement;
-    const opts = FIELD_ENUMS[key].slice();
+    const opts = enumOpts.slice();
     if (!opts.includes(value) && value) opts.unshift(value);
     opts.forEach((o) => {
       const op = document.createElement('option');
@@ -555,6 +639,29 @@ function renderField(node: Node, key: string, value: string): HTMLElement {
       if (key === 'onConflict') renderEditor();
     };
     f.appendChild(sel);
+    return f;
+  }
+
+  // Field-name reference → autocomplete input backed by the upstream schema.
+  // Users pick from the available input fields (like the validate/dq pickers)
+  // instead of typing an exact name, but a custom value is still allowed.
+  if (FIELD_NAME_KEYS[node.type]?.has(key)) {
+    const cols = upstreamSchema(node);
+    const inp = el('input', 'v') as HTMLInputElement;
+    inp.value = value;
+    inp.placeholder = 'input field name';
+    if (cols.length) {
+      const listId = `fl_${node.type}_${key}`;
+      const dl = document.createElement('datalist');
+      dl.id = listId;
+      cols.forEach((c) => { const o = document.createElement('option'); o.value = c.name; dl.appendChild(o); });
+      inp.setAttribute('list', listId);
+      f.appendChild(dl);
+    }
+    inp.onchange = () => setCfgField(node, key, inp.value);
+    f.appendChild(inp);
+    const hint = FIELD_HINTS[key] || (cols.length ? `Pick from ${cols.length} available field${cols.length === 1 ? '' : 's'}, or type a name.` : '');
+    if (hint) f.appendChild(el('div', 'hint', hint));
     return f;
   }
 
@@ -1526,25 +1633,132 @@ function renderColumnsEditor(node: Node): HTMLElement {
 let inferTargetNode: Node | null = null;
 
 // Builtin mapper functions available to the map transform's expressions. These
-// mirror the engine's `builtins` map (transform/mapper). Each carries a snippet
-// with a ${} cursor marker so clicking inserts a ready-to-fill call.
-const MAP_FUNCTIONS: Array<{ name: string; snippet: string; hint: string }> = [
-  { name: 'concat', snippet: 'concat($1, $2)', hint: 'Join values into a string' },
-  { name: 'upper', snippet: 'upper($1)', hint: 'Uppercase a string' },
-  { name: 'lower', snippet: 'lower($1)', hint: 'Lowercase a string' },
-  { name: 'trim', snippet: 'trim($1)', hint: 'Strip surrounding whitespace' },
-  { name: 'coalesce', snippet: 'coalesce($1, $2)', hint: 'First non-null value' },
-  { name: 'multiply', snippet: 'multiply($1, $2)', hint: 'Numeric a × b' },
-  { name: 'divide', snippet: 'divide($1, $2)', hint: 'Numeric a ÷ b' },
-  { name: 'scientific', snippet: 'scientific($1)', hint: 'Signed scientific notation, e.g. +1.234E-05' },
-  { name: 'lpad', snippet: 'lpad($1, $2)', hint: 'Left-pad value to width (right-aligned)' },
-  { name: 'rpad', snippet: 'rpad($1, $2)', hint: 'Right-pad value to width (left-aligned)' },
-  { name: 'clamp', snippet: 'clamp($1, $2, $3)', hint: 'Constrain a number between min and max' },
+// mirror the engine's `builtins` map (transform/mapper) — every function offered
+// here actually evaluates at runtime. Grouped by category for the palette. Each
+// snippet uses $1/$2/$3 caret markers so clicking inserts a ready-to-fill call.
+const MAP_FUNCTIONS: Array<{ name: string; snippet: string; hint: string; cat: string }> = [
+  // ── String ──
+  { cat: 'String', name: 'concat', snippet: 'concat($1, $2)', hint: 'Join values into a string' },
+  { cat: 'String', name: 'upper', snippet: 'upper($1)', hint: 'Uppercase a string' },
+  { cat: 'String', name: 'lower', snippet: 'lower($1)', hint: 'Lowercase a string' },
+  { cat: 'String', name: 'title', snippet: 'string.title($1)', hint: 'Title-case each word' },
+  { cat: 'String', name: 'trim', snippet: 'trim($1)', hint: 'Strip surrounding whitespace' },
+  { cat: 'String', name: 'length', snippet: 'string.length($1)', hint: 'Character count' },
+  { cat: 'String', name: 'substring', snippet: 'string.substring($1, $2, $3)', hint: 'Slice by start/end index' },
+  { cat: 'String', name: 'substringBefore', snippet: 'string.substringBefore($1, $2)', hint: 'Text before a separator' },
+  { cat: 'String', name: 'substringAfter', snippet: 'string.substringAfter($1, $2)', hint: 'Text after a separator' },
+  { cat: 'String', name: 'replace', snippet: 'string.replace($1, $2, $3)', hint: 'Replace all occurrences' },
+  { cat: 'String', name: 'split', snippet: 'string.split($1, $2, $3)', hint: 'Split by separator, take Nth token' },
+  { cat: 'String', name: 'join', snippet: 'string.join($1, $2, $3)', hint: 'Join values with a separator' },
+  { cat: 'String', name: 'indexOf', snippet: 'string.indexOf($1, $2)', hint: 'Position of substring (-1 if absent)' },
+  { cat: 'String', name: 'contains', snippet: 'string.contains($1, $2)', hint: 'True if substring present' },
+  { cat: 'String', name: 'startsWith', snippet: 'string.startsWith($1, $2)', hint: 'True if prefix matches' },
+  { cat: 'String', name: 'endsWith', snippet: 'string.endsWith($1, $2)', hint: 'True if suffix matches' },
+  { cat: 'String', name: 'trimPrefix', snippet: 'string.trimPrefix($1, $2)', hint: 'Remove a leading prefix' },
+  { cat: 'String', name: 'trimSuffix', snippet: 'string.trimSuffix($1, $2)', hint: 'Remove a trailing suffix' },
+  { cat: 'String', name: 'padLeft', snippet: 'string.padLeft($1, $2, $3)', hint: 'Left-pad to width (fill char)' },
+  { cat: 'String', name: 'padRight', snippet: 'string.padRight($1, $2, $3)', hint: 'Right-pad to width (fill char)' },
+  { cat: 'String', name: 'repeat', snippet: 'string.repeat($1, $2)', hint: 'Repeat a string N times' },
+  { cat: 'String', name: 'reverse', snippet: 'string.reverse($1)', hint: 'Reverse the characters' },
+  { cat: 'String', name: 'equalsIgnoreCase', snippet: 'string.equalsIgnoreCase($1, $2)', hint: 'Case-insensitive equality' },
+  // ── Regex ──
+  { cat: 'Regex', name: 'match', snippet: 'regex.match($1, $2)', hint: 'True if pattern matches' },
+  { cat: 'Regex', name: 'replace', snippet: 'regex.replace($1, $2, $3)', hint: 'Regex search-and-replace' },
+  { cat: 'Regex', name: 'extract', snippet: 'regex.extract($1, $2, $3)', hint: 'Return a capture group' },
+  // ── Number / Math ──
+  { cat: 'Number', name: 'add', snippet: 'number.add($1, $2)', hint: 'a + b' },
+  { cat: 'Number', name: 'subtract', snippet: 'number.subtract($1, $2)', hint: 'a − b' },
+  { cat: 'Number', name: 'multiply', snippet: 'multiply($1, $2)', hint: 'a × b' },
+  { cat: 'Number', name: 'divide', snippet: 'divide($1, $2)', hint: 'a ÷ b' },
+  { cat: 'Number', name: 'mod', snippet: 'math.mod($1, $2)', hint: 'Remainder a mod b' },
+  { cat: 'Number', name: 'round', snippet: 'number.round($1, $2)', hint: 'Round to N decimals' },
+  { cat: 'Number', name: 'floor', snippet: 'math.floor($1)', hint: 'Round down' },
+  { cat: 'Number', name: 'ceil', snippet: 'math.ceil($1)', hint: 'Round up' },
+  { cat: 'Number', name: 'trunc', snippet: 'math.trunc($1)', hint: 'Drop the fraction' },
+  { cat: 'Number', name: 'abs', snippet: 'math.abs($1)', hint: 'Absolute value' },
+  { cat: 'Number', name: 'sign', snippet: 'math.sign($1)', hint: '-1, 0 or 1' },
+  { cat: 'Number', name: 'pow', snippet: 'math.pow($1, $2)', hint: 'a to the power b' },
+  { cat: 'Number', name: 'sqrt', snippet: 'math.sqrt($1)', hint: 'Square root' },
+  { cat: 'Number', name: 'min', snippet: 'math.min($1, $2)', hint: 'Smaller of two' },
+  { cat: 'Number', name: 'max', snippet: 'math.max($1, $2)', hint: 'Larger of two' },
+  { cat: 'Number', name: 'clamp', snippet: 'clamp($1, $2, $3)', hint: 'Constrain between min and max' },
+  { cat: 'Number', name: 'random', snippet: 'number.random($1)', hint: 'Random int below limit' },
+  { cat: 'Number', name: 'scientific', snippet: 'scientific($1)', hint: 'Signed scientific notation' },
+  // ── Date / Time ──
+  { cat: 'Date/Time', name: 'now', snippet: 'datetime.now()', hint: 'Current UTC timestamp (RFC3339)' },
+  { cat: 'Date/Time', name: 'today', snippet: 'datetime.today()', hint: "Today's date (YYYY-MM-DD)" },
+  { cat: 'Date/Time', name: 'parse', snippet: 'datetime.parse($1, $2)', hint: 'Parse to RFC3339 (optional layout)' },
+  { cat: 'Date/Time', name: 'format', snippet: 'datetime.format($1, $2)', hint: 'Format with a Go layout' },
+  { cat: 'Date/Time', name: 'year', snippet: 'datetime.year($1)', hint: 'Extract the year' },
+  { cat: 'Date/Time', name: 'month', snippet: 'datetime.month($1)', hint: 'Extract the month (1-12)' },
+  { cat: 'Date/Time', name: 'day', snippet: 'datetime.day($1)', hint: 'Extract the day of month' },
+  { cat: 'Date/Time', name: 'hour', snippet: 'datetime.hour($1)', hint: 'Extract the hour' },
+  { cat: 'Date/Time', name: 'dayOfWeek', snippet: 'datetime.dayOfWeek($1)', hint: 'Weekday name' },
+  { cat: 'Date/Time', name: 'addDays', snippet: 'datetime.addDays($1, $2)', hint: 'Add N days' },
+  { cat: 'Date/Time', name: 'addHours', snippet: 'datetime.addHours($1, $2)', hint: 'Add N hours' },
+  { cat: 'Date/Time', name: 'diffDays', snippet: 'datetime.diffDays($1, $2)', hint: 'Whole days between two dates' },
+  { cat: 'Date/Time', name: 'epoch', snippet: 'datetime.epoch($1)', hint: 'Unix seconds since epoch' },
+  { cat: 'Date/Time', name: 'fromEpoch', snippet: 'datetime.fromEpoch($1)', hint: 'Unix seconds → RFC3339' },
+  // ── Convert ──
+  { cat: 'Convert', name: 'toInt', snippet: 'coerce.toInt($1)', hint: 'Cast to integer' },
+  { cat: 'Convert', name: 'toFloat', snippet: 'coerce.toFloat($1)', hint: 'Cast to float' },
+  { cat: 'Convert', name: 'toString', snippet: 'coerce.toString($1)', hint: 'Cast to string' },
+  { cat: 'Convert', name: 'toBool', snippet: 'coerce.toBool($1)', hint: 'Cast to boolean' },
+  // ── Hash / Encode / Mask ──
+  { cat: 'Hash & Encode', name: 'md5', snippet: 'hash.md5($1)', hint: 'MD5 hex digest (surrogate key)' },
+  { cat: 'Hash & Encode', name: 'sha256', snippet: 'hash.sha256($1)', hint: 'SHA-256 hex digest' },
+  { cat: 'Hash & Encode', name: 'base64Encode', snippet: 'encoding.base64Encode($1)', hint: 'Base64 encode' },
+  { cat: 'Hash & Encode', name: 'base64Decode', snippet: 'encoding.base64Decode($1)', hint: 'Base64 decode' },
+  { cat: 'Hash & Encode', name: 'uuid', snippet: 'util.uuid()', hint: 'Random UUID v4' },
+  { cat: 'Hash & Encode', name: 'mask', snippet: 'util.mask($1, $2)', hint: 'Mask all but last N chars' },
+  // ── Logic / Null ──
+  { cat: 'Logic', name: 'iif', snippet: 'iif($1, $2, $3)', hint: 'If cond then a else b' },
+  { cat: 'Logic', name: 'coalesce', snippet: 'coalesce($1, $2)', hint: 'First non-null value' },
+  { cat: 'Logic', name: 'nvl', snippet: 'nvl($1, $2)', hint: 'Value, or fallback when null/empty' },
+  { cat: 'Logic', name: 'nullif', snippet: 'nullif($1, $2)', hint: 'Null when the two are equal' },
+  { cat: 'Logic', name: 'decode', snippet: 'decode($1, $2, $3)', hint: 'Value map (Oracle DECODE)' },
+  { cat: 'Logic', name: 'equals', snippet: 'equals($1, $2)', hint: 'String equality' },
+  { cat: 'Logic', name: 'between', snippet: 'between($1, $2, $3)', hint: 'True if lo ≤ v ≤ hi' },
+  { cat: 'Logic', name: 'isNull', snippet: 'isNull($1)', hint: 'True when null' },
+  { cat: 'Logic', name: 'isEmpty', snippet: 'isEmpty($1)', hint: 'True when empty string' },
 ];
 
 // The currently focused mapping-expression input, so Available-data / Function
 // chips insert at the caret of the row the user is editing.
 let mapFocusedInput: HTMLInputElement | null = null;
+
+// The output field currently selected in the mapper's Target pane, whose
+// expression is shown/edited in the third (Mapping) pane. Persists across
+// re-renders so selection survives a mapping edit.
+let mapSelectedTarget: string | null = null;
+
+// Free-text filter for the function palette, so the (large) function library
+// stays quick to scan.
+let mapFnFilter = '';
+
+// Categories the user has collapsed in the function palette. Persists across
+// re-renders. An active filter overrides this and expands matching groups.
+const mapFnCollapsed = new Set<string>();
+
+// The map transform stores dynamic expressions with a leading "=" (e.g.
+// "=$order_date"), which the engine uses to distinguish an expression from a
+// static string literal. For a cleaner experience the "=" is IMPLICIT in the
+// UI: the input shows "$order_date" and we add the "=" back on save. Plain text
+// that is NOT an expression stays a static literal (no "="), so existing
+// literals keep working — matching the OOTB Flogo mapper, where field refs
+// ($x), function calls (upper($x)) are expressions and bare text is a constant.
+function exprForDisplay(stored: string): string {
+  return typeof stored === 'string' && stored.startsWith('=') ? stored.slice(1) : (stored ?? '');
+}
+function exprForStore(display: string): string {
+  const v = (display ?? '').trim();
+  if (v === '') return '';
+  if (v.startsWith('=')) return v; // already explicit
+  // Looks like an expression → make the "=" explicit. Otherwise treat as a
+  // static string literal (stored verbatim, no "=").
+  const isExpr = v.startsWith('$') || /^[A-Za-z_][\w.]*\s*\(/.test(v);
+  return isExpr ? '=' + v : v;
+}
 
 // Insert text at the caret of the focused mapping expression input (or append).
 function insertIntoMapExpr(text: string) {
@@ -1556,7 +1770,7 @@ function insertIntoMapExpr(text: string) {
   // Place caret: if the snippet has a $1 marker, select it; else after text.
   const marker = text.indexOf('$1');
   if (marker >= 0) {
-    inp.value = inp.value.replace('$1', '').replace('$2', '');
+    inp.value = inp.value.replace('$1', '').replace('$2', '').replace('$3', '');
     inp.setSelectionRange(start + marker, start + marker);
   } else {
     inp.setSelectionRange(start + text.length, start + text.length);
@@ -1571,10 +1785,8 @@ function insertIntoMapExpr(text: string) {
 // blocks as the Flogo mapper, right-sized for the flat map model.
 function renderMapEditor(node: Node): HTMLElement {
   const f = el('div', 'fld');
-  f.appendChild(el('div', 'k', 'Field mappings'));
   const target = cfgTarget(node);
   const fields: Record<string, string> = (target.fields && typeof target.fields === 'object') ? target.fields : {};
-  // Preserve a stable, user-visible order via fieldOrder (backend honours it).
   let order: string[] = Array.isArray(target.fieldOrder) ? target.fieldOrder.filter((k: string) => k in fields) : [];
   for (const k of Object.keys(fields)) if (!order.includes(k)) order.push(k);
 
@@ -1583,88 +1795,231 @@ function renderMapEditor(node: Node): HTMLElement {
     target.fieldOrder = order;
     setCfgValue(node, 'fields', fields);
   };
+  // Set an output field's expression to a source path (=$path), adding the row
+  // if it doesn't exist. Used by both drag-drop and click-to-map.
+  const mapInto = (outName: string, path: string) => {
+    if (!(outName in fields)) order.push(outName);
+    fields[outName] = `=$${path}`;
+    persist();
+    renderEditor();
+  };
 
-  const box = el('div', 'maps');
+  const srcTree = sourceFieldTree(node);
+  const hasSchema = srcTree.length > 0;
+
+  // ── Two-pane mapper: Source (left) → Target (right) ──────────────────────
+  const mapper = el('div', 'mapper2');
+
+  // LEFT: draggable source-field tree (complex fields expand to nested paths).
+  const srcPane = el('div', 'mpane msrc');
+  const srcHead = el('div', 'mphead');
+  srcHead.innerHTML = `<span>Source</span><span class="cnt">${hasSchema ? srcTree.length : 0}</span>`;
+  srcPane.appendChild(srcHead);
+  const srcBody = el('div', 'mpbody');
+  if (hasSchema) {
+    const renderField = (fld: SrcField, depth: number, into: HTMLElement) => {
+      const isMapped = Object.values(fields).includes(`=$${fld.path}`);
+      const item = el('div', 'mfield' + (isMapped ? ' mapped' : ''));
+      item.style.paddingLeft = `${6 + depth * 12}px`;
+      const complex = fld.children && fld.children.length > 0;
+      const caret = complex ? '<span class="mcaret">▸</span>' : '<span class="mcaret ph"></span>';
+      item.innerHTML = `${caret}<span class="mfname">${escapeHtml(fld.name)}</span><span class="mtype">${escapeHtml(fld.type)}</span>`;
+      item.setAttribute('draggable', 'true');
+      item.title = `Drag onto a target field or the Mapping box, or click to map into the selected target. Path: $${fld.path}`;
+      item.ondragstart = (e) => { e.dataTransfer?.setData('text/plain', fld.path); (e.dataTransfer || {} as any).effectAllowed = 'copy'; item.classList.add('dragging'); };
+      item.ondragend = () => item.classList.remove('dragging');
+      // Click: map into the SELECTED target field if one is selected; otherwise
+      // create/fill a same-named output (drag-to-output shortcut).
+      item.onclick = (e) => {
+        if ((e.target as HTMLElement).classList.contains('mcaret') && complex) {
+          item.classList.toggle('open'); kids.classList.toggle('show'); return;
+        }
+        if (mapSelectedTarget) { fields[mapSelectedTarget] = `=$${fld.path}`; persist(); renderEditor(); }
+        else { mapInto(fld.name, fld.path); }
+      };
+      into.appendChild(item);
+      const kids = el('div', 'mkids');
+      if (complex) {
+        fld.children!.forEach((ch) => renderField(ch, depth + 1, kids));
+        into.appendChild(kids);
+      }
+    };
+    srcTree.forEach((fld) => renderField(fld, 0, srcBody));
+  } else {
+    const empty = el('div', 'mapempty');
+    empty.innerHTML = '<div style="font-size:11px;line-height:1.5;color:var(--dim)">No source fields yet. For Parquet/JSON or undeclared sources, load the live schema:</div>';
+    const b = el('button', 'btn sm', '⌕ Load fields');
+    b.style.marginTop = '6px';
+    b.onclick = () => doPreview();
+    empty.appendChild(b);
+    srcBody.appendChild(empty);
+  }
+  srcPane.appendChild(srcBody);
+
+  // Ensure a selected target exists so the Mapping pane has something to show.
+  if (mapSelectedTarget && !order.includes(mapSelectedTarget)) mapSelectedTarget = null;
+  if (!mapSelectedTarget && order.length) mapSelectedTarget = order[0];
+
+  // MIDDLE: target output field names — click to select (its expression shows in
+  // the Mapping pane); drop a source here to set/create the mapping directly.
+  const tgtPane = el('div', 'mpane mtgt');
+  const tgtHead = el('div', 'mphead');
+  tgtHead.innerHTML = `<span>Target field</span><span class="cnt">${order.length}</span>`;
+  tgtPane.appendChild(tgtHead);
+  const tgtBody = el('div', 'mpbody');
   order.forEach((outName, i) => {
-    const row = el('div', 'mrow');
+    const row = el('div', 'trow' + (outName === mapSelectedTarget ? ' sel' : ''));
+    row.ondragover = (e) => { e.preventDefault(); row.classList.add('drop'); };
+    row.ondragleave = () => row.classList.remove('drop');
+    row.ondrop = (e) => {
+      e.preventDefault(); row.classList.remove('drop');
+      const p = e.dataTransfer?.getData('text/plain');
+      if (p) { fields[outName] = `=$${p}`; mapSelectedTarget = outName; persist(); renderEditor(); }
+    };
+    const mapped = !!(fields[outName] && String(fields[outName]).trim());
     const out = document.createElement('input');
-    out.className = 'out';
+    out.className = 'tname';
     out.value = outName;
-    out.placeholder = 'field';
     out.title = 'Output field name';
+    out.onfocus = () => { mapSelectedTarget = outName; };
     out.onchange = () => {
       const nn = out.value.trim();
       if (!nn || nn === outName) return;
       const val = fields[outName];
-      delete fields[outName];
-      fields[nn] = val;
-      order[i] = nn;
-      persist();
-      renderEditor();
+      delete fields[outName]; fields[nn] = val; order[i] = nn;
+      if (mapSelectedTarget === outName) mapSelectedTarget = nn;
+      persist(); renderEditor();
     };
-    const eq = el('span', 'eq', '←');
-    const expr = document.createElement('input');
-    expr.className = 'expr';
-    expr.value = fields[outName] ?? '';
-    expr.placeholder = '=$sourceField or =upper($field)';
-    expr.title = 'Mapping expression';
-    expr.onfocus = () => { mapFocusedInput = expr; };
-    expr.onchange = () => { fields[outName] = expr.value; persist(); };
+    const dot = el('span', 'tdot' + (mapped ? ' on' : ''));
+    dot.title = mapped ? 'Mapped' : 'Unmapped';
     const del = el('span', 'del', '✕');
-    del.title = 'Remove mapping';
-    del.onclick = () => { delete fields[outName]; order = order.filter((k) => k !== outName); persist(); renderEditor(); };
-    row.appendChild(out);
-    row.appendChild(eq);
-    row.appendChild(expr);
-    row.appendChild(del);
-    box.appendChild(row);
+    del.title = 'Remove field';
+    del.onclick = (e) => { e.stopPropagation(); delete fields[outName]; order = order.filter((k) => k !== outName); if (mapSelectedTarget === outName) mapSelectedTarget = null; persist(); renderEditor(); };
+    row.appendChild(dot); row.appendChild(out); row.appendChild(del);
+    row.onclick = (e) => { if (e.target === row || (e.target as HTMLElement).classList.contains('tdot')) { mapSelectedTarget = outName; renderEditor(); } };
+    tgtBody.appendChild(row);
   });
-  const add = el('button', 'addmap', '＋ Add field mapping');
-  add.onclick = () => {
-    let base = 'new_field';
-    let n = base;
-    let c = 1;
-    while (n in fields) n = base + '_' + c++;
-    fields[n] = '';
-    order.push(n);
-    persist();
-    renderEditor();
+  const addZone = el('div', 'maddzone');
+  addZone.textContent = '＋ Add field (or drop a source)';
+  addZone.ondragover = (e) => { e.preventDefault(); addZone.classList.add('drop'); };
+  addZone.ondragleave = () => addZone.classList.remove('drop');
+  addZone.ondrop = (e) => {
+    e.preventDefault(); addZone.classList.remove('drop');
+    const p = e.dataTransfer?.getData('text/plain');
+    if (p) { const leaf = p.split('.').pop() || p; mapInto(leaf, p); mapSelectedTarget = leaf; }
   };
-  box.appendChild(add);
-  f.appendChild(box);
+  addZone.onclick = () => {
+    let base = 'new_field', n = base, c = 1;
+    while (n in fields) n = base + '_' + c++;
+    fields[n] = ''; order.push(n); mapSelectedTarget = n; persist(); renderEditor();
+  };
+  tgtBody.appendChild(addZone);
+  tgtPane.appendChild(tgtBody);
 
-  // ── Available data (upstream columns) — click to insert =$field ──────────
-  // Show the schema visible ENTERING this map (i.e. produced by everything
-  // before it), so users insert the source fields they map from — not the
-  // map's own output fields.
-  const help = el('div', 'mhelp');
-  const cols = upstreamSchema(node);
-  if (cols.length) {
-    help.appendChild(el('div', 'lbl', 'Available data'));
-    const chips = el('div', 'chips');
-    cols.forEach((c) => {
-      const chip = el('span', 'chip2', c.name);
-      chip.title = `Insert =$${c.name}`;
-      chip.onclick = () => insertIntoMapExpr(`=$${c.name}`);
-      chips.appendChild(chip);
-    });
-    help.appendChild(chips);
+  // RIGHT: the Mapping pane — a large expression editor for the SELECTED target
+  // field, plus a function palette. Drop a source field here to insert its path.
+  const mapPane = el('div', 'mpane mmap');
+  const mapHead = el('div', 'mphead');
+  mapHead.innerHTML = `<span>Mapping</span>` + (mapSelectedTarget ? `<span class="cnt">${escapeHtml(mapSelectedTarget)}</span>` : '');
+  mapPane.appendChild(mapHead);
+  const mapBody = el('div', 'mpbody mmapbody');
+  if (mapSelectedTarget) {
+    const sel = mapSelectedTarget;
+    mapBody.appendChild(el('div', 'mmaplbl', `${escapeHtml(sel)} ←`));
+    const ta = document.createElement('textarea');
+    ta.className = 'mexpr';
+    ta.value = exprForDisplay(fields[sel]);
+    ta.placeholder = 'drag a Source field here, or type: $field, upper($field), "constant"';
+    ta.rows = 3;
+    ta.onfocus = () => { mapFocusedInput = ta as unknown as HTMLInputElement; };
+    ta.onchange = () => { fields[sel] = exprForStore(ta.value); persist(); renderEditor(); };
+    ta.ondragover = (e) => { e.preventDefault(); ta.classList.add('drop'); };
+    ta.ondragleave = () => ta.classList.remove('drop');
+    ta.ondrop = (e) => {
+      e.preventDefault(); ta.classList.remove('drop');
+      const p = e.dataTransfer?.getData('text/plain');
+      if (!p) return;
+      // Insert at caret if focused/has selection, else replace.
+      const cur = ta.value;
+      const at = ta.selectionStart ?? cur.length;
+      const token = `$${p}`;
+      ta.value = cur.slice(0, at) + token + cur.slice(ta.selectionEnd ?? at);
+      fields[sel] = exprForStore(ta.value); persist(); renderEditor();
+    };
+    mapBody.appendChild(ta);
+    // Function palette — grouped by category, with a filter box. Clicking a chip
+    // inserts a ready-to-fill call into the expression above.
+    const fnwrap = el('div', 'mmapfns');
+    const fnhdr = el('div', 'mmapfns-hdr');
+    fnhdr.appendChild(el('span', 'lbl', 'Functions'));
+    const filter = document.createElement('input');
+    filter.className = 'mfnfilter';
+    filter.placeholder = 'filter…';
+    filter.value = mapFnFilter;
+    filter.oninput = () => { mapFnFilter = filter.value; renderGroups(); filter.focus(); };
+    fnhdr.appendChild(filter);
+    fnwrap.appendChild(fnhdr);
+    const groupsHost = el('div', 'mfngroups');
+    fnwrap.appendChild(groupsHost);
+    const renderGroups = () => {
+      groupsHost.innerHTML = '';
+      const q = mapFnFilter.trim().toLowerCase();
+      const cats: string[] = [];
+      for (const fn of MAP_FUNCTIONS) if (!cats.includes(fn.cat)) cats.push(fn.cat);
+      cats.forEach((cat) => {
+        const items = MAP_FUNCTIONS.filter((fn) => fn.cat === cat &&
+          (!q || fn.name.toLowerCase().includes(q) || fn.hint.toLowerCase().includes(q) || cat.toLowerCase().includes(q)));
+        if (!items.length) return;
+        // A group is collapsed when the user has toggled it shut — but an active
+        // filter force-expands every matching group so results are always visible.
+        const collapsed = !q && mapFnCollapsed.has(cat);
+        const grp = el('div', 'mfngroup' + (collapsed ? ' collapsed' : ''));
+        const head = el('div', 'mfncat');
+        head.innerHTML = `<span class="mfncaret">▾</span><span class="mfncatname">${escapeHtml(cat)}</span><span class="mfncount">${items.length}</span>`;
+        head.onclick = () => {
+          if (mapFnCollapsed.has(cat)) mapFnCollapsed.delete(cat); else mapFnCollapsed.add(cat);
+          renderGroups();
+        };
+        grp.appendChild(head);
+        const chips = el('div', 'chips');
+        items.forEach((fn) => {
+          const chip = el('span', 'chip2 fn', `ƒ ${fn.name}`);
+          chip.title = fn.hint;
+          chip.onmousedown = (e) => e.preventDefault();
+          chip.onclick = () => { mapFocusedInput = ta as unknown as HTMLInputElement; insertIntoMapExpr(fn.snippet); ta.dispatchEvent(new Event('change')); };
+          chips.appendChild(chip);
+        });
+        grp.appendChild(chips);
+        groupsHost.appendChild(grp);
+      });
+      if (!groupsHost.childElementCount) groupsHost.appendChild(el('div', 'focushint', 'No functions match.'));
+    };
+    renderGroups();
+    mapBody.appendChild(fnwrap);
+    mapBody.appendChild(el('div', 'focushint', 'Drag a Source field here or type it. = is implicit — $field, upper($field); plain text is a constant.'));
+  } else {
+    mapBody.appendChild(el('div', 'muted', '<div style="font-size:11px;padding:8px;color:var(--dim)">Select a Target field (or add one) to edit its mapping here.</div>'));
   }
+  mapPane.appendChild(mapBody);
 
-  // ── Functions — click to insert a call snippet ───────────────────────────
-  help.appendChild(el('div', 'lbl', 'Functions'));
-  const fchips = el('div', 'chips');
-  MAP_FUNCTIONS.forEach((fn) => {
-    const chip = el('span', 'chip2 fn', `ƒ ${fn.name}`);
-    chip.title = fn.hint;
-    chip.onclick = () => insertIntoMapExpr(`=${fn.snippet}`);
-    fchips.appendChild(chip);
-  });
-  help.appendChild(fchips);
-  help.appendChild(el('div', 'focushint', 'Click an expression field, then a data column or function to insert at the caret. Prefix literals with =, reference fields with =$name.'));
-  f.appendChild(help);
+  mapper.appendChild(srcPane);
+  mapper.appendChild(tgtPane);
+  mapper.appendChild(mapPane);
+
+  f.appendChild(el('div', 'k', 'Field mapping'));
+  if (hasSchema) {
+    const allBtn = el('button', 'btn sm mapallbtn', '⧉ Map all fields (passthrough)');
+    allBtn.onclick = () => {
+      srcTree.forEach((c) => { if (!(c.name in fields)) { fields[c.name] = `=$${c.name}`; order.push(c.name); } });
+      persist(); renderEditor();
+    };
+    f.appendChild(allBtn);
+  }
+  f.appendChild(mapper);
   return f;
 }
+
+
 
 // Structured rule editor for the `validate` transform. Each rule is a card with
 // a field picker (from upstream columns) and plain-language constraints — not
@@ -2149,7 +2504,7 @@ function renderCanvas(m: HTMLElement) {
     const kindLbl = sn.kind === 'source' ? 'Source' : sn.kind === 'sink' ? 'Sink' : sn.kind === 'dlq' ? 'DLQ' : 'Transform';
     ih.appendChild(el('span', 'ihkind ' + kindCls, kindLbl));
   }
-  ih.appendChild(el('span', 'ihname', sn ? typeLabel(sn.type) : ''));
+  ih.appendChild(el('span', 'ihname', sn ? (sn.kind === 'transform' ? transformLabel(sn.type) : typeLabel(sn.type)) : ''));
   const closeBtn = el('span', 'ihx', '✕');
   closeBtn.title = 'Close config panel';
   closeBtn.onclick = () => { S.inspClosed = true; renderEditor(); };
@@ -2208,7 +2563,7 @@ function renderCanvas(m: HTMLElement) {
       typeRow.appendChild(sel);
     } else {
       typeRow.appendChild(el('span', 'badge', 'transform'));
-      typeRow.appendChild(el('span', 'chip plain', typeLabel(sn.type)));
+      typeRow.appendChild(el('span', 'chip plain', transformLabel(sn.type)));
     }
     ib.appendChild(typeRow);
 
@@ -2338,7 +2693,7 @@ function schemaForNode(node: Node): Array<{ name: string; type: string; derived?
   const src: any = S.doc.source || {};
   let cols: Array<{ name: string; type: string; derived?: boolean }> = Array.isArray(src.columns)
     ? src.columns.map((c: any) => ({ name: c.name, type: c.type || 'string' }))
-    : [];
+    : (SOURCE_FIXED_SCHEMA[String(src.type)] || []).map((c) => ({ name: c.name, type: c.type }));
   const transforms = Array.isArray(S.doc.transforms) ? S.doc.transforms : [];
   // Source sees no transforms; sink/dlq see the full chain; a transform sees up
   // to its own index.
@@ -2350,10 +2705,15 @@ function schemaForNode(node: Node): Array<{ name: string; type: string; derived?
       // map replaces the projected set with its output fields
       cols = Object.keys(t.fields).map((k) => ({ name: k, type: 'derived', derived: true }));
     }
-    // filter/validate/hwm/dq/lookup/schemadrift are passthrough for schema purposes
-    // (lookup appends outputFields)
+    // filter/validate/hwm/dq/schemadrift are passthrough for schema purposes.
+    // lookup and parse APPEND columns to the existing set.
     if (t.type === 'lookup' && Array.isArray(t.outputFields)) {
       t.outputFields.forEach((f: any) => cols.push({ name: String(f), type: 'derived', derived: true }));
+    }
+    if (t.type === 'parse') {
+      parseProducedColumns(t).forEach((n) => {
+        if (!cols.some((c) => c.name === n)) cols.push({ name: n, type: 'derived', derived: true });
+      });
     }
   }
   return cols;
@@ -2366,7 +2726,7 @@ function upstreamSchema(node: Node): Array<{ name: string; type: string; derived
   const src: any = S.doc.source || {};
   let cols: Array<{ name: string; type: string; derived?: boolean }> = Array.isArray(src.columns)
     ? src.columns.map((c: any) => ({ name: c.name, type: c.type || 'string' }))
-    : [];
+    : (SOURCE_FIXED_SCHEMA[String(src.type)] || []).map((c) => ({ name: c.name, type: c.type }));
   const transforms = Array.isArray(S.doc.transforms) ? S.doc.transforms : [];
   const stop = typeof node.ref === 'number' ? (node.ref as number) : transforms.length;
   for (let i = 0; i < stop; i++) {
@@ -2378,13 +2738,118 @@ function upstreamSchema(node: Node): Array<{ name: string; type: string; derived
     if (t.type === 'lookup' && Array.isArray(t.outputFields)) {
       t.outputFields.forEach((f: any) => cols.push({ name: String(f), type: 'derived', derived: true }));
     }
+    if (t.type === 'parse') {
+      parseProducedColumns(t).forEach((n) => {
+        if (!cols.some((c) => c.name === n)) cols.push({ name: n, type: 'derived', derived: true });
+      });
+    }
   }
   // If a preview ran, prefer its live columns for the very first map (source
   // columns may be undeclared for self-describing formats).
   if (!cols.length && S.preview && S.preview.columns.length) {
     return S.preview.columns.map((c) => ({ name: c, type: 'any' }));
   }
+  // Last-resort fallback: when the source declares no schema and no preview has
+  // run, harvest the field names the pipeline ALREADY references ($field tokens
+  // in filter/map/parse expressions up to and including this stage). This means
+  // the "Available data" palette is populated from the pipeline's own intent —
+  // so a Text Document / undeclared-CSV source still shows the fields the user
+  // is working with, instead of an empty palette.
+  if (!cols.length) {
+    const harvested = harvestFieldRefs(stop + 1);
+    if (harvested.length) return harvested.map((n) => ({ name: n, type: 'any' }));
+  }
   return cols;
+}
+
+// Scan every stage up to index `stop` for field references and return the
+// distinct field names. Map/parse use $field tokens; filter uses BARE field
+// names in a boolean expression (e.g. status != 'CANCELLED'), so both forms are
+// harvested. Used as the Available-data fallback when no schema is declared.
+function harvestFieldRefs(stop: number): string[] {
+  const seen = new Set<string>();
+  const addDollar = (s: string) => {
+    if (typeof s !== 'string') return;
+    const re = /\$([A-Za-z_][A-Za-z0-9_]*)/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(s)) !== null) seen.add(m[1]);
+  };
+  // Reserved words in filter expressions that are NOT field names.
+  const KW = new Set(['AND', 'OR', 'NOT', 'IN', 'LIKE', 'IS', 'NULL', 'TRUE', 'FALSE']);
+  const addBare = (s: string) => {
+    if (typeof s !== 'string') return;
+    // Strip single/double-quoted string literals so their words aren't harvested.
+    const noStr = s.replace(/'[^']*'/g, ' ').replace(/"[^"]*"/g, ' ');
+    const re = /[A-Za-z_][A-Za-z0-9_.]*/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(noStr)) !== null) {
+      const w = m[0];
+      // Skip keywords and function-call names (identifier immediately followed by "(").
+      if (KW.has(w.toUpperCase())) continue;
+      const after = noStr.slice(m.index + w.length).trimStart();
+      if (after.startsWith('(')) continue; // function name, not a field
+      seen.add(w);
+    }
+  };
+  const transforms = Array.isArray(S.doc.transforms) ? S.doc.transforms : [];
+  for (let i = 0; i < stop && i < transforms.length; i++) {
+    const t: any = transforms[i];
+    if (!t) continue;
+    if (t.type === 'filter') addBare(String(t.expr || ''));
+    if ((t.type === 'map' || t.type === 'mapper') && t.fields && typeof t.fields === 'object') {
+      for (const v of Object.values(t.fields)) addDollar(String(v));
+    }
+    if (t.type === 'parse' && typeof t.source === 'string') seen.add(t.source);
+  }
+  return Array.from(seen);
+}
+
+// A node in the source-field tree shown on the LEFT of the mapper. Complex
+// fields (objects) carry children so nested paths ($product.name) can be mapped.
+interface SrcField { name: string; path: string; type: string; children?: SrcField[] }
+
+// Build the source-field tree for the mapper's left pane. Flat columns come from
+// upstreamSchema; complex/nested structure is discovered from the last preview's
+// actual row values (JSON/XML objects), so a field like `product` expands into
+// product.name / product.price the user can drag individually.
+function sourceFieldTree(node: Node): SrcField[] {
+  const cols = upstreamSchema(node);
+  // Sample object shapes from the preview rows (first row that has the key).
+  const sample: Record<string, unknown> = {};
+  if (S.preview && Array.isArray(S.preview.rows)) {
+    for (const r of S.preview.rows as Array<Record<string, unknown>>) {
+      for (const k of Object.keys(r || {})) {
+        if (!(k in sample) && r[k] && typeof r[k] === 'object') sample[k] = r[k];
+      }
+    }
+  }
+  const childrenOf = (val: unknown, basePath: string, depth: number): SrcField[] | undefined => {
+    if (depth > 4 || !val || typeof val !== 'object' || Array.isArray(val)) return undefined;
+    const obj = val as Record<string, unknown>;
+    const keys = Object.keys(obj);
+    if (!keys.length) return undefined;
+    return keys.map((k) => {
+      const p = `${basePath}.${k}`;
+      const v = obj[k];
+      const kids = childrenOf(v, p, depth + 1);
+      return { name: k, path: p, type: kids ? 'object' : typeofVal(v), children: kids };
+    });
+  };
+  return cols.map((c) => {
+    const kids = childrenOf(sample[c.name], c.name, 1);
+    return { name: c.name, path: c.name, type: kids ? 'object' : (c.type || 'any'), children: kids };
+  });
+}
+
+function typeofVal(v: unknown): string {
+  if (v === null || v === undefined) return 'any';
+  if (Array.isArray(v)) return 'array';
+  switch (typeof v) {
+    case 'number': return 'number';
+    case 'boolean': return 'bool';
+    case 'object': return 'object';
+    default: return 'string';
+  }
 }
 
 function renderSchemaTab(ib: HTMLElement, sn: Node) {
@@ -2805,6 +3270,8 @@ const TRANSFORMS: Array<{ type: string; label: string; cfg: Record<string, unkno
     cfg: { expectations: [{ type: 'expectColumnNotNull', column: 'id' }], onFail: 'warn', qualityThreshold: 0.95 } },
   { type: 'schemadrift', label: 'Schema drift — detect column add/remove/type',
     cfg: { policy: 'additive', onDrift: 'log' } },
+  { type: 'parse', label: 'Parse — structure a text field into columns (regex/JSON)',
+    cfg: { source: 'message', mode: 'regex', pattern: '^(?P<level>\\w+)\\s+(?P<msg>.*)$', onError: 'keep', keepSource: true } },
 ];
 
 // Compute the column names visible at a given transforms[] insert position,
@@ -2813,7 +3280,9 @@ const TRANSFORMS: Array<{ type: string; label: string; cfg: Record<string, unkno
 // complete, valid projection.
 function upstreamColumnsAt(insertIndex: number): string[] {
   const src: any = S.doc.source || {};
-  let cols: string[] = Array.isArray(src.columns) ? src.columns.map((c: any) => String(c.name)) : [];
+  let cols: string[] = Array.isArray(src.columns)
+    ? src.columns.map((c: any) => String(c.name))
+    : (SOURCE_FIXED_SCHEMA[String(src.type)] || []).map((c) => c.name);
   const transforms = Array.isArray(S.doc.transforms) ? S.doc.transforms : [];
   for (let i = 0; i < insertIndex && i < transforms.length; i++) {
     const t: any = transforms[i];
@@ -2823,6 +3292,9 @@ function upstreamColumnsAt(insertIndex: number): string[] {
     }
     if (t.type === 'lookup' && Array.isArray(t.outputFields)) {
       t.outputFields.forEach((f: any) => cols.push(String(f)));
+    }
+    if (t.type === 'parse') {
+      parseProducedColumns(t).forEach((n) => { if (!cols.includes(n)) cols.push(n); });
     }
   }
   if (!cols.length && S.preview && S.preview.columns.length) cols = S.preview.columns.slice();
