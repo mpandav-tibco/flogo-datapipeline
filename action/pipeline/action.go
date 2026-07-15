@@ -8,6 +8,7 @@ import (
 	"io"
 	"runtime/debug"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -421,20 +422,27 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 	}
 
 	// transformWorkers > 1 requests multi-core transform parallelism. It is only
-	// safe when transforms are stateless AND checkpointing is off, because
-	// out-of-order batch completion would corrupt the checkpoint cursor and any
-	// order-dependent accumulator (HWM max-tracking, DQ gate stats, schemadrift
-	// baseline). When those correctness constraints apply we keep transform
-	// single-threaded — reads are still overlapped with transform+write by the
-	// read-ahead goroutine below, so the source never blocks the pipeline.
-	if def.Performance.TransformWorkers > 1 {
-		orderSensitive := hwmProvider != nil || dqProvider != nil ||
-			def.SchemaDrift.Policy != "" ||
-			(def.Checkpoint.Type != "" && def.Checkpoint.Type != "none")
-		if orderSensitive {
-			runLog.Infof("transformWorkers=%d — ordered processing required (checkpoint/HWM/DQ/drift); transform runs single-threaded, reads overlapped via read-ahead", def.Performance.TransformWorkers)
+	// safe when transforms are STATELESS and there is no ordered-cursor state to
+	// protect, i.e. no HWM/DQ/schemadrift accumulator and no checkpointing. When
+	// eligible we run an ordered-parallel path: N worker goroutines each own a
+	// private transform pipeline, and a single collector reassembles results in
+	// the original batch order before writing — so the sink write and all
+	// counters stay single-threaded (no data race) while transforms use N cores.
+	// When the constraints don't hold we keep transform single-threaded; reads
+	// are still overlapped with transform+write by the read-ahead goroutine.
+	txWorkers := def.Performance.TransformWorkers
+	if txWorkers < 1 {
+		txWorkers = 1
+	}
+	parallelEligible := txWorkers > 1 &&
+		hwmProvider == nil && dqProvider == nil &&
+		def.SchemaDrift.Policy == "" &&
+		(def.Checkpoint.Type == "" || def.Checkpoint.Type == "none")
+	if txWorkers > 1 {
+		if parallelEligible {
+			runLog.Infof("transformWorkers=%d — parallel transform across %d workers with ordered output", txWorkers, txWorkers)
 		} else {
-			runLog.Infof("transformWorkers=%d — reads overlapped with transform+write via read-ahead buffer (depth %d)", def.Performance.TransformWorkers, bufDepth)
+			runLog.Infof("transformWorkers=%d — ordered processing required (checkpoint/HWM/DQ/drift); transform runs single-threaded, reads overlapped via read-ahead", txWorkers)
 		}
 	}
 
@@ -591,9 +599,169 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 	if scMode == "" {
 		scMode = "single"
 	}
-	switch scMode {
-	case "sharded", "distributed":
+	// drainParallel is the ordered-parallel transform path (see parallelEligible).
+	// A reader feeds sequence-numbered batches to a pool of workers, each with a
+	// private transform pipeline; a collector reassembles results in read order
+	// so the sink write + counter updates stay single-threaded. It carries no
+	// checkpoint/watermark logic because parallelEligible already excludes those.
+	drainParallel := func(pSrc source.Source) error {
+		type result struct {
+			seq         int64
+			src         *record.RecordBatch
+			transformed *record.RecordBatch
+			batchLen    int64
+			txErr       error
+			txDur       time.Duration
+			readDur     time.Duration
+		}
+		type job struct {
+			seq     int64
+			batch   *record.RecordBatch
+			readDur time.Duration
+		}
+
+		// One private transform pipeline per worker so concurrent Apply calls
+		// never share mutable transform state.
+		pipes := make([]*transform.Pipeline, txWorkers)
+		for i := range pipes {
+			p, bErr := transform.Build(transformCfgs)
+			if bErr != nil {
+				for j := 0; j < i; j++ {
+					_ = pipes[j].Close()
+				}
+				return fmt.Errorf("transforms build (worker %d): %w", i, bErr)
+			}
+			pipes[i] = p
+		}
+		defer func() {
+			for _, p := range pipes {
+				_ = p.Close()
+			}
+		}()
+
+		jobCh := make(chan job, txWorkers)
+		resCh := make(chan result, txWorkers*2)
+		wctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+
+		var inFlight int64
+		go func() {
+			defer close(jobCh)
+			var seq int64
+			for {
+				if wctx.Err() != nil {
+					return
+				}
+				for maxInFlightBytes > 0 && atomic.LoadInt64(&inFlight) >= maxInFlightBytes {
+					if wctx.Err() != nil {
+						return
+					}
+					time.Sleep(2 * time.Millisecond)
+				}
+				t0 := time.Now()
+				b, rErr := pSrc.ReadBatch(batchSize)
+				rd := time.Since(t0)
+				if b != nil && b.Len() > 0 {
+					atomic.AddInt64(&inFlight, batchBytes(b))
+					select {
+					case jobCh <- job{seq: seq, batch: b, readDur: rd}:
+						seq++
+					case <-wctx.Done():
+						return
+					}
+				}
+				if rErr != nil {
+					return
+				}
+			}
+		}()
+
+		var wg sync.WaitGroup
+		for i := 0; i < txWorkers; i++ {
+			wg.Add(1)
+			go func(p *transform.Pipeline) {
+				defer wg.Done()
+				for j := range jobCh {
+					t1 := time.Now()
+					tOut, err := p.Apply(j.batch)
+					resCh <- result{
+						seq: j.seq, src: j.batch, transformed: tOut,
+						batchLen: int64(j.batch.Len()), txErr: err,
+						txDur: time.Since(t1), readDur: j.readDur,
+					}
+				}
+			}(pipes[i])
+		}
+		go func() { wg.Wait(); close(resCh) }()
+
+		pending := make(map[int64]result)
+		var next int64
+		var writeErr error
+		process := func(r result) {
+			bBytes := batchBytes(r.src)
+			out.RowsProcessed += r.batchLen
+			a.recorder.BatchRead(a.ref, def.Source.Type, int(r.batchLen), r.readDur)
+			a.checkStall(runLog, "read", r.readDur)
+			if r.transformed != r.src {
+				record.Put(r.src)
+			}
+			atomic.AddInt64(&inFlight, -bBytes)
+			switch {
+			case r.txErr != nil:
+				runLog.Warnf("transform error on batch of %d rows (routing to failed): %v", r.batchLen, r.txErr)
+				a.recorder.BatchFailed(a.ref, int(r.batchLen))
+				out.RowsFailed += r.batchLen
+			case r.transformed == nil:
+				a.recorder.BatchTransformed(a.ref, int(r.batchLen), 0, r.txDur)
+				a.checkStall(runLog, "transform", r.txDur)
+				out.RowsDropped += r.batchLen
+			case r.transformed.Len() == 0:
+				a.recorder.BatchTransformed(a.ref, int(r.batchLen), 0, r.txDur)
+				a.checkStall(runLog, "transform", r.txDur)
+				record.Put(r.transformed)
+			default:
+				txOut := int(r.transformed.Len())
+				a.recorder.BatchTransformed(a.ref, int(r.batchLen), txOut, r.txDur)
+				a.checkStall(runLog, "transform", r.txDur)
+				t2 := time.Now()
+				written, wErr := a.rowLevelWrite(runLog, snk, dlq, r.transformed, runID, out)
+				writeDur := time.Since(t2)
+				record.Put(r.transformed)
+				if wErr != nil {
+					writeErr = wErr
+					cancel()
+					return
+				}
+				out.RowsWritten += int64(written)
+				a.recorder.BatchWritten(a.ref, def.Sink.Type, written, writeDur)
+				a.checkStall(runLog, "write", writeDur)
+			}
+		}
+		for r := range resCh {
+			if writeErr != nil {
+				continue // keep draining results after an error so goroutines exit
+			}
+			pending[r.seq] = r
+			for {
+				nr, ok := pending[next]
+				if !ok {
+					break
+				}
+				delete(pending, next)
+				process(nr)
+				next++
+			}
+		}
+		return writeErr
+	}
+
+	switch {
+	case scMode == "sharded" || scMode == "distributed":
 		if err := a.runScaled(ctx, runLog, def, scMode, src, srcCfg, runID, drain); err != nil {
+			return out, err
+		}
+	case parallelEligible:
+		if err := drainParallel(src); err != nil {
 			return out, err
 		}
 	default:

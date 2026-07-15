@@ -1234,7 +1234,7 @@ function renderPipelineSettings(): HTMLElement {
     stNum(perf, 'batchSize', 'Batch size (rows)', '5000', 'Rows per in-flight batch. Higher = faster, more memory.'),
     stNum(perf, 'sourceBufferBatches', 'Read-ahead buffer (batches)', '4', 'Depth of the read-ahead buffer — the source reads ahead this many batches so reads overlap transform+write.'),
     stNum(perf, 'maxMemoryMB', 'Max in-flight memory (MB)', '512', 'Backpressure: the reader blocks when buffered in-flight bytes exceed this, bounding memory.'),
-    stNum(perf, 'transformWorkers', 'Transform workers', '1', 'Reads are already overlapped via read-ahead. Ordered processing is enforced for checkpoint/HWM/DQ correctness, so >1 does not add parallel transform threads.'),
+    stNum(perf, 'transformWorkers', 'Transform workers', '1', 'Parallel transform threads. When >1 and there is no HWM/DQ/schema-drift transform and checkpointing is off, transforms run across N workers with order-preserving output; otherwise processing stays ordered/single-threaded.'),
     stNum(perf, 'sinkBufferBatches', 'Sink buffer (batches)', '4', 'Reserved. Sink writes stay ordered so checkpoints remain consistent.'),
     stNum(perf, 'rowGroupParallelism', 'Parquet row-group parallelism', '4', 'Concurrent row-group readers — used by the Parquet source.'),
   ));
