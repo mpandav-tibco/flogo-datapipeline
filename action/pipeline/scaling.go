@@ -99,19 +99,18 @@ func (a *DataPipelineAction) runScaled(
 			return fmt.Errorf("scaling.mode=distributed requires a coordinator config")
 		}
 		coord := def.Scaling.Coordinator
-		if coord.Type != "postgres" {
-			// Only the Postgres work queue is implemented today. Redis is
-			// reserved (documented in the workqueue package) but not yet built,
-			// so fail loudly instead of silently mis-scheduling work.
-			return fmt.Errorf("scaling: coordinator type %q is not supported (use 'postgres')", coord.Type)
+		if coord.Type != "postgres" && coord.Type != "redis" {
+			return fmt.Errorf("scaling: coordinator type %q is not supported (use 'postgres' or 'redis')", coord.Type)
 		}
 		qcfg := scaling.Config{
-			Mode:             scaling.ModeDistributed,
-			CoordinatorType:  "postgres",
-			CoordinatorDSN:   coord.DSN,
-			LeaseSeconds:     coord.LeaseSeconds,
-			HeartbeatSeconds: coord.HeartbeatSeconds,
-			MaxRetries:       coord.MaxRetries,
+			Mode:                   scaling.ModeDistributed,
+			CoordinatorType:        coord.Type,
+			CoordinatorDSN:         coord.DSN,
+			CoordinatorAddr:        coord.Addr,
+			CoordinatorPasswordEnv: coord.PasswordEnv,
+			LeaseSeconds:           coord.LeaseSeconds,
+			HeartbeatSeconds:       coord.HeartbeatSeconds,
+			MaxRetries:             coord.MaxRetries,
 		}
 		queue, err := scaling.BuildQueue(qcfg, a.ref)
 		if err != nil {
@@ -120,7 +119,7 @@ func (a *DataPipelineAction) runScaled(
 		defer queue.Close()
 
 		c := scaling.NewCoordinator(qcfg, queue)
-		runLog.Infof("scaling.mode=distributed — enqueuing %d partition(s) to postgres coordinator", len(parts))
+		runLog.Infof("scaling.mode=distributed — enqueuing %d partition(s) to %s coordinator", len(parts), coord.Type)
 		if err := c.Enqueue(ctx, parts); err != nil {
 			return fmt.Errorf("scaling: enqueue partitions: %w", err)
 		}

@@ -79,11 +79,11 @@ integration suite.
 |-------|----------|
 | `single` (default) | One instance processes all data. |
 | `sharded` | Static assignment: this instance owns partitions where `index % instanceCount == instanceIndex`. No coordinator needed. Reveals `instanceIndex`, `instanceCount`, `partitionStrategy`. |
-| `distributed` | Dynamic assignment via a shared **Postgres** work queue: every instance competes to claim partitions; failed partitions are re-queued up to `maxRetries`. Reveals the coordinator block (type, DSN, lease/heartbeat/retries). |
+| `distributed` | Dynamic assignment via a shared work queue (**PostgreSQL** or **Redis**): every instance competes to claim partitions; failed partitions are re-queued up to `maxRetries`. Reveals the coordinator block (type, DSN/addr, lease/heartbeat/retries). |
 
 Only **jdbc** and **object-store** (s3/gcs/adls) sources are partitionable.
 Non-partitionable sources (csv, sectioned, …) log a graceful fallback and run
-single-instance. Redis coordinator is not yet implemented (use Postgres).
+single-instance. Both PostgreSQL and Redis coordinators are supported.
 
 **Validated (UI):** `scaling=sharded` echoed and executed; sectioned source →
 `WARN … not partitionable — falling back to single-instance execution`.

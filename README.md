@@ -105,7 +105,7 @@ See [`studio/vscode/README.md`](studio/vscode/README.md) for full details.
 | Checkpointing (resume after interruption) | Local file, Redis |
 | Watermarking (incremental high-water marks) | Local file, Redis, PostgreSQL |
 | Metrics | Prometheus endpoint (`/metrics`) + OpenTelemetry OTLP gRPC export |
-| Distributed scaling | Sharded (static partition assignment) or distributed (PostgreSQL work-queue coordinator with lease-based claim, heartbeat, and retry) |
+| Distributed scaling | Sharded (static partition assignment) or distributed (PostgreSQL or Redis work-queue coordinator with lease-based claim, heartbeat, and retry) |
 
 ### Pipeline templates (6)
 
@@ -234,7 +234,6 @@ These are honest work items — not committed roadmap, but the next things we in
 - [ ] **MSSQL and Oracle JDBC drivers** — PostgreSQL, MySQL, SQLite are current; these are the next priority enterprise databases
 - [ ] **SFTP and local directory watch sources** — file-arrival triggered ingestion without cron
 - [ ] **Avro source and sink** — Avro is common in Kafka-based enterprise architectures
-- [ ] **Redis-backed distributed work queue** — distributed scaling currently uses the PostgreSQL work-queue coordinator; a Redis-backed coordinator is planned as a lighter-weight alternative
 
 ### VS Code extension
 

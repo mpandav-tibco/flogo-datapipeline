@@ -1263,10 +1263,18 @@ function renderPipelineSettings(): HTMLElement {
     scFields.push(stNum(sc, 'partitionsPerClaim', 'Partitions per claim', '1', 'How many partitions an instance claims at once.'));
     const coord = settingsSection(sc, 'coordinator');
     if (!coord.type) coord.type = 'postgres';
+    const coordType = String(coord.type);
     scFields.push(stSelect(coord, 'type', 'Coordinator', [
       ['postgres', 'PostgreSQL'],
-    ], 'Shared work-queue backend that hands out partitions. PostgreSQL is the supported coordinator.', true));
-    scFields.push(stText(coord, 'dsn', 'PostgreSQL DSN', 'host=… dbname=… user=…', 'Connection string for the coordinator DB.'));
+      ['redis', 'Redis'],
+    ], 'Shared work-queue backend that hands out partitions.', true));
+    if (coordType === 'redis') {
+      scFields.push(stText(coord, 'addr', 'Redis address', 'localhost:6379', 'host:port of the coordinator Redis.'));
+      scFields.push(stText(coord, 'keyPrefix', 'Key prefix', 'flogo:pipeline:wq', 'Namespace for the work-queue keys.'));
+      scFields.push(stText(coord, 'passwordEnv', 'Password env var', 'REDIS_PASSWORD', 'Env var holding the Redis password.'));
+    } else {
+      scFields.push(stText(coord, 'dsn', 'PostgreSQL DSN', 'host=… dbname=… user=…', 'Connection string for the coordinator DB.'));
+    }
     scFields.push(stNum(coord, 'leaseSeconds', 'Lease TTL (s)', '120', 'How long a claim is held before it can be reclaimed.'));
     scFields.push(stNum(coord, 'heartbeatSeconds', 'Heartbeat (s)', '30', 'Lease-renewal interval.'));
     scFields.push(stNum(coord, 'maxRetries', 'Max retries', '3', 'Partition retry limit before it is marked failed.'));
