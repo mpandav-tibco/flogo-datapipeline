@@ -1,0 +1,98 @@
+{
+ "name": "etl05_postgres_map_kafka",
+ "type": "flogo:app",
+ "version": "1.0.0",
+ "appModel": "1.1.1",
+ "imports": [
+  "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+  "github.com/project-flogo/contrib/trigger/timer"
+ ],
+ "triggers": [
+  {
+   "id": "bench-timer",
+   "ref": "github.com/project-flogo/contrib/trigger/timer",
+   "settings": {
+    "repeating": true,
+    "startDelay": 0,
+    "interval": 86400000
+   },
+   "handlers": [
+    {
+     "settings": {},
+     "action": {
+      "ref": "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+      "settings": {
+       "pipelineRef": "res://pipeline:etl05_postgres_map_kafka"
+      }
+     }
+    }
+   ]
+  }
+ ],
+ "resources": [
+  {
+   "id": "pipeline:etl05_postgres_map_kafka",
+   "data": {
+    "mode": "etl",
+    "source": {
+     "type": "jdbc",
+     "driver": "postgres",
+     "dsn": "postgres://postgres:bench@localhost:5433/warehouse?sslmode=disable",
+     "table": "orders_raw",
+     "keyColumn": "order_id",
+     "batchSize": 5000,
+     "partitions": 4
+    },
+    "transforms": [
+     {
+      "type": "map",
+      "fieldOrder": [
+       "order_id",
+       "customer_id",
+       "region_code",
+       "product",
+       "category",
+       "quantity",
+       "net_amount",
+       "status",
+       "order_date",
+       "email"
+      ],
+      "fields": {
+       "order_id": "=$order_id",
+       "customer_id": "=$customer_id",
+       "region_code": "=upper($.region)",
+       "product": "=$product",
+       "category": "=$category",
+       "quantity": "=$quantity",
+       "net_amount": "=multiply($.quantity, $.unit_price)",
+       "status": "=$status",
+       "order_date": "=$order_date",
+       "email": "=lower($.email)"
+      }
+     }
+    ],
+    "sink": {
+     "type": "kafka",
+     "brokers": [
+      "localhost:9092"
+     ],
+     "topic": "etl05_out",
+     "ackMode": "leader",
+     "serializer": "json"
+    },
+    "performance": {
+     "batchSize": 5000,
+     "maxMemoryMB": 1024
+    },
+    "scaling": {
+     "mode": "single"
+    },
+    "checkpoint": {
+     "type": "none"
+    },
+    "name": "etl05_postgres_map_kafka"
+   }
+  }
+ ]
+}

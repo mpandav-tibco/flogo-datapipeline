@@ -1,0 +1,73 @@
+{
+ "name": "el17_s3_postgres",
+ "type": "flogo:app",
+ "version": "1.0.0",
+ "appModel": "1.1.1",
+ "imports": [
+  "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+  "github.com/project-flogo/contrib/trigger/timer"
+ ],
+ "triggers": [
+  {
+   "id": "bench-timer",
+   "ref": "github.com/project-flogo/contrib/trigger/timer",
+   "settings": {
+    "repeating": true,
+    "startDelay": 0,
+    "interval": 86400000
+   },
+   "handlers": [
+    {
+     "settings": {},
+     "action": {
+      "ref": "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+      "settings": {
+       "pipelineRef": "res://pipeline:el17_s3_postgres"
+      }
+     }
+    }
+   ]
+  }
+ ],
+ "resources": [
+  {
+   "id": "pipeline:el17_s3_postgres",
+   "data": {
+    "mode": "el",
+    "source": {
+     "type": "s3",
+     "options": {
+      "bucket": "datalake",
+      "region": "us-east-1",
+      "endpoint": "http://localhost:9000",
+      "forcePathStyle": true,
+      "accessKeyIdEnv": "MINIO_AK",
+      "secretAccessKeyEnv": "MINIO_SK",
+      "prefix": "lake/",
+      "format": "parquet"
+     }
+    },
+    "transforms": [],
+    "sink": {
+     "type": "jdbc",
+     "driver": "postgres",
+     "dsn": "postgres://postgres:bench@localhost:5433/warehouse?sslmode=disable",
+     "table": "orders_sink",
+     "batchSize": 5000,
+     "onConflict": "insert"
+    },
+    "performance": {
+     "batchSize": 5000,
+     "maxMemoryMB": 1024
+    },
+    "scaling": {
+     "mode": "single"
+    },
+    "checkpoint": {
+     "type": "none"
+    },
+    "name": "el17_s3_postgres"
+   }
+  }
+ ]
+}

@@ -1,0 +1,112 @@
+{
+ "name": "ent02_checkpoint_resume",
+ "type": "flogo:app",
+ "version": "1.0.0",
+ "appModel": "1.1.1",
+ "imports": [
+  "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+  "github.com/project-flogo/contrib/trigger/timer"
+ ],
+ "triggers": [
+  {
+   "id": "bench-timer",
+   "ref": "github.com/project-flogo/contrib/trigger/timer",
+   "settings": {
+    "repeating": true,
+    "startDelay": 0,
+    "interval": 86400000
+   },
+   "handlers": [
+    {
+     "settings": {},
+     "action": {
+      "ref": "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+      "settings": {
+       "pipelineRef": "res://pipeline:ent02_checkpoint_resume"
+      }
+     }
+    }
+   ]
+  }
+ ],
+ "resources": [
+  {
+   "id": "pipeline:ent02_checkpoint_resume",
+   "data": {
+    "mode": "etl",
+    "source": {
+     "type": "csv",
+     "path": "./data/orders.csv",
+     "delimiter": ",",
+     "hasHeader": true,
+     "columns": [
+      {
+       "name": "order_id",
+       "type": "string"
+      },
+      {
+       "name": "customer_id",
+       "type": "string"
+      },
+      {
+       "name": "region",
+       "type": "string"
+      },
+      {
+       "name": "product",
+       "type": "string"
+      },
+      {
+       "name": "category",
+       "type": "string"
+      },
+      {
+       "name": "quantity",
+       "type": "int"
+      },
+      {
+       "name": "unit_price",
+       "type": "float"
+      },
+      {
+       "name": "status",
+       "type": "string"
+      },
+      {
+       "name": "order_date",
+       "type": "string"
+      },
+      {
+       "name": "email",
+       "type": "string"
+      }
+     ]
+    },
+    "transforms": [
+     {
+      "type": "filter",
+      "expr": "status != 'CANCELLED' AND unit_price > 0"
+     }
+    ],
+    "sink": {
+     "type": "null"
+    },
+    "performance": {
+     "batchSize": 5000,
+     "maxMemoryMB": 1024
+    },
+    "scaling": {
+     "mode": "single"
+    },
+    "checkpoint": {
+     "type": "file",
+     "path": "./checkpoints/ent02",
+     "intervalRows": 1000000,
+     "intervalSeconds": 10,
+     "deleteOnSuccess": false
+    },
+    "name": "ent02_checkpoint_resume"
+   }
+  }
+ ]
+}

@@ -1,0 +1,245 @@
+{
+ "el01_csv_parquet": {
+  "cat": "EL",
+  "desc": "csv -> parquet",
+  "source": "csv",
+  "sink": "parquet",
+  "transforms": []
+ },
+ "el02_csv_postgres": {
+  "cat": "EL",
+  "desc": "csv -> jdbc",
+  "source": "csv",
+  "sink": "jdbc",
+  "transforms": []
+ },
+ "el03_csv_kafka": {
+  "cat": "EL",
+  "desc": "csv -> kafka",
+  "source": "csv",
+  "sink": "kafka",
+  "transforms": []
+ },
+ "el04_csv_s3": {
+  "cat": "EL",
+  "desc": "csv -> s3",
+  "source": "csv",
+  "sink": "s3",
+  "transforms": []
+ },
+ "el05_csv_null": {
+  "cat": "EL",
+  "desc": "csv -> null",
+  "source": "csv",
+  "sink": "null",
+  "transforms": []
+ },
+ "el06_parquet_postgres": {
+  "cat": "EL",
+  "desc": "parquet -> jdbc",
+  "source": "parquet",
+  "sink": "jdbc",
+  "transforms": []
+ },
+ "el07_parquet_kafka": {
+  "cat": "EL",
+  "desc": "parquet -> kafka",
+  "source": "parquet",
+  "sink": "kafka",
+  "transforms": []
+ },
+ "el08_parquet_s3": {
+  "cat": "EL",
+  "desc": "parquet -> s3",
+  "source": "parquet",
+  "sink": "s3",
+  "transforms": []
+ },
+ "el09_jsonl_parquet": {
+  "cat": "EL",
+  "desc": "jsonlines -> parquet",
+  "source": "jsonlines",
+  "sink": "parquet",
+  "transforms": []
+ },
+ "el10_jsonl_postgres": {
+  "cat": "EL",
+  "desc": "jsonlines -> jdbc",
+  "source": "jsonlines",
+  "sink": "jdbc",
+  "transforms": []
+ },
+ "el11_postgres_parquet": {
+  "cat": "EL",
+  "desc": "jdbc -> parquet",
+  "source": "jdbc",
+  "sink": "parquet",
+  "transforms": []
+ },
+ "el12_postgres_kafka": {
+  "cat": "EL",
+  "desc": "jdbc -> kafka",
+  "source": "jdbc",
+  "sink": "kafka",
+  "transforms": []
+ },
+ "el13_postgres_s3": {
+  "cat": "EL",
+  "desc": "jdbc -> s3",
+  "source": "jdbc",
+  "sink": "s3",
+  "transforms": []
+ },
+ "el14_kafka_parquet": {
+  "cat": "EL",
+  "desc": "kafka -> parquet",
+  "source": "kafka",
+  "sink": "parquet",
+  "transforms": []
+ },
+ "el15_kafka_postgres": {
+  "cat": "EL",
+  "desc": "kafka -> jdbc",
+  "source": "kafka",
+  "sink": "jdbc",
+  "transforms": []
+ },
+ "el16_s3_parquet": {
+  "cat": "EL",
+  "desc": "s3 -> parquet",
+  "source": "s3",
+  "sink": "parquet",
+  "transforms": []
+ },
+ "el17_s3_postgres": {
+  "cat": "EL",
+  "desc": "s3 -> jdbc",
+  "source": "s3",
+  "sink": "jdbc",
+  "transforms": []
+ },
+ "etl01_csv_filter_parquet": {
+  "cat": "ETL",
+  "desc": "csv -> filter -> parquet",
+  "source": "csv",
+  "sink": "parquet",
+  "transforms": [
+   "filter"
+  ]
+ },
+ "etl02_csv_filtermap_parquet": {
+  "cat": "ETL",
+  "desc": "csv -> filter/map -> parquet",
+  "source": "csv",
+  "sink": "parquet",
+  "transforms": [
+   "filter",
+   "map"
+  ]
+ },
+ "etl03_csv_clean_postgres": {
+  "cat": "ETL",
+  "desc": "csv -> validate/map -> jdbc",
+  "source": "csv",
+  "sink": "jdbc",
+  "transforms": [
+   "validate",
+   "map"
+  ]
+ },
+ "etl04_csv_full_s3": {
+  "cat": "ETL",
+  "desc": "csv -> filter/validate/map -> s3",
+  "source": "csv",
+  "sink": "s3",
+  "transforms": [
+   "filter",
+   "validate",
+   "map"
+  ]
+ },
+ "etl05_postgres_map_kafka": {
+  "cat": "ETL",
+  "desc": "jdbc -> map -> kafka",
+  "source": "jdbc",
+  "sink": "kafka",
+  "transforms": [
+   "map"
+  ]
+ },
+ "etl06_kafka_filter_parquet": {
+  "cat": "ETL",
+  "desc": "kafka -> filter -> parquet",
+  "source": "kafka",
+  "sink": "parquet",
+  "transforms": [
+   "filter"
+  ]
+ },
+ "etl07_parquet_full_postgres": {
+  "cat": "ETL",
+  "desc": "parquet -> filter/validate/map -> jdbc",
+  "source": "parquet",
+  "sink": "jdbc",
+  "transforms": [
+   "filter",
+   "validate",
+   "map"
+  ]
+ },
+ "etl08_csv_schemadrift_parquet": {
+  "cat": "ETL",
+  "desc": "csv -> schemadrift -> parquet",
+  "source": "csv",
+  "sink": "parquet",
+  "transforms": [
+   "schemadrift"
+  ]
+ },
+ "etl09_csv_dq_parquet": {
+  "cat": "ETL",
+  "desc": "csv -> dq -> parquet",
+  "source": "csv",
+  "sink": "parquet",
+  "transforms": [
+   "dq"
+  ]
+ },
+ "etl10_csv_hwm_parquet": {
+  "cat": "ETL",
+  "desc": "csv -> hwm -> parquet",
+  "source": "csv",
+  "sink": "parquet",
+  "transforms": [
+   "hwm"
+  ]
+ },
+ "etl11_csv_lookup_parquet": {
+  "cat": "ETL",
+  "desc": "csv -> lookup/map -> parquet",
+  "source": "csv",
+  "sink": "parquet",
+  "transforms": [
+   "lookup",
+   "map"
+  ]
+ },
+ "ent01_dlq_isolation": {
+  "cat": "ENT",
+  "desc": "csv -> validate -> parquet",
+  "source": "csv",
+  "sink": "parquet",
+  "transforms": [
+   "validate"
+  ]
+ },
+ "ent02_checkpoint_resume": {
+  "cat": "ENT",
+  "desc": "csv -> filter -> null",
+  "source": "csv",
+  "sink": "null",
+  "transforms": [
+   "filter"
+  ]
+ }
+}
