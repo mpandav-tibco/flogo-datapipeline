@@ -1,0 +1,77 @@
+{
+ "name": "etl06_kafka_filter_parquet",
+ "type": "flogo:app",
+ "version": "1.0.0",
+ "appModel": "1.1.1",
+ "imports": [
+  "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+  "github.com/project-flogo/contrib/trigger/timer"
+ ],
+ "triggers": [
+  {
+   "id": "bench-timer",
+   "ref": "github.com/project-flogo/contrib/trigger/timer",
+   "settings": {
+    "repeating": true,
+    "startDelay": 0,
+    "interval": 86400000
+   },
+   "handlers": [
+    {
+     "settings": {},
+     "action": {
+      "ref": "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+      "settings": {
+       "pipelineRef": "res://pipeline:etl06_kafka_filter_parquet"
+      }
+     }
+    }
+   ]
+  }
+ ],
+ "resources": [
+  {
+   "id": "pipeline:etl06_kafka_filter_parquet",
+   "data": {
+    "mode": "etl",
+    "source": {
+     "type": "kafka",
+     "options": {
+      "brokers": [
+       "localhost:9092"
+      ],
+      "topic": "orders",
+      "mode": "batch",
+      "groupId": "g_etl06",
+      "startOffset": "earliest",
+      "stopAtCurrentEnd": true,
+      "batchSize": 5000
+     }
+    },
+    "transforms": [
+     {
+      "type": "filter",
+      "expr": "status != 'CANCELLED' AND unit_price > 0"
+     }
+    ],
+    "sink": {
+     "type": "parquet",
+     "path": "./out/etl06.parquet",
+     "compression": "snappy",
+     "rowGroupSize": 100000
+    },
+    "performance": {
+     "batchSize": 5000,
+     "maxMemoryMB": 1024
+    },
+    "scaling": {
+     "mode": "single"
+    },
+    "checkpoint": {
+     "type": "none"
+    },
+    "name": "etl06_kafka_filter_parquet"
+   }
+  }
+ ]
+}

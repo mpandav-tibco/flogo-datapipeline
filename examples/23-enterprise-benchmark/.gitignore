@@ -1,0 +1,20 @@
+# Generated datasets (regenerate with scripts/gen-data.sh) — up to ~19 GB
+data/orders.csv
+data/orders.jsonl
+data/orders.parquet
+
+# Compiled benchmark binary (rebuild with scripts/build.sh)
+bin/
+
+# Run outputs, logs, engine scratch
+out/
+.dpcache/
+checkpoints/
+watermarks/
+
+# NOTE: harness/*.json (results, elt, enterprise, dataset_meta) and reports/*.md
+# ARE committed — they are the recorded benchmark evidence.
+
+# Python
+__pycache__/
+*.pyc

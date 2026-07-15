@@ -1,0 +1,111 @@
+{
+ "name": "_prep_load_s3",
+ "type": "flogo:app",
+ "version": "1.0.0",
+ "appModel": "1.1.1",
+ "imports": [
+  "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+  "github.com/project-flogo/contrib/trigger/timer"
+ ],
+ "triggers": [
+  {
+   "id": "bench-timer",
+   "ref": "github.com/project-flogo/contrib/trigger/timer",
+   "settings": {
+    "repeating": true,
+    "startDelay": 0,
+    "interval": 86400000
+   },
+   "handlers": [
+    {
+     "settings": {},
+     "action": {
+      "ref": "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+      "settings": {
+       "pipelineRef": "res://pipeline:_prep_load_s3"
+      }
+     }
+    }
+   ]
+  }
+ ],
+ "resources": [
+  {
+   "id": "pipeline:_prep_load_s3",
+   "data": {
+    "mode": "el",
+    "source": {
+     "type": "csv",
+     "path": "./data/orders.csv",
+     "delimiter": ",",
+     "hasHeader": true,
+     "columns": [
+      {
+       "name": "order_id",
+       "type": "string"
+      },
+      {
+       "name": "customer_id",
+       "type": "string"
+      },
+      {
+       "name": "region",
+       "type": "string"
+      },
+      {
+       "name": "product",
+       "type": "string"
+      },
+      {
+       "name": "category",
+       "type": "string"
+      },
+      {
+       "name": "quantity",
+       "type": "int"
+      },
+      {
+       "name": "unit_price",
+       "type": "float"
+      },
+      {
+       "name": "status",
+       "type": "string"
+      },
+      {
+       "name": "order_date",
+       "type": "string"
+      },
+      {
+       "name": "email",
+       "type": "string"
+      }
+     ]
+    },
+    "transforms": [],
+    "sink": {
+     "bucket": "datalake",
+     "region": "us-east-1",
+     "endpoint": "http://localhost:9000",
+     "forcePathStyle": true,
+     "accessKeyIdEnv": "MINIO_AK",
+     "secretAccessKeyEnv": "MINIO_SK",
+     "type": "s3-sink",
+     "key": "lake/orders.parquet",
+     "format": "parquet"
+    },
+    "performance": {
+     "batchSize": 5000,
+     "maxMemoryMB": 1024
+    },
+    "scaling": {
+     "mode": "single"
+    },
+    "checkpoint": {
+     "type": "none"
+    },
+    "name": "_prep_load_s3"
+   }
+  }
+ ]
+}

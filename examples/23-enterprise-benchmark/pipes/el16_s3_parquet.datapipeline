@@ -1,0 +1,71 @@
+{
+ "name": "el16_s3_parquet",
+ "type": "flogo:app",
+ "version": "1.0.0",
+ "appModel": "1.1.1",
+ "imports": [
+  "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+  "github.com/project-flogo/contrib/trigger/timer"
+ ],
+ "triggers": [
+  {
+   "id": "bench-timer",
+   "ref": "github.com/project-flogo/contrib/trigger/timer",
+   "settings": {
+    "repeating": true,
+    "startDelay": 0,
+    "interval": 86400000
+   },
+   "handlers": [
+    {
+     "settings": {},
+     "action": {
+      "ref": "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+      "settings": {
+       "pipelineRef": "res://pipeline:el16_s3_parquet"
+      }
+     }
+    }
+   ]
+  }
+ ],
+ "resources": [
+  {
+   "id": "pipeline:el16_s3_parquet",
+   "data": {
+    "mode": "el",
+    "source": {
+     "type": "s3",
+     "options": {
+      "bucket": "datalake",
+      "region": "us-east-1",
+      "endpoint": "http://localhost:9000",
+      "forcePathStyle": true,
+      "accessKeyIdEnv": "MINIO_AK",
+      "secretAccessKeyEnv": "MINIO_SK",
+      "prefix": "lake/",
+      "format": "parquet"
+     }
+    },
+    "transforms": [],
+    "sink": {
+     "type": "parquet",
+     "path": "./out/el16.parquet",
+     "compression": "snappy",
+     "rowGroupSize": 100000
+    },
+    "performance": {
+     "batchSize": 5000,
+     "maxMemoryMB": 1024
+    },
+    "scaling": {
+     "mode": "single"
+    },
+    "checkpoint": {
+     "type": "none"
+    },
+    "name": "el16_s3_parquet"
+   }
+  }
+ ]
+}

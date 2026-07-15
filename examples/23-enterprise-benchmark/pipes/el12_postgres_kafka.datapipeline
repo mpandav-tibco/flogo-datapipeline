@@ -1,0 +1,70 @@
+{
+ "name": "el12_postgres_kafka",
+ "type": "flogo:app",
+ "version": "1.0.0",
+ "appModel": "1.1.1",
+ "imports": [
+  "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+  "github.com/project-flogo/contrib/trigger/timer"
+ ],
+ "triggers": [
+  {
+   "id": "bench-timer",
+   "ref": "github.com/project-flogo/contrib/trigger/timer",
+   "settings": {
+    "repeating": true,
+    "startDelay": 0,
+    "interval": 86400000
+   },
+   "handlers": [
+    {
+     "settings": {},
+     "action": {
+      "ref": "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+      "settings": {
+       "pipelineRef": "res://pipeline:el12_postgres_kafka"
+      }
+     }
+    }
+   ]
+  }
+ ],
+ "resources": [
+  {
+   "id": "pipeline:el12_postgres_kafka",
+   "data": {
+    "mode": "el",
+    "source": {
+     "type": "jdbc",
+     "driver": "postgres",
+     "dsn": "postgres://postgres:bench@localhost:5433/warehouse?sslmode=disable",
+     "table": "orders_raw",
+     "keyColumn": "order_id",
+     "batchSize": 5000,
+     "partitions": 4
+    },
+    "transforms": [],
+    "sink": {
+     "type": "kafka",
+     "brokers": [
+      "localhost:9092"
+     ],
+     "topic": "el12_out",
+     "ackMode": "leader",
+     "serializer": "json"
+    },
+    "performance": {
+     "batchSize": 5000,
+     "maxMemoryMB": 1024
+    },
+    "scaling": {
+     "mode": "single"
+    },
+    "checkpoint": {
+     "type": "none"
+    },
+    "name": "el12_postgres_kafka"
+   }
+  }
+ ]
+}

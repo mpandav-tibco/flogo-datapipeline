@@ -35,21 +35,27 @@ func init() {
 }
 
 type parquetSource struct {
-	file        *os.File
-	pqFile      *parquetgo.File
-	schema      []record.Column
-	colIndices  []int // mapping from output column position to parquet leaf column index
-	rowGroups   []parquetgo.RowGroup
-	rgIdx       int // current row group index (single-instance mode)
+	file       *os.File
+	pqFile     *parquetgo.File
+	schema     []record.Column
+	colIndices []int // mapping from output column position to parquet leaf column index
+	rowGroups  []parquetgo.RowGroup
+	rgIdx      int // current row group index (single-instance mode)
 	// seqReader is the persistent reader for the current row group in sequential
 	// mode. Keeping it open across ReadBatch calls is critical: NewRowGroupReader
 	// is stateless — creating a new one for the same row group always starts from
 	// row 0, which causes duplicate rows whenever a row group is larger than the
 	// requested batch size.
-	seqReader   *parquetgo.Reader
-	rowBuf      []parquetgo.Row
-	rowBufIdx   int
-	rowsRead    int64
+	seqReader *parquetgo.Reader
+	rowBuf    []parquetgo.Row
+	rowBufIdx int
+	rowsRead  int64
+	// parBuf holds rows decoded by readParallel that exceed the requested batch
+	// size; they are served in size-bounded chunks on subsequent ReadBatch calls
+	// so a single call never returns whole row groups (which blows up memory when
+	// the downstream sink is slower than the parallel decoders).
+	parBuf      [][]interface{}
+	parBufIdx   int
 	parallelism int
 	closed      bool
 	mu          sync.Mutex
@@ -96,6 +102,9 @@ func newParquetSource(cfg map[string]interface{}) (source.Source, error) {
 	parallelism := 4
 	if p, ok := cfg["rowGroupParallelism"].(int); ok && p > 0 {
 		parallelism = p
+	} else if pf, ok := cfg["rowGroupParallelism"].(float64); ok && pf > 0 {
+		// JSON-decoded pipeline configs deliver numbers as float64.
+		parallelism = int(pf)
 	}
 
 	rowGroups := pf.RowGroups()
@@ -157,6 +166,12 @@ func (s *parquetSource) ReadBatch(size int) (*record.RecordBatch, error) {
 		return nil, io.EOF
 	}
 
+	// Serve any rows left over from a prior parallel decode first, so each batch
+	// stays bounded by `size` even though a row group holds far more rows.
+	if s.parBufIdx < len(s.parBuf) {
+		return s.serveParBuf(size)
+	}
+
 	if s.parallelism <= 1 || len(s.rowGroups)-s.rgIdx <= 1 {
 		return s.readSequential(size)
 	}
@@ -209,8 +224,11 @@ func (s *parquetSource) readSequential(size int) (*record.RecordBatch, error) {
 		}
 		s.rowsRead += int64(n)
 
-		if err == io.EOF || (err == nil && n < len(buf)) {
+		if err == io.EOF || (err == nil && n == 0) {
 			// Row group exhausted: close the reader and advance to the next group.
+			// NOTE: a short read (n < len(buf)) with err==nil is a page boundary, NOT
+			// end-of-group — keep the persistent reader open and continue on the next
+			// call, or rows past the first page of the group are silently dropped.
 			s.seqReader.Close()
 			s.seqReader = nil
 			s.rgIdx++
@@ -234,60 +252,100 @@ func (s *parquetSource) readSequential(size int) (*record.RecordBatch, error) {
 // Bug 1 fix: use NewRowGroupReader not NewReader.
 // Bug 6/7 fix: defer reader.Close() inside goroutine to release resources on all paths.
 func (s *parquetSource) readParallel(size int) (*record.RecordBatch, error) {
-	s.mu.Lock()
-	start := s.rgIdx
-	end := start + s.parallelism
-	if end > len(s.rowGroups) {
-		end = len(s.rowGroups)
-	}
-	s.rgIdx = end
-	s.mu.Unlock()
-
-	if start >= len(s.rowGroups) {
-		return nil, io.EOF
-	}
-
 	type rgResult struct {
 		rows [][]interface{}
 		err  error
 	}
 
-	results := make([]rgResult, end-start)
-	var wg sync.WaitGroup
-	for i := start; i < end; i++ {
-		wg.Add(1)
-		go func(idx, slot int) {
-			defer wg.Done()
-			rg := s.rowGroups[idx]
-			reader := parquetgo.NewRowGroupReader(rg) // Bug 1 fix
-			defer reader.Close()                      // Bug 6/7 fix: release on all exit paths
-			buf := make([]parquetgo.Row, rg.NumRows())
-			n, err := reader.ReadRows(buf)
-			rows := make([][]interface{}, n)
-			for r := 0; r < n; r++ {
-				rows[r] = extractRow(buf[r], s.colIndices, s.schema)
-			}
-			results[slot] = rgResult{rows: rows, err: err}
-		}(i, i-start)
-	}
-	wg.Wait()
-
-	batch := record.Get()
-	batch.Columns = s.schema
-	batch.Rows = make([][]interface{}, 0, size)
-	for _, r := range results {
-		if r.err != nil && r.err != io.EOF {
-			return batch, r.err
+	// Loop so that a chunk of entirely-empty row groups (pathological) advances
+	// to the next chunk rather than returning a spurious empty batch.
+	for {
+		s.mu.Lock()
+		start := s.rgIdx
+		end := start + s.parallelism
+		if end > len(s.rowGroups) {
+			end = len(s.rowGroups)
 		}
-		batch.Rows = append(batch.Rows, r.rows...)
-	}
-	s.rowsRead += int64(len(batch.Rows))
+		s.rgIdx = end
+		s.mu.Unlock()
 
-	if len(batch.Rows) == 0 {
-		record.Put(batch)
+		if start >= len(s.rowGroups) {
+			return nil, io.EOF
+		}
+
+		results := make([]rgResult, end-start)
+		var wg sync.WaitGroup
+		for i := start; i < end; i++ {
+			wg.Add(1)
+			go func(idx, slot int) {
+				defer wg.Done()
+				rg := s.rowGroups[idx]
+				reader := parquetgo.NewRowGroupReader(rg) // Bug 1 fix
+				defer reader.Close()                      // Bug 6/7 fix: release on all exit paths
+				// Drain the whole row group: ReadRows may return a partial page
+				// (n < len(buf)) with err==nil, so loop until io.EOF instead of reading
+				// once, or rows past the first page of each group are silently dropped.
+				var rows [][]interface{}
+				buf := make([]parquetgo.Row, 4096)
+				for {
+					n, err := reader.ReadRows(buf)
+					for r := 0; r < n; r++ {
+						rows = append(rows, extractRow(buf[r], s.colIndices, s.schema))
+					}
+					if err == io.EOF || (err == nil && n == 0) {
+						break
+					}
+					if err != nil {
+						results[slot] = rgResult{rows: rows, err: err}
+						return
+					}
+				}
+				results[slot] = rgResult{rows: rows, err: nil}
+			}(i, i-start)
+		}
+		wg.Wait()
+
+		// Collect all decoded rows into the overflow buffer, then serve only
+		// `size` of them now; the remainder is handed out by later ReadBatch
+		// calls. This keeps batch memory bounded no matter how large a row group
+		// is, which is what lets a slow sink (e.g. JDBC) apply backpressure
+		// instead of the source flooding the pipeline with whole row groups.
+		s.parBuf = s.parBuf[:0]
+		s.parBufIdx = 0
+		for _, r := range results {
+			if r.err != nil && r.err != io.EOF {
+				return nil, r.err
+			}
+			s.parBuf = append(s.parBuf, r.rows...)
+		}
+		if len(s.parBuf) > 0 {
+			return s.serveParBuf(size)
+		}
+		// All groups in this chunk were empty; continue to the next chunk.
+	}
+}
+
+// serveParBuf returns up to `size` rows from the parallel overflow buffer,
+// copying the row slice into a fresh batch so the buffer's backing array can be
+// reused by the next parallel decode. It reports io.EOF once the buffer is fully
+// drained and no row groups remain.
+func (s *parquetSource) serveParBuf(size int) (*record.RecordBatch, error) {
+	avail := len(s.parBuf) - s.parBufIdx
+	if avail <= 0 {
 		return nil, io.EOF
 	}
-	if end >= len(s.rowGroups) {
+	n := size
+	if avail < n {
+		n = avail
+	}
+	batch := record.Get()
+	batch.Columns = s.schema
+	batch.Rows = make([][]interface{}, n)
+	copy(batch.Rows, s.parBuf[s.parBufIdx:s.parBufIdx+n])
+	s.parBufIdx += n
+	s.rowsRead += int64(n)
+
+	if s.parBufIdx >= len(s.parBuf) && s.rgIdx >= len(s.rowGroups) {
 		return batch, io.EOF
 	}
 	return batch, nil
