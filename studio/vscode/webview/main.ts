@@ -1682,7 +1682,6 @@ function renderMapEditor(node: Node): HTMLElement {
   const f = el('div', 'fld');
   const target = cfgTarget(node);
   const fields: Record<string, string> = (target.fields && typeof target.fields === 'object') ? target.fields : {};
-  // Preserve a stable, user-visible order via fieldOrder (backend honours it).
   let order: string[] = Array.isArray(target.fieldOrder) ? target.fieldOrder.filter((k: string) => k in fields) : [];
   for (const k of Object.keys(fields)) if (!order.includes(k)) order.push(k);
 
@@ -1691,138 +1690,158 @@ function renderMapEditor(node: Node): HTMLElement {
     target.fieldOrder = order;
     setCfgValue(node, 'fields', fields);
   };
+  // Set an output field's expression to a source path (=$path), adding the row
+  // if it doesn't exist. Used by both drag-drop and click-to-map.
+  const mapInto = (outName: string, path: string) => {
+    if (!(outName in fields)) order.push(outName);
+    fields[outName] = `=$${path}`;
+    persist();
+    renderEditor();
+  };
 
-  const box = el('div', 'maps');
+  const srcTree = sourceFieldTree(node);
+  const hasSchema = srcTree.length > 0;
+
+  // ── Two-pane mapper: Source (left) → Target (right) ──────────────────────
+  const mapper = el('div', 'mapper2');
+
+  // LEFT: draggable source-field tree (complex fields expand to nested paths).
+  const srcPane = el('div', 'mpane msrc');
+  const srcHead = el('div', 'mphead');
+  srcHead.innerHTML = `<span>Source</span><span class="cnt">${hasSchema ? srcTree.length : 0}</span>`;
+  srcPane.appendChild(srcHead);
+  const srcBody = el('div', 'mpbody');
+  if (hasSchema) {
+    const renderField = (fld: SrcField, depth: number, into: HTMLElement) => {
+      const isMapped = Object.values(fields).includes(`=$${fld.path}`);
+      const item = el('div', 'mfield' + (isMapped ? ' mapped' : ''));
+      item.style.paddingLeft = `${6 + depth * 12}px`;
+      const complex = fld.children && fld.children.length > 0;
+      const caret = complex ? '<span class="mcaret">▸</span>' : '<span class="mcaret ph"></span>';
+      item.innerHTML = `${caret}<span class="mfname">${escapeHtml(fld.name)}</span><span class="mtype">${escapeHtml(fld.type)}</span>`;
+      item.setAttribute('draggable', 'true');
+      item.title = `Drag onto a target field, or click to map. Path: $${fld.path}`;
+      item.ondragstart = (e) => { e.dataTransfer?.setData('text/plain', fld.path); (e.dataTransfer || {} as any).effectAllowed = 'copy'; item.classList.add('dragging'); };
+      item.ondragend = () => item.classList.remove('dragging');
+      // Click: map into a same-named leaf output field (drag-to-output shortcut).
+      item.onclick = (e) => {
+        if ((e.target as HTMLElement).classList.contains('mcaret') && complex) {
+          item.classList.toggle('open'); kids.classList.toggle('show'); return;
+        }
+        mapInto(fld.name, fld.path);
+      };
+      into.appendChild(item);
+      const kids = el('div', 'mkids');
+      if (complex) {
+        fld.children!.forEach((ch) => renderField(ch, depth + 1, kids));
+        into.appendChild(kids);
+      }
+    };
+    srcTree.forEach((fld) => renderField(fld, 0, srcBody));
+  } else {
+    const empty = el('div', 'mapempty');
+    empty.innerHTML = '<div style="font-size:11px;line-height:1.5;color:var(--dim)">No source fields yet. For Parquet/JSON or undeclared sources, load the live schema:</div>';
+    const b = el('button', 'btn sm', '⌕ Load fields');
+    b.style.marginTop = '6px';
+    b.onclick = () => doPreview();
+    empty.appendChild(b);
+    srcBody.appendChild(empty);
+  }
+  srcPane.appendChild(srcBody);
+
+  // RIGHT: target output fields (drop zones + editable expression).
+  const tgtPane = el('div', 'mpane mtgt');
+  const tgtHead = el('div', 'mphead');
+  tgtHead.innerHTML = `<span>Target</span><span class="cnt">${order.length}</span>`;
+  tgtPane.appendChild(tgtHead);
+  const tgtBody = el('div', 'mpbody');
   order.forEach((outName, i) => {
-    const row = el('div', 'mrow');
+    const row = el('div', 'mrow2');
+    row.ondragover = (e) => { e.preventDefault(); row.classList.add('drop'); };
+    row.ondragleave = () => row.classList.remove('drop');
+    row.ondrop = (e) => {
+      e.preventDefault(); row.classList.remove('drop');
+      const p = e.dataTransfer?.getData('text/plain');
+      if (p) { fields[outName] = `=$${p}`; persist(); renderEditor(); }
+    };
     const out = document.createElement('input');
     out.className = 'out';
     out.value = outName;
-    out.placeholder = 'field';
     out.title = 'Output field name';
     out.onchange = () => {
       const nn = out.value.trim();
       if (!nn || nn === outName) return;
       const val = fields[outName];
-      delete fields[outName];
-      fields[nn] = val;
-      order[i] = nn;
-      persist();
-      renderEditor();
+      delete fields[outName]; fields[nn] = val; order[i] = nn;
+      persist(); renderEditor();
     };
-    const eq = el('span', 'eq', '←');
     const expr = document.createElement('input');
     expr.className = 'expr';
     expr.value = exprForDisplay(fields[outName]);
-    expr.placeholder = '$sourceField or upper($field)';
+    expr.placeholder = 'drag a source field, or type $field';
     expr.title = 'Mapping expression (= is implicit; plain text is a constant)';
     expr.onfocus = () => { mapFocusedInput = expr; };
     expr.onchange = () => { fields[outName] = exprForStore(expr.value); persist(); };
     const del = el('span', 'del', '✕');
-    del.title = 'Remove mapping';
+    del.title = 'Remove field';
     del.onclick = () => { delete fields[outName]; order = order.filter((k) => k !== outName); persist(); renderEditor(); };
-    row.appendChild(out);
-    row.appendChild(eq);
-    row.appendChild(expr);
-    row.appendChild(del);
-    box.appendChild(row);
+    const top = el('div', 'mrow2-top');
+    top.appendChild(out); top.appendChild(del);
+    row.appendChild(top);
+    const bot = el('div', 'mrow2-bot');
+    bot.appendChild(el('span', 'eq', '←')); bot.appendChild(expr);
+    row.appendChild(bot);
+    tgtBody.appendChild(row);
   });
-  const add = el('button', 'addmap', '＋ Add field mapping');
-  add.onclick = () => {
-    let base = 'new_field';
-    let n = base;
-    let c = 1;
-    while (n in fields) n = base + '_' + c++;
-    fields[n] = '';
-    order.push(n);
-    persist();
-    renderEditor();
+  // Add-field drop zone: dropping a source field here creates a same-named output.
+  const addZone = el('div', 'maddzone');
+  addZone.textContent = '＋ Add field (or drop a source here)';
+  addZone.ondragover = (e) => { e.preventDefault(); addZone.classList.add('drop'); };
+  addZone.ondragleave = () => addZone.classList.remove('drop');
+  addZone.ondrop = (e) => {
+    e.preventDefault(); addZone.classList.remove('drop');
+    const p = e.dataTransfer?.getData('text/plain');
+    if (p) { const leaf = p.split('.').pop() || p; mapInto(leaf, p); }
   };
-  box.appendChild(add);
+  addZone.onclick = () => {
+    let base = 'new_field', n = base, c = 1;
+    while (n in fields) n = base + '_' + c++;
+    fields[n] = ''; order.push(n); persist(); renderEditor();
+  };
+  tgtBody.appendChild(addZone);
+  tgtPane.appendChild(tgtBody);
 
-  // ── Available data (upstream columns) — rendered FIRST, like the OOTB Flogo
-  // mapper's left-hand input tree, so users see the source fields before the
-  // mappings. Click a field to map it: if an expression input is focused it
-  // inserts $field at the caret; otherwise it ADDS a new "field ← $field" row.
-  const dataSec = el('div', 'mhelp');
-  const cols = upstreamSchema(node);
-  dataSec.appendChild(el('div', 'lbl', 'Available data' + (cols.length ? ` · ${cols.length} field${cols.length === 1 ? '' : 's'}` : '')));
-  if (cols.length) {
-    // "Map all" — one click creates a full passthrough projection (every input
-    // field → same-named output), the fastest way to start from a valid map.
-    const bar = el('div', 'mapall');
-    const allBtn = el('span', 'chip2 act', '⧉ Map all fields');
-    allBtn.title = 'Add a passthrough mapping for every input field';
+  mapper.appendChild(srcPane);
+  mapper.appendChild(tgtPane);
+
+  f.appendChild(el('div', 'k', 'Field mapping'));
+  if (hasSchema) {
+    const allBtn = el('button', 'btn sm mapallbtn', '⧉ Map all fields (passthrough)');
     allBtn.onclick = () => {
-      cols.forEach((c) => {
-        if (!(c.name in fields)) { fields[c.name] = `=$${c.name}`; order.push(c.name); }
-      });
-      persist();
-      renderEditor();
+      srcTree.forEach((c) => { if (!(c.name in fields)) { fields[c.name] = `=$${c.name}`; order.push(c.name); } });
+      persist(); renderEditor();
     };
-    bar.appendChild(allBtn);
-    dataSec.appendChild(bar);
-
-    const chips = el('div', 'chips');
-    cols.forEach((c) => {
-      const mapped = fields[c.name] === `=$${c.name}`;
-      const chip = el('span', 'chip2 data' + (mapped ? ' used' : ''), `${c.name}`);
-      chip.title = `Click to map ${c.name} (or insert $${c.name} when an expression is focused)`;
-      // Preserve the focused expression input across the click so the "insert at
-      // caret" path is reliable — clicking a non-focusable span would otherwise
-      // blur the input first, breaking insert. The onclick then checks the LIVE
-      // active element (not a stale variable) to decide insert-vs-add-row.
-      chip.onmousedown = (e) => { e.preventDefault(); };
-      chip.onclick = () => {
-        const active = document.activeElement as HTMLElement | null;
-        const exprFocused = active && active.classList && active.classList.contains('expr') && active.isConnected;
-        if (exprFocused) {
-          mapFocusedInput = active as HTMLInputElement;
-          // "=" is implicit in the input — insert the bare $field reference.
-          insertIntoMapExpr(`$${c.name}`);
-        } else {
-          // Drag-to-output equivalent: add a passthrough row for this field.
-          if (!(c.name in fields)) { fields[c.name] = `=$${c.name}`; order.push(c.name); }
-          else { fields[c.name] = `=$${c.name}`; }
-          persist();
-          renderEditor();
-        }
-      };
-      chips.appendChild(chip);
-    });
-    dataSec.appendChild(chips);
-  } else {
-    // No declared/known schema (self-describing source, no preview yet). Offer a
-    // one-click preview so the palette fills with live columns.
-    const empty = el('div', 'mapempty');
-    empty.appendChild(el('div', 'muted', '<div style="font-size:11.5px;line-height:1.5">No input fields to show yet. For self-describing sources (Parquet/JSON) or a source without declared columns, load the live schema:</div>'));
-    const b = el('button', 'btn sm', '⌕ Load fields from preview');
-    b.style.marginTop = '8px';
-    b.onclick = () => doPreview();
-    empty.appendChild(b);
-    dataSec.appendChild(empty);
+    f.appendChild(allBtn);
   }
-  f.appendChild(dataSec);
+  f.appendChild(mapper);
 
-  // ── Field mappings (output ← expression rows) ────────────────────────────
-  f.appendChild(el('div', 'k', 'Field mappings'));
-  f.appendChild(box);
-
-  // ── Functions — click to insert a call snippet at the focused expression ─
+  // ── Functions — click to insert into the focused expression ──────────────
   const help = el('div', 'mhelp');
   help.appendChild(el('div', 'lbl', 'Functions'));
   const fchips = el('div', 'chips');
   MAP_FUNCTIONS.forEach((fn) => {
     const chip = el('span', 'chip2 fn', `ƒ ${fn.name}`);
     chip.title = fn.hint;
+    chip.onmousedown = (e) => e.preventDefault();
     chip.onclick = () => insertIntoMapExpr(fn.snippet);
     fchips.appendChild(chip);
   });
   help.appendChild(fchips);
-  help.appendChild(el('div', 'focushint', 'Click a field to map it (adds a row, or inserts at the caret when an expression is focused). The leading = is implicit — reference fields as $name, call functions like upper($name); plain text is a constant.'));
+  help.appendChild(el('div', 'focushint', 'Drag a Source field onto a Target field to map it (nested objects expand). Or click a source to map by name, or type in the expression: $field, upper($field); plain text is a constant.'));
   f.appendChild(help);
   return f;
 }
+
 
 // Structured rule editor for the `validate` transform. Each rule is a card with
 // a field picker (from upstream columns) and plain-language constraints — not
@@ -2605,6 +2624,54 @@ function harvestFieldRefs(stop: number): string[] {
     if (t.type === 'parse' && typeof t.source === 'string') seen.add(t.source);
   }
   return Array.from(seen);
+}
+
+// A node in the source-field tree shown on the LEFT of the mapper. Complex
+// fields (objects) carry children so nested paths ($product.name) can be mapped.
+interface SrcField { name: string; path: string; type: string; children?: SrcField[] }
+
+// Build the source-field tree for the mapper's left pane. Flat columns come from
+// upstreamSchema; complex/nested structure is discovered from the last preview's
+// actual row values (JSON/XML objects), so a field like `product` expands into
+// product.name / product.price the user can drag individually.
+function sourceFieldTree(node: Node): SrcField[] {
+  const cols = upstreamSchema(node);
+  // Sample object shapes from the preview rows (first row that has the key).
+  const sample: Record<string, unknown> = {};
+  if (S.preview && Array.isArray(S.preview.rows)) {
+    for (const r of S.preview.rows as Array<Record<string, unknown>>) {
+      for (const k of Object.keys(r || {})) {
+        if (!(k in sample) && r[k] && typeof r[k] === 'object') sample[k] = r[k];
+      }
+    }
+  }
+  const childrenOf = (val: unknown, basePath: string, depth: number): SrcField[] | undefined => {
+    if (depth > 4 || !val || typeof val !== 'object' || Array.isArray(val)) return undefined;
+    const obj = val as Record<string, unknown>;
+    const keys = Object.keys(obj);
+    if (!keys.length) return undefined;
+    return keys.map((k) => {
+      const p = `${basePath}.${k}`;
+      const v = obj[k];
+      const kids = childrenOf(v, p, depth + 1);
+      return { name: k, path: p, type: kids ? 'object' : typeofVal(v), children: kids };
+    });
+  };
+  return cols.map((c) => {
+    const kids = childrenOf(sample[c.name], c.name, 1);
+    return { name: c.name, path: c.name, type: kids ? 'object' : (c.type || 'any'), children: kids };
+  });
+}
+
+function typeofVal(v: unknown): string {
+  if (v === null || v === undefined) return 'any';
+  if (Array.isArray(v)) return 'array';
+  switch (typeof v) {
+    case 'number': return 'number';
+    case 'boolean': return 'bool';
+    case 'object': return 'object';
+    default: return 'string';
+  }
 }
 
 function renderSchemaTab(ib: HTMLElement, sn: Node) {
