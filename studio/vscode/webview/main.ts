@@ -1601,6 +1601,26 @@ const MAP_FUNCTIONS: Array<{ name: string; snippet: string; hint: string }> = [
 // chips insert at the caret of the row the user is editing.
 let mapFocusedInput: HTMLInputElement | null = null;
 
+// The map transform stores dynamic expressions with a leading "=" (e.g.
+// "=$order_date"), which the engine uses to distinguish an expression from a
+// static string literal. For a cleaner experience the "=" is IMPLICIT in the
+// UI: the input shows "$order_date" and we add the "=" back on save. Plain text
+// that is NOT an expression stays a static literal (no "="), so existing
+// literals keep working — matching the OOTB Flogo mapper, where field refs
+// ($x), function calls (upper($x)) are expressions and bare text is a constant.
+function exprForDisplay(stored: string): string {
+  return typeof stored === 'string' && stored.startsWith('=') ? stored.slice(1) : (stored ?? '');
+}
+function exprForStore(display: string): string {
+  const v = (display ?? '').trim();
+  if (v === '') return '';
+  if (v.startsWith('=')) return v; // already explicit
+  // Looks like an expression → make the "=" explicit. Otherwise treat as a
+  // static string literal (stored verbatim, no "=").
+  const isExpr = v.startsWith('$') || /^[A-Za-z_][\w.]*\s*\(/.test(v);
+  return isExpr ? '=' + v : v;
+}
+
 // Insert text at the caret of the focused mapping expression input (or append).
 function insertIntoMapExpr(text: string) {
   const inp = mapFocusedInput;
@@ -1660,11 +1680,11 @@ function renderMapEditor(node: Node): HTMLElement {
     const eq = el('span', 'eq', '←');
     const expr = document.createElement('input');
     expr.className = 'expr';
-    expr.value = fields[outName] ?? '';
-    expr.placeholder = '=$sourceField or =upper($field)';
-    expr.title = 'Mapping expression';
+    expr.value = exprForDisplay(fields[outName]);
+    expr.placeholder = '$sourceField or upper($field)';
+    expr.title = 'Mapping expression (= is implicit; plain text is a constant)';
     expr.onfocus = () => { mapFocusedInput = expr; };
-    expr.onchange = () => { fields[outName] = expr.value; persist(); };
+    expr.onchange = () => { fields[outName] = exprForStore(expr.value); persist(); };
     const del = el('span', 'del', '✕');
     del.title = 'Remove mapping';
     del.onclick = () => { delete fields[outName]; order = order.filter((k) => k !== outName); persist(); renderEditor(); };
@@ -1716,11 +1736,12 @@ function renderMapEditor(node: Node): HTMLElement {
       const mapped = fields[c.name] === `=$${c.name}`;
       const chip = el('span', 'chip2 data' + (mapped ? ' used' : ''), `${c.name}`);
       chip.title = mapFocusedInput
-        ? `Insert =$${c.name} at the caret`
-        : `Add mapping ${c.name} ← =$${c.name}`;
+        ? `Insert $${c.name} at the caret`
+        : `Add mapping ${c.name} ← $${c.name}`;
       chip.onclick = () => {
         if (mapFocusedInput) {
-          insertIntoMapExpr(`=$${c.name}`);
+          // "=" is implicit in the input — insert the bare $field reference.
+          insertIntoMapExpr(`$${c.name}`);
         } else {
           // Drag-to-output equivalent: add a passthrough row for this field.
           if (!(c.name in fields)) { fields[c.name] = `=$${c.name}`; order.push(c.name); }
@@ -1750,11 +1771,11 @@ function renderMapEditor(node: Node): HTMLElement {
   MAP_FUNCTIONS.forEach((fn) => {
     const chip = el('span', 'chip2 fn', `ƒ ${fn.name}`);
     chip.title = fn.hint;
-    chip.onclick = () => insertIntoMapExpr(`=${fn.snippet}`);
+    chip.onclick = () => insertIntoMapExpr(fn.snippet);
     fchips.appendChild(chip);
   });
   help.appendChild(fchips);
-  help.appendChild(el('div', 'focushint', 'Click a field to map it (adds a row, or inserts at the caret when an expression is focused). Click a function to insert it. Reference fields as =$name, literals as plain text.'));
+  help.appendChild(el('div', 'focushint', 'Click a field to map it (adds a row, or inserts at the caret when an expression is focused). The leading = is implicit — reference fields as $name, call functions like upper($name); plain text is a constant.'));
   f.appendChild(help);
   return f;
 }
