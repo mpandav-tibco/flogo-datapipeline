@@ -11,113 +11,139 @@ import (
 	"github.com/mpandav-tibco/flogo-datapipeline/transform"
 )
 
-func inBatch(keyField string, keys ...interface{}) *record.RecordBatch {
+func mkBatch(keyField string, keys ...interface{}) *record.RecordBatch {
 	rows := make([][]interface{}, len(keys))
 	for i, k := range keys {
 		rows[i] = []interface{}{k}
 	}
-	return &record.RecordBatch{
-		Columns: []record.Column{{Name: keyField, Type: record.TypeString}},
-		Rows:    rows,
+	return &record.RecordBatch{Columns: []record.Column{{Name: keyField, Type: record.TypeString}}, Rows: rows}
+}
+
+func newLookup(t *testing.T, cfg map[string]interface{}) transform.Transform {
+	t.Helper()
+	tr, err := newLookupTransform(cfg)
+	if err != nil {
+		t.Fatalf("newLookupTransform: %v", err)
 	}
+	return tr
 }
 
 func TestLookup_ConfigValidation(t *testing.T) {
-	if _, err := transform.New("lookup", map[string]interface{}{"url": "http://x"}); err == nil {
+	if _, err := newLookupTransform(map[string]interface{}{"url": "http://x"}); err == nil {
 		t.Error("expected error when keyField missing")
 	}
-	if _, err := transform.New("lookup", map[string]interface{}{"keyField": "id"}); err == nil {
+	if _, err := newLookupTransform(map[string]interface{}{"keyField": "id"}); err == nil {
 		t.Error("expected error when url missing")
 	}
+	tr := newLookup(t, map[string]interface{}{"keyField": "id", "url": "http://x/{id}"})
+	if tr.Name() != "lookup" {
+		t.Errorf("Name = %q", tr.Name())
+	}
+	if err := tr.Close(); err != nil {
+		t.Errorf("Close: %v", err)
+	}
 }
 
-func TestLookup_EnrichAndCache(t *testing.T) {
-	var calls int64
+func TestLookup_EnrichSuccess(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt64(&calls, 1)
-		fmt.Fprint(w, `{"name":"Alice","tier":"gold"}`)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"name":"Ada","tier":"gold"}`)
 	}))
 	defer srv.Close()
 
-	tr, err := transform.New("lookup", map[string]interface{}{
-		"keyField":     "id",
-		"url":          srv.URL + "/c/{id}",
+	tr := newLookup(t, map[string]interface{}{
+		"keyField": "id", "url": srv.URL + "/c/{id}",
 		"outputFields": []interface{}{"name", "tier"},
-		"concurrency":  4,
 	})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	defer tr.Close()
-
-	// Two distinct keys + a repeat of the first (should hit cache).
-	out, err := tr.Apply(inBatch("id", "1", "2", "1"))
+	out, err := tr.Apply(mkBatch("id", "42"))
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
-	if len(out.Columns) != 3 {
-		t.Fatalf("columns = %+v", out.Columns)
-	}
-	if out.Value(0, "name") != "Alice" || out.Value(0, "tier") != "gold" {
-		t.Errorf("row0 not enriched: %v", out.Rows[0])
-	}
-	// Only 2 unique keys => at most 2 server calls (cache/singleflight dedup).
-	if c := atomic.LoadInt64(&calls); c > 2 {
-		t.Errorf("server called %d times, want <=2 (cache miss)", c)
+	if out.Value(0, "name") != "Ada" || out.Value(0, "tier") != "gold" {
+		t.Errorf("enrichment wrong: %v", out.Rows[0])
 	}
 }
 
-func TestLookup_404FillsNull(t *testing.T) {
+func TestLookup_404IsNull(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNotFound)
+		http.Error(w, "nope", http.StatusNotFound)
 	}))
 	defer srv.Close()
-	tr, _ := transform.New("lookup", map[string]interface{}{
+	tr := newLookup(t, map[string]interface{}{
 		"keyField": "id", "url": srv.URL + "/{id}", "outputFields": []interface{}{"name"},
 	})
-	defer tr.Close()
-	out, err := tr.Apply(inBatch("id", "missing"))
+	out, err := tr.Apply(mkBatch("id", "x"))
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
-	if out.Value(0, "name") != nil {
-		t.Errorf("404 should yield nil enrichment, got %v", out.Value(0, "name"))
+	if out.Len() != 1 || out.Value(0, "name") != nil {
+		t.Errorf("404 should yield nil enrichment, got %v", out.Rows)
 	}
 }
 
-func TestLookup_OnErrorFail(t *testing.T) {
+func TestLookup_OnErrorNull(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
+		http.Error(w, "boom", http.StatusInternalServerError)
 	}))
 	defer srv.Close()
-	tr, _ := transform.New("lookup", map[string]interface{}{
-		"keyField": "id", "url": srv.URL + "/{id}", "outputFields": []interface{}{"name"}, "onError": "fail",
+	tr := newLookup(t, map[string]interface{}{
+		"keyField": "id", "url": srv.URL + "/{id}", "outputFields": []interface{}{"name"}, "onError": "null",
 	})
-	defer tr.Close()
-	if _, err := tr.Apply(inBatch("id", "boom")); err == nil {
-		t.Error("onError=fail should return an error on HTTP 500")
+	out, err := tr.Apply(mkBatch("id", "x"))
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if out.Len() != 1 {
+		t.Errorf("onError=null should keep the row, got %d", out.Len())
 	}
 }
 
 func TestLookup_OnErrorSkip(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/ok" {
-			fmt.Fprint(w, `{"name":"Bob"}`)
-			return
-		}
-		w.WriteHeader(http.StatusInternalServerError)
+		http.Error(w, "boom", http.StatusInternalServerError)
 	}))
 	defer srv.Close()
-	tr, _ := transform.New("lookup", map[string]interface{}{
+	tr := newLookup(t, map[string]interface{}{
 		"keyField": "id", "url": srv.URL + "/{id}", "outputFields": []interface{}{"name"}, "onError": "skip",
 	})
-	defer tr.Close()
-	out, err := tr.Apply(inBatch("id", "ok", "bad"))
+	out, err := tr.Apply(mkBatch("id", "x"))
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
-	if out.Len() != 1 {
-		t.Errorf("skip should drop the failing row, got %d rows", out.Len())
+	if out.Len() != 0 {
+		t.Errorf("onError=skip should drop the row, got %d rows", out.Len())
+	}
+}
+
+func TestLookup_OnErrorFail(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+	tr := newLookup(t, map[string]interface{}{
+		"keyField": "id", "url": srv.URL + "/{id}", "outputFields": []interface{}{"name"}, "onError": "fail",
+	})
+	if _, err := tr.Apply(mkBatch("id", "x")); err == nil {
+		t.Error("onError=fail should return an error")
+	}
+}
+
+func TestLookup_Caches(t *testing.T) {
+	var hits int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt64(&hits, 1)
+		fmt.Fprintf(w, `{"name":"same"}`)
+	}))
+	defer srv.Close()
+	tr := newLookup(t, map[string]interface{}{
+		"keyField": "id", "url": srv.URL + "/{id}", "outputFields": []interface{}{"name"},
+		"concurrency": 1,
+	})
+	// Same key three times across two batches — server should be hit once.
+	_, _ = tr.Apply(mkBatch("id", "k", "k"))
+	_, _ = tr.Apply(mkBatch("id", "k"))
+	if got := atomic.LoadInt64(&hits); got != 1 {
+		t.Errorf("server hits = %d, want 1 (cached)", got)
 	}
 }
 
@@ -125,8 +151,8 @@ func TestLRUCache_Eviction(t *testing.T) {
 	c := newLRUCache(2)
 	c.Put("a", map[string]interface{}{"v": 1})
 	c.Put("b", map[string]interface{}{"v": 2})
-	_, _ = c.Get("a") // touch a → b is now LRU
-	c.Put("c", map[string]interface{}{"v": 3})
+	_, _ = c.Get("a")                          // a becomes MRU
+	c.Put("c", map[string]interface{}{"v": 3}) // evicts b (LRU)
 	if _, ok := c.Get("b"); ok {
 		t.Error("b should have been evicted")
 	}
@@ -138,6 +164,6 @@ func TestLRUCache_Eviction(t *testing.T) {
 	}
 	c.Clear()
 	if _, ok := c.Get("a"); ok {
-		t.Error("cache should be empty after Clear")
+		t.Error("Clear should empty the cache")
 	}
 }

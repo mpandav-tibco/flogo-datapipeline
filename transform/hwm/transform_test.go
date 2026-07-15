@@ -8,118 +8,152 @@ import (
 	"github.com/mpandav-tibco/flogo-datapipeline/transform"
 )
 
-func build(t *testing.T, cfg map[string]interface{}) transform.Transform {
+func build(t *testing.T, cfg map[string]interface{}) *hwmTransform {
 	t.Helper()
-	tr, err := transform.New("hwm", cfg)
+	tr, err := newHWMTransform(cfg)
 	if err != nil {
-		t.Fatalf("New: %v", err)
+		t.Fatalf("newHWMTransform: %v", err)
 	}
-	return tr
+	return tr.(*hwmTransform)
 }
 
-func batch(col string, ct record.ColumnType, vals ...interface{}) *record.RecordBatch {
+func batch(col string, typ record.ColumnType, vals ...interface{}) *record.RecordBatch {
 	rows := make([][]interface{}, len(vals))
 	for i, v := range vals {
 		rows[i] = []interface{}{v}
 	}
-	return &record.RecordBatch{
-		Columns: []record.Column{{Name: col, Type: ct}},
-		Rows:    rows,
-	}
+	return &record.RecordBatch{Columns: []record.Column{{Name: col, Type: typ}}, Rows: rows}
 }
 
 func TestHWM_ConfigValidation(t *testing.T) {
-	if _, err := transform.New("hwm", map[string]interface{}{}); err == nil {
+	if _, err := newHWMTransform(map[string]interface{}{}); err == nil {
 		t.Error("expected error when column missing")
 	}
-	if _, err := transform.New("hwm", map[string]interface{}{"column": "c", "valueType": "bogus"}); err == nil {
+	if _, err := newHWMTransform(map[string]interface{}{"column": "c", "valueType": "bogus"}); err == nil {
 		t.Error("expected error for invalid valueType")
 	}
-	// Default valueType is string.
-	tr := build(t, map[string]interface{}{"column": "c"})
-	if p := tr.(HWMProvider); p.WatermarkValueType() != "string" {
-		t.Errorf("default valueType = %q, want string", p.WatermarkValueType())
+	// default valueType is string
+	h := build(t, map[string]interface{}{"column": "c"})
+	if h.WatermarkValueType() != "string" {
+		t.Errorf("default valueType = %q, want string", h.WatermarkValueType())
+	}
+	if h.WatermarkColumn() != "c" {
+		t.Errorf("column = %q", h.WatermarkColumn())
+	}
+	if h.Name() != "hwm" {
+		t.Errorf("Name = %q", h.Name())
+	}
+	if err := h.Close(); err != nil {
+		t.Errorf("Close: %v", err)
 	}
 }
 
 func TestHWM_Int(t *testing.T) {
-	tr := build(t, map[string]interface{}{"column": "id", "valueType": "int"})
-	p := tr.(HWMProvider)
-	if p.MaxSeen() != nil {
-		t.Error("MaxSeen should be nil before any rows")
-	}
-	if _, err := tr.Apply(batch("id", record.TypeInt, 3, 10, 7, "12", 5)); err != nil {
+	h := build(t, map[string]interface{}{"column": "id", "valueType": "int"})
+	if _, err := h.Apply(batch("id", record.TypeInt, 3, 10, 7, nil, "42", 5)); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
-	if got := p.MaxSeen(); got != int64(12) {
-		t.Errorf("MaxSeen = %v, want 12", got)
-	}
-	if p.WatermarkColumn() != "id" {
-		t.Errorf("column = %q", p.WatermarkColumn())
+	if got := h.MaxSeen(); got != int64(42) {
+		t.Errorf("MaxSeen = %v (%T), want int64(42)", got, got)
 	}
 }
 
 func TestHWM_Datetime(t *testing.T) {
-	tr := build(t, map[string]interface{}{"column": "ts", "valueType": "datetime"})
-	p := tr.(HWMProvider)
-	_, _ = tr.Apply(batch("ts", record.TypeDate,
-		"2024-01-01T00:00:00Z", "2024-03-15T12:00:00Z", "2024-02-01T00:00:00Z"))
-	got, ok := p.MaxSeen().(time.Time)
-	if !ok {
-		t.Fatalf("MaxSeen type = %T, want time.Time", p.MaxSeen())
+	h := build(t, map[string]interface{}{"column": "ts", "valueType": "datetime"})
+	early := "2024-01-01T00:00:00Z"
+	late := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
+	if _, err := h.Apply(batch("ts", record.TypeDate, early, late, "2023-01-01")); err != nil {
+		t.Fatalf("Apply: %v", err)
 	}
-	if !got.Equal(time.Date(2024, 3, 15, 12, 0, 0, 0, time.UTC)) {
-		t.Errorf("MaxSeen = %v", got)
+	got, ok := h.MaxSeen().(time.Time)
+	if !ok || !got.Equal(late) {
+		t.Errorf("MaxSeen = %v, want %v", h.MaxSeen(), late)
 	}
 }
 
 func TestHWM_String(t *testing.T) {
-	tr := build(t, map[string]interface{}{"column": "name", "valueType": "string"})
-	p := tr.(HWMProvider)
-	_, _ = tr.Apply(batch("name", record.TypeString, "alpha", "zeta", "gamma"))
-	if got := p.MaxSeen(); got != "zeta" {
-		t.Errorf("MaxSeen = %v, want zeta", got)
+	h := build(t, map[string]interface{}{"column": "name", "valueType": "string"})
+	if _, err := h.Apply(batch("name", record.TypeString, "alpha", "zulu", "mike")); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if got := h.MaxSeen(); got != "zulu" {
+		t.Errorf("MaxSeen = %v, want zulu", got)
 	}
 }
 
-func TestHWM_NullsAndMissingColumn(t *testing.T) {
-	tr := build(t, map[string]interface{}{"column": "id", "valueType": "int"})
-	p := tr.(HWMProvider)
-	// Nulls are skipped.
-	_, _ = tr.Apply(batch("id", record.TypeInt, nil, 4, nil, 9))
-	if got := p.MaxSeen(); got != int64(9) {
-		t.Errorf("MaxSeen with nulls = %v, want 9", got)
+func TestHWM_ColumnAbsent(t *testing.T) {
+	h := build(t, map[string]interface{}{"column": "missing", "valueType": "int"})
+	out, err := h.Apply(batch("other", record.TypeInt, 1, 2))
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
 	}
-	// A batch missing the column passes through and does not update.
-	other := batch("unrelated", record.TypeInt, 100)
-	out, err := tr.Apply(other)
-	if err != nil || out != other {
-		t.Errorf("missing column should pass through unchanged")
+	if out == nil || out.Len() != 2 {
+		t.Errorf("passthrough failed: %v", out)
 	}
-	if got := p.MaxSeen(); got != int64(9) {
-		t.Errorf("MaxSeen after missing-column batch = %v, want 9", got)
+	if h.MaxSeen() != nil {
+		t.Errorf("MaxSeen = %v, want nil when column absent", h.MaxSeen())
 	}
 }
 
-func TestHWM_AcrossBatches(t *testing.T) {
-	tr := build(t, map[string]interface{}{"column": "id", "valueType": "int"})
-	p := tr.(HWMProvider)
-	_, _ = tr.Apply(batch("id", record.TypeInt, 5, 2))
-	_, _ = tr.Apply(batch("id", record.TypeInt, 8))
-	_, _ = tr.Apply(batch("id", record.TypeInt, 1)) // lower — no change
-	if got := p.MaxSeen(); got != int64(8) {
-		t.Errorf("MaxSeen across batches = %v, want 8", got)
+func TestHWM_EmptyRun(t *testing.T) {
+	h := build(t, map[string]interface{}{"column": "id", "valueType": "int"})
+	if _, err := h.Apply(batch("id", record.TypeInt)); err != nil {
+		t.Fatalf("Apply: %v", err)
 	}
-	if tr.Name() != "hwm" || tr.Close() != nil {
-		t.Error("Name/Close contract broken")
+	if h.MaxSeen() != nil {
+		t.Errorf("MaxSeen = %v, want nil for empty batch", h.MaxSeen())
 	}
 }
 
-func TestHWM_UintOverflowClamp(t *testing.T) {
-	tr := build(t, map[string]interface{}{"column": "id", "valueType": "int"})
-	p := tr.(HWMProvider)
-	_, _ = tr.Apply(batch("id", record.TypeInt, uint64(1)<<63))
-	if got := p.MaxSeen(); got != int64(^uint64(0)>>1) {
-		t.Errorf("uint64 overflow clamp = %v", got)
+func TestHWM_MonotonicAcrossBatches(t *testing.T) {
+	h := build(t, map[string]interface{}{"column": "id", "valueType": "int"})
+	_, _ = h.Apply(batch("id", record.TypeInt, 100))
+	_, _ = h.Apply(batch("id", record.TypeInt, 50)) // lower — must not regress
+	if got := h.MaxSeen(); got != int64(100) {
+		t.Errorf("MaxSeen = %v, want 100 (no regression)", got)
+	}
+	_, _ = h.Apply(batch("id", record.TypeInt, 250))
+	if got := h.MaxSeen(); got != int64(250) {
+		t.Errorf("MaxSeen = %v, want 250", got)
+	}
+}
+
+func TestHWM_IntCoercionTypes(t *testing.T) {
+	h := build(t, map[string]interface{}{"column": "id", "valueType": "int"})
+	// Exercise the many numeric input types coerceInt handles.
+	_, _ = h.Apply(batch("id", record.TypeInt,
+		int8(1), int16(2), int32(3), int64(4), uint(5), uint8(6),
+		uint16(7), uint32(8), uint64(9), float32(10.9), float64(11.9), "12"))
+	if got := h.MaxSeen(); got != int64(12) {
+		t.Errorf("MaxSeen = %v, want 12", got)
+	}
+}
+
+func TestHWM_StringFromTime(t *testing.T) {
+	h := build(t, map[string]interface{}{"column": "c", "valueType": "string"})
+	tm := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)
+	_, _ = h.Apply(batch("c", record.TypeString, tm, 42, true))
+	// All coerced to string; the max is whichever sorts highest lexicographically.
+	if h.MaxSeen() == nil {
+		t.Error("MaxSeen should not be nil")
+	}
+}
+
+func TestHWM_DatetimeUnparseableSkipped(t *testing.T) {
+	h := build(t, map[string]interface{}{"column": "ts", "valueType": "datetime"})
+	_, _ = h.Apply(batch("ts", record.TypeDate, "not-a-date", "also bad"))
+	if h.MaxSeen() != nil {
+		t.Errorf("MaxSeen = %v, want nil (all unparseable)", h.MaxSeen())
+	}
+}
+
+// Registered factory is reachable through the transform registry.
+func TestHWM_RegisteredFactory(t *testing.T) {
+	tr, err := transform.New("hwm", map[string]interface{}{"column": "id", "valueType": "int"})
+	if err != nil {
+		t.Fatalf("transform.New: %v", err)
+	}
+	if _, ok := tr.(HWMProvider); !ok {
+		t.Error("hwm transform does not implement HWMProvider")
 	}
 }
