@@ -79,6 +79,9 @@ type tailer struct {
 	// unbounded poll loop. Used by tests and batch/drain scenarios so ReadBatch
 	// terminates deterministically with io.EOF.
 	bounded bool
+	// recon receives files-open and rotation counts for reconciliation metrics.
+	// May be nil (metrics disabled path in tests).
+	recon *reconCounters
 
 	open map[string]*openLogFile
 	out  chan enrichedRecord
@@ -206,6 +209,9 @@ func (t *tailer) scan() {
 			delete(t.open, key)
 		}
 	}
+	if t.recon != nil {
+		setFilesOpen(t.node, len(t.open))
+	}
 }
 
 func (t *tailer) nsAllowed(ns string) bool {
@@ -231,7 +237,14 @@ func (t *tailer) openFile(path string, meta podMeta) *openLogFile {
 	var start int64
 	if saved, ok := t.positions.get(path); ok && saved.Fingerprint == fp {
 		start = saved.Offset
-	} else if !ok && !t.fromBeginning {
+	} else if ok {
+		// A saved position exists but the fingerprint differs — the file at this
+		// path is a fresh one (containerd rotates by rename+recreate). Read from
+		// the start so no rotated-in data is skipped, and count the rotation.
+		if t.recon != nil {
+			t.recon.addRotation(t.node)
+		}
+	} else if !t.fromBeginning {
 		// Brand-new file and configured to skip history: start at end.
 		if fi, err := f.Stat(); err == nil {
 			start = fi.Size()
@@ -261,6 +274,9 @@ func (t *tailer) openFile(path string, meta podMeta) *openLogFile {
 func (t *tailer) drain(ctx context.Context, of *openLogFile) (int, error) {
 	if fi, err := of.f.Stat(); err == nil && fi.Size() < of.offset {
 		// File was truncated or replaced in place — reopen from the start.
+		if t.recon != nil {
+			t.recon.addRotation(t.node)
+		}
 		of.f.Close()
 		reopened := t.openFileAt(of.key, of.meta, 0)
 		if reopened == nil {

@@ -1,0 +1,46 @@
+# Prometheus recording + alerting rules for the pod-log collector's core
+# guarantee: read == written + dlq. Sustained drift means records were read off
+# the node but never landed in S3 or the DLQ — the exact "unverifiable loss"
+# the collector exists to eliminate. Load into Prometheus (rule_files:) or a
+# PrometheusRule CR (Prometheus Operator).
+#
+# Metrics used:
+#   podlog_lines_read_total{node,namespace}       — logical records emitted by the source
+#   flogo_pipeline_rows_written_total{pipeline}   — records acked by the sink
+#   flogo_pipeline_rows_failed_total{pipeline}    — records routed to the DLQ
+#   podlog_files_open{node}, podlog_rotations_total{node}, podlog_bytes_committed_total{node}
+groups:
+  - name: podlog.reconciliation
+    rules:
+      # Per-node reconciliation gap over a rolling 5m window. Zero = no loss.
+      - record: podlog:recon_gap:rate5m
+        expr: |
+          sum by (node) (rate(podlog_lines_read_total[5m]))
+          - sum by (node) (rate(flogo_pipeline_rows_written_total[5m]))
+          - sum by (node) (rate(flogo_pipeline_rows_failed_total[5m]))
+
+      # Alert when the gap is sustained — reads are not being accounted for by
+      # writes + DLQ. Small transient gaps (in-flight batches) are tolerated by
+      # the 10m `for`.
+      - alert: PodlogReconciliationDrift
+        expr: podlog:recon_gap:rate5m > 1
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Pod-log reconciliation drift on {{ $labels.node }}"
+          description: >
+            read - (written + dlq) = {{ printf "%.2f" $value }} rec/s on node
+            {{ $labels.node }} sustained for 10m. Logs were read off the node but
+            did not land in S3 or the DLQ — investigate the sink / object store.
+
+      # No files being tailed on a node that should have workloads — the
+      # collector may have lost its hostPath mount or crashed.
+      - alert: PodlogNoFilesOpen
+        expr: podlog_files_open == 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Pod-log collector tailing no files on {{ $labels.node }}"
+          description: "podlog_files_open == 0 for 15m on {{ $labels.node }}."

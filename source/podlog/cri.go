@@ -12,12 +12,12 @@ import (
 //
 // e.g.
 //
-//	2026-07-14T10:00:00.123456789Z stdout F Started BW6 engine
-//	2026-07-14T10:00:00.200000000Z stderr P java.lang.RuntimeException: boom
+//		2026-07-14T10:00:00.123456789Z stdout F Started BW6 engine
+//		2026-07-14T10:00:00.200000000Z stderr P java.lang.RuntimeException: boom
 //
-//   - stream is "stdout" or "stderr".
-//   - tag is "F" (full/final line) or "P" (partial — the runtime split a long
-//     line; the following line(s) continue it until an "F" tag is seen).
+//	  - stream is "stdout" or "stderr".
+//	  - tag is "F" (full/final line) or "P" (partial — the runtime split a long
+//	    line; the following line(s) continue it until an "F" tag is seen).
 type criLine struct {
 	timestamp string // RFC3339Nano, as emitted by the runtime
 	stream    string // stdout | stderr

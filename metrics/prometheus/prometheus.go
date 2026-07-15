@@ -127,7 +127,12 @@ func initShared(listenAddr, path string) error {
 		shared.checkpoints = checkpoints
 
 		mux := http.NewServeMux()
-		mux.Handle(path, promhttp.HandlerFor(reg, promhttp.HandlerOpts{
+		// Gather from both the pipeline's private registry and the process-wide
+		// default registry, so source-owned collectors (e.g. the podlog
+		// reconciliation counters registered via promauto on the default
+		// registry) are exposed on the same /metrics endpoint.
+		gatherer := prom.Gatherers{reg, prom.DefaultGatherer}
+		mux.Handle(path, promhttp.HandlerFor(gatherer, promhttp.HandlerOpts{
 			EnableOpenMetrics: false,
 		}))
 		srv := &http.Server{

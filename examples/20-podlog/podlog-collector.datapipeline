@@ -97,7 +97,11 @@
           "intervalSeconds": 1
         },
         "observability": {
-          "metrics": "none"
+          "metrics": "prometheus",
+          "options": {
+            "listenAddr": ":9095",
+            "path": "/metrics"
+          }
         }
       }
     }

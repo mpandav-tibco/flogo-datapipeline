@@ -74,6 +74,13 @@ type podlogSource struct {
 	// handed to the pipeline but Cursor() has not yet persisted.
 	mu      sync.Mutex
 	pending map[string]position
+	// committed holds the last durably-persisted offset per file, so Cursor()
+	// can compute the newly-committed byte delta for the reconciliation metric.
+	committed map[string]int64
+
+	// recon accumulates reconciliation totals (lines read, bytes committed,
+	// rotations) for the shutdown summary + Prometheus counters.
+	recon reconCounters
 
 	// idle tracks consecutive empty poll windows so bounded mode can decide the
 	// watched tree is fully drained.
@@ -158,7 +165,10 @@ func newPodlogSource(cfg map[string]interface{}) (source.Source, error) {
 		cancel:    cancel,
 		schema:    podlogColumns,
 		pending:   map[string]position{},
+		committed: map[string]int64{},
 	}
+	// The tailer reports open-file count and rotations for reconciliation.
+	t.recon = &s.recon
 
 	go t.run(ctx)
 	plog.Infof("podlog source started — root=%s node=%s bounded=%t multiline=%t",
@@ -210,6 +220,7 @@ func (s *podlogSource) ReadBatch(size int) (*record.RecordBatch, error) {
 			}
 			batch.Rows = append(batch.Rows, s.rowFor(er))
 			s.trackPending(er)
+			s.recon.addLinesRead(s.cfg.node, er.meta.namespace, 1)
 			got = true
 		case <-timer.C:
 			// poll window elapsed
@@ -264,7 +275,12 @@ func (s *podlogSource) trackPending(er enrichedRecord) {
 // in the implementation plan). Returns the registry snapshot for audit.
 func (s *podlogSource) Cursor() json.RawMessage {
 	s.mu.Lock()
+	var committedDelta int64
 	for key, p := range s.pending {
+		if prev := s.committed[key]; p.Offset > prev {
+			committedDelta += p.Offset - prev
+			s.committed[key] = p.Offset
+		}
 		s.positions.set(key, p)
 	}
 	s.pending = map[string]position{}
@@ -272,6 +288,7 @@ func (s *podlogSource) Cursor() json.RawMessage {
 	if err := s.positions.persist(); err != nil {
 		plog.Warnf("podlog source: persist positions: %v", err)
 	}
+	s.recon.addBytesCommitted(s.cfg.node, committedDelta)
 	return s.positions.snapshot()
 }
 
@@ -283,12 +300,23 @@ func (s *podlogSource) Close() error {
 	// Best-effort final persist so the last acknowledged offsets survive a clean
 	// shutdown (a crash falls back to the last checkpoint-time persist).
 	s.mu.Lock()
+	var committedDelta int64
 	for key, p := range s.pending {
+		if prev := s.committed[key]; p.Offset > prev {
+			committedDelta += p.Offset - prev
+			s.committed[key] = p.Offset
+		}
 		s.positions.set(key, p)
 	}
 	s.pending = map[string]position{}
 	s.mu.Unlock()
-	return s.positions.persist()
+	s.recon.addBytesCommitted(s.cfg.node, committedDelta)
+	err := s.positions.persist()
+	// Auditable reconciliation summary — always logged, even without Prometheus,
+	// so an operator can confirm read == committed at shutdown.
+	plog.Infof("podlog reconciliation — node=%s linesRead=%d bytesCommitted=%d rotations=%d",
+		s.cfg.node, s.recon.linesRead.Load(), s.recon.bytesCommitted.Load(), s.recon.rotations.Load())
+	return err
 }
 
 // idempotencyKey is a stable per-record identifier:

@@ -1,0 +1,268 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Kubernetes deployment for the flogo-datapipeline pod-log collector.
+#
+# Deploys ONE collector pod per node (DaemonSet) that tails every container's
+# CRI logs from the node's disk, stitches multiline BW6/Java stack traces, and
+# ships newline-delimited JSON with an auditable read == written + dlq
+# reconciliation. Replaces ~30 per-namespace Fluentds with 3 accountable
+# per-node collectors.
+#
+# EDIT BEFORE APPLYING:
+#   • image:            point at your built flogo-datapipeline image
+#   • S3/bucket config  in the ConfigMap pipeline (sink)
+#   • namespace         (default: logging)
+#
+# Apply:
+#   kubectl apply -f daemonset.yaml
+#   kubectl -n logging rollout status daemonset/podlog-collector
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: logging
+---
+# ServiceAccount the collector pods run as (least privilege).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: podlog-collector
+  namespace: logging
+---
+# RBAC — the collector reads pod metadata to enrich records with workload
+# context. hostPath log access itself is governed by the PodSecurity policy /
+# SecurityContextConstraints, not this Role. Scope is read-only, cluster-wide
+# (a per-node DaemonSet sees pods from all namespaces on its node).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: podlog-collector
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "namespaces"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: podlog-collector
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: podlog-collector
+subjects:
+  - kind: ServiceAccount
+    name: podlog-collector
+    namespace: logging
+---
+# The pipeline definition. Uses the App Startup hook to fire the streaming
+# collector on boot, a file checkpoint (on the persistent hostPath) to advance
+# the position registry, and Prometheus for reconciliation metrics.
+# NODE_NAME is injected via the downward API and referenced with ${NODE_NAME}.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: podlog-pipeline
+  namespace: logging
+data:
+  podlog.datapipeline: |
+    {
+      "name": "podlog-collector",
+      "type": "flogo:app",
+      "version": "1.0.0",
+      "appModel": "1.1.1",
+      "imports": [
+        "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+        "github.com/tibco/flogo-general/src/app/General/trigger/startuphook"
+      ],
+      "triggers": [
+        {
+          "id": "pipeline-startup",
+          "ref": "github.com/tibco/flogo-general/src/app/General/trigger/startuphook",
+          "settings": {},
+          "handlers": [
+            {
+              "settings": {},
+              "action": {
+                "ref": "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+                "settings": { "pipelineRef": "res://pipeline:podlog-collector" }
+              }
+            }
+          ]
+        }
+      ],
+      "resources": [
+        {
+          "id": "pipeline:podlog-collector",
+          "data": {
+            "name": "podlog-collector",
+            "mode": "etl",
+            "source": {
+              "type": "podlog",
+              "options": {
+                "root": "/var/log/pods",
+                "node": "${NODE_NAME}",
+                "positionFile": "/var/lib/flogo-podlog/positions.json",
+                "fromBeginning": false,
+                "pollMs": 500,
+                "excludeNamespaces": ["kube-system", "kube-public"],
+                "multiline": {
+                  "startPattern": "^\\d{4}-\\d{2}-\\d{2}[ T]\\d{2}:\\d{2}:\\d{2}",
+                  "flushIdleMs": 2000,
+                  "maxLines": 500
+                }
+              }
+            },
+            "transforms": [
+              {
+                "type": "map",
+                "fields": {
+                  "namespace": "=$namespace",
+                  "pod": "=$pod",
+                  "container": "=$container",
+                  "stream": "=$stream",
+                  "log_time": "=$log_time",
+                  "message": "=$message",
+                  "node": "=$node",
+                  "idempotency_key": "=$idempotency_key",
+                  "ingest_time": "=datetime.now()"
+                }
+              },
+              {
+                "type": "validate",
+                "rules": [{ "field": "message", "notNull": true }],
+                "onViolation": "route"
+              }
+            ],
+            "dlq": {
+              "type": "s3-sink",
+              "options": {
+                "provider": "s3",
+                "bucket": "CHANGE_ME-logs-dlq",
+                "region": "us-east-1",
+                "key": "dlq/{YYYY}/{MM}/{DD}/${NODE_NAME}.ndjson",
+                "format": "jsonlines"
+              }
+            },
+            "sink": {
+              "type": "s3-sink",
+              "options": {
+                "provider": "s3",
+                "bucket": "CHANGE_ME-logs",
+                "region": "us-east-1",
+                "key": "logs/{YYYY}/{MM}/{DD}/${NODE_NAME}/part.ndjson",
+                "format": "jsonlines"
+              }
+            },
+            "checkpoint": {
+              "type": "file",
+              "path": "/var/lib/flogo-podlog/ckpt",
+              "intervalSeconds": 10
+            },
+            "performance": { "batchSize": 5000, "maxMemoryMB": 256 },
+            "scaling": { "mode": "single" },
+            "observability": {
+              "metrics": "prometheus",
+              "options": { "listenAddr": ":9090", "path": "/metrics" }
+            }
+          }
+        }
+      ]
+    }
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: podlog-collector
+  namespace: logging
+  labels:
+    app.kubernetes.io/name: podlog-collector
+    app.kubernetes.io/part-of: flogo-datapipeline
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: podlog-collector
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: podlog-collector
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: podlog-collector
+      # Tolerate control-plane / tainted nodes so EVERY node runs a collector.
+      tolerations:
+        - operator: Exists
+      # AWS creds via IRSA (recommended) — annotate the ServiceAccount instead of
+      # mounting static keys. For non-IRSA, add an envFrom secretRef here.
+      containers:
+        - name: collector
+          image: CHANGE_ME/flogo-datapipeline:latest
+          imagePullPolicy: IfNotPresent
+          args: ["-f", "/etc/podlog/podlog.datapipeline"]
+          env:
+            # Downward API — the node this pod runs on. Referenced as ${NODE_NAME}
+            # in the pipeline so each record and S3 key is partitioned by node.
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          ports:
+            - name: metrics
+              containerPort: 9090
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              # Bounds the collector to well under one core/node (plan target).
+              cpu: "500m"
+              memory: "512Mi"
+          volumeMounts:
+            # CRI container logs on the node — READ ONLY.
+            - name: varlogpods
+              mountPath: /var/log/pods
+              readOnly: true
+            # containerd symlinks pod logs into /var/log/containers → the real
+            # files live under /var/lib/docker or /var/log/pods; mount the shared
+            # container storage read-only so symlinked targets resolve.
+            - name: varlibcontainers
+              mountPath: /var/lib/containers
+              readOnly: true
+            # Persistent position registry + checkpoints — survives pod restarts
+            # so resume works (at-least-once). One dir per node.
+            - name: podlog-state
+              mountPath: /var/lib/flogo-podlog
+            - name: pipeline
+              mountPath: /etc/podlog
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /metrics
+              port: 9090
+            initialDelaySeconds: 10
+            periodSeconds: 30
+      volumes:
+        - name: varlogpods
+          hostPath:
+            path: /var/log/pods
+            type: Directory
+        - name: varlibcontainers
+          hostPath:
+            path: /var/lib/containers
+            type: DirectoryOrCreate
+        - name: podlog-state
+          hostPath:
+            path: /var/lib/flogo-podlog
+            type: DirectoryOrCreate
+        - name: pipeline
+          configMap:
+            name: podlog-pipeline
+            items:
+              - key: podlog.datapipeline
+                path: podlog.datapipeline
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
