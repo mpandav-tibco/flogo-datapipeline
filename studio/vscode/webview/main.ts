@@ -403,6 +403,17 @@ const FIELD_ENUMS_BY_TYPE: Record<string, Record<string, string[]>> = {
     onError: ['keep', 'drop', 'route'],
   },
 };
+
+// Config keys that reference an INPUT field name (not free text). For these we
+// render an autocomplete input backed by the upstream schema — so users pick
+// from the available fields instead of guessing the exact name — while still
+// allowing a custom value (self-describing sources, computed names). Keyed by
+// stage type, then the set of field-name config keys.
+const FIELD_NAME_KEYS: Record<string, Set<string>> = {
+  parse: new Set(['source']),
+  hwm: new Set(['column']),
+  lookup: new Set(['keyField']),
+};
 const FIELD_HINTS: Record<string, string> = {
   path: 'Local path or glob. Supports ${date}/${year} templating.',
   dsn: 'e.g. host=localhost port=5432 dbname=app user=… sslmode=disable',
@@ -610,6 +621,29 @@ function renderField(node: Node, key: string, value: string): HTMLElement {
       if (key === 'onConflict') renderEditor();
     };
     f.appendChild(sel);
+    return f;
+  }
+
+  // Field-name reference → autocomplete input backed by the upstream schema.
+  // Users pick from the available input fields (like the validate/dq pickers)
+  // instead of typing an exact name, but a custom value is still allowed.
+  if (FIELD_NAME_KEYS[node.type]?.has(key)) {
+    const cols = upstreamSchema(node);
+    const inp = el('input', 'v') as HTMLInputElement;
+    inp.value = value;
+    inp.placeholder = 'input field name';
+    if (cols.length) {
+      const listId = `fl_${node.type}_${key}`;
+      const dl = document.createElement('datalist');
+      dl.id = listId;
+      cols.forEach((c) => { const o = document.createElement('option'); o.value = c.name; dl.appendChild(o); });
+      inp.setAttribute('list', listId);
+      f.appendChild(dl);
+    }
+    inp.onchange = () => setCfgField(node, key, inp.value);
+    f.appendChild(inp);
+    const hint = FIELD_HINTS[key] || (cols.length ? `Pick from ${cols.length} available field${cols.length === 1 ? '' : 's'}, or type a name.` : '');
+    if (hint) f.appendChild(el('div', 'hint', hint));
     return f;
   }
 
@@ -2508,7 +2542,41 @@ function upstreamSchema(node: Node): Array<{ name: string; type: string; derived
   if (!cols.length && S.preview && S.preview.columns.length) {
     return S.preview.columns.map((c) => ({ name: c, type: 'any' }));
   }
+  // Last-resort fallback: when the source declares no schema and no preview has
+  // run, harvest the field names the pipeline ALREADY references ($field tokens
+  // in filter/map/parse expressions up to and including this stage). This means
+  // the "Available data" palette is populated from the pipeline's own intent —
+  // so a Text Document / undeclared-CSV source still shows the fields the user
+  // is working with, instead of an empty palette.
+  if (!cols.length) {
+    const harvested = harvestFieldRefs(stop + 1);
+    if (harvested.length) return harvested.map((n) => ({ name: n, type: 'any' }));
+  }
   return cols;
+}
+
+// Scan every stage up to index `stop` for $field references in expressions
+// (filter expr, map field expressions, parse source) and return the distinct
+// field names. Used as the Available-data fallback when no schema is declared.
+function harvestFieldRefs(stop: number): string[] {
+  const seen = new Set<string>();
+  const add = (s: string) => {
+    if (typeof s !== 'string') return;
+    const re = /\$([A-Za-z_][A-Za-z0-9_]*)/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(s)) !== null) seen.add(m[1]);
+  };
+  const transforms = Array.isArray(S.doc.transforms) ? S.doc.transforms : [];
+  for (let i = 0; i < stop && i < transforms.length; i++) {
+    const t: any = transforms[i];
+    if (!t) continue;
+    if (t.type === 'filter') add(String(t.expr || ''));
+    if ((t.type === 'map' || t.type === 'mapper') && t.fields && typeof t.fields === 'object') {
+      for (const v of Object.values(t.fields)) add(String(v));
+    }
+    if (t.type === 'parse' && typeof t.source === 'string') seen.add(t.source);
+  }
+  return Array.from(seen);
 }
 
 function renderSchemaTab(ib: HTMLElement, sn: Node) {
