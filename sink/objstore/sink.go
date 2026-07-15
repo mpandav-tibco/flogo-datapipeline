@@ -98,6 +98,21 @@ func newObjstoreSink(provider string, cfg map[string]interface{}) (sink.Sink, er
 	if keyTemplate == "" {
 		return nil, fmt.Errorf("%s sink: 'key' (destination object key) is required", provider)
 	}
+	// When the key template contains record-field placeholders (e.g.
+	// "{namespace}/{YYYY}/part.ndjson"), route each record to a per-key object so
+	// one collector can fan out to namespace/tenant-partitioned destinations.
+	// Templates with only date/uuid macros keep the single-object fast path.
+	if fields := keyFieldPlaceholders(keyTemplate); len(fields) > 0 {
+		return newPartitionedSink(provider, cfg, keyTemplate, fields)
+	}
+	return newSingleObjstoreSink(provider, cfg)
+}
+
+func newSingleObjstoreSink(provider string, cfg map[string]interface{}) (sink.Sink, error) {
+	keyTemplate, _ := cfg["key"].(string)
+	if keyTemplate == "" {
+		return nil, fmt.Errorf("%s sink: 'key' (destination object key) is required", provider)
+	}
 	innerFormat, _ := cfg["format"].(string)
 	if innerFormat == "" {
 		return nil, fmt.Errorf("%s sink: 'format' is required (inner sink type, e.g. csv, parquet)", provider)
@@ -287,6 +302,162 @@ func expandKeyMacros(key string) string {
 		"${runId}", uuid,
 	)
 	return r.Replace(key)
+}
+
+// reservedMacros are the brace-form {..} tokens that expandKeyMacros handles as
+// date/uuid values. Any OTHER {name} token is treated as a record-field
+// placeholder for per-record object partitioning.
+var reservedMacros = map[string]bool{
+	"YYYY": true, "MM": true, "DD": true, "HH": true,
+	"mm": true, "ss": true, "ts": true, "uuid": true,
+}
+
+// keyFieldPlaceholders returns the distinct record-field names referenced as
+// {name} in the key template (excluding the reserved date/uuid macros). These
+// drive per-record object partitioning (e.g. "{namespace}/{YYYY}/part.ndjson").
+func keyFieldPlaceholders(template string) []string {
+	var fields []string
+	seen := map[string]bool{}
+	for i := 0; i < len(template); i++ {
+		if template[i] != '{' {
+			continue
+		}
+		// Skip the ${...} dollar-brace form (handled by expandKeyMacros).
+		if i > 0 && template[i-1] == '$' {
+			continue
+		}
+		end := strings.IndexByte(template[i:], '}')
+		if end < 0 {
+			break
+		}
+		name := template[i+1 : i+end]
+		i += end
+		if name == "" || reservedMacros[name] || seen[name] {
+			continue
+		}
+		seen[name] = true
+		fields = append(fields, name)
+	}
+	return fields
+}
+
+// partitionedObjstoreSink fans a stream out to multiple objects, one per distinct
+// resolved key. The key template's record-field placeholders ({namespace}, …)
+// are substituted per row; date/uuid macros are expanded lazily by each child
+// single-object sink. Child sinks are created on first use and closed together.
+type partitionedObjstoreSink struct {
+	provider    string
+	cfg         map[string]interface{}
+	keyTemplate string
+	fields      []string
+	children    map[string]sink.Sink // field-resolved key → child sink
+}
+
+func newPartitionedSink(provider string, cfg map[string]interface{}, keyTemplate string, fields []string) (sink.Sink, error) {
+	if _, ok := cfg["format"].(string); !ok || cfg["format"] == "" {
+		return nil, fmt.Errorf("%s sink: 'format' is required (inner sink type, e.g. csv, parquet)", provider)
+	}
+	return &partitionedObjstoreSink{
+		provider:    provider,
+		cfg:         cfg,
+		keyTemplate: keyTemplate,
+		fields:      fields,
+		children:    map[string]sink.Sink{},
+	}, nil
+}
+
+// resolveKey substitutes the field placeholders in the template for one row.
+// Missing/empty field values become "_unknown" so records are never dropped.
+func (p *partitionedObjstoreSink) resolveKey(batch *record.RecordBatch, row int) string {
+	key := p.keyTemplate
+	for _, f := range p.fields {
+		v := batch.Value(row, f)
+		val := "_unknown"
+		if v != nil {
+			if s := fmt.Sprintf("%v", v); s != "" {
+				val = sanitizeKeySegment(s)
+			}
+		}
+		key = strings.ReplaceAll(key, "{"+f+"}", val)
+	}
+	return key
+}
+
+// sanitizeKeySegment keeps a field value safe for use inside an object key
+// (no path traversal, no slashes injected by data).
+func sanitizeKeySegment(s string) string {
+	return strings.NewReplacer("/", "_", "\\", "_", "..", "_").Replace(s)
+}
+
+func (p *partitionedObjstoreSink) child(resolvedKey string) (sink.Sink, error) {
+	if c, ok := p.children[resolvedKey]; ok {
+		return c, nil
+	}
+	// Clone the config with the fully field-resolved key; the single-object sink
+	// still expands date/uuid macros in it.
+	childCfg := make(map[string]interface{}, len(p.cfg))
+	for k, v := range p.cfg {
+		childCfg[k] = v
+	}
+	childCfg["key"] = resolvedKey
+	c, err := newSingleObjstoreSink(p.provider, childCfg)
+	if err != nil {
+		return nil, err
+	}
+	p.children[resolvedKey] = c
+	return c, nil
+}
+
+func (p *partitionedObjstoreSink) WriteBatch(batch *record.RecordBatch) error {
+	if batch == nil || batch.Len() == 0 {
+		return nil
+	}
+	// Group row indices by resolved key, then write one sub-batch per key so each
+	// child sink receives a proper RecordBatch (preserving columnar structure).
+	groups := map[string][]int{}
+	order := []string{}
+	for i := 0; i < batch.Len(); i++ {
+		k := p.resolveKey(batch, i)
+		if _, ok := groups[k]; !ok {
+			order = append(order, k)
+		}
+		groups[k] = append(groups[k], i)
+	}
+	for _, k := range order {
+		rows := groups[k]
+		sub := &record.RecordBatch{Columns: batch.Columns, Rows: make([][]interface{}, 0, len(rows))}
+		for _, idx := range rows {
+			sub.Rows = append(sub.Rows, batch.Rows[idx])
+		}
+		c, err := p.child(k)
+		if err != nil {
+			return err
+		}
+		if err := c.WriteBatch(sub); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (p *partitionedObjstoreSink) Flush() error {
+	var errs []error
+	for _, c := range p.children {
+		if err := c.Flush(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func (p *partitionedObjstoreSink) Close() error {
+	var errs []error
+	for _, c := range p.children {
+		if err := c.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // newUUID returns a random RFC-4122 v4 UUID string. Used to make object keys

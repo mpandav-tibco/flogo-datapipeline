@@ -149,7 +149,7 @@ data:
                 "provider": "s3",
                 "bucket": "CHANGE_ME-logs",
                 "region": "us-east-1",
-                "key": "logs/{YYYY}/{MM}/{DD}/${NODE_NAME}/part.ndjson",
+                "key": "logs/{namespace}/{YYYY}/{MM}/{DD}/${NODE_NAME}/part.ndjson",
                 "format": "jsonlines"
               }
             },
