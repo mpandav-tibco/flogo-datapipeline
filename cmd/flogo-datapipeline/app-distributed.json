@@ -1,0 +1,223 @@
+{
+  "name": "flogo-datapipeline-distributed",
+  "type": "flogo:app",
+  "version": "1.0.0",
+  "description": "Multi-instance distributed pipeline example. Each Kubernetes pod runs this app; instances coordinate via the Postgres work queue. INSTANCE_INDEX and INSTANCE_COUNT environment variables control sharding in the simpler 'sharded' mode.",
+  "appModel": "1.1.1",
+  "imports": [
+    "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+    "github.com/project-flogo/contrib/trigger/rest",
+    "github.com/project-flogo/contrib/trigger/timer"
+  ],
+  "properties": [
+    { "name": "db.dsn",          "type": "string", "value": "host=postgres port=5432 dbname=analytics user=pipeline sslmode=disable" },
+    { "name": "redis.addr",      "type": "string", "value": "redis:6379" },
+    { "name": "checkpoint.path", "type": "string", "value": "/var/flogo/checkpoints" }
+  ],
+  "resources": [
+    {
+      "id": "pipeline:claims-processing",
+      "data": {
+        "name": "Insurance Claims ETL",
+        "description": "Distributed multi-instance pipeline: reads Parquet claim files, applies underwriting rules transforms, upserts to PostgreSQL. Coordinated via Postgres work queue with Redis checkpointing.",
+        "source": {
+          "type": "parquet",
+          "path": "/data/claims/${date}/*.parquet",
+          "columns": ["claim_id", "policy_id", "amount", "claimant_id", "claim_date", "status"],
+          "rowGroupParallelism": 4
+        },
+        "transforms": [
+          {
+            "type": "filter",
+            "expr": "amount > 0 AND status != 'WITHDRAWN'"
+          },
+          {
+            "type": "validate",
+            "rules": [
+              { "field": "claim_id",   "notNull": true, "pattern": "^CLM-\\d{8}$" },
+              { "field": "policy_id",  "notNull": true },
+              { "field": "amount",     "notNull": true, "min": 1, "max": 10000000 },
+              { "field": "status",     "in": ["PENDING", "APPROVED", "REJECTED", "UNDER_REVIEW"] }
+            ],
+            "onViolation": "route",
+            "errorSinkType": "jdbc",
+            "errorSinkConfig": {
+              "driver": "postgres",
+              "dsn": "$property[db.dsn]",
+              "table": "claims_rejected",
+              "batchSize": 100
+            }
+          },
+          {
+            "type": "lookup",
+            "keyField": "claimant_id",
+            "url": "http://customer-service/api/customers/{claimant_id}",
+            "method": "GET",
+            "outputFields": ["name", "risk_tier", "region"],
+            "concurrency": 20,
+            "cacheSize": 10000,
+            "timeoutMs": 3000,
+            "onError": "null"
+          },
+          {
+            "type": "map",
+            "fields": {
+              "claim_id":         "=$claim_id",
+              "policy_id":        "=$policy_id",
+              "amount_usd":       "=divide($.amount, 100)",
+              "claimant_name":    "=$name",
+              "risk_tier":        "=coalesce($.risk_tier, 'UNKNOWN')",
+              "region":           "=coalesce($.region, 'UNASSIGNED')",
+              "processing_date":  "=$claim_date"
+            }
+          }
+        ],
+        "sink": {
+          "type":        "jdbc",
+          "driver":      "postgres",
+          "dsn":         "$property[db.dsn]",
+          "table":       "claims_enriched",
+          "batchSize":   500,
+          "onConflict":  "upsert",
+          "conflictKey": ["claim_id"]
+        },
+        "checkpoint": {
+          "type":            "redis",
+          "addr":            "$property[redis.addr]",
+          "keyPrefix":       "ckpt:claims",
+          "intervalRows":    5000,
+          "intervalSeconds": 15,
+          "deleteOnSuccess": false
+        },
+        "performance": {
+          "batchSize":               5000,
+          "transformWorkers":        4,
+          "sourceBufferBatches":     8,
+          "sinkBufferBatches":       8,
+          "maxMemoryMB":             1024,
+          "rowGroupParallelism":     4
+        },
+        "scaling": {
+          "mode":               "distributed",
+          "partitionStrategy":  "file",
+          "partitionsPerClaim": 2,
+          "coordinator": {
+            "type":             "postgres",
+            "dsn":              "$property[db.dsn]",
+            "leaseSeconds":     120,
+            "heartbeatSeconds": 30,
+            "maxRetries":       3
+          }
+        }
+      }
+    },
+    {
+      "id": "pipeline:sensor-readings",
+      "data": {
+        "name": "IoT Sensor Readings ETL",
+        "description": "Edge pipeline: fixed-width EBCDIC sensor files → time-series DB. Single-instance, file checkpoint. Runs on the factory floor edge node.",
+        "source": {
+          "type":         "fixedwidth",
+          "path":         "/mnt/factory/readings/${date}.dat",
+          "encoding":     "ebcdic-037",
+          "recordLength": 80,
+          "columns": [
+            { "name": "sensor_id",   "start": 1,  "length": 8,  "type": "string", "trim": true },
+            { "name": "timestamp",   "start": 9,  "length": 14, "type": "string" },
+            { "name": "reading",     "start": 23, "length": 10, "type": "decimal", "impliedDecimal": 3 },
+            { "name": "unit",        "start": 33, "length": 4,  "type": "string", "trim": true },
+            { "name": "quality_flag","start": 37, "length": 1,  "type": "string" }
+          ]
+        },
+        "transforms": [
+          {
+            "type": "filter",
+            "expr": "quality_flag = 'G' AND reading IS NOT NULL"
+          },
+          {
+            "type": "validate",
+            "rules": [
+              { "field": "sensor_id", "notNull": true },
+              { "field": "reading",   "notNull": true, "min": -9999.999, "max": 9999.999 }
+            ],
+            "onViolation": "drop"
+          }
+        ],
+        "sink": {
+          "type":   "jdbc",
+          "driver": "postgres",
+          "dsn":    "host=timescaledb port=5432 dbname=iot user=edge sslmode=disable",
+          "table":  "sensor_readings",
+          "batchSize": 2000,
+          "onConflict": "insert"
+        },
+        "checkpoint": {
+          "type":            "file",
+          "path":            "/var/flogo/checkpoints/sensor",
+          "intervalRows":    50000,
+          "intervalSeconds": 60,
+          "deleteOnSuccess": false
+        },
+        "performance": {
+          "batchSize":   10000,
+          "maxMemoryMB": 128
+        },
+        "scaling": {
+          "mode": "single"
+        }
+      }
+    }
+  ],
+  "triggers": [
+    {
+      "id": "claims-timer",
+      "ref": "github.com/project-flogo/contrib/trigger/timer",
+      "settings": {
+        "repeating": true,
+        "startDelay": 0,
+        "interval": 3600000
+      },
+      "handlers": [
+        {
+          "settings": {},
+          "action": {
+            "ref": "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+            "settings": {
+              "pipelineRef": "res://pipeline:claims-processing"
+            },
+            "input": {
+              "params": { "date": "2026-07-07" }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "pipeline-admin-api",
+      "ref": "github.com/project-flogo/contrib/trigger/rest",
+      "settings": {
+        "port": 9080
+      },
+      "handlers": [
+        {
+          "settings": { "method": "POST", "path": "/pipeline/run" },
+          "action": {
+            "ref": "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+            "settings": {
+              "pipelineRef": "res://pipeline:claims-processing"
+            },
+            "input": {
+              "inputPath":   "=$.content.path",
+              "runId":       "=$.content.runId",
+              "params":      "=$.content.params"
+            },
+            "output": {
+              "code": "=200",
+              "data": "=$.result"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

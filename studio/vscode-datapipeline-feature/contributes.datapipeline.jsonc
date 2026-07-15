@@ -1,0 +1,137 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// contributes.datapipeline.jsonc
+//
+// These entries must be MERGED into  extension/package.json  under the existing
+// top-level "contributes" object (and one entry under "activationEvents").
+// They follow the repo's conventions: viewType "flogo3.<x>-editor", the shared
+// activity-bar container "flogo3-sidebar-view", and command ids "flogo3.<area>.<verb>".
+//
+// This file is documentation only — it is not loaded at runtime.
+// ─────────────────────────────────────────────────────────────────────────────
+{
+  // → append to "activationEvents"
+  "activationEvents": [
+    "onCustomEditor:flogo3.datapipeline-editor",
+    "onView:flogo3.datapipeline.pipelines",
+    "onCommand:flogo3.datapipeline.newFromTemplate"
+  ],
+
+  "contributes": {
+    // → append to contributes.customEditors
+    "customEditors": [
+      {
+        "viewType": "flogo3.datapipeline-editor",
+        "displayName": "Flogo Data Pipeline",
+        "selector": [{ "filenamePattern": "*.datapipeline" }],
+        "priority": "default"
+      }
+    ],
+
+    // → append a view to the EXISTING "flogo3-sidebar-view" container
+    "views": {
+      "flogo3-sidebar-view": [
+        {
+          "id": "flogo3.datapipeline.pipelines",
+          "name": "Data Pipelines",
+          "icon": "$(server-process)",
+          "contextualTitle": "Data Pipelines"
+        }
+      ]
+    },
+
+    // → append to contributes.commands
+    "commands": [
+      {
+        "command": "flogo3.datapipeline.run",
+        "title": "Run Pipeline",
+        "category": "Flogo Data Pipeline",
+        "icon": "$(play)"
+      },
+      {
+        "command": "flogo3.datapipeline.preview",
+        "title": "Dry-run Preview",
+        "category": "Flogo Data Pipeline",
+        "icon": "$(search)"
+      },
+      {
+        "command": "flogo3.datapipeline.refresh",
+        "title": "Refresh Pipelines",
+        "category": "Flogo Data Pipeline",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "flogo3.datapipeline.newFromTemplate",
+        "title": "New Pipeline from Template…",
+        "category": "Flogo Data Pipeline",
+        "icon": "$(add)"
+      },
+      {
+        "command": "flogo3.datapipeline.showOutput",
+        "title": "Show Output",
+        "category": "Flogo Data Pipeline"
+      }
+    ],
+
+    // → merge into contributes.menus
+    "menus": {
+      "view/title": [
+        {
+          "command": "flogo3.datapipeline.newFromTemplate",
+          "when": "view == flogo3.datapipeline.pipelines",
+          "group": "navigation@1"
+        },
+        {
+          "command": "flogo3.datapipeline.refresh",
+          "when": "view == flogo3.datapipeline.pipelines",
+          "group": "navigation@2"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "flogo3.datapipeline.run",
+          "when": "view == flogo3.datapipeline.pipelines && viewItem == datapipeline",
+          "group": "inline@1"
+        },
+        {
+          "command": "flogo3.datapipeline.preview",
+          "when": "view == flogo3.datapipeline.pipelines && viewItem == datapipeline",
+          "group": "inline@2"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "flogo3.datapipeline.preview",
+          "when": "activeCustomEditorId == flogo3.datapipeline-editor",
+          "group": "navigation@1"
+        },
+        {
+          "command": "flogo3.datapipeline.run",
+          "when": "activeCustomEditorId == flogo3.datapipeline-editor",
+          "group": "navigation@2"
+        }
+      ]
+    },
+
+    // → merge into contributes.configuration.properties
+    "configuration": {
+      "title": "Flogo Data Pipeline",
+      "properties": {
+        "flogo3.datapipeline.binaryPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Absolute path to the `flogo-datapipeline` engine binary. When empty, the binary name is resolved from `PATH`."
+        },
+        "flogo3.datapipeline.engineAddr": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Address of a running engine REST server (e.g. `127.0.0.1:8888`) for the `/v1` API. When empty, only local CLI runs are used."
+        },
+        "flogo3.datapipeline.verbose": {
+          "type": "boolean",
+          "default": true,
+          "description": "Pass -v to the engine so run summaries (processed/written/dropped/routed) are captured."
+        }
+      }
+    }
+  }
+}

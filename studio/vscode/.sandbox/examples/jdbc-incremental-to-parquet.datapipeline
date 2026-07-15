@@ -1,0 +1,66 @@
+{
+    "version":  "1.0.0",
+    "name":  "jdbc-incremental-to-parquet",
+    "appModel":  "1.1.1",
+    "resources":  [
+                      {
+                          "id":  "pipeline:jdbc-incremental-to-parquet",
+                          "data":  {
+                                       "name":  "jdbc-incremental-to-parquet",
+                                       "source":  {
+                                                      "batchSize":  5000,
+                                                      "orderKey":  "updated_at",
+                                                      "driver":  "postgres",
+                                                      "type":  "jdbc",
+                                                      "table":  "customers",
+                                                      "dsn":  "host=localhost port=5432 dbname=crm sslmode=disable"
+                                                  },
+                                       "description":  "JDBC source with high-water-mark incremental load -\u003e Parquet file sink.",
+                                       "sink":  {
+                                                    "path":  "./out/customers.parquet",
+                                                    "rowGroupSize":  100000,
+                                                    "compression":  "snappy",
+                                                    "type":  "parquet"
+                                                },
+                                       "mode":  "etl",
+                                       "transforms":  [
+                                                          {
+                                                              "column":  "updated_at",
+                                                              "name":  "watermark",
+                                                              "type":  "hwm",
+                                                              "valueType":  "timestamp"
+                                                          }
+                                                      ]
+                                   }
+                      }
+                  ],
+    "type":  "flogo:app",
+    "imports":  [
+                    "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+                    "github.com/project-flogo/contrib/trigger/timer"
+                ],
+    "triggers":  [
+                     {
+                         "handlers":  [
+                                          {
+                                              "settings":  {
+
+                                                           },
+                                              "action":  {
+                                                             "settings":  {
+                                                                              "pipelineRef":  "res://pipeline:jdbc-incremental-to-parquet"
+                                                                          },
+                                                             "ref":  "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline"
+                                                         }
+                                          }
+                                      ],
+                         "ref":  "github.com/project-flogo/contrib/trigger/timer",
+                         "id":  "pipeline-timer",
+                         "settings":  {
+                                          "repeating":  true,
+                                          "startDelay":  0,
+                                          "interval":  86400000
+                                      }
+                     }
+                 ]
+}

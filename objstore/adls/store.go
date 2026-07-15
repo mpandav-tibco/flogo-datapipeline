@@ -60,16 +60,43 @@ func newADLSStore(cfg map[string]interface{}) (objstore.Store, error) {
 
 	sasTokenEnv, _ := cfg["sasTokenEnv"].(string)
 	accountKeyEnv, _ := cfg["accountKeyEnv"].(string)
+	// Inline values (from a Studio connection or explicit config).
+	inlineSasToken, _ := cfg["sasToken"].(string)
+	inlineAccountKey, _ := cfg["accountKey"].(string)
 
 	var client *azblob.Client
 	var err error
 
-	switch {
-	case sasTokenEnv != "":
-		sasToken := os.Getenv(sasTokenEnv)
+	// Resolve the SAS token / account key up front so we can pick the right auth
+	// mode. The Studio connection wizard exposes a single "SAS token / key" field
+	// that is always stored as sasToken, but the value may in fact be a storage
+	// account key (e.g. the Azurite emulator, or any shared-key deployment). A
+	// real SAS token always carries a "sig=" signature parameter; an account key
+	// never does. When the supplied value is not a SAS token, fall back to
+	// shared-key credentials so account-key auth works through the same field.
+	sasToken := inlineSasToken
+	if sasTokenEnv != "" {
+		sasToken = os.Getenv(sasTokenEnv)
 		if sasToken == "" {
 			return nil, fmt.Errorf("adls store: env var %q (sasTokenEnv) is empty", sasTokenEnv)
 		}
+	}
+	accountKey := inlineAccountKey
+	if accountKeyEnv != "" {
+		accountKey = os.Getenv(accountKeyEnv)
+		if accountKey == "" {
+			return nil, fmt.Errorf("adls store: env var %q (accountKeyEnv) is empty", accountKeyEnv)
+		}
+	}
+	// If the "SAS token" is really an account key (no sig= signature), treat it
+	// as a shared-key credential instead.
+	if sasToken != "" && !strings.Contains(sasToken, "sig=") && accountKey == "" {
+		accountKey = sasToken
+		sasToken = ""
+	}
+
+	switch {
+	case sasToken != "":
 		// A SAS token can be embedded directly in the service URL or supplied as a
 		// query string.  azblob.NewClientWithNoCredential handles both forms.
 		urlWithSAS := serviceURL
@@ -78,11 +105,7 @@ func newADLSStore(cfg map[string]interface{}) (objstore.Store, error) {
 		}
 		client, err = azblob.NewClientWithNoCredential(urlWithSAS, nil)
 
-	case accountKeyEnv != "":
-		accountKey := os.Getenv(accountKeyEnv)
-		if accountKey == "" {
-			return nil, fmt.Errorf("adls store: env var %q (accountKeyEnv) is empty", accountKeyEnv)
-		}
+	case accountKey != "":
 		cred, credErr := azblob.NewSharedKeyCredential(accountName, accountKey)
 		if credErr != nil {
 			return nil, fmt.Errorf("adls store: build shared-key credential: %w", credErr)

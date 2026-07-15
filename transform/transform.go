@@ -65,8 +65,11 @@ func (p *Pipeline) Apply(in *record.RecordBatch) (*record.RecordBatch, error) {
 		if err != nil {
 			return nil, fmt.Errorf("transform %s: %w", t.Name(), err)
 		}
-		// Return intermediate batch to pool; never recycle the caller-owned input.
-		if cur != in {
+		// Return the intermediate batch to the pool once we're done with it —
+		// but ONLY when the stage produced a DISTINCT batch. Pass-through stages
+		// (hwm, dq, schemadrift, validate-keep) return the SAME batch they were
+		// given; recycling it here would clear the rows the next stage reads.
+		if cur != in && cur != out {
 			record.Put(cur)
 		}
 		cur = out

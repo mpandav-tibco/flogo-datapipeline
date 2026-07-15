@@ -1,0 +1,1175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Flogo Data Pipeline — VS Code Studio · Clickable Prototype</title>
+<style>
+  :root{
+    --editor:#1f1f1f; --chrome:#181818; --tab:#1f1f1f; --border:#2b2b2b; --border2:#313131;
+    --input:#313131; --inputBorder:#3c3c3c; --text:#cccccc; --mute:#9d9d9d; --dim:#6e7681;
+    --blue:#0078d4; --blueHi:#4daafc; --sel:#04395e; --hover:#2a2d2e; --listInactive:#37373d;
+    --green:#89d185; --greenA:rgba(137,209,133,.16); --red:#f14c4c; --redA:rgba(241,76,76,.15);
+    --yellow:#cca700; --yellowA:rgba(204,167,0,.16); --orange:#ce9178;
+    --mono:"SF Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+    --node:#252526; --nodeBorder:#3c3c3c;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0;background:#0b0b0b;color:var(--text);font-family:var(--sans);font-size:13px;overflow:hidden}
+  button{font-family:inherit;color:inherit;background:none;border:none;cursor:pointer}
+  ::-webkit-scrollbar{width:10px;height:10px}
+  ::-webkit-scrollbar-thumb{background:#42454a;border-radius:6px}
+  ::-webkit-scrollbar-track{background:transparent}
+  :focus-visible{outline:1px solid var(--blueHi);outline-offset:-1px}
+
+  /* prototype hint bar */
+  .protobar{height:26px;background:#0a0a0a;color:#9aa4ad;display:flex;align-items:center;gap:12px;
+    padding:0 12px;font-size:11px;border-bottom:1px solid #000}
+  .protobar b{color:#4daafc}
+  .protobar .k{border:1px solid #2b2b2b;border-radius:4px;padding:1px 6px;color:#cbd3d9;font:11px var(--mono)}
+  .protobar .grow{flex:1}
+  .protobar button{color:#9aa4ad;border:1px solid #2b2b2b;border-radius:5px;padding:2px 9px;font-size:11px}
+  .protobar button:hover{color:#fff;border-color:#3c3c3c}
+
+  .win{height:calc(100vh - 26px);display:flex;flex-direction:column;background:var(--editor)}
+  .titlebar{height:34px;background:var(--chrome);display:flex;align-items:center;gap:8px;padding:0 10px;border-bottom:1px solid var(--border);flex:none}
+  .traffic{display:flex;gap:8px}
+  .traffic i{width:12px;height:12px;border-radius:50%;display:block}
+  .traffic .r{background:#ff5f57}.traffic .y{background:#febc2e}.traffic .g{background:#28c840}
+  .titlebar .ttl{flex:1;text-align:center;font-size:12px;color:var(--mute)}
+  .titlebar .cmd{min-width:280px;max-width:420px;background:#2d2d2d;border:1px solid #3c3c3c;border-radius:6px;
+    height:22px;display:flex;align-items:center;justify-content:center;gap:8px;font-size:11px;color:var(--mute);cursor:pointer}
+  .titlebar .cmd:hover{background:#333}
+  .titlebar .cmd .kbd{font:10px var(--mono);color:var(--dim);border:1px solid #3c3c3c;border-radius:3px;padding:0 4px}
+
+  .ide{flex:1;display:grid;grid-template-columns:48px var(--sbw,300px) 1fr;min-height:0}
+  .ide.nosb{grid-template-columns:48px 0 1fr}
+
+  /* activity bar */
+  .activity{background:var(--chrome);border-right:1px solid var(--border);display:flex;flex-direction:column;align-items:center;padding:6px 0;gap:2px}
+  .abi{width:48px;height:44px;display:flex;align-items:center;justify-content:center;color:var(--dim);font-size:19px;position:relative}
+  .abi:hover{color:#cfd3d8}
+  .abi.on{color:#fff}
+  .abi.on::before{content:"";position:absolute;left:0;top:8px;bottom:8px;width:2px;background:#fff}
+  .abi .bdg{position:absolute;top:6px;right:6px;min-width:15px;height:15px;background:var(--blue);color:#fff;
+    font:700 9px/15px var(--sans);border-radius:8px;text-align:center;padding:0 3px}
+  .abi.grow{flex:1;height:auto}
+
+  /* sidebar */
+  .sidebar{background:var(--chrome);border-right:1px solid var(--border);display:flex;flex-direction:column;min-width:0;overflow:hidden}
+  .sbhead{height:34px;display:flex;align-items:center;justify-content:space-between;padding:0 8px 0 18px;font-size:11px;letter-spacing:.08em;color:var(--mute);text-transform:uppercase;flex:none}
+  .sbhead .acts{display:flex;gap:10px;color:var(--dim);font-size:14px}
+  .sbhead .acts span{cursor:pointer}.sbhead .acts span:hover{color:var(--text)}
+  .sbbody{flex:1;overflow:auto}
+  .section{border-top:1px solid var(--border)}
+  .sxhead{display:flex;align-items:center;gap:5px;padding:6px 10px;font-size:11px;font-weight:700;letter-spacing:.04em;color:var(--text);text-transform:uppercase;cursor:pointer;user-select:none}
+  .sxhead .tw{color:var(--mute);font-size:10px;width:11px;transition:transform .12s}
+  .sxhead .cnt{color:var(--dim);font-weight:400;letter-spacing:0;margin-left:4px}
+  .sxhead .acts{margin-left:auto;color:var(--dim);display:none;gap:9px;font-size:13px}
+  .sxhead:hover .acts{display:flex}
+  .sxhead .acts span:hover{color:var(--text)}
+  .tree{padding:2px 0 6px}
+  .tree.collapsed{display:none}
+  .ti{display:flex;align-items:center;gap:7px;padding:3px 10px 3px 22px;font-size:13px;color:var(--text);position:relative;cursor:pointer;white-space:nowrap;user-select:none}
+  .ti:hover{background:var(--hover)}
+  .ti.sel{background:var(--sel)}
+  .ti .ic{width:16px;text-align:center;flex:none;font-size:12px}
+  .ti .lbl{overflow:hidden;text-overflow:ellipsis}
+  .ti .desc{color:var(--dim);font-size:11px;margin-left:6px;overflow:hidden;text-overflow:ellipsis;flex:1}
+  .ti .st{margin-left:auto;padding-left:8px}
+  .ti .inl{margin-left:auto;display:none;gap:9px;color:var(--mute);font-size:12px;padding-left:8px}
+  .ti:hover .inl{display:flex}.ti:hover .st{display:none}
+  .ti .inl span:hover{color:#fff}
+  .dot{width:7px;height:7px;border-radius:50%;display:inline-block}
+  .dot.g{background:var(--green)}.dot.b{background:var(--blueHi)}.dot.r{background:var(--red)}.dot.y{background:var(--yellow)}.dot.d{background:var(--dim)}
+  .welcome{padding:16px 16px;color:var(--mute);font-size:12.5px;line-height:1.7}
+  .welcome .pri{display:block;text-align:center;margin:12px 0;background:var(--blue);color:#fff;border-radius:5px;padding:7px}
+  .welcome a{color:var(--blueHi);cursor:pointer}
+
+  /* editor group */
+  .egroup{display:flex;flex-direction:column;min-width:0;background:var(--editor)}
+  .tabsbar{height:35px;background:var(--chrome);display:flex;align-items:stretch;border-bottom:1px solid var(--border);flex:none;overflow-x:auto}
+  .tab{display:flex;align-items:center;gap:8px;padding:0 11px;font-size:12.5px;color:var(--mute);border-right:1px solid var(--border);position:relative;white-space:nowrap;cursor:pointer}
+  .tab:hover{background:#202020}
+  .tab.on{background:var(--tab);color:var(--text)}
+  .tab.on::before{content:"";position:absolute;left:0;right:0;top:0;height:1px;background:var(--blue)}
+  .tab .ic{font-size:12px;color:var(--blueHi)}
+  .tab .x{color:var(--dim);font-size:14px;border-radius:4px;width:18px;height:18px;display:inline-flex;align-items:center;justify-content:center}
+  .tab .x:hover{background:#ffffff22;color:#fff}
+  .tabsbar .egacts{margin-left:auto;display:flex;align-items:center;gap:8px;padding:0 10px;flex:none}
+  .breadcrumb{height:26px;display:flex;align-items:center;gap:6px;padding:0 14px;font-size:12px;color:var(--dim);border-bottom:1px solid var(--border);flex:none}
+  .breadcrumb .sep{color:#4a4a4a}
+  .edmain{flex:1;min-height:0;display:flex}
+  .edcontent{flex:1;min-width:0;position:relative;overflow:auto}
+
+  .btn{display:inline-flex;align-items:center;gap:6px;background:var(--input);border:1px solid var(--inputBorder);color:var(--text);border-radius:5px;padding:4px 10px;font-size:12px;font-weight:600}
+  .btn:hover{background:#3a3a3a}
+  .btn.pri{background:var(--blue);border-color:var(--blue);color:#fff}
+  .btn.pri:hover{background:#1a86d9}
+  .btn.sm{padding:3px 8px;font-size:11px}
+  .pill{font:11px var(--mono);color:var(--mute);background:#2a2a2a;border-radius:5px;padding:2px 7px}
+  .pillrow{display:flex;gap:6px;flex-wrap:wrap}
+  .chip{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:600;border-radius:11px;padding:2px 8px}
+  .chip::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+  .chip.ok{color:var(--green);background:var(--greenA)}.chip.run{color:var(--blueHi);background:rgba(0,120,212,.18)}
+  .chip.warn{color:var(--yellow);background:var(--yellowA)}.chip.err{color:var(--red);background:var(--redA)}
+  .chip.idle{color:var(--dim);background:#2a2a2a}.chip.plain{color:var(--mute);background:#2a2a2a}.chip.plain::before{display:none}
+
+  /* canvas */
+  .canvas{position:absolute;inset:0;overflow:auto;padding:22px 20px;background:radial-gradient(#2a2a2a 1px,transparent 1px) 0 0/22px 22px,var(--editor)}
+  .flowrow{display:flex;align-items:center;flex-wrap:nowrap;padding:10px 2px}
+  .node{flex:none;width:150px;background:var(--node);border:1px solid var(--nodeBorder);border-radius:9px;padding:10px 11px;position:relative;cursor:pointer;transition:box-shadow .12s,border-color .12s}
+  .node:hover{border-color:#565a60}
+  .node.src{border-top:2px solid #4a90d9}.node.sink{border-top:2px solid #4caf7d}.node.dlq{border-style:dashed}
+  .node.sel{border-color:var(--blue);box-shadow:0 0 0 2px rgba(0,120,212,.4)}
+  .node .kind{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim)}
+  .node .nm{font-weight:600;font-size:13px;margin:3px 0 5px}
+  .node .meta{font:11px var(--mono);color:var(--mute);word-break:break-word}
+  .node .thru{margin-top:8px;height:4px;border-radius:3px;background:#333;overflow:hidden}
+  .node .thru i{display:block;height:100%;width:0;background:var(--blue);transition:width .8s ease}
+  .node.ran .thru i{width:var(--w,90%)}
+  .conn{flex:none;width:30px;height:2px;background:#3c3c3c;position:relative}
+  .conn::after{content:"";position:absolute;right:-1px;top:-4px;border:5px solid transparent;border-left-color:#3c3c3c}
+  .conn.live{background:linear-gradient(90deg,#3c3c3c,var(--blue))}
+  .branch{margin:12px 0 0 186px;display:flex;flex-direction:column;align-items:center}
+  .branch .down{width:2px;height:22px;background:#7a3c34}
+  .addnode{flex:none;width:42px;height:42px;border:1px dashed var(--inputBorder);border-radius:9px;color:var(--dim);display:flex;align-items:center;justify-content:center;font-size:18px}
+  .addnode:hover{color:var(--text);border-color:#565a60}
+  .conn{cursor:pointer}
+  .conn .ins{position:absolute;left:50%;top:-10px;transform:translateX(-50%);width:18px;height:18px;border-radius:50%;background:var(--blue);color:#fff;font:700 13px/18px var(--sans);text-align:center;display:none;box-shadow:0 1px 4px rgba(0,0,0,.45);z-index:4}
+  .conn:hover .ins{display:block}
+  .conn:hover{background:var(--blueHi)}
+  .canvas-hint{position:absolute;left:20px;bottom:14px}
+
+  /* inspector */
+  .inspector{width:300px;flex:none;border-left:1px solid var(--border);background:#1b1b1b;overflow:auto}
+  .inspector .ih{height:34px;display:flex;align-items:center;gap:8px;padding:0 12px;border-bottom:1px solid var(--border);font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute)}
+  .inspector .ib{padding:12px}
+  .tabs{display:flex;gap:2px;border-bottom:1px solid var(--border);margin-bottom:12px}
+  .tabs span{padding:7px 10px;font-size:12px;color:var(--dim);border-bottom:1px solid transparent;margin-bottom:-1px;cursor:pointer}
+  .tabs span.on{color:var(--text);border-bottom-color:var(--blue)}
+  .fld{margin-bottom:12px}
+  .fld .k{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px}
+  .fld .v{background:var(--input);border:1px solid var(--inputBorder);border-radius:5px;padding:6px 9px;font:12px var(--mono);color:var(--text);width:100%}
+  .fld .v:focus{border-color:var(--blue);outline:none}
+
+  /* webview editor pages */
+  .wv{padding:16px 18px}
+  .wvnote{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--dim);padding:6px 14px;border-bottom:1px solid var(--border);background:#1a1a1a}
+  .wvnote .d{width:7px;height:7px;border-radius:50%;background:var(--blueHi)}
+  .cards{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+  .card{border:1px solid var(--border);border-radius:8px;padding:12px 13px;background:#202020}
+  .card .cap{font-size:10.5px;color:var(--dim);text-transform:uppercase;letter-spacing:.06em}
+  .card .kpi{font-size:21px;font-weight:700;margin-top:3px;font-variant-numeric:tabular-nums}
+  .card .sub{font-size:11.5px;color:var(--mute);margin-top:3px}
+  table.grid{width:100%;border-collapse:collapse;font-size:12.5px}
+  table.grid th{text-align:left;color:var(--dim);font-weight:600;font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;padding:8px 10px;border-bottom:1px solid var(--border)}
+  table.grid td{padding:9px 10px;border-bottom:1px solid #262626;color:var(--mute)}
+  table.grid tr.click{cursor:pointer}
+  table.grid tr.click:hover td{background:var(--hover)}
+  .barmini{height:6px;border-radius:4px;background:#333;position:relative;overflow:hidden;min-width:60px}
+  .barmini i{position:absolute;inset:0 auto 0 0;background:var(--blue)}
+  .barmini i.g{background:var(--green)}.barmini i.r{background:var(--red)}.barmini i.a{background:var(--yellow)}
+  .funnel{display:flex;margin:10px 0}
+  .fstage{flex:1;text-align:center;position:relative;padding:0 6px;cursor:pointer}
+  .fstage .bar{height:64px;border-radius:7px;background:#2a2f36;display:flex;align-items:flex-end;overflow:hidden;position:relative}
+  .fstage .bar i{position:absolute;left:0;right:0;bottom:0;height:0;background:var(--blue);opacity:.9;transition:height .7s ease}
+  .fstage.loss .bar i{background:#555}.fstage.route .bar i{background:var(--yellow)}.fstage.err .bar i{background:var(--red)}.fstage.win .bar i{background:var(--green)}
+  .fstage .n{font-size:14px;font-weight:700;margin-top:7px;font-variant-numeric:tabular-nums}
+  .fstage .l{font-size:11px;color:var(--dim)}
+  .fstage:hover .bar{outline:1px solid var(--blueHi)}
+  .spark{display:flex;align-items:flex-end;gap:3px;height:52px}
+  .spark i{flex:1;background:#cdd9ea55;border-radius:2px 2px 0 0}.spark i.hi{background:var(--blue)}
+  h3.sec{font-size:14px;margin:2px 0 12px}
+
+  /* bottom panel */
+  .panel{border-top:1px solid var(--border);background:var(--chrome);display:flex;flex-direction:column;flex:none;height:var(--ph,210px)}
+  .panel.collapsed{height:35px}
+  .paneltabs{height:34px;display:flex;align-items:center;padding:0 8px;border-bottom:1px solid var(--border);flex:none}
+  .pt{padding:0 12px;line-height:34px;font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:var(--dim);border-bottom:1px solid transparent;cursor:pointer;position:relative}
+  .pt:hover{color:var(--mute)}
+  .pt.on{color:var(--text);border-bottom-color:var(--text)}
+  .pt.err.on{border-bottom-color:var(--red)}
+  .pt .cnt{font-size:10px;color:var(--mute);margin-left:5px}
+  .paneltabs .pacts{margin-left:auto;display:flex;gap:12px;color:var(--dim);font-size:13px;padding-right:6px}
+  .paneltabs .pacts span{cursor:pointer}.paneltabs .pacts span:hover{color:var(--text)}
+  .panelbody{flex:1;overflow:auto;padding:8px 12px;font:12px var(--mono)}
+  .panel.collapsed .panelbody{display:none}
+  .log .ln{white-space:pre-wrap;line-height:1.5}
+  .log .t{color:var(--dim)}.log .ok{color:var(--green)}.log .w{color:var(--yellow)}.log .e{color:var(--red)}.log .b{color:var(--blueHi)}
+  .prob{display:flex;gap:9px;align-items:flex-start;padding:4px 6px;border-radius:4px;cursor:pointer;font-family:var(--sans)}
+  .prob:hover{background:var(--hover)}
+  .prob .i{font-size:13px;margin-top:1px}.prob .i.err{color:var(--red)}.prob .i.warn{color:var(--yellow)}.prob .i.ok{color:var(--green)}
+  .prob .msg{color:var(--text);font-size:12.5px}.prob .loc{color:var(--dim);font-size:11.5px}
+  .prob .src{color:var(--dim);margin-left:auto;font-size:11px}
+  .pv{border:1px solid var(--border);border-radius:6px;overflow:hidden}
+  .pv .pvtop{display:flex;justify-content:space-between;align-items:center;padding:6px 10px;background:#202020;border-bottom:1px solid var(--border);font:12px var(--sans);color:var(--mute)}
+  .pv table{width:100%;border-collapse:collapse;font:11.5px var(--mono)}
+  .pv th{background:#202020;color:var(--dim);text-align:left;padding:5px 9px;border-bottom:1px solid var(--border)}
+  .pv td{padding:5px 9px;border-bottom:1px solid #262626;color:var(--mute);white-space:nowrap}
+  .pv td.add{background:var(--greenA);color:var(--green)}.pv td.chg{background:var(--yellowA);color:var(--yellow)}.pv td.del{background:var(--redA);color:var(--red);text-decoration:line-through}
+
+  /* status bar */
+  .statusbar{height:24px;background:var(--chrome);border-top:1px solid var(--border);display:flex;align-items:center;font-size:11.5px;color:var(--mute);flex:none}
+  .sbi{display:flex;align-items:center;gap:5px;padding:0 9px;height:100%;cursor:pointer}
+  .sbi:hover{background:#ffffff14}
+  .statusbar .grow{flex:1}
+  .sbi.run{background:var(--blue);color:#fff}
+  .sbi.run:hover{background:#1a86d9}
+
+  /* overlays */
+  .scrim{position:fixed;inset:0;z-index:40;background:transparent}
+  .palette{position:fixed;top:38px;left:50%;transform:translateX(-50%);width:min(600px,86vw);z-index:50;
+    background:#252526;border:1px solid #454545;border-radius:8px;box-shadow:0 16px 50px rgba(0,0,0,.6);overflow:hidden}
+  .palette input{width:100%;background:#3c3c3c;border:1px solid #007fd4;color:var(--text);font-size:13px;padding:8px 10px;margin:8px;width:calc(100% - 16px);border-radius:4px;outline:none}
+  .palette .pi{display:flex;align-items:center;gap:10px;padding:7px 16px;font-size:13px;color:var(--text);cursor:pointer}
+  .palette .pi.on,.palette .pi:hover{background:var(--sel)}
+  .palette .pi .ic{color:var(--blueHi);width:16px;text-align:center}
+  .palette .pi .cat{color:var(--dim)}
+  .palette .pi .kb{margin-left:auto;color:var(--dim);font:11px var(--mono)}
+  .palette .empty{padding:12px 16px;color:var(--dim);font-size:12px}
+
+  .toasts{position:fixed;right:14px;bottom:32px;z-index:60;display:flex;flex-direction:column;gap:10px;width:340px}
+  .toast{background:#252526;border:1px solid #454545;border-radius:7px;box-shadow:0 10px 30px rgba(0,0,0,.5);overflow:hidden;animation:slidein .18s ease}
+  @keyframes slidein{from{transform:translateY(8px);opacity:0}to{transform:none;opacity:1}}
+  .toast .tt{display:flex;gap:9px;padding:11px 12px;font-size:12.5px}
+  .toast .tt .i{font-size:15px}
+  .toast .acts{display:flex;gap:8px;padding:0 12px 11px 33px}
+  .toast .prog{height:3px;background:#333}.toast .prog i{display:block;height:100%;background:var(--blue);width:5%;transition:width .3s}
+  .toast .close{margin-left:auto;color:var(--dim);cursor:pointer}.toast .close:hover{color:#fff}
+
+  .muted{color:var(--dim)}
+  .between{display:flex;align-items:center;justify-content:space-between;gap:12px}
+  .row{display:flex;gap:14px}.wrapf{flex-wrap:wrap}
+  .hidden{display:none!important}
+
+  /* ─── next-improvements ─── */
+  /* 1 edge volume badges */
+  .conn .vol{position:absolute;top:8px;left:50%;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;line-height:12px;
+    font:9.5px var(--mono);color:var(--mute);background:#1b1b1bcc;border:1px solid var(--border);border-radius:8px;padding:1px 5px;pointer-events:none;white-space:nowrap;z-index:3}
+  .conn .vol .dn{color:var(--red)}
+  .conn.est .vol{color:var(--dim);border-style:dashed;opacity:.85}
+  /* 3 lineage */
+  .node.lit{border-color:var(--blueHi)!important;box-shadow:0 0 0 2px rgba(77,170,252,.55)}
+  .node.dimmed{opacity:.3}
+  .lin-banner{display:flex;align-items:center;gap:10px;background:rgba(0,120,212,.12);border:1px solid rgba(77,170,252,.4);border-radius:7px;padding:7px 11px;margin:0 0 4px;font-size:12px;color:var(--text)}
+  .lin-banner .path{font:11px var(--mono);color:var(--blueHi)}
+  .lin-banner .x{margin-left:auto;color:var(--dim);cursor:pointer}.lin-banner .x:hover{color:#fff}
+  .colpill{cursor:pointer}.colpill:hover{background:#33608f;color:#fff}
+  .colpill.on{background:#33608f;color:#fff}
+  /* 2 run diff */
+  .diffgrid{display:grid;grid-template-columns:1fr 148px 1fr;gap:14px;align-items:stretch;margin-top:8px}
+  .diffcol{border:1px solid var(--border);border-radius:8px;padding:12px;background:#202020}
+  .diffcol h4{margin:0 0 10px;font-size:12.5px;display:flex;align-items:center;gap:7px}
+  .diffmid{display:flex;flex-direction:column;justify-content:center;gap:8px}
+  .drow{display:flex;justify-content:space-between;font-size:12px;padding:4px 0;border-bottom:1px solid #2a2a2a}
+  .drow .lb{color:var(--dim)}
+  .delta{font:11px var(--mono);text-align:center;border-radius:6px;padding:5px 6px;line-height:1.35}
+  .delta.bad{color:var(--red);background:var(--redA)}.delta.good{color:var(--green);background:var(--greenA)}.delta.flat{color:var(--dim);background:#2a2a2a}
+  .regbanner{display:flex;align-items:center;gap:9px;border-radius:7px;padding:9px 12px;font-size:12.5px;margin-bottom:6px}
+  .regbanner.bad{background:var(--redA);border:1px solid rgba(241,76,76,.4);color:#f5b0b0}
+  .regbanner.good{background:var(--greenA);border:1px solid rgba(137,209,133,.4);color:#bfe6bd}
+  /* 4 AI popover */
+  .aiPop{position:fixed;right:16px;bottom:40px;z-index:70;width:404px;background:#1e1e1e;border-radius:10px;box-shadow:0 18px 50px rgba(0,0,0,.6);overflow:hidden}
+  .aiPop::before{content:"";position:absolute;inset:0;border-radius:10px;padding:1px;background:linear-gradient(135deg,#4daafc,#a86cff 55%,#89d185);-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude;pointer-events:none;opacity:.75}
+  .aiPop .hd{display:flex;align-items:center;gap:8px;padding:11px 13px;font-weight:600;font-size:13px;border-bottom:1px solid var(--border)}
+  .aiPop .hd .sp{margin-left:auto;color:var(--dim);cursor:pointer}.aiPop .hd .sp:hover{color:#fff}
+  .aiPop .bd{padding:12px 13px;font-size:12.5px;line-height:1.55;color:var(--mute);max-height:340px;overflow:auto}
+  .aiPop .bd b{color:var(--text)}
+  .aiPop code{font:11.5px var(--mono);color:var(--orange)}
+  .aiPop pre{font:11.5px var(--mono);color:var(--green);background:#141414;border:1px solid var(--border);border-radius:6px;padding:9px 10px;white-space:pre-wrap;margin:8px 0;line-height:1.5}
+  .aiPop .acts{display:flex;gap:8px;padding:0 13px 13px;flex-wrap:wrap}
+  .aiPop .tag{display:inline-block;font:10px var(--mono);color:var(--blueHi);background:rgba(0,120,212,.16);border-radius:5px;padding:1px 6px;margin-bottom:6px}
+  .explain{cursor:pointer;color:var(--blueHi)}.explain:hover{text-decoration:underline}
+  /* 5 live tail */
+  .tailwrap{display:flex;flex-direction:column;gap:12px;max-width:820px}
+  .gauge{height:8px;border-radius:5px;background:#2a2f36;overflow:hidden;position:relative}
+  .gauge i{position:absolute;inset:0 auto 0 0;background:var(--green);transition:width .5s}
+  .taillog{border:1px solid var(--border);border-radius:7px;overflow:hidden}
+  .taillog table{width:100%;border-collapse:collapse;font:11.5px var(--mono)}
+  .taillog th{background:#202020;color:var(--dim);text-align:left;padding:5px 9px;border-bottom:1px solid var(--border)}
+  .taillog td{padding:4px 9px;border-bottom:1px solid #242424;color:var(--mute);white-space:nowrap}
+  .taillog tr.new td{animation:flashrow 1s ease}
+  @keyframes flashrow{from{background:rgba(77,170,252,.18)}to{background:transparent}}
+  .livedot{width:8px;height:8px;border-radius:50%;background:var(--green);display:inline-block;animation:pulse 1.2s infinite;margin-right:2px}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+  /* 6 drift */
+  .drift{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:8px;max-width:760px}
+  .drift .col{border:1px solid var(--border);border-radius:8px;overflow:hidden}
+  .drift .col h4{margin:0;padding:8px 11px;font-size:12px;background:#202020;border-bottom:1px solid var(--border)}
+  .drift .r{display:flex;justify-content:space-between;padding:6px 11px;font:11.5px var(--mono);border-bottom:1px solid #242424}
+  .drift .r.add{background:var(--greenA);color:var(--green)}
+  .drift .r.del{background:var(--redA);color:var(--red);text-decoration:line-through}
+  .drift .r.chg{background:var(--yellowA);color:var(--yellow)}
+  /* 7 walkthrough */
+  .walk{display:grid;grid-template-columns:1.1fr .9fr;gap:20px;max-width:840px}
+  .walk .steps{display:flex;flex-direction:column;gap:8px}
+  .wstep{display:flex;gap:11px;padding:11px 12px;border:1px solid var(--border);border-radius:8px;background:#1f1f1f;cursor:pointer}
+  .wstep:hover{border-color:#565a60}
+  .wstep.done{background:#1c241c;border-color:rgba(137,209,133,.4)}
+  .wstep .ck{width:20px;height:20px;border-radius:50%;border:1.5px solid var(--dim);display:flex;align-items:center;justify-content:center;font-size:12px;flex:none;margin-top:1px}
+  .wstep.done .ck{background:var(--green);border-color:var(--green);color:#08260a}
+  .wstep .tl{font-weight:600;color:var(--text);font-size:13px}
+  .wstep .ds{color:var(--mute);font-size:11.5px;margin-top:2px}
+  .walkmedia{border:1px solid var(--border);border-radius:10px;background:#161616;display:flex;align-items:center;justify-content:center;min-height:280px;color:var(--dim);font-size:12px;text-align:center;padding:20px}
+  .wprog{height:6px;border-radius:4px;background:#2a2a2a;overflow:hidden;margin:8px 0 16px;max-width:840px}
+  .wprog i{display:block;height:100%;background:var(--green);transition:width .4s}
+  /* 8 a11y */
+  .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+  .node:focus-visible{outline:2px solid var(--blueHi);outline-offset:2px}
+  /* right-click context menu */
+  .ctxmenu{position:fixed;z-index:80;min-width:228px;background:#252526;border:1px solid #454545;border-radius:6px;box-shadow:0 8px 30px rgba(0,0,0,.55);padding:4px}
+  .ctxmenu .mi{display:flex;align-items:center;gap:10px;padding:5px 10px;border-radius:4px;color:var(--text);font-size:13px;cursor:pointer;white-space:nowrap}
+  .ctxmenu .mi:hover{background:var(--sel)}
+  .ctxmenu .mi.dis{color:var(--dim);pointer-events:none}
+  .ctxmenu .mi .ic{width:15px;text-align:center;color:var(--mute);font-size:12px}
+  .ctxmenu .mi .kb{margin-left:auto;color:var(--dim);font:11px var(--mono);padding-left:18px}
+  .ctxmenu .sep{height:1px;background:var(--border);margin:4px 6px}
+</style>
+</head>
+<body>
+<div class="protobar">
+  <b>Clickable prototype</b> — every action does something.
+  <span>Try: <b style="color:#4daafc">right-click</b> a pipeline, hit <span class="k">▷ Run</span>, open the palette</span>
+  <span class="k" id="openPaletteHint">⇧⌘P</span>
+  <span class="grow"></span>
+  <button id="btnWalk">✦ Get Started</button>
+  <button id="btnHelp">What's clickable?</button>
+  <button id="btnReset">Reset</button>
+</div>
+
+<div class="win">
+  <div class="titlebar">
+    <div class="traffic"><i class="r"></i><i class="y"></i><i class="g"></i></div>
+    <div class="cmd" id="cmdCenter"><span>⌕ Search / run a command</span><span class="kbd">⇧⌘P</span></div>
+    <div class="ttl" id="winTitle">orders-to-lake.datapipeline — flogo-datapipeline</div>
+    <div style="width:70px"></div>
+  </div>
+
+  <div class="ide" id="ide">
+    <div class="activity" id="activity"></div>
+    <div class="sidebar" id="sidebar"></div>
+    <div class="egroup">
+      <div class="tabsbar" id="tabsbar"></div>
+      <div class="breadcrumb" id="breadcrumb"></div>
+      <div class="edmain" id="edmain"></div>
+      <div class="panel" id="panel">
+        <div class="paneltabs" id="paneltabs"></div>
+        <div class="panelbody" id="panelbody"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="statusbar" id="statusbar"></div>
+</div>
+
+<div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+
+<script>
+(function(){
+  "use strict";
+  const $ = (s,r)=> (r||document).querySelector(s);
+  const el = (t,c,h)=>{const e=document.createElement(t);if(c)e.className=c;if(h!=null)e.innerHTML=h;return e;};
+  const fmt = n => n.toLocaleString('en-US');
+
+  // ─────────────── data ───────────────
+  function nodes(list){ return list; }
+  const PIPES = {
+    'orders-to-lake':{src:'csv',sink:'parquet·s3',mode:'ETL',status:'partial',dq:91,
+      nodes:[
+        {id:'source',kind:'source',type:'csv',nm:'orders.csv',meta:'csv · 12 cols',cfg:{Path:'./orders.csv',Header:'true',Columns:'12'}},
+        {id:'t0',kind:'transform',type:'filter',nm:'drop cancelled',meta:"status!='CANCELLED'",cfg:{Expression:"status != 'CANCELLED'"}},
+        {id:'t1',kind:'transform',type:'map',nm:'net_amount',meta:'=multiply()',cfg:{'Output field':'net_amount',Expression:'=multiply(=$quantity, =$unit_price)',Type:'float64','On error':'emit null · warn'}},
+        {id:'t2',kind:'transform',type:'validate',nm:'field rules',meta:'4 rules · →DLQ',cfg:{Rules:'4','On violation':'route → DLQ'}},
+        {id:'sink',kind:'sink',type:'parquet',nm:'lake / parquet',meta:'s3 · snappy',cfg:{Bucket:'s3://acme-datalake/orders',Compression:'snappy','Row group':'100000'}}
+      ], hasDlq:true},
+    'daily-tx-load':{src:'kafka',sink:'jdbc·pg',mode:'ETL',status:'running',dq:98,
+      nodes:[
+        {id:'source',kind:'source',type:'kafka',nm:'orders topic',meta:'kafka · group',cfg:{Brokers:'broker-1:9092',Topic:'orders',Group:'dp-daily'}},
+        {id:'t0',kind:'transform',type:'map',nm:'shape',meta:'project 8',cfg:{Fields:'8'}},
+        {id:'sink',kind:'sink',type:'jdbc',nm:'warehouse-pg',meta:'jdbc · upsert',cfg:{DSN:'pg://prod-wh/analytics',Table:'tx',Conflict:'upsert'}}
+      ], hasDlq:false},
+    'mainframe-offload':{src:'fixedwidth',sink:'parquet·s3',mode:'EL',status:'failed',dq:null,
+      nodes:[
+        {id:'source',kind:'source',type:'fixedwidth',nm:'UA00008P.dat',meta:'ebcdic-037',cfg:{Encoding:'EBCDIC-037','Record len':'280'}},
+        {id:'sink',kind:'sink',type:'parquet',nm:'lake / parquet',meta:'s3 · snappy',cfg:{Bucket:'s3://acme/mf'}}
+      ], hasDlq:false},
+    'crm-sync-incremental':{src:'jdbc·mysql',sink:'jdbc·pg',mode:'ETL',status:'completed',dq:100,
+      nodes:[
+        {id:'source',kind:'source',type:'jdbc',nm:'crm.mysql',meta:'jdbc · keyset',cfg:{DSN:'mysql://crm/app',Table:'customers'}},
+        {id:'t0',kind:'transform',type:'hwm',nm:'watermark',meta:'updated_at',cfg:{Column:'updated_at',Backend:'postgres'}},
+        {id:'sink',kind:'sink',type:'jdbc',nm:'warehouse-pg',meta:'jdbc · upsert',cfg:{Table:'customers'}}
+      ], hasDlq:false},
+    'events-archive':{src:'kafka',sink:'objstore·gcs',mode:'EL',status:'idle',dq:null,
+      nodes:[
+        {id:'source',kind:'source',type:'kafka',nm:'events topic',meta:'kafka',cfg:{Topic:'events'}},
+        {id:'sink',kind:'sink',type:'gcs',nm:'archive / gcs',meta:'gcs · jsonl',cfg:{Bucket:'gs://acme-archive'}}
+      ], hasDlq:false}
+  };
+  const ORDER = ['orders-to-lake','daily-tx-load','mainframe-offload','crm-sync-incremental','events-archive'];
+  const CONNS=[
+    {name:'warehouse-pg',fam:'db',type:'postgres',status:'g',desc:'jdbc·postgres'},
+    {name:'lake-s3',fam:'obj',type:'s3',status:'g',desc:'objstore·s3'},
+    {name:'events-kafka',fam:'stream',type:'kafka',status:'r',desc:'SASL_SSL · auth failed'}
+  ];
+  const statusColor = {running:'b',completed:'g',partial:'y',failed:'r',idle:'d'};
+  const runResult = {processed:2000000,written:1876300,dropped:119200,routed:4500,failed:0,ms:9900,dq:91};
+
+  // ─────────────── state ───────────────
+  const S = {
+    activity:'dp',
+    sb:{pipes:true,conns:false,hist:false},
+    tabs:[{id:'orders-to-lake',type:'canvas',key:'orders-to-lake'}],
+    active:'orders-to-lake',
+    selNode:'t1',
+    inspTab:'Config',
+    panelTab:'preview',
+    panelCollapsed:false,
+    ran:{}, // pipelineId -> summary
+    lastRunPipe:null,
+    running:false
+  };
+
+  // ─────────────── activity bar ───────────────
+  const ACTS = [
+    {id:'explorer',ic:'▤',t:'Explorer'},
+    {id:'search',ic:'⌕',t:'Search'},
+    {id:'scm',ic:'⑂',t:'Source Control',bdg:'3'},
+    {id:'run',ic:'▷',t:'Run and Debug'},
+    {id:'dp',ic:'◈',t:'Data Pipeline'},
+    {id:'test',ic:'⚗',t:'Testing',bdg:'2',bc:'#cca700'}
+  ];
+  function renderActivity(){
+    const a=$('#activity'); a.innerHTML='';
+    ACTS.forEach(x=>{
+      const b=el('div','abi'+(S.activity===x.id?' on':''),x.ic);
+      b.title=x.t; b.setAttribute('role','button'); b.tabIndex=0;
+      if(x.bdg){const g=el('span','bdg',x.bdg); if(x.bc){g.style.background=x.bc;g.style.color='#000';} b.appendChild(g);}
+      b.onclick=()=>{ S.activity=x.id; renderActivity(); renderSidebar();
+        if(x.id!=='dp'&&x.id!=='test') toast('info','This prototype focuses on the Data Pipeline & Testing views','');
+      };
+      a.appendChild(b);
+    });
+    a.appendChild(el('div','abi grow'));
+    ['◍','⚙'].forEach(ic=>{const b=el('div','abi',ic);b.onclick=()=>toast('info','Accounts / Settings — native VS Code surface','');a.appendChild(b);});
+  }
+
+  // ─────────────── sidebar ───────────────
+  function renderSidebar(){
+    const sb=$('#sidebar');
+    if(S.activity==='test'){ renderTesting(sb); return; }
+    if(S.activity!=='dp'){ sb.innerHTML=''; sb.appendChild(sbHead('Explorer'));
+      const w=el('div','welcome','This prototype centers on the <b>Data Pipeline</b> view. <a data-goto="dp">Open it →</a>');
+      w.querySelector('[data-goto]').onclick=()=>{S.activity='dp';renderActivity();renderSidebar();}; sb.appendChild(w); return; }
+    sb.innerHTML='';
+    sb.appendChild(sbHead('Data Pipeline', [{ic:'⟳',t:'Refresh',fn:()=>toast('ok','Pipelines refreshed','')},{ic:'⋯',t:'More',fn:()=>toast('info','View container menu','')}]));
+    const body=el('div','sbbody');
+    // Pipelines
+    body.appendChild(section('pipes','Pipelines',String(ORDER.length),
+      [{ic:'＋',t:'New pipeline',fn:newFromTemplate},{ic:'⌕',t:'Filter',fn:()=>toast('info','Filter pipelines','')},{ic:'⟳',t:'Refresh',fn:()=>toast('ok','Refreshed','')}],
+      ()=>{ const t=el('div','tree'+(S.sb.pipes?'':' collapsed'));
+        ORDER.forEach(id=>{ const p=PIPES[id]; const ran=S.ran[id];
+          const st=ran?ran.status:p.status;
+          const ti=el('div','ti'+(S.active===id&&tab(id)?' sel':''));
+          ti.innerHTML='<span class="ic" style="color:'+dotHex(st)+'">◈</span><span class="lbl">'+id+'</span><span class="desc">'+p.src+' → '+p.sink+'</span>';
+          const st2=el('span','st','<span class="dot '+statusColor[st]+'"></span>'); ti.appendChild(st2);
+          const inl=el('span','inl'); // <=3 inline actions per VS Code guidance
+          inl.innerHTML='<span title="Run" data-run="'+id+'">▷</span><span title="Run report" data-report="'+id+'">⧉</span><span title="More" data-more="'+id+'">⋯</span>';
+          ti.appendChild(inl);
+          ti.onclick=(e)=>{ if(e.target.closest('[data-run]')){run(id);return;} if(e.target.closest('[data-report]')){openReport(id);return;} if(e.target.closest('[data-more]')){pipeMenu(id,e);return;} openPipe(id); };
+          ti.oncontextmenu=(e)=>pipeMenu(id,e);
+          t.appendChild(ti);
+        });
+        return t; }));
+    // Connections
+    body.appendChild(section('conns','Connections',String(CONNS.length),[{ic:'＋',t:'New connection',fn:createConnection}],
+      ()=>{ const t=el('div','tree'+(S.sb.conns?'':' collapsed'));
+        CONNS.forEach(c=>{
+          const ti=el('div','ti'); ti.innerHTML='<span class="ic">⛁</span><span class="lbl">'+c.name+'</span><span class="desc">'+c.desc+'</span><span class="st"><span class="dot '+c.status+'"></span></span>';
+          ti.onclick=()=> c.status==='r' ? toast('err',c.name+': auth failed — secret rotated? Re-test the connection','') : toast('ok','Connection "'+c.name+'" — tested OK','');
+          ti.oncontextmenu=(e)=>connMenu(c,e);
+          t.appendChild(ti);
+        }); return t; }));
+    // Run history
+    body.appendChild(section('hist','Run History','orders-to-lake',[],
+      ()=>{ const t=el('div','tree'+(S.sb.hist?'':' collapsed'));
+        [['run 8f3a…c1','y','partial · 4.5k DLQ · now'],['run 77de…a0','g','2.0M · 9.9s · 1h'],['run 12bc…9f','g','2.0M · 10.1s · 4h']].forEach(r=>{
+          const ti=el('div','ti'); ti.innerHTML='<span class="ic" style="color:'+dotHex2(r[1])+'">'+(r[1]==='g'?'✓':'◐')+'</span><span class="lbl">'+r[0]+'</span><span class="desc">'+r[2]+'</span>';
+          ti.onclick=()=>openReport('orders-to-lake'); ti.oncontextmenu=(e)=>histMenu('orders-to-lake',e); t.appendChild(ti);
+        }); return t; }));
+    sb.appendChild(body);
+  }
+  function renderTesting(sb){
+    sb.innerHTML=''; sb.appendChild(sbHead('Testing',[{ic:'▷',t:'Run all DQ',fn:()=>{openPipe('orders-to-lake');setPanel('dq');toast('ok','Ran 22 DQ expectations — 20 passed, 2 failed','');}}]));
+    const body=el('div','sbbody');
+    body.appendChild(section('dqtests','Data Quality · orders-to-lake','22',[{ic:'▷',t:'Run',fn:()=>{setPanel('dq');toast('ok','DQ suite run','');}}],
+      ()=>{ const t=el('div','tree');
+        [['expectColumnNotNull · unit_price','g'],['expectValuesInSet · region','r'],['expectValuesBetween · net_amount','y'],['expectColumnUnique · order_id','g']].forEach(x=>{
+          const ti=el('div','ti'); ti.innerHTML='<span class="ic" style="color:'+dotHex2(x[1])+'">'+(x[1]==='g'?'✓':x[1]==='r'?'✕':'◐')+'</span><span class="lbl">'+x[0]+'</span>';
+          ti.onclick=()=>{openPipe('orders-to-lake');setPanel('dq');}; t.appendChild(ti);
+        }); return t;}));
+    sb.appendChild(body);
+    body.insertBefore(el('div','welcome','Each DQ expectation is a <b>test</b> — reuses the flogo-3x unit-test rig &amp; the native Testing view.'),body.firstChild);
+  }
+  function sbHead(title,acts){ const h=el('div','sbhead',title);
+    const a=el('span','acts'); (acts||[]).forEach(x=>{const s=el('span',null,x.ic);s.title=x.t;s.onclick=x.fn;a.appendChild(s);}); h.appendChild(a); return h; }
+  function section(key,title,cnt,acts,bodyFn){
+    const wrap=el('div','section');
+    const h=el('div','sxhead');
+    h.innerHTML='<span class="tw">'+(S.sb[key]?'▾':'▸')+'</span>'+title+(cnt?'<span class="cnt">'+cnt+'</span>':'');
+    const a=el('span','acts'); (acts||[]).forEach(x=>{const s=el('span',null,x.ic);s.title=x.t;s.onclick=(e)=>{e.stopPropagation();x.fn();};a.appendChild(s);}); h.appendChild(a);
+    h.onclick=()=>{ S.sb[key]=!S.sb[key]; renderSidebar(); };
+    wrap.appendChild(h); wrap.appendChild(bodyFn()); return wrap;
+  }
+  function dotHex(st){return ({running:'#4daafc',completed:'#89d185',partial:'#cca700',failed:'#f14c4c',idle:'#6e7681'})[st]||'#6e7681';}
+  function dotHex2(c){return ({g:'#89d185',r:'#f14c4c',y:'#cca700',b:'#4daafc',d:'#6e7681'})[c]||'#6e7681';}
+
+  // ─────────────── tabs & editor ───────────────
+  function keyOf(id,type){ return type==='canvas'? id : type+':'+id; }
+  function tab(key){ return S.tabs.find(t=>t.key===key); }
+  function renderTabs(){
+    const bar=$('#tabsbar'); bar.innerHTML='';
+    S.tabs.forEach(t=>{
+      const meta=tabMeta(t);
+      const d=el('div','tab'+(S.active===t.key?' on':''));
+      d.innerHTML='<span class="ic">'+meta.ic+'</span>'+meta.label+' <span class="x" title="Close">✕</span>';
+      d.onclick=(e)=>{ if(e.target.classList.contains('x')){ closeTab(t.key); return;} S.active=t.key; renderAll(); };
+      bar.appendChild(d);
+    });
+    const acts=el('div','egacts');
+    if(cur()&&cur().type==='canvas'){
+      const kafka = PIPES[cur().id] && PIPES[cur().id].nodes[0].type==='kafka';
+      acts.innerHTML='<button class="btn sm" data-a="preview">⌕ Dry-run Preview</button>'+(kafka?'<button class="btn sm" data-a="tail">≋ Live Tail</button>':'')+'<button class="btn sm pri" data-a="run">▷ Run</button>';
+      acts.querySelector('[data-a="preview"]').onclick=()=>preview(S.active);
+      const tlb=acts.querySelector('[data-a="tail"]'); if(tlb) tlb.onclick=()=>openTail(S.active);
+      acts.querySelector('[data-a="run"]').onclick=()=>run(S.active);
+    }
+    bar.appendChild(acts);
+  }
+  function tabMeta(t){
+    if(t.type==='canvas') return {ic:'◈',label:t.id+'.datapipeline'};
+    if(t.type==='report') return {ic:'⧉',label:'Run Report · '+t.id};
+    if(t.type==='fleet') return {ic:'▤',label:'Fleet Dashboard'};
+    if(t.type==='dlq') return {ic:'⚠',label:'DLQ · '+t.id};
+    if(t.type==='conn') return {ic:'⛁',label:'New Connection · '+t.id};
+    if(t.type==='diff') return {ic:'⇄',label:'Run Diff · '+t.id};
+    if(t.type==='tail') return {ic:'≋',label:'Live Tail · '+t.id};
+    if(t.type==='drift') return {ic:'≠',label:'Schema Drift · '+t.id};
+    if(t.type==='walk') return {ic:'✦',label:'Get Started'};
+    return {ic:'◇',label:t.id};
+  }
+  function cur(){ return S.tabs.find(t=>t.key===S.active); }
+  function openPipe(id){ const k=id; if(!tab(k)) S.tabs.push({id,type:'canvas',key:k}); S.active=k; S.selNode = PIPES[id]?(PIPES[id].nodes.find(n=>n.type==='map')||PIPES[id].nodes[1]||PIPES[id].nodes[0]).id : null; renderAll(); }
+  function openTab(id,type){ const k=keyOf(id,type); if(!tab(k)) S.tabs.push({id,type,key:k}); S.active=k; renderAll(); }
+  function closeTab(key){ const i=S.tabs.findIndex(t=>t.key===key); if(i<0)return; S.tabs.splice(i,1); if(S.active===key){ S.active=S.tabs.length?S.tabs[Math.max(0,i-1)].key:null; } renderAll(); }
+
+  function renderEditor(){
+    const m=$('#edmain'), bc=$('#breadcrumb'); m.innerHTML='';
+    if(S.tailTimer){ clearInterval(S.tailTimer); S.tailTimer=null; }
+    const t=cur();
+    if(!t){ bc.innerHTML=''; m.appendChild(el('div','canvas','<div style="max-width:460px;margin:40px auto;text-align:center;color:var(--mute)"><div style="font-size:34px;color:var(--dim)">◈</div><div style="font-weight:600;color:var(--text);margin-top:8px;font-size:14px">No editor open</div><div style="margin-top:6px">Open a pipeline from the <a style="color:var(--blueHi);cursor:pointer" id="wOpen">Data Pipelines</a> view, or <a style="color:var(--blueHi);cursor:pointer" id="wNew">create one from a template</a>.</div><div style="margin-top:12px"><a style="color:var(--blueHi);cursor:pointer" id="wWalk">✦ Get Started with Data Pipelines</a></div></div>'));
+      const wo=$('#wOpen'); if(wo)wo.onclick=()=>{S.activity="dp";renderActivity();renderSidebar();}; const wn=$('#wNew'); if(wn)wn.onclick=newFromTemplate; const ww=$('#wWalk'); if(ww)ww.onclick=openWalkthrough; $('#winTitle').textContent='flogo-datapipeline'; return; }
+    // breadcrumb
+    if(t.type==='canvas'){ const p=PIPES[t.id]; const sn=p.nodes.find(n=>n.id===S.selNode)||p.nodes[0];
+      bc.innerHTML='◈ '+t.id+' <span class="sep">›</span> '+(sn?sn.type+': '+sn.nm:'')+' <span class="sep">›</span> <span class="chip plain" style="padding:1px 7px">'+p.mode+'</span>';
+      $('#winTitle').textContent=t.id+'.datapipeline — flogo-datapipeline';
+      renderCanvas(m,t.id);
+    } else { bc.innerHTML=tabMeta(t).label; $('#winTitle').textContent=tabMeta(t).label+' — flogo-datapipeline';
+      const c=el('div','edcontent'); m.appendChild(c);
+      c.appendChild(el('div','wvnote','<span class="d"></span>Webview editor · rendered from the running engine · <code style="color:var(--orange)">GET /v1/...</code>'));
+      const wv=el('div','wv'); c.appendChild(wv);
+      if(t.type==='report') renderReport(wv,t.id);
+      else if(t.type==='fleet') renderFleet(wv);
+      else if(t.type==='dlq') renderDLQ(wv,t.id);
+      else if(t.type==='conn') renderConnEditor(wv,t.id);
+      else if(t.type==='diff') renderRunDiff(wv,t.id);
+      else if(t.type==='tail') renderLiveTail(wv,t.id);
+      else if(t.type==='drift') renderDrift(wv,t.id);
+      else if(t.type==='walk') renderWalkthrough(wv);
+    }
+  }
+
+  function renderCanvas(m,id){
+    const p=PIPES[id]; const ran=S.ran[id];
+    const c=el('div','edcontent'); const cv=el('div','canvas'); c.appendChild(cv);
+    const lin = (S.lineage && S.lineage.id===id) ? S.lineage : null;
+    if(lin){ const lb=el('div','lin-banner'); lb.innerHTML='<span style="color:var(--blueHi)">⧉</span><div>Lineage · <b>'+lin.col+'</b>  <span class="path">'+lin.path+'</span></div><span class="x" title="Clear">✕ clear</span>'; lb.querySelector('.x').onclick=()=>{ S.lineage=null; renderEditor(); }; cv.appendChild(lb); }
+    const vols=edgeVols(id);
+    const row=el('div','flowrow'); row.setAttribute('role','list'); row.setAttribute('aria-label','Pipeline '+id+', '+p.nodes.length+' stages: '+p.nodes.map(n=>n.type).join(', '));
+    p.nodes.forEach((n,i)=>{
+      if(i>0){ const cn=el('div','conn'+(ran?' live':' est')); const at=i; cn.setAttribute('aria-hidden','true');
+        const v=vols[i-1]; const badge=el('div','vol'); badge.innerHTML='<span>'+(ran?'':'~')+fmtK(v.rows)+'</span>'+(v.delta<0?'<span class="dn">−'+fmtK(-v.delta)+'</span>':''); cn.appendChild(badge);
+        const ins=el('div','ins','＋'); ins.title='Insert transform here'; ins.onclick=(e)=>{e.stopPropagation();addTransform(id,at);}; cn.appendChild(ins); cn.onclick=()=>addTransform(id,at); row.appendChild(cn); }
+      const w = [92,94,94,89,89][i]||90;
+      const litC = lin? (lin.nodes.indexOf(n.id)>=0?' lit':' dimmed') : '';
+      const nd=el('div','node '+(n.kind==='source'?'src':n.kind==='sink'?'sink':'')+(ran?' ran':'')+(S.selNode===n.id?' sel':'')+litC);
+      nd.style.setProperty('--w',w+'%');
+      nd.innerHTML='<div class="kind">'+n.kind+'</div><div class="nm">'+n.nm+'</div><div class="meta">'+n.meta+'</div><div class="thru"><i></i></div>';
+      nd.setAttribute('role','button'); nd.tabIndex=0; nd.setAttribute('aria-pressed',S.selNode===n.id?'true':'false');
+      nd.setAttribute('aria-label',n.kind+' stage: '+n.nm+', '+n.meta+(ran?', throughput '+fmtK(vols[i].rows)+' rows':''));
+      const sel=()=>{ S.selNode=n.id; S.inspTab='Config'; renderEditor(); };
+      nd.onclick=sel;
+      nd.oncontextmenu=(e)=>nodeMenu(id,n,i,e);
+      nd.onkeydown=(e)=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); sel(); } else if(e.key==='ArrowRight'||e.key==='ArrowLeft'){ e.preventDefault(); const list=[...row.querySelectorAll('.node')]; const idx=list.indexOf(nd); const nx=list[idx+(e.key==='ArrowRight'?1:-1)]; if(nx)nx.focus(); } };
+      row.appendChild(nd);
+    });
+    row.appendChild(el('div','conn')); const add=el('div','addnode','＋'); add.title='Add transform (appends before the sink)'; add.onclick=()=>addTransform(id, p.nodes.length-1); row.appendChild(add);
+    cv.appendChild(row);
+    if(p.hasDlq){ const br=el('div','branch'); br.innerHTML='<div class="down"></div>'; const dn=el('div','node dlq');dn.style.width='150px';
+      dn.innerHTML='<div class="kind">DLQ Sink</div><div class="nm">rejects</div><div class="meta">jdbc·pg · orders_dlq</div>'; dn.onclick=()=>openDLQ(id); br.appendChild(dn); cv.appendChild(br); }
+    const kafka0 = p.nodes[0].type==='kafka';
+    const hint=el('div','canvas-hint pillrow'); hint.innerHTML='<span class="pill" data-h="src">＋ Source</span><span class="pill" data-h="tf">＋ Transform</span><span class="pill" data-h="sink">＋ Sink</span>'+(kafka0?'<span class="pill" data-h="tail">≋ Live Tail</span>':'')+'<span class="pill">⤢ Fit</span><span class="pill">100%</span>';
+    hint.querySelectorAll('[data-h]').forEach(x=>{ const h=x.getAttribute('data-h');
+      x.onclick=()=>{ if(h==='tf'){ addTransform(id, p.nodes.length-1); }
+        else if(h==='tail'){ openTail(id); }
+        else if(h==='src'){ quickPick('Change source type',['csv','tsv','fixedwidth','parquet','xml','jsonlines','jdbc','kafka','objstore'],v=>{ p.nodes[0].type=v; p.nodes[0].nm=v; renderEditor(); toast('ok','Source type → '+v,''); }); }
+        else { quickPick('Change sink type',['jdbc','parquet','kafka','objstore','null'],v=>{ const sk=p.nodes.find(n=>n.kind==='sink'); if(sk){sk.type=v;sk.nm=v;} renderEditor(); toast('ok','Sink type → '+v,''); }); } };
+    });
+    cv.appendChild(hint);
+    m.appendChild(c);
+    // inspector
+    const insp=el('div','inspector'); const sn=p.nodes.find(n=>n.id===S.selNode)||p.nodes[0];
+    insp.appendChild(el('div','ih','Inspector — '+(sn?sn.type:'')));
+    const ib=el('div','ib');
+    const tabs=el('div','tabs'); ['Config','Schema','Test'].forEach(tn=>{const s=el('span',(S.inspTab===tn?'on':''),tn);s.onclick=()=>{S.inspTab=tn;renderEditor();};tabs.appendChild(s);}); ib.appendChild(tabs);
+    if(S.inspTab==='Config'){
+      const cfam=famOfType(sn.type);
+      if((sn.kind==='source'||sn.kind==='sink')&&cfam){ const cf=el('div','fld'); cf.innerHTML='<div class="k">Connection</div>'; const pick=el('div','v'); pick.style.cursor='pointer'; const match=CONNS.find(x=>x.fam===cfam); pick.innerHTML='<span>'+(match?match.name:'— select —')+'</span><span style="float:right;color:var(--dim)">▾</span>'; pick.onclick=()=>{ const opts=CONNS.filter(x=>x.fam===cfam).map(x=>x.name).concat(['＋ New connection…']); quickPick('Connection for '+sn.type,opts,v=>{ if(v.indexOf('New connection')>=0){createConnection();return;} toast('ok','Bound '+sn.type+' → connection "'+v+'"',''); }); }; cf.appendChild(pick); ib.appendChild(cf); }
+      Object.entries(sn.cfg||{}).forEach(([k,v])=>{ const f=el('div','fld'); f.innerHTML='<div class="k">'+k+'</div>'; const inp=el('input','v'); inp.value=v; inp.onchange=()=>toast('ok','Updated '+sn.type+'.'+k+' → saved to .datapipeline (Git-friendly)',''); f.appendChild(inp); ib.appendChild(f); });
+      if(sn.type==='map'){ ib.appendChild(el('div','between','<span class="muted" style="font-size:11px">40+ functions</span><span class="btn sm">ƒ library</span>'));
+        ib.appendChild(el('div','pillrow','<span class="pill">multiply</span><span class="pill">upper</span><span class="pill">divide</span><span class="pill">coerce</span>')); }
+    } else if(S.inspTab==='Schema'){ ib.appendChild(el('div',null,'<div class="muted" style="font-size:12px;padding:6px 0">Inferred schema for <b style="color:var(--text)">'+sn.nm+'</b> — <span style="color:var(--blueHi)">click a column to trace lineage</span>:</div>'));
+      const cols={order_id:'string',quantity:'int',unit_price:'float',net_amount:'float',region:'string'}; const pr=el('div','pillrow');
+      Object.entries(cols).forEach(([k,ty])=>{ const s=el('span','pill colpill'+((S.lineage&&S.lineage.col===k&&S.lineage.id===id)?' on':''),k+':'+ty); s.onclick=()=>traceLineage(id,k); pr.appendChild(s); });
+      ib.appendChild(pr);
+      if(S.lineage&&S.lineage.id===id){ ib.appendChild(el('div','muted','<div style="font-size:11.5px;margin-top:10px;border-top:1px solid var(--border);padding-top:10px"><b style="color:var(--text)">'+S.lineage.col+'</b> is highlighted across the canvas:<br><span style="color:var(--blueHi);font-family:var(--mono)">'+S.lineage.path+'</span></div>')); } }
+    else { const b=el('button','btn sm pri','▷ Test this stage on sample'); b.onclick=()=>{preview(id);toast('ok','Ran '+sn.type+' on 1,000 sampled rows → see Data Preview','');}; ib.appendChild(b); ib.appendChild(el('div','muted','<div style="font-size:11.5px;margin-top:10px">Runs just this stage against a live sample.</div>')); }
+    insp.appendChild(ib); m.appendChild(insp);
+  }
+
+  function renderReport(wv,id){
+    const r=S.ran[id]||runResult; const dq=r.dq!=null?r.dq:(PIPES[id].dq||100);
+    wv.innerHTML='';
+    const cards=el('div','cards'); cards.style.marginBottom='16px';
+    cards.innerHTML=''+
+      '<div class="card"><div class="cap">Processed</div><div class="kpi">'+fmt(r.processed)+'</div><div class="sub">read from source</div></div>'+
+      '<div class="card"><div class="cap">Written</div><div class="kpi" style="color:var(--green)">'+fmt(r.written)+'</div><div class="sub">'+((r.written/r.processed*100).toFixed(1))+'% to sink</div></div>'+
+      '<div class="card"><div class="cap">Duration</div><div class="kpi">'+(r.ms/1000).toFixed(1)+'s</div><div class="sub">~'+Math.round(r.processed/(r.ms/1000)/1000)+'k rows/s</div></div>'+
+      '<div class="card"><div class="cap">DQ score</div><div class="kpi" style="color:'+(dq>=95?'var(--green)':'var(--yellow)')+'">'+dq+'%</div><div class="sub">click to open Testing</div></div>';
+    wv.appendChild(cards);
+    cards.lastChild.style.cursor='pointer'; cards.lastChild.onclick=()=>{S.activity='test';renderActivity();renderSidebar();setPanel('dq');};
+    wv.appendChild(el('h3','sec','Row funnel <span class="muted" style="font-weight:400;font-size:12px">— click a segment to inspect those rows</span>'));
+    const fn=el('div','funnel'); fn.setAttribute('role','img'); fn.setAttribute('aria-label',narrateFunnel(r));
+    const stages=[['',fmt(r.processed),'Read',100],['loss',fmt(r.dropped),'Dropped',7],['route',fmt(r.routed),'→ DLQ',5],['err',fmt(r.failed),'Failed',1],['win',fmt(r.written),'Written',94]];
+    stages.forEach((s,i)=>{ const st=el('div','fstage '+s[0]); st.innerHTML='<div class="bar"><i></i></div><div class="n">'+s[1]+'</div><div class="l">'+s[2]+'</div>';
+      st.onclick=()=>{ if(s[0]==='route'){openDLQ(id);} else if(s[0]==='win'){toast('ok',fmt(r.written)+' rows written to the sink','');} else {toast('info',s[2]+': '+s[1]+' rows','');} };
+      fn.appendChild(st); setTimeout(()=>{st.querySelector('i').style.height=(s[0]==='loss'||s[0]==='route'||s[0]==='err'?Math.max(2,s[3]):s[3])+'%';},60+i*80); });
+    wv.appendChild(fn);
+    wv.appendChild(el('div','sr-only',narrateFunnel(r)));
+    const lossLine=el('div',null,'<span class="explain">✨ Explain the '+fmtK(r.dropped+r.routed)+' losses &amp; suggest a fix</span>'); lossLine.style.cssText='margin-top:9px;font-size:12px'; lossLine.querySelector('.explain').onclick=()=>aiExplain('dlq',id); wv.appendChild(lossLine);
+    const rowx=el('div','row'); rowx.style.marginTop='18px';
+    rowx.innerHTML='<div style="flex:1.4"><h3 class="sec">Throughput</h3><div class="spark">'+[20,55,82,88,79,90,84,60,73,86,80,44].map(h=>'<i class="'+(h>75?'hi':'')+'" style="height:'+h+'%"></i>').join('')+'</div></div>'+
+      '<div style="flex:1"><h3 class="sec">Per-stage</h3><table class="grid"><thead><tr><th>Stage</th><th>In</th><th>Out</th><th>ms</th></tr></thead><tbody>'+
+      '<tr><td>csv source</td><td>—</td><td>2.00M</td><td>3,910</td></tr><tr><td>filter</td><td>2.00M</td><td>1.88M</td><td>610</td></tr><tr><td>map</td><td>1.88M</td><td>1.88M</td><td>840</td></tr><tr><td>validate</td><td>1.88M</td><td>1.876M</td><td>520</td></tr><tr><td>parquet sink</td><td>1.876M</td><td>1.876M</td><td>3,020</td></tr></tbody></table></div>';
+    wv.appendChild(rowx);
+    const cmp=el('button','btn sm','⇄ Compare with previous run'); cmp.style.marginTop='16px'; cmp.onclick=()=>openDiff(id); wv.appendChild(cmp);
+  }
+  function renderFleet(wv){
+    wv.innerHTML='';
+    const cards=el('div','cards');cards.style.marginBottom='14px';
+    cards.innerHTML='<div class="card"><div class="cap">Pipelines</div><div class="kpi">5</div><div class="sub">3 healthy · 1 idle</div></div><div class="card"><div class="cap">Running</div><div class="kpi" style="color:var(--blueHi)">1</div><div class="sub">~248k rows/s</div></div><div class="card"><div class="cap">Attention</div><div class="kpi" style="color:var(--red)">2</div><div class="sub">1 failed · 1 partial</div></div><div class="card"><div class="cap">Rows / 24h</div><div class="kpi">1.24B</div><div class="sub">DLQ 0.03%</div></div>';
+    wv.appendChild(cards);
+    wv.appendChild(el('div','between','<div class="pillrow"><span class="chip plain">All 5</span><span class="chip run">Running 1</span><span class="chip err">Failed 1</span><span class="chip warn">Partial 1</span></div>')).style.marginBottom='8px';
+    const tb=el('table','grid'); tb.innerHTML='<thead><tr><th>Pipeline</th><th>Source → Sink</th><th>Status</th><th>Throughput</th><th>DQ</th></tr></thead>';
+    const body=el('tbody');
+    ORDER.forEach(id=>{const p=PIPES[id];const st=S.ran[id]?S.ran[id].status:p.status;
+      const tr=el('tr','click'); tr.innerHTML='<td><b style="color:var(--text)">'+id+'</b></td><td><span class="pill">'+p.src+'</span> → <span class="pill">'+p.sink+'</span></td><td><span class="chip '+({running:'run',completed:'ok',partial:'warn',failed:'err',idle:'idle'})[st]+'">'+st+'</span></td><td><div class="barmini"><i class="'+(st==='failed'?'r':st==='partial'?'a':st==='completed'?'g':'')+'" style="width:'+(st==='idle'?0:st==='failed'?34:70)+'%"></i></div></td><td>'+(p.dq!=null?'<span class="chip '+(p.dq>=95?'ok':'warn')+'">'+p.dq+'%</span>':'<span class="chip idle">—</span>')+'</td>';
+      tr.onclick=()=>openPipe(id); body.appendChild(tr);
+    });
+    tb.appendChild(body); wv.appendChild(tb);
+    wv.appendChild(el('div','muted','<div style="margin-top:12px;font-size:11.5px">Double-click a row → opens that pipeline\'s canvas.</div>'));
+  }
+  function renderDLQ(wv,id){
+    wv.innerHTML='';
+    wv.appendChild(el('div','between','<h3 class="sec" style="margin:0">Dead-letter · '+id+'</h3><div class="pillrow"><span class="chip err">not-null 3,910</span><span class="chip warn">enum 512</span><span class="chip warn">pattern 78</span></div>'));
+    const pv=el('div','pv');pv.style.marginTop='10px';
+    pv.innerHTML='<div class="pvtop"><span><b style="color:var(--text)">orders_dlq</b> · 4 of 4,500 rejected</span><span class="muted">select rows → requeue</span></div><table><thead><tr><th>☐</th><th>order_id</th><th>region</th><th>unit_price</th><th>reason</th></tr></thead><tbody>'+
+      '<tr><td>☐</td><td>ORD-100485</td><td>emea</td><td class="del">null</td><td class="chg">unit_price notNull</td></tr>'+
+      '<tr><td>☐</td><td>ORD-100931</td><td class="del">EU</td><td>19.99</td><td class="chg">region ∉ set</td></tr>'+
+      '<tr><td>☐</td><td>ORD-101044</td><td class="del">EMEA1</td><td>5.00</td><td class="chg">region ∉ set</td></tr>'+
+      '<tr><td>☐</td><td>ORD-101120</td><td>apac</td><td class="del">-3.00</td><td class="chg">value &lt; min</td></tr></tbody></table>';
+    wv.appendChild(pv);
+    const acts=el('div','row'); acts.style.marginTop='12px';
+    const b=el('button','btn pri','↻ Fix & replay selected'); b.onclick=()=>toast('ok','Selected rows re-injected through the pipeline','');
+    const ax=el('button','btn','✨ Explain & suggest a fix'); ax.onclick=()=>aiExplain('dlq',id);
+    acts.appendChild(b); acts.appendChild(ax); wv.appendChild(acts);
+  }
+  function openReport(id){ if(!S.ran[id]) S.ran[id]={...runResult,status:PIPES[id].status,dq:PIPES[id].dq}; openTab(id,'report'); }
+  function openDLQ(id){ openTab(id,'dlq'); }
+  function openFleet(){ openTab('fleet','fleet'); }
+
+  // ─────────────── bottom panel ───────────────
+  const PANELS=[{id:'problems',t:'Problems',cnt:2,err:true},{id:'output',t:'Output'},{id:'preview',t:'Data Preview'},{id:'dq',t:'DQ Report'},{id:'terminal',t:'Terminal'}];
+  function setPanel(id){ S.panelTab=id; S.panelCollapsed=false; renderPanel(); }
+  function renderPanel(){
+    const tabs=$('#paneltabs'), body=$('#panelbody'), panel=$('#panel');
+    panel.classList.toggle('collapsed',S.panelCollapsed);
+    tabs.innerHTML='';
+    PANELS.forEach(p=>{ const s=el('div','pt'+(p.err?' err':'')+(S.panelTab===p.id?' on':''),p.t+(p.cnt?' <span class="cnt">'+p.cnt+'</span>':''));
+      s.onclick=()=>setPanel(p.id); tabs.appendChild(s); });
+    const acts=el('div','pacts'); acts.innerHTML='<span title="Clear">⌫</span><span title="'+(S.panelCollapsed?'Expand':'Collapse')+'">'+(S.panelCollapsed?'▴':'▾')+'</span>';
+    acts.lastChild.onclick=()=>{S.panelCollapsed=!S.panelCollapsed;renderPanel();};
+    acts.firstChild.onclick=()=>{ if(S.panelTab==='output'){outputLines=[];} renderPanel(); };
+    tabs.appendChild(acts);
+    if(S.panelCollapsed){ body.innerHTML=''; return; }
+    body.innerHTML=''; body.className='panelbody';
+    if(S.panelTab==='problems') renderProblems(body);
+    else if(S.panelTab==='output') renderOutput(body);
+    else if(S.panelTab==='preview') renderPreview(body);
+    else if(S.panelTab==='dq') renderDQ(body);
+    else renderTerminal(body);
+  }
+  function renderProblems(b){ b.style.fontFamily='var(--sans)';
+    const items=[['err','⊗','validate: field <b style="color:var(--text)">unit_price</b> — notNull rule routes rows to DLQ','transform[3] validate · Ln 48','flogo-dp'],
+      ['warn','⚠','map: expression on <b style="color:var(--text)">unit_price</b> may yield null — coercion emits null &amp; warns','transform[2] map · Ln 39','flogo-dp'],
+      ['warn','⚠','parquet sink: all columns written as string — net_amount (float) stringified','sink parquet · Ln 61','flogo-dp']];
+    items.forEach(x=>{ const p=el('div','prob','<span class="i '+x[0]+'">'+x[1]+'</span><div><div class="msg">'+x[2]+'</div><div class="loc">'+x[3]+'</div></div><span class="src">'+x[4]+' <span class="explain" title="Explain with Copilot">✨</span></span>');
+      p.querySelector('.explain').onclick=(e)=>{e.stopPropagation();aiExplain(x[2].indexOf('stringified')>=0?'stringified':'dlq','orders-to-lake');};
+      p.onclick=()=>{ openPipe('orders-to-lake'); toast('info','Navigated to '+x[3]+' (would reveal in canvas + text)',''); }; b.appendChild(p); });
+    const drift=el('div','prob','<span class="i warn">≠</span><div><div class="msg">schema drift: incoming batch adds <b style="color:var(--text)">loyalty_tier</b>, changes <b style="color:var(--text)">zip</b> int→string</div><div class="loc">sink parquet · contract</div></div><span class="src explain" title="Review drift">≠ review</span>');
+    drift.onclick=()=>openDrift('orders-to-lake'); b.appendChild(drift);
+  }
+  let outputLines=[];
+  function renderOutput(b){ b.className='panelbody log';
+    if(!outputLines.length){ b.innerHTML='<div class="muted">No run yet. Click <b style="color:var(--text)">▷ Run</b> on a pipeline.</div>'; return; }
+    b.innerHTML=outputLines.map(l=>'<div class="ln">'+l+'</div>').join('');
+    b.scrollTop=b.scrollHeight;
+  }
+  function renderPreview(b){ b.style.fontFamily='var(--sans)';
+    if(!S.previewOn){ b.innerHTML='<div class="muted">Click <b style="color:var(--text)">⌕ Dry-run Preview</b> (editor toolbar) or a stage\'s <b style="color:var(--text)">Test</b> — sample rows appear here.</div>'; return; }
+    const pv=el('div','pv'); pv.innerHTML='<div class="pvtop"><span><b style="color:var(--text)">Live preview</b> · 5/1000 sampled · after “map: net_amount”</span><span class="muted">before ↔ after</span></div><table><thead><tr><th>order_id</th><th>qty</th><th>unit_price</th><th>net_amount</th><th>region</th><th>status</th></tr></thead><tbody>'+
+      '<tr><td>ORD-100482</td><td>3</td><td>19.99</td><td class="add">59.97</td><td>emea</td><td>PAID</td></tr>'+
+      '<tr><td>ORD-100484</td><td>10</td><td>4.50</td><td class="add">45.00</td><td>apac</td><td>PAID</td></tr>'+
+      '<tr><td>ORD-100485</td><td>2</td><td class="del">null</td><td class="chg">null ⚠</td><td>emea</td><td>PAID</td></tr>'+
+      '<tr><td>ORD-100486</td><td>5</td><td>12.00</td><td class="add">60.00</td><td>amer</td><td>PAID</td></tr></tbody></table>'; b.appendChild(pv);
+  }
+  function renderDQ(b){ b.style.fontFamily='var(--sans)';
+    b.appendChild(el('div','between','<span style="color:var(--text);font-weight:600">Quality — 22 expectations</span><span class="chip warn">91% · 2 failed</span>'));
+    [['ok','✓','expectColumnNotNull · <span class="muted">unit_price</span>','99.8%'],['err','✕','expectValuesInSet · <span class="muted">region ∈ {emea,amer,apac}</span> — 512 → DLQ','88%'],['warn','⚠','expectValuesBetween · <span class="muted">net_amount 0–100k</span>','94%'],['ok','✓','expectColumnUnique · <span class="muted">order_id</span>','100%']].forEach(x=>{
+      const p=el('div','prob','<span class="i '+x[0]+'">'+x[1]+'</span><div><div class="msg">'+x[2]+'</div></div><span class="src">'+x[3]+'</span>'); p.onclick=()=>{S.activity='test';renderActivity();renderSidebar();}; b.appendChild(p);
+    });
+    b.appendChild(el('div','muted','<div style="margin-top:10px;font-size:11.5px;border-top:1px solid var(--border);padding-top:10px">Also in the <b style="color:var(--text)">Testing</b> view — each expectation is a test.</div>'));
+  }
+  function renderTerminal(b){ b.className='panelbody log'; b.innerHTML='<div class="ln"><span class="ok">➜</span> flogo-datapipeline <span class="b">git:(</span>feature/datapipeline-studio-ux<span class="b">)</span> $ <span style="opacity:.6">flogo-datapipeline -f orders-to-lake.datapipeline -v</span></div>'; }
+
+  // ─────────────── run / preview ───────────────
+  function run(id){
+    if(S.running) return;
+    openPipe(id); S.running=true; S.lastRunPipe=id;
+    const name=id; setPanel('output'); outputLines=[]; renderStatus();
+    const t=progressToast(name);
+    const seq=[
+      ['<span class="t">04:12:01.2</span> <span class="b">[run 8f3a…c1]</span> starting '+name+' · mode='+PIPES[id].mode,8],
+      ['<span class="t">04:12:01.3</span> source '+PIPES[id].src+' · 2,000,000 rows · batch=5000',24],
+      ['<span class="t">04:12:04.9</span> filter · <span class="w">119,200 dropped</span>',55],
+      ['<span class="t">04:12:06.4</span> validate · <span class="w">4,500 routed → DLQ</span>',78],
+      ['<span class="t">04:12:10.8</span> sink '+PIPES[id].sink+' · s3://acme-datalake/orders/dt=2026-07-10',94],
+      ['<span class="ok">✓ completed</span> · processed=2,000,000 written=<span class="ok">1,876,300</span> dropped=119,200 routed=4,500 failed=0 · 9.9s · 202k/s',100]
+    ];
+    let i=0;
+    const step=()=>{
+      if(i>=seq.length){ finishRun(id,name,t); return; }
+      outputLines.push(seq[i][0]); if(S.panelTab==='output') renderOutput($('#panelbody'));
+      t.setProgress(seq[i][1]); i++; setTimeout(step, 380);
+    };
+    step();
+  }
+  function finishRun(id,name,t){
+    S.running=false;
+    S.ran[id]={...runResult,status:'partial',dq:PIPES[id].dq};
+    t.close();
+    renderSidebar(); renderStatus(); renderEditor();
+    const tt=toast('ok','<b style="color:var(--text)">Run completed</b> — '+name+'<br><span class="muted">1,876,300 written (93.8%) · 4,500 → DLQ · 9.9s</span>',[
+      {label:'Open Report',pri:true,fn:()=>openReport(id)},{label:'Open DLQ',fn:()=>openDLQ(id)}
+    ]);
+    if(id==='orders-to-lake'){ setTimeout(()=>toast('warn','<b style="color:var(--text)">Schema drift detected</b> in the last batch<br><span class="muted">+loyalty_tier · zip int→string</span>',[{label:'Review drift',pri:true,fn:()=>openDrift(id)},{label:'Dismiss',fn:()=>{}}]),1000); }
+  }
+  function preview(id){ openPipe(id); S.previewOn=true; setPanel('preview'); toast('info','Sampled 1,000 rows through the chain — the null-price edge case is flagged',''); }
+
+  // ─────────────── status bar ───────────────
+  function renderStatus(){
+    const sb=$('#statusbar'); sb.innerHTML='';
+    const left=[['⑂ main',()=>toast('info','Source Control — pipelines are files, so diff/blame/PR are native','')],
+      ['<span style="color:var(--red)">⊗ 2</span> <span style="color:var(--yellow)">⚠ 5</span>',()=>setPanel('problems')],
+      ['◈ engine: connected :8888',()=>toast('ok','Engine reachable · GET /v1/health → {status:ok}','')]];
+    left.forEach(x=>{const d=el('div','sbi',x[0]);d.onclick=x[1];sb.appendChild(d);});
+    sb.appendChild(el('div','grow'));
+    const runItem=el('div','sbi run', S.running? '$(sync) '+(S.lastRunPipe||'')+' · running…' : '▷ Run  ⇧⌘R');
+    runItem.innerHTML = S.running? '⟳ '+(S.lastRunPipe||'')+' · running…' : '▷ Run  ⇧⌘R';
+    runItem.onclick=()=> S.running? setPanel('output') : run(S.active||'orders-to-lake');
+    sb.appendChild(runItem);
+    const right=[['DQ 91%',()=>{S.activity='test';renderActivity();renderSidebar();setPanel('dq');}],['Data Pipeline',()=>openPalette()],['UTF-8',()=>{}],['⚙',()=>toast('info','Settings: flogo3.datapipeline.binaryPath / engineAddr','')]];
+    right.forEach(x=>{const d=el('div','sbi',x[0]);d.onclick=x[1];sb.appendChild(d);});
+  }
+
+  // ─────────────── command palette ───────────────
+  // ─── add-transform + create-connection ───
+  const TRANSFORMS=[
+    {type:'filter',label:'Filter — drop rows by a boolean expression',meta:'expr',cfg:{Expression:"amount > 0 AND status != 'CANCELLED'"}},
+    {type:'map',label:'Map — project, rename, coerce & derive fields',meta:'derive',cfg:{'Output field':'new_field',Expression:'=upper(=$region)',Type:'string'}},
+    {type:'validate',label:'Validate — per-field rules, route to DLQ',meta:'rules',cfg:{Field:'unit_price',Rule:'notNull','On violation':'route → DLQ'}},
+    {type:'lookup',label:'Lookup — HTTP enrichment with LRU cache',meta:'http',cfg:{URL:'https://api.internal/enrich',Key:'=$order_id',Cache:'LRU 10000'}},
+    {type:'hwm',label:'High-Water Mark — incremental cursor',meta:'incremental',cfg:{Column:'updated_at',Backend:'postgres'}},
+    {type:'schemadrift',label:'Schema Drift — detect column add/remove/type',meta:'policy',cfg:{Policy:'additive'}},
+    {type:'dq',label:'Data Quality — expectations + quality score',meta:'quality',cfg:{Expectations:'2','On fail':'warn',Threshold:'0.05'}}
+  ];
+  function addTransform(id,index){
+    quickPick('Insert transform (position '+index+')', TRANSFORMS.map(t=>t.label), label=>{
+      const t=TRANSFORMS.find(x=>x.label===label); const p=PIPES[id];
+      const n={id:'t'+Date.now(),kind:'transform',type:t.type,nm:t.type,meta:t.meta,cfg:Object.assign({},t.cfg)};
+      p.nodes.splice(index,0,n);
+      if(S.active!==id) openPipe(id);
+      S.selNode=n.id; S.inspTab='Config'; renderEditor();
+      toast('ok','Inserted <b style="color:var(--text)">'+t.type+'</b> into '+id+' — configure it in the Inspector →','');
+    });
+  }
+  const CONN_TYPES=[
+    {t:'postgres',label:'PostgreSQL — JDBC',fam:'db',desc:'jdbc·postgres',fields:['Host','Port','Database','Username','Password','SSL mode']},
+    {t:'mysql',label:'MySQL — JDBC',fam:'db',desc:'jdbc·mysql',fields:['Host','Port','Database','Username','Password']},
+    {t:'sqlite',label:'SQLite — JDBC',fam:'db',desc:'jdbc·sqlite',fields:['File path']},
+    {t:'kafka',label:'Apache Kafka',fam:'stream',desc:'kafka',fields:['Bootstrap brokers','Security protocol','SASL mechanism','Username','Password']},
+    {t:'s3',label:'Amazon S3',fam:'obj',desc:'objstore·s3',fields:['Bucket','Region','Access key ID','Secret access key','Endpoint (optional)']},
+    {t:'gcs',label:'Google Cloud Storage',fam:'obj',desc:'objstore·gcs',fields:['Bucket','Project ID','Service account JSON']},
+    {t:'adls',label:'Azure ADLS Gen2',fam:'obj',desc:'objstore·adls',fields:['Account','Container','SAS token / key']},
+    {t:'http',label:'HTTP endpoint — lookup enrichment',fam:'http',desc:'http',fields:['Base URL','Auth header']}
+  ];
+  const SECRET_FIELDS=['Password','Secret access key','SAS token / key','Service account JSON','Auth header'];
+  function createConnection(){
+    quickPick('New connection — pick a type', CONN_TYPES.map(c=>c.label), label=>{
+      const c=CONN_TYPES.find(x=>x.label===label); openTab(c.t,'conn');
+    });
+  }
+  function famOfType(type){ if(['jdbc','postgres','mysql','sqlite'].includes(type))return 'db'; if(type==='kafka')return 'stream'; if(['s3','gcs','adls','objstore'].includes(type))return 'obj'; return null; }
+  function famName(fam){ return ({db:'database',stream:'Kafka',obj:'object-store',http:'HTTP'})[fam]||fam; }
+  function phFor(type,f){ const m={Host:'prod-db.internal',Port:type==='mysql'?'3306':'5432',Database:'analytics',Username:'app',Bucket:'acme-lake',Region:'us-east-1','Bootstrap brokers':'broker-1:9092, broker-2:9092','Security protocol':'SASL_SSL','SASL mechanism':'SCRAM-SHA-512','Base URL':'https://api.internal','File path':'./data.db','Project ID':'acme-prod',Account:'acmestorage',Container:'lake'}; return m[f]||''; }
+  function renderConnEditor(wv,type){
+    const c=CONN_TYPES.find(x=>x.t===type)||CONN_TYPES[0];
+    wv.innerHTML=''; wv.appendChild(el('h3','sec','New connection · '+c.label));
+    const form=el('div'); form.style.maxWidth='560px';
+    const nameF=el('div','fld'); nameF.innerHTML='<div class="k">Connection name</div>'; const ni=el('input','v'); ni.value=c.t+'-conn'; nameF.appendChild(ni); form.appendChild(nameF);
+    c.fields.forEach(f=>{ const secret=SECRET_FIELDS.includes(f); const fd=el('div','fld');
+      fd.innerHTML='<div class="k">'+f+(secret?' <span style="color:var(--dim);text-transform:none;letter-spacing:0">· Secret Storage</span>':'')+'</div>';
+      const inp=el('input','v'); if(secret) inp.type='password'; inp.placeholder=phFor(type,f); fd.appendChild(inp); form.appendChild(fd); });
+    const acts=el('div','row'); acts.style.marginTop='14px';
+    const testB=el('button','btn','⇶ Test Connection'); testB.onclick=()=>{ testB.textContent='Testing…'; setTimeout(()=>{ testB.textContent='⇶ Test Connection'; toast('ok',c.label+' — connection OK (round-trip 42ms)',''); },500); };
+    const saveB=el('button','btn pri','Save Connection'); saveB.onclick=()=>{ const nm=ni.value||c.t+'-conn'; CONNS.push({name:nm,fam:c.fam,type:type,status:'g',desc:c.desc}); closeTab('conn:'+type); S.activity='dp'; S.sb.conns=true; renderAll(); toast('ok','Connection <b style="color:var(--text)">'+nm+'</b> saved — now selectable on any '+famName(c.fam)+' source/sink',''); };
+    acts.appendChild(testB); acts.appendChild(saveB); form.appendChild(acts);
+    form.appendChild(el('div','muted','<div style="font-size:11.5px;margin-top:14px;border-top:1px solid var(--border);padding-top:12px">Secrets go to VS Code <b style="color:var(--text)">Secret Storage</b> — never written to the <code style="color:var(--orange)">.datapipeline</code> file. Stages reference the connection <b style="color:var(--text)">by name</b>.</div>'));
+    wv.appendChild(form);
+  }
+
+  // ──────── next-improvements: data + helpers ────────
+  const PREV_RUN = {processed:2000000,written:1999760,dropped:120,routed:120,failed:0,ms:10100,dq:100};
+  const BASE_ROWS = {'orders-to-lake':2000000,'daily-tx-load':860000,'mainframe-offload':1350000,'crm-sync-incremental':240000,'events-archive':5300000};
+  const fmtK = n => n>=1e6?(n/1e6).toFixed(2)+'M':n>=1e3?Math.round(n/1e3)+'k':String(Math.round(n));
+  function edgeVols(id){ const p=PIPES[id]; const res=[]; let r=BASE_ROWS[id]||1000000;
+    p.nodes.forEach((n,i)=>{ if(i===0){ res[0]={rows:r,delta:0}; return; }
+      let d=0; if(n.type==='filter')d=-Math.round(r*0.06); else if(n.type==='validate')d=-Math.round(r*0.0024); else if(n.type==='dq')d=-Math.round(r*0.001);
+      r=r+d; res[i]={rows:r,delta:d}; }); return res; }
+  function narrateFunnel(r){ return 'Row funnel: '+fmt(r.processed)+' read, '+fmt(r.dropped)+' dropped, '+fmt(r.routed)+' routed to dead-letter, '+fmt(r.failed)+' failed, '+fmt(r.written)+' written to sink, '+(r.written/r.processed*100).toFixed(1)+' percent.'; }
+
+  // 3 · column lineage
+  const LINEAGE = { 'orders-to-lake':{
+    order_id:{nodes:['source','t2','sink'],path:'orders.csv → validate(unique) → parquet'},
+    quantity:{nodes:['source','t1','sink'],path:'orders.csv → map(input to net_amount) → parquet'},
+    unit_price:{nodes:['source','t1','t2','sink'],path:'orders.csv → map(input) · validate(notNull) → parquet'},
+    net_amount:{nodes:['source','t1','sink'],path:'orders.csv(quantity, unit_price) → map: net_amount = multiply() → parquet'},
+    region:{nodes:['source','t2','sink'],path:'orders.csv → validate(∈ {emea,amer,apac}) → parquet'} } };
+  function traceLineage(id,col){ const m=(LINEAGE[id]||{})[col]; const p=PIPES[id];
+    const info = m || {nodes:p.nodes.map(n=>n.id),path:p.nodes.map(n=>n.type).join(' → ')};
+    S.lineage={id,col,nodes:info.nodes,path:info.path}; renderEditor(); }
+
+  // 4 · AI explain / suggest a fix
+  const AI = {
+    dlq:{tag:'2 root causes · 4,500 rows',title:'Why are rows landing in the DLQ?',
+      body:'<b>88%</b> of rejects fail <code>validate: region ∈ {emea,amer,apac}</code>. Incoming values like <code>EU</code> and <code>EMEA1</code> are casing/label variants of <code>emea</code>. The other <b>12%</b> fail <code>unit_price notNull</code> — the source CSV has empty price cells for pre-orders.',
+      fix:'normalize region before validation, and default the missing price with a warning:',
+      code:"map: region     = lower(trim($region))\nmap: region     = coalesce(regionAlias($region), $region)\nmap: unit_price = coalesce($unit_price, 0)   // dq: warn",
+      apply:'Insert 2 map stages before validate'},
+    failed:{tag:'run failed · mainframe-offload',title:'Why did the run fail?',
+      body:'The fixed-width source declares <code>EBCDIC-037</code>, but record <b>#4,102</b> carries a packed-decimal (COMP-3) field the layout reads as text, so the reader hit an invalid byte at offset 128 and aborted before the sink opened.',
+      fix:'declare the field as packed-decimal and route bad records instead of aborting:',
+      code:"field balance: comp3(len=6, scale=2)\nsource.onError: route → DLQ    // was: abort",
+      apply:'Apply layout fix + error policy'},
+    stringified:{tag:'schema · parquet sink',title:'Why is net_amount written as string?',
+      body:'The map stage sets <code>Type: float64</code>, but the parquet sink’s <b>inferred</b> schema pins every column to <code>string</code> because the header is sampled before column types are known.',
+      fix:'pin the sink schema so numeric columns keep their type:',
+      code:"sink.schema: { net_amount: float64, quantity: int32, zip: string }",
+      apply:'Pin sink schema'} };
+  function aiExplain(topic,id){ const a=AI[topic]||AI.dlq; closeAi();
+    const pop=el('div','aiPop');
+    pop.innerHTML='<div class="hd"><span style="color:var(--blueHi)">✨</span> Copilot <span class="muted" style="font-weight:400;font-size:11px">· data-pipeline</span><span class="sp" title="Close">✕</span></div>'+
+      '<div class="bd"><span class="tag">'+a.tag+'</span><div style="color:var(--text);font-weight:600;margin-bottom:6px">'+a.title+'</div>'+a.body+
+      '<div style="margin-top:9px"><b>Suggested fix</b> — '+a.fix+'</div><pre>'+a.code+'</pre></div><div class="acts"></div>';
+    pop.querySelector('.sp').onclick=closeAi;
+    const acts=pop.querySelector('.acts');
+    const ap=el('button','btn sm pri','✓ '+a.apply); ap.onclick=()=>{ closeAi(); toast('ok','Applied — '+a.apply+(id?' · '+id:''),''); };
+    const ins=el('button','btn sm','Insert as comment'); ins.onclick=()=>{ closeAi(); toast('info','Suggested fix inserted as a commented block in the .datapipeline file',''); };
+    const dis=el('button','btn sm','Dismiss'); dis.onclick=closeAi;
+    acts.appendChild(ap); acts.appendChild(ins); acts.appendChild(dis);
+    document.body.appendChild(pop);
+  }
+  function closeAi(){ document.querySelectorAll('.aiPop').forEach(x=>x.remove()); }
+
+  // 2 · run diff / time-travel
+  function openDiff(id){ if(!S.ran[id]) S.ran[id]={...runResult,status:PIPES[id].status,dq:PIPES[id].dq}; openTab(id,'diff'); }
+  function renderRunDiff(wv,id){
+    const a=S.ran[id]||runResult, b=PREV_RUN;
+    const dlqUp=a.routed-b.routed, wrDelta=a.written-b.written;
+    const worse = a.routed>b.routed*2 || a.written<b.written;
+    wv.innerHTML='';
+    wv.appendChild(el('div','regbanner '+(worse?'bad':'good'),(worse?'⚠ Regression':'✓ Stable')+' — DLQ '+(dlqUp>=0?'up ':'down ')+fmtK(Math.abs(dlqUp))+' ('+(b.routed?(a.routed/b.routed).toFixed(1)+'×':'∞')+'), written '+(wrDelta<0?'down ':'up ')+fmtK(Math.abs(wrDelta))+' vs the previous run.'));
+    function rw(k,v){ return '<div class="drow"><span class="lb">'+k+'</span><span>'+v+'</span></div>'; }
+    const mk=(run,label,when,bullet)=>{ const c=el('div','diffcol'); c.innerHTML='<h4>'+bullet+' '+label+' <span class="muted" style="font-weight:400">· '+when+'</span></h4>'+
+      rw('Processed',fmt(run.processed))+rw('Written',fmt(run.written)+' ('+(run.written/run.processed*100).toFixed(1)+'%)')+rw('Dropped',fmt(run.dropped))+rw('→ DLQ',fmt(run.routed))+rw('Failed',fmt(run.failed))+rw('Duration',(run.ms/1000).toFixed(1)+'s')+rw('DQ',run.dq+'%'); return c; };
+    const mid=el('div','diffmid');
+    const dl=(label,delta,badWhenPos)=>{ const flat=delta===0; const bad=badWhenPos?delta>0:delta<0; return '<div class="delta '+(flat?'flat':(bad?'bad':'good'))+'">'+label+'<br>'+(delta>0?'▲ +':delta<0?'▼ −':'')+fmtK(Math.abs(delta))+'</div>'; };
+    mid.innerHTML=dl('Written',a.written-b.written,false)+dl('→ DLQ',a.routed-b.routed,true)+dl('Duration ms',a.ms-b.ms,true)+dl('DQ %',a.dq-b.dq,false);
+    const g=el('div','diffgrid'); g.appendChild(mk(a,'run 8f3a…c1','now','●')); g.appendChild(mid); g.appendChild(mk(b,'run 77de…a0','1h ago','○')); wv.appendChild(g);
+    wv.appendChild(el('div','muted','<div style="margin-top:14px;font-size:11.5px">Runs come from the status ring buffer · <code style="color:var(--orange)">GET /v1/pipelines/'+id+'/status</code>. Pick any two to compare.</div>'));
+    const ex=el('button','btn sm','✨ Explain the regression'); ex.style.marginTop='10px'; ex.onclick=()=>aiExplain('dlq',id); wv.appendChild(ex);
+  }
+
+  // 5 · live tail (streaming)
+  function openTail(id){ openTab(id,'tail'); }
+  function renderLiveTail(wv,id){
+    if(S.tailTimer){ clearInterval(S.tailTimer); S.tailTimer=null; }
+    const p=PIPES[id]; const topic=(p.nodes[0].cfg&&p.nodes[0].cfg.Topic)||'orders';
+    wv.innerHTML='';
+    wv.appendChild(el('div','between','<h3 class="sec" style="margin:0"><span class="livedot"></span> Live tail · '+topic+'</h3><div class="pillrow"><span class="chip run">consuming</span><span class="pill" id="tlRate">— msg/s</span><span class="pill">group dp-'+id.split('-')[0]+'</span></div>'));
+    const wrap=el('div','tailwrap');
+    wrap.appendChild(el('div',null,'<div class="between" style="font-size:11.5px;color:var(--dim)"><span>Consumer lag</span><span id="tlLagN">— msgs</span></div><div class="gauge"><i id="tlLag" style="width:22%"></i></div>'));
+    const log=el('div','taillog'); log.innerHTML='<table><thead><tr><th>offset</th><th>part</th><th>key</th><th>value</th><th>ts</th></tr></thead><tbody id="tlBody"></tbody></table>'; wrap.appendChild(log);
+    wrap.appendChild(el('div','muted','<div style="font-size:11.5px">Streaming from the running engine · <code style="color:var(--orange)">GET /v1/pipelines/'+id+'/tail</code> (SSE) · stops when you switch tabs.</div>'));
+    wv.appendChild(wrap);
+    let off=48211500,n=0,lag=1200; const keys=['ORD','TXN','EVT'];
+    const push=()=>{ const body=document.getElementById('tlBody'); if(!body){ if(S.tailTimer){clearInterval(S.tailTimer);S.tailTimer=null;} return; }
+      const k=keys[n%3]+'-'+(100000+Math.floor(Math.random()*900000));
+      const val='{"id":"'+k+'","amt":'+(Math.random()*400).toFixed(2)+',"region":"'+['emea','amer','apac'][n%3]+'"}';
+      const tr=document.createElement('tr'); tr.className='new';
+      const ts=new Date().toLocaleTimeString('en-US',{hour12:false})+'.'+(100+Math.floor(Math.random()*900));
+      tr.innerHTML='<td>'+(off++)+'</td><td>'+(n%6)+'</td><td>'+k+'</td><td style="color:var(--mute)">'+val+'</td><td style="color:var(--dim)">'+ts+'</td>';
+      body.insertBefore(tr,body.firstChild); while(body.children.length>14) body.removeChild(body.lastChild);
+      n++; const rl=document.getElementById('tlRate'); if(rl)rl.textContent=(180+Math.floor(Math.random()*90))+' msg/s';
+      lag=Math.max(0,lag+Math.floor(Math.random()*120)-72); const lg=document.getElementById('tlLag'); if(lg)lg.style.width=Math.min(100,lag/30)+'%'; const ln=document.getElementById('tlLagN'); if(ln)ln.textContent=fmtK(lag)+' msgs';
+    };
+    for(let i=0;i<8;i++) push();
+    S.tailTimer=setInterval(push,650);
+  }
+
+  // 6 · schema-drift diff
+  const DRIFT = {'orders-to-lake':{batch:'2026-07-10T04:12',added:[['loyalty_tier','string']],changed:[['zip','int32 → string']],removed:[['legacy_flag','bool']]}};
+  function openDrift(id){ openTab(id,'drift'); }
+  function renderDrift(wv,id){
+    const d=DRIFT[id]||DRIFT['orders-to-lake']; wv.innerHTML='';
+    wv.appendChild(el('div','regbanner bad','<span>≠</span><div>Schema drift detected in batch <b>'+d.batch+'</b> — '+d.added.length+' added · '+d.changed.length+' type-changed · '+d.removed.length+' removed. Sink write paused pending policy.</div>'));
+    const grid=el('div','drift');
+    const contract=el('div','col'); contract.innerHTML='<h4>Contract (expected)</h4>'+['order_id:int32','quantity:int32','unit_price:float64','region:string','zip:int32','legacy_flag:bool'].map(c=>'<div class="r"><span>'+c.split(':')[0]+'</span><span class="muted">'+c.split(':')[1]+'</span></div>').join('');
+    let rows='<div class="r"><span>order_id</span><span class="muted">int32</span></div><div class="r"><span>quantity</span><span class="muted">int32</span></div><div class="r"><span>unit_price</span><span class="muted">float64</span></div><div class="r"><span>region</span><span class="muted">string</span></div>';
+    d.changed.forEach(c=>rows+='<div class="r chg"><span>~ '+c[0]+'</span><span>'+c[1]+'</span></div>');
+    d.removed.forEach(c=>rows+='<div class="r del"><span>− '+c[0]+'</span><span>'+c[1]+'</span></div>');
+    d.added.forEach(c=>rows+='<div class="r add"><span>+ '+c[0]+'</span><span>'+c[1]+'</span></div>');
+    const incoming=el('div','col'); incoming.innerHTML='<h4>Incoming batch</h4>'+rows;
+    grid.appendChild(contract); grid.appendChild(incoming); wv.appendChild(grid);
+    const pol=el('div','pillrow'); pol.style.marginTop='14px'; pol.innerHTML='<span class="muted" style="font-size:12px;align-self:center">Policy:</span>';
+    ['additive (accept new cols)','strict (fail on any drift)','ignore (drop unknown)'].forEach((x,i)=>{ const s=el('span','pill'); s.textContent=x; s.style.cursor='pointer'; if(i===0){s.style.color='#fff';s.style.background='#33608f';}
+      s.onclick=()=>{ pol.querySelectorAll('.pill').forEach(z=>{z.style.color='';z.style.background='';}); s.style.color='#fff'; s.style.background='#33608f'; toast('info','Drift policy → '+x.split(' ')[0],''); }; pol.appendChild(s); });
+    wv.appendChild(pol);
+    const acts=el('div','row'); acts.style.marginTop='12px';
+    const a1=el('button','btn pri','Accept into contract'); a1.onclick=()=>{ closeTab('drift:'+id); toast('ok','Contract updated (+loyalty_tier, zip→string) · sink resumed',''); };
+    const a2=el('button','btn','Route drifted rows → DLQ'); a2.onclick=()=>{ closeTab('drift:'+id); openDLQ(id); };
+    const a3=el('button','btn','✨ Ask Copilot'); a3.onclick=()=>aiExplain('stringified',id);
+    acts.appendChild(a1); acts.appendChild(a2); acts.appendChild(a3); wv.appendChild(acts);
+  }
+
+  // 7 · walkthrough onboarding
+  const WALK=[
+    {id:'open',t:'Open a pipeline',d:'Pipelines are just <code>.datapipeline</code> files — open one to see the canvas.',fn:()=>openPipe('orders-to-lake')},
+    {id:'conn',t:'Create a connection',d:'Add a reusable source/sink connection — secrets go to Secret Storage.',fn:createConnection},
+    {id:'preview',t:'Dry-run a preview',d:'Sample 1,000 rows through the chain before a full run.',fn:()=>preview('orders-to-lake')},
+    {id:'run',t:'Run the pipeline',d:'Execute end-to-end and watch the live Output stream.',fn:()=>run('orders-to-lake')},
+    {id:'funnel',t:'Read the run funnel',d:'See processed → written with drops and DLQ reconciled.',fn:()=>openReport('orders-to-lake')},
+    {id:'dlq',t:'Inspect the DLQ',d:'Triage rejected rows, then fix & replay.',fn:()=>openDLQ('orders-to-lake')},
+    {id:'transform',t:'Add a transform',d:'Insert a filter/map/validate/lookup stage anywhere on the canvas.',fn:()=>{ openPipe('orders-to-lake'); addTransform('orders-to-lake',PIPES['orders-to-lake'].nodes.length-1); }},
+    {id:'deploy',t:'Deploy to Kubernetes',d:'Generate a sharded StatefulSet manifest for scale-out.',fn:()=>quickPick('Replicas (sharded StatefulSet)',['N=1','N=2','N=4  (recommended)','N=8'],v=>toast('ok','Generated K8s StatefulSet · '+v,''))}
+  ];
+  function openWalkthrough(){ openTab('walk','walk'); }
+  function renderWalkthrough(wv){
+    S.walk=S.walk||{}; const done=WALK.filter(s=>S.walk[s.id]).length; wv.innerHTML='';
+    wv.appendChild(el('div',null,'<div style="font-size:17px;font-weight:700;color:var(--text)">Get Started with Flogo Data Pipelines</div><div class="muted" style="margin-top:3px">Build, run and operate a pipeline in VS Code — '+done+' of '+WALK.length+' done.</div>'));
+    const prog=el('div','wprog'); prog.innerHTML='<i style="width:'+(done/WALK.length*100)+'%"></i>'; wv.appendChild(prog);
+    const grid=el('div','walk'); const steps=el('div','steps');
+    WALK.forEach((s,i)=>{ const d=el('div','wstep'+(S.walk[s.id]?' done':''));
+      d.innerHTML='<div class="ck">'+(S.walk[s.id]?'✓':(i+1))+'</div><div><div class="tl">'+s.t+'</div><div class="ds">'+s.d+'</div></div>';
+      d.onclick=()=>{ S.walk[s.id]=true; d.classList.add('done'); d.querySelector('.ck').textContent='✓'; s.fn(); };
+      steps.appendChild(d); });
+    grid.appendChild(steps);
+    grid.appendChild(el('div','walkmedia','<div><div style="font-size:38px;color:var(--dim)">◈ → ▷ → ⧉</div><div style="margin-top:10px">Each step runs the real action in this prototype,<br>then you can return here to continue.</div><div class="pillrow" style="justify-content:center;margin-top:14px"><span class="pill">source</span><span class="pill">transform×n</span><span class="pill">sink</span><span class="pill">DLQ</span></div></div>'));
+    wv.appendChild(grid);
+    const reset=el('button','btn sm','Reset checklist'); reset.style.marginTop='14px'; reset.onclick=()=>{ S.walk={}; renderEditor(); }; wv.appendChild(reset);
+  }
+
+  // ─── right-click context menus (discoverability) ───
+  function contextMenu(x,y,items){ closeCtx();
+    const scrim=el('div','scrim ctxscrim'); scrim.style.zIndex='79'; scrim.onmousedown=closeCtx; scrim.oncontextmenu=(e)=>{e.preventDefault();closeCtx();}; document.body.appendChild(scrim);
+    const m=el('div','ctxmenu');
+    items.forEach(it=>{ if(it.sep){ m.appendChild(el('div','sep')); return; }
+      const d=el('div','mi'+(it.dis?' dis':'')); d.innerHTML='<span class="ic">'+(it.ic||'')+'</span>'+it.label+(it.kb?'<span class="kb">'+it.kb+'</span>':'');
+      if(!it.dis) d.onclick=()=>{ closeCtx(); it.fn(); }; m.appendChild(d); });
+    document.body.appendChild(m);
+    const r=m.getBoundingClientRect(); m.style.left=Math.min(x,innerWidth-r.width-8)+'px'; m.style.top=Math.min(y,innerHeight-r.height-8)+'px';
+  }
+  function closeCtx(){ document.querySelectorAll('.ctxmenu,.ctxscrim').forEach(x=>x.remove()); }
+  function pipeMenu(id,e){ e.preventDefault(); e.stopPropagation(); const p=PIPES[id]; const kafka=p.nodes[0].type==='kafka';
+    const items=[{ic:'◈',label:'Open',fn:()=>openPipe(id)},{ic:'▷',label:'Run Pipeline',kb:'⇧⌘R',fn:()=>run(id)},{ic:'⌕',label:'Dry-run Preview',fn:()=>preview(id)},{sep:true},
+      {ic:'⧉',label:'Open Run Report',fn:()=>openReport(id)},{ic:'⇄',label:'Compare Runs (time-travel)…',fn:()=>openDiff(id)}];
+    if(kafka) items.push({ic:'≋',label:'Open Live Tail',fn:()=>openTail(id)});
+    items.push({ic:'≠',label:'Review Schema Drift…',fn:()=>openDrift(id)});
+    if(p.hasDlq) items.push({ic:'⚠',label:'Open DLQ Inspector',fn:()=>openDLQ(id)});
+    items.push({sep:true},{ic:'＋',label:'Add Transform…',fn:()=>{openPipe(id);addTransform(id,p.nodes.length-1);}},
+      {ic:'☁',label:'Deploy to Kubernetes…',fn:()=>quickPick('Replicas (sharded StatefulSet)',['N=1','N=2','N=4  (recommended)','N=8'],v=>toast('ok','Generated K8s StatefulSet · '+v,''))},
+      {sep:true},{ic:'✎',label:'Rename',fn:()=>toast('info','Rename '+id+' — inline edit in the tree','')},{ic:'✕',label:'Delete',fn:()=>toast('warn','Delete '+id+'? — would confirm first','')});
+    contextMenu(e.clientX,e.clientY,items);
+  }
+  function nodeMenu(id,n,i,e){ e.preventDefault(); e.stopPropagation(); const p=PIPES[id]; const isT=n.kind==='transform';
+    contextMenu(e.clientX,e.clientY,[
+      {ic:'⚙',label:'Configure',fn:()=>{S.selNode=n.id;S.inspTab='Config';renderEditor();}},
+      {ic:'▷',label:'Test this stage on sample',fn:()=>{S.selNode=n.id;preview(id);toast('ok','Ran '+n.type+' on 1,000 sampled rows → Data Preview','');}},
+      {ic:'⧉',label:'Trace lineage…',fn:()=>{S.selNode=n.id;S.inspTab='Schema';renderEditor();toast('info','Click a column in the Schema tab to trace its lineage','');}},
+      {ic:'✨',label:'Explain with Copilot',fn:()=>aiExplain(n.kind==='sink'?'stringified':'dlq',id)},
+      {sep:true},
+      {ic:'＋',label:'Insert transform before',fn:()=>addTransform(id,i)},
+      {ic:'＋',label:'Insert transform after',fn:()=>addTransform(id,i+1)},
+      {sep:true},
+      {ic:'✕',label:'Delete stage',dis:!isT,fn:()=>{ p.nodes.splice(i,1); S.selNode=(p.nodes[Math.max(0,i-1)]||p.nodes[0]).id; renderEditor(); toast('warn','Removed '+n.type+' stage',''); }}
+    ]);
+  }
+  function connMenu(c,e){ e.preventDefault(); e.stopPropagation();
+    contextMenu(e.clientX,e.clientY,[
+      {ic:'⇶',label:'Test Connection',fn:()=>toast(c.status==='r'?'err':'ok',c.name+(c.status==='r'?': auth failed (secret rotated?)':': connection OK'),'')},
+      {ic:'✎',label:'Edit…',fn:()=>openTab(c.type,'conn')},
+      {ic:'⧉',label:'Duplicate',fn:()=>{ CONNS.push({...c,name:c.name+'-copy'}); renderSidebar(); toast('ok','Duplicated → '+c.name+'-copy',''); }},
+      {sep:true},
+      {ic:'✕',label:'Delete',fn:()=>{ const i=CONNS.indexOf(c); if(i>=0)CONNS.splice(i,1); renderSidebar(); toast('warn','Deleted connection '+c.name,''); }}
+    ]);
+  }
+  function histMenu(id,e){ e.preventDefault(); e.stopPropagation();
+    contextMenu(e.clientX,e.clientY,[{ic:'⧉',label:'Open Run Report',fn:()=>openReport(id)},{ic:'⇄',label:'Compare with current run',fn:()=>openDiff(id)}]);
+  }
+
+  const COMMANDS=[
+    {ic:'▷',t:'Data Pipeline: Run Pipeline',kb:'⇧⌘R',fn:()=>run(S.active||'orders-to-lake')},
+    {ic:'⌕',t:'Data Pipeline: Dry-run Preview (1,000 rows)',kb:'⇧⌘P',fn:()=>preview(S.active||'orders-to-lake')},
+    {ic:'＋',t:'Data Pipeline: New Pipeline from Template…',fn:newFromTemplate},
+    {ic:'⧉',t:'Data Pipeline: Open Run Report',fn:()=>openReport(S.active||'orders-to-lake')},
+    {ic:'▤',t:'Data Pipeline: Open Fleet Dashboard',fn:openFleet},
+    {ic:'⚗',t:'Data Pipeline: Run Data-Quality Checks',fn:()=>{S.activity='test';renderActivity();renderSidebar();setPanel('dq');toast('ok','DQ suite run — 20/22 passed','');}},
+    {ic:'⚠',t:'Data Pipeline: Open DLQ Inspector',fn:()=>openDLQ(S.active||'orders-to-lake')},
+    {ic:'☁',t:'Data Pipeline: Deploy to Kubernetes…',fn:()=>quickPick('Replicas (sharded StatefulSet)',['N=1','N=2','N=4  (recommended)','N=8'],v=>toast('ok','Generated K8s StatefulSet manifest · '+v,''))},
+    {ic:'⛁',t:'Data Pipeline: New Connection…',fn:createConnection},
+    {ic:'＋',t:'Data Pipeline: Add Transform to Pipeline…',fn:()=>{ const id=(cur()&&cur().type==='canvas')?cur().id:'orders-to-lake'; if(!(cur()&&cur().type==='canvas'))openPipe(id); addTransform(id, PIPES[id].nodes.length-1); }},
+    {ic:'⇶',t:'Data Pipeline: Test Connection…',fn:()=>quickPick('Test which connection?',CONNS.map(c=>c.name),v=>{const cc=CONNS.find(x=>x.name===v);toast(cc&&cc.status==='r'?'err':'ok',cc&&cc.status==='r'?v+': auth failed (secret rotated?)':v+': connection OK','');})},
+    {ic:'⇄',t:'Data Pipeline: Compare Runs (time-travel)…',fn:()=>openDiff((cur()&&cur().type==='canvas')?cur().id:'orders-to-lake')},
+    {ic:'≋',t:'Data Pipeline: Open Live Tail (streaming)…',fn:()=>{ const ks=ORDER.filter(x=>PIPES[x].nodes[0].type==='kafka'); quickPick('Live tail which streaming pipeline?',ks,openTail); }},
+    {ic:'≠',t:'Data Pipeline: Review Schema Drift…',fn:()=>openDrift((cur()&&cur().type==='canvas')?cur().id:'orders-to-lake')},
+    {ic:'✨',t:'Data Pipeline: Explain a Failure (AI)…',fn:()=>quickPick('Explain which issue?',['DLQ rejects — orders-to-lake','Failed run — mainframe-offload','Stringified columns — parquet sink'],v=>aiExplain(v.indexOf('Failed')>=0?'failed':v.indexOf('String')>=0?'stringified':'dlq',(cur()&&cur().type==='canvas')?cur().id:'orders-to-lake'))},
+    {ic:'✦',t:'Data Pipeline: Get Started (Walkthrough)',fn:openWalkthrough},
+    {ic:'▤',t:'View: Show Output',fn:()=>setPanel('output')},
+    {ic:'⊗',t:'View: Show Problems',fn:()=>setPanel('problems')}
+  ];
+  let paletteEl=null, pIdx=0, pList=[];
+  function openPalette(prefill){
+    closeOverlays();
+    const scrim=el('div','scrim'); scrim.onclick=closeOverlays; document.body.appendChild(scrim);
+    paletteEl=el('div','palette'); 
+    const inp=el('input'); inp.placeholder='Type a command…'; inp.value=prefill||'>';
+    paletteEl.appendChild(inp); const list=el('div'); paletteEl.appendChild(list);
+    document.body.appendChild(paletteEl);
+    const draw=()=>{ const q=inp.value.replace(/^>/,'').trim().toLowerCase();
+      pList=COMMANDS.filter(c=>c.t.toLowerCase().includes(q)); pIdx=0; list.innerHTML='';
+      if(!pList.length){ list.appendChild(el('div','empty','No matching commands')); return; }
+      pList.forEach((c,i)=>{ const cat=c.t.split(':'); const d=el('div','pi'+(i===pIdx?' on':''),'<span class="ic">'+c.ic+'</span><span class="cat">'+cat[0]+':</span>'+cat.slice(1).join(':')+(c.kb?'<span class="kb">'+c.kb+'</span>':''));
+        d.onclick=()=>{ closeOverlays(); c.fn(); }; list.appendChild(d); }); };
+    inp.oninput=draw; draw();
+    inp.onkeydown=(e)=>{ if(e.key==='ArrowDown'){pIdx=Math.min(pList.length-1,pIdx+1);paint(list);e.preventDefault();}
+      else if(e.key==='ArrowUp'){pIdx=Math.max(0,pIdx-1);paint(list);e.preventDefault();}
+      else if(e.key==='Enter'){ if(pList[pIdx]){closeOverlays();pList[pIdx].fn();} }
+      else if(e.key==='Escape'){ closeOverlays(); } };
+    setTimeout(()=>{inp.focus(); inp.setSelectionRange(inp.value.length,inp.value.length);},10);
+  }
+  function paint(list){ [...list.children].forEach((c,i)=>c.classList.toggle('on',i===pIdx)); }
+  function quickPick(title,items,onPick){
+    closeOverlays();
+    const scrim=el('div','scrim'); scrim.onclick=closeOverlays; document.body.appendChild(scrim);
+    paletteEl=el('div','palette'); const inp=el('input'); inp.placeholder=title; inp.readOnly=true; paletteEl.appendChild(inp);
+    const list=el('div'); items.forEach((it,i)=>{ const d=el('div','pi'+(i===0?' on':''),'<span class="ic">◦</span>'+it); d.onclick=()=>{closeOverlays();onPick(it);}; list.appendChild(d); });
+    paletteEl.appendChild(list); document.body.appendChild(paletteEl);
+    document.addEventListener('keydown',escOnce);
+  }
+  function escOnce(e){ if(e.key==='Escape'){ closeOverlays(); document.removeEventListener('keydown',escOnce);} }
+  function newFromTemplate(){
+    quickPick('New pipeline — pick a template',['CSV → PostgreSQL (filter + map)','Kafka → JDBC (streaming ETL)','Parquet on S3 → JDBC (validate + checkpoint)','Database → Database incremental (HWM)','Mainframe EBCDIC → PostgreSQL','Extract & Load only (no transforms)'], v=>{
+      const id='new-pipeline-'+(Object.keys(PIPES).length);
+      PIPES[id]={src:'csv',sink:'jdbc·pg',mode:'ETL',status:'idle',dq:null,nodes:[
+        {id:'source',kind:'source',type:'csv',nm:'input.csv',meta:'csv',cfg:{Path:'./input.csv'}},
+        {id:'t0',kind:'transform',type:'filter',nm:'filter',meta:'expr',cfg:{Expression:"status != 'CANCELLED'"}},
+        {id:'sink',kind:'sink',type:'jdbc',nm:'target',meta:'jdbc',cfg:{Table:'out'}}],hasDlq:false};
+      if(!ORDER.includes(id)) ORDER.push(id);
+      openPipe(id); toast('ok','Created <b style="color:var(--text)">'+id+'.datapipeline</b> from “'+v.split(' (')[0]+'” — opened in the canvas','');
+    });
+  }
+  function closeOverlays(){ document.querySelectorAll('.scrim,.palette').forEach(x=>x.remove()); paletteEl=null; closeAi(); closeCtx(); }
+
+  // ─────────────── toasts ───────────────
+  function toast(kind,msg,acts){
+    const box=$('#toasts'); const t=el('div','toast');
+    const icon={ok:'<span style="color:var(--green)">✓</span>',err:'<span style="color:var(--red)">✕</span>',warn:'<span style="color:var(--yellow)">⚠</span>',info:'<span style="color:var(--blueHi)">ℹ</span>'}[kind]||'';
+    t.innerHTML='<div class="tt"><span class="i">'+icon+'</span><div>'+msg+'</div><span class="close">✕</span></div>';
+    if(acts&&acts.length){ const a=el('div','acts'); acts.forEach(x=>{const b=el('button','btn sm'+(x.pri?' pri':''),x.label);b.onclick=()=>{x.fn();t.remove();};a.appendChild(b);}); t.appendChild(a); }
+    t.querySelector('.close').onclick=()=>t.remove();
+    box.appendChild(t);
+    if(!acts) setTimeout(()=>{ t.style.opacity='0'; t.style.transition='opacity .3s'; setTimeout(()=>t.remove(),300); }, 3600);
+    return t;
+  }
+  function progressToast(name){
+    const box=$('#toasts'); const t=el('div','toast');
+    t.innerHTML='<div class="tt"><span class="i">⟳</span><div><b style="color:var(--text)">Running '+name+'…</b><br><span class="muted" id="ptmsg">starting…</span></div><span class="close">Cancel</span></div><div class="prog"><i></i></div>';
+    t.querySelector('.close').onclick=()=>{ S.running=false; t.remove(); renderStatus(); toast('warn','Run cancelled',''); };
+    box.appendChild(t);
+    return { setProgress:(p)=>{ t.querySelector('.prog i').style.width=p+'%'; }, close:()=>t.remove() };
+  }
+
+  // ─────────────── keyboard ───────────────
+  document.addEventListener('keydown',(e)=>{
+    const mod=e.metaKey||e.ctrlKey;
+    if(mod&&e.shiftKey&&e.key.toLowerCase()==='p'){ e.preventDefault(); openPalette('>'); }
+    else if(mod&&e.key.toLowerCase()==='p'&&!e.shiftKey){ e.preventDefault(); quickPick('Go to pipeline…',ORDER,openPipe); }
+    else if(mod&&e.key.toLowerCase()==='r'&&e.shiftKey){ e.preventDefault(); run(S.active||'orders-to-lake'); }
+    else if(e.key==='Escape'){ closeOverlays(); }
+  });
+
+  // ─────────────── boot ───────────────
+  function renderAll(){ renderActivity(); renderSidebar(); renderTabs(); renderEditor(); renderPanel(); renderStatus(); }
+  function boot(){ S.previewOn=false; renderAll(); }
+  $('#cmdCenter').onclick=()=>openPalette('>');
+  $('#openPaletteHint').onclick=()=>openPalette('>');
+  $('#btnReset').onclick=()=>{ location.reload(); };
+  $('#btnWalk').onclick=openWalkthrough;
+  $('#btnHelp').onclick=()=>toast('info','<b style="color:var(--text)">How to reach everything:</b> pipeline tree (click=open · hover ▷/⧉/⋯ · <b style="color:var(--text)">right-click</b>=full menu) · canvas node (click→inspector · <b style="color:var(--text)">right-click</b>=stage menu) · connections &amp; run-history <b style="color:var(--text)">right-click</b> · editor toolbar buttons · report/DLQ/drift buttons · <span class="k">⇧⌘P</span> palette (every screen) · ✦ Get Started',[{label:'Got it',pri:true,fn:()=>{}}]);
+  boot();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,91 @@
+{
+  "name": "csv-to-s3",
+  "type": "flogo:app",
+  "version": "1.0.0",
+  "appModel": "1.1.1",
+  "imports": [
+    "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+    "github.com/project-flogo/contrib/trigger/timer"
+  ],
+  "triggers": [
+    {
+      "id": "pipeline-timer",
+      "ref": "github.com/project-flogo/contrib/trigger/timer",
+      "settings": {
+        "repeating": true,
+        "startDelay": 0,
+        "interval": 86400000
+      },
+      "handlers": [
+        {
+          "settings": {},
+          "action": {
+            "ref": "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+            "settings": {
+              "pipelineRef": "res://pipeline:csv-to-s3"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "resources": [
+    {
+      "id": "pipeline:csv-to-s3",
+      "data": {
+        "name": "csv-to-s3",
+        "description": "CSV source -> map -> S3 (MinIO) object sink as JSON-lines.",
+        "mode": "etl",
+        "source": {
+          "type": "csv",
+          "path": "../data/orders.csv",
+          "hasHeader": true,
+          "columns": [
+            {
+              "name": "id",
+              "type": "int"
+            },
+            {
+              "name": "order_id",
+              "type": "string"
+            },
+            {
+              "name": "customer_id",
+              "type": "string"
+            },
+            {
+              "name": "amount",
+              "type": "int",
+              "nullable": true
+            },
+            {
+              "name": "status",
+              "type": "string"
+            }
+          ]
+        },
+        "transforms": [
+          {
+            "type": "map",
+            "name": "project",
+            "fields": {
+              "order_id": "=$order_id",
+              "amount": "=$amount"
+            }
+          }
+        ],
+        "sink": {
+          "type": "s3-sink",
+          "bucket": "acme-datalake",
+          "key": "orders/data.jsonl",
+          "format": "jsonlines",
+          "endpoint": "http://localhost:59000",
+          "region": "us-east-1",
+          "forcePathStyle": true,
+          "accessKeyIdEnv": "MINIO_KEY",
+          "secretAccessKeyEnv": "MINIO_SECRET"
+        }
+      }
+    }
+  ]
+}

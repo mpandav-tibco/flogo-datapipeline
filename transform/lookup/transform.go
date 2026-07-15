@@ -18,8 +18,9 @@
 //	}
 //
 // onError: "null" fills enrichment fields with nil on HTTP error (default).
-//          "skip" drops the row.
-//          "fail" aborts the pipeline.
+//
+//	"skip" drops the row.
+//	"fail" aborts the pipeline.
 package lookup
 
 import (
@@ -27,6 +28,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -204,8 +206,14 @@ func (l *lookupTransform) fetchWithCache(key string) (map[string]interface{}, er
 }
 
 func (l *lookupTransform) fetch(key string) (map[string]interface{}, error) {
-	url := strings.ReplaceAll(l.urlTemplate, "{"+l.keyField+"}", key)
-	req, err := http.NewRequestWithContext(context.Background(), l.method, url, nil)
+	// Accept both {keyField} and ${keyField} so users familiar with the source
+	// path templating (which uses ${date}) aren't surprised. Replace the
+	// ${...} form first so the {...} pass doesn't leave a stray "$".
+	escKey := url.PathEscape(key)
+	target := l.urlTemplate
+	target = strings.ReplaceAll(target, "${"+l.keyField+"}", escKey)
+	target = strings.ReplaceAll(target, "{"+l.keyField+"}", escKey)
+	req, err := http.NewRequestWithContext(context.Background(), l.method, target, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -240,11 +248,11 @@ func (l *lookupTransform) Close() error {
 // Get and Put are concurrent-safe (each acquires c.mu). fetchWithCache uses
 // a singleflight.Group to avoid duplicate in-flight fetches for the same key.
 type lruCache struct {
-	mu       sync.Mutex
-	cap      int
-	items    map[string]*lruNode
-	head     *lruNode // most-recently used sentinel
-	tail     *lruNode // least-recently used sentinel
+	mu    sync.Mutex
+	cap   int
+	items map[string]*lruNode
+	head  *lruNode // most-recently used sentinel
+	tail  *lruNode // least-recently used sentinel
 }
 
 type lruNode struct {

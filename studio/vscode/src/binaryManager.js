@@ -64,11 +64,11 @@ class BinaryManager {
   // given port (default: DEFAULT_PORT). Tries up to PORT_RETRY_MAX consecutive
   // ports until one binds cleanly. Resolves with the bound port.
   /** @returns {Promise<number>} */
-  async start(pipelineFile, startPort) {
+  async start(pipelineFile, startPort, workingDir) {
     if (this._externalStop) this.stop()   // tear down any attached external engine first
     if (this._process) return this._port  // already running
     if (this._startingPromise) return this._startingPromise  // concurrent start() — share the in-flight promise
-    this._startingPromise = this._doStart(pipelineFile, startPort)
+    this._startingPromise = this._doStart(pipelineFile, startPort, workingDir)
     try {
       return await this._startingPromise
     } finally {
@@ -77,7 +77,7 @@ class BinaryManager {
   }
 
   /** @returns {Promise<number>} */
-  async _doStart(pipelineFile, startPort) {
+  async _doStart(pipelineFile, startPort, workingDir) {
 
     // Open the output channel first so any error (including NO_BINARY) is visible there.
     this._channel.show(true)
@@ -94,8 +94,19 @@ class BinaryManager {
         port++
         continue
       }
+      // A stale engine from a previous session (or a different tool) may hold the
+      // port on another interface (e.g. IPv6/dual-stack) so that the local
+      // bind-probe above still reports it "free". If something already answers on
+      // the health endpoint, the port is effectively taken — spawning here would
+      // fail to bind and then time out on health. Skip to the next port instead.
+      if (await this._probeHealth(port)) {
+        this._channel.appendLine(
+          `[manager] an engine is already responding on port ${port}, trying ${port + 1}…`)
+        port++
+        continue
+      }
 
-      proc = this._spawn(binary, port, pipelineFile)
+      proc = this._spawn(binary, port, pipelineFile, workingDir)
 
       // Give the process 2 s to crash (EADDRINUSE surfaces quickly).
       const crashed = await this._waitForEarlyExit(proc, 2000)
@@ -294,19 +305,28 @@ class BinaryManager {
   // Spawn the engine process. The pipeline file and port are passed via both
   // environment variables (PIPELINE_FILE / PORT) and CLI flags (-port / -f) so
   // either convention works regardless of how the binary was built.
-  _spawn(binary, port, pipelineFile) {
+  _spawn(binary, port, pipelineFile, workingDir) {
     this._prepBinary(binary)
 
     const args = ['-port', String(port)]
     if (pipelineFile) args.push('-f', pipelineFile)
 
+    /** @type {Record<string, string|undefined>} */
     const env = { ...process.env, PORT: String(port) }
     if (pipelineFile) env.PIPELINE_FILE = pipelineFile
 
-    this._channel.appendLine(`[manager] spawning: ${binary} ${args.join(' ')}`)
+    // Run the engine with the project (workspace) root as the working directory
+    // when provided, so relative paths inside the .datapipeline (e.g.
+    // "data/x.csv", "out/y.parquet") resolve against the project root regardless
+    // of whether the pipeline lives in a pipelines/ subfolder. Falls back to the
+    // pipeline file's own directory.
+    const cwd = workingDir || (pipelineFile ? path.dirname(pipelineFile) : undefined)
+
+    this._channel.appendLine(`[manager] spawning: ${binary} ${args.join(' ')}${cwd ? ` (cwd: ${cwd})` : ''}`)
     const proc = spawn(binary, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
       shell: false,   // always false — same as flogo-agent; avoids quoting issues on Win32
+      cwd,
       env,
     })
 
@@ -333,6 +353,23 @@ class BinaryManager {
       srv.once('error', () => resolve(false))
       srv.once('listening', () => srv.close(() => resolve(true)))
       srv.listen(port, '127.0.0.1')
+    })
+  }
+
+  // Quick one-shot check: does an engine already answer the health endpoint on
+  // this port? Used to detect a stale/orphaned engine that the plain bind-probe
+  // may miss (e.g. it holds the port on IPv6 while we probe IPv4). Resolves true
+  // when a 200 is received within `timeoutMs`, false otherwise.
+  _probeHealth(port, timeoutMs = 400) {
+    return new Promise(resolve => {
+      let done = false
+      const finish = (v) => { if (!done) { done = true; resolve(v) } }
+      const req = http.get(`http://127.0.0.1:${port}${HEALTH_ENDPOINT}`, res => {
+        res.resume()
+        finish(res.statusCode === 200)
+      })
+      req.on('error', () => finish(false))
+      req.setTimeout(timeoutMs, () => { req.destroy(); finish(false) })
     })
   }
 

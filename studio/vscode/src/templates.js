@@ -149,7 +149,12 @@ const TEMPLATES = [
         source: {
           type:    'parquet',
           path:    's3://my-data-lake/events/${year}/${month}/${day}/*.parquet',
-          columns: ['event_id', 'user_id', 'event_type', 'payload', 'event_ts', 'session_id', 'platform'],
+          columns: [
+            { name: 'event_id', type: 'string' }, { name: 'user_id', type: 'string' },
+            { name: 'event_type', type: 'string' }, { name: 'payload', type: 'string' },
+            { name: 'event_ts', type: 'date' }, { name: 'session_id', type: 'string' },
+            { name: 'platform', type: 'string' },
+          ],
           rowGroupParallelism: 4,
         },
         transforms: [
@@ -246,7 +251,12 @@ const TEMPLATES = [
           driver:    'postgres',
           dsn:       'host=source-db port=5432 dbname=operational user=reader password=secret sslmode=disable',
           table:     'customers',
-          columns:   ['customer_id', 'first_name', 'last_name', 'email', 'phone', 'tier', 'created_at', 'updated_at'],
+          columns: [
+            { name: 'customer_id', type: 'string' }, { name: 'first_name', type: 'string' },
+            { name: 'last_name', type: 'string' }, { name: 'email', type: 'string' },
+            { name: 'phone', type: 'string' }, { name: 'tier', type: 'string' },
+            { name: 'created_at', type: 'date' }, { name: 'updated_at', type: 'date' },
+          ],
           where:     "updated_at > '${hwm}'",
           orderKey:  'updated_at',
           batchSize: 5000,

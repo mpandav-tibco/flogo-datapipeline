@@ -41,6 +41,10 @@ func init() {
 type mapperTransform struct {
 	fieldExprs []fieldExpr
 	outCols    []record.Column
+	// typesResolved is set once the output column types have been inferred from
+	// the first batch's actual values, so downstream sinks (Parquet, JDBC) get
+	// concrete types instead of a stringified TypeAny schema.
+	typesResolved bool
 }
 
 type fieldExpr struct {
@@ -116,7 +120,6 @@ func (m *mapperTransform) Name() string { return "map" }
 
 func (m *mapperTransform) Apply(in *record.RecordBatch) (*record.RecordBatch, error) {
 	out := record.Get()
-	out.Columns = m.outCols
 	out.Rows = make([][]interface{}, 0, in.Len())
 
 	for i := range in.Rows {
@@ -127,36 +130,104 @@ func (m *mapperTransform) Apply(in *record.RecordBatch) (*record.RecordBatch, er
 		}
 		out.Rows = append(out.Rows, outRow)
 	}
+
+	// Infer concrete output column types from the first batch's values, so a
+	// downstream typed sink (Parquet/JDBC) doesn't stringify everything. Columns
+	// whose values are all nil stay TypeAny (string-compatible).
+	if !m.typesResolved {
+		m.resolveTypes(out.Rows)
+		m.typesResolved = true
+	}
+	out.Columns = m.outCols
 	return out, nil
+}
+
+// resolveTypes refines TypeAny output columns to concrete pipeline types by
+// scanning the first non-nil value produced for each column.
+func (m *mapperTransform) resolveTypes(rows [][]interface{}) {
+	for j := range m.outCols {
+		if m.outCols[j].Type != record.TypeAny {
+			continue
+		}
+		for _, r := range rows {
+			if j >= len(r) || r[j] == nil {
+				continue
+			}
+			if t, ok := inferColumnType(r[j]); ok {
+				m.outCols[j].Type = t
+			}
+			break
+		}
+	}
+}
+
+// inferColumnType maps a Go value's dynamic type to a pipeline column type.
+// The bool return is false when the value doesn't map to a concrete type.
+func inferColumnType(v interface{}) (record.ColumnType, bool) {
+	switch v.(type) {
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+		return record.TypeInt, true
+	case float32, float64:
+		return record.TypeFloat, true
+	case bool:
+		return record.TypeBool, true
+	case time.Time:
+		return record.TypeDate, true
+	case string:
+		return record.TypeString, true
+	default:
+		return record.TypeAny, false
+	}
 }
 
 func (m *mapperTransform) Close() error { return nil }
 
-// compileExpr compiles an expression string into an evaluator function.
+// compileExpr compiles a field-value expression into an evaluator function.
+// A value with no leading "=" is a static string constant; otherwise everything
+// after the "=" is compiled as an expression (field ref, function call, literal).
 func compileExpr(expr string) (func(row map[string]interface{}) interface{}, error) {
 	if !strings.HasPrefix(expr, "=") {
 		// Static string constant.
 		return func(_ map[string]interface{}) interface{} { return expr }, nil
 	}
+	return compileInner(strings.TrimPrefix(expr, "="))
+}
 
-	inner := strings.TrimPrefix(expr, "=")
+// compileInner compiles an expression (the part after a leading "="). It is also
+// used to compile function-call arguments, which are always expressions —
+// `$field`, a numeric/quoted literal, or a nested `func(...)`. Arguments may be
+// written with or without a leading "=" (both `upper($product)` and
+// `upper(=$product)` resolve $product to the row value), so we tolerate an
+// optional "=" prefix here.
+func compileInner(inner string) (func(row map[string]interface{}) interface{}, error) {
+	inner = strings.TrimSpace(inner)
+	inner = strings.TrimPrefix(inner, "=")
+	inner = strings.TrimSpace(inner)
 
-	// Field reference: =$fieldName or =$.fieldName
+	// Field reference: $fieldName or $.fieldName. A dotted path
+	// ($.properties.amount) traverses nested maps so JSON/XML records can be
+	// flattened; a bare name is a fast direct lookup.
 	if strings.HasPrefix(inner, "$") {
 		fieldName := strings.TrimPrefix(strings.TrimPrefix(inner, "$"), ".")
+		if !strings.Contains(fieldName, ".") {
+			return func(row map[string]interface{}) interface{} {
+				return row[fieldName]
+			}, nil
+		}
+		segments := strings.Split(fieldName, ".")
 		return func(row map[string]interface{}) interface{} {
-			return row[fieldName]
+			return resolvePath(row, segments)
 		}, nil
 	}
 
-	// Function call: =funcName(arg1, arg2, ...)
+	// Function call: funcName(arg1, arg2, ...)
 	parenIdx := strings.Index(inner, "(")
 	if parenIdx > 0 && strings.HasSuffix(inner, ")") {
 		funcName := strings.ToLower(inner[:parenIdx])
 		argsStr := inner[parenIdx+1 : len(inner)-1]
 		args, err := splitArgs(argsStr)
 		if err != nil {
-			return nil, fmt.Errorf("bad function call %q: %w", expr, err)
+			return nil, fmt.Errorf("bad function call %q: %w", inner, err)
 		}
 		argEvals := make([]func(map[string]interface{}) interface{}, len(args))
 		for i, arg := range args {
@@ -202,7 +273,25 @@ func compileExpr(expr string) (func(row map[string]interface{}) interface{}, err
 		return func(_ map[string]interface{}) interface{} { return s }, nil
 	}
 
-	return nil, fmt.Errorf("unrecognized expression: %q", expr)
+	return nil, fmt.Errorf("unrecognized expression: %q", inner)
+}
+
+// resolvePath traverses a dotted path (e.g. properties.amount) through nested
+// map[string]interface{} values and returns the leaf value, or nil if any
+// segment is missing or not a map.
+func resolvePath(row map[string]interface{}, segments []string) interface{} {
+	var cur interface{} = row
+	for _, seg := range segments {
+		m, ok := cur.(map[string]interface{})
+		if !ok {
+			return nil
+		}
+		cur, ok = m[seg]
+		if !ok {
+			return nil
+		}
+	}
+	return cur
 }
 
 // splitArgs splits a comma-separated argument list respecting parentheses and quotes.

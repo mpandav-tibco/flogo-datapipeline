@@ -6,6 +6,8 @@ package pipeline
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"regexp"
 
 	"github.com/project-flogo/core/app/resource"
 )
@@ -19,24 +21,24 @@ const ResType = "pipeline"
 // (CSV without auto-inference, fixed-width, delimited flat files).
 type ColumnDef struct {
 	Name           string `json:"name"`
-	Type           string `json:"type"`            // string | int | float | bool | date | decimal
-	Scale          int    `json:"scale,omitempty"` // decimal places
-	Format         string `json:"format,omitempty"` // date format e.g. "2006-01-02"
-	Start          int    `json:"start,omitempty"`  // fixed-width: 1-based column start position
-	Length         int    `json:"length,omitempty"` // fixed-width: column byte length
+	Type           string `json:"type"`                     // string | int | float | bool | date | decimal
+	Scale          int    `json:"scale,omitempty"`          // decimal places
+	Format         string `json:"format,omitempty"`         // date format e.g. "2006-01-02"
+	Start          int    `json:"start,omitempty"`          // fixed-width: 1-based column start position
+	Length         int    `json:"length,omitempty"`         // fixed-width: column byte length
 	ImpliedDecimal int    `json:"impliedDecimal,omitempty"` // fixed-width: implied decimal places
-	Trim           bool   `json:"trim,omitempty"`   // trim whitespace
+	Trim           bool   `json:"trim,omitempty"`           // trim whitespace
 	Nullable       bool   `json:"nullable,omitempty"`
 }
 
 // SourceDef configures the data source for the pipeline.
 // The "type" field selects the registered source factory.
 type SourceDef struct {
-	Type     string                 `json:"type"`              // csv | parquet | fixedwidth | xml | jsonlines | jdbc
-	Path     string                 `json:"path,omitempty"`    // file path or glob pattern
+	Type     string                 `json:"type"`               // csv | parquet | fixedwidth | xml | jsonlines | jdbc
+	Path     string                 `json:"path,omitempty"`     // file path or glob pattern
 	Encoding string                 `json:"encoding,omitempty"` // utf-8 | ebcdic-037 | latin-1
-	Columns  []ColumnDef            `json:"columns,omitempty"` // explicit schema (optional for self-describing formats)
-	Options  map[string]interface{} `json:"options,omitempty"` // format-specific options
+	Columns  []ColumnDef            `json:"columns,omitempty"`  // explicit schema (optional for self-describing formats)
+	Options  map[string]interface{} `json:"options,omitempty"`  // format-specific options
 
 	// ErrorSink routes deserialization failures from streaming sources (malformed
 	// JSON, schema-mismatch, encoding errors) to a DLQ rather than aborting the
@@ -47,6 +49,61 @@ type SourceDef struct {
 	// Example:
 	//   "errorSink": { "type": "dlq", "innerType": "file", "innerOptions": { "path": "/tmp/src-errors" } }
 	ErrorSink map[string]interface{} `json:"errorSink,omitempty"`
+}
+
+// UnmarshalJSON flattens the entire source object into Options so that
+// source-specific keys can be written either at the top level (e.g. "dsn",
+// "driver", "table", "brokers", "topic") or nested under "options" — matching
+// the ergonomics of SinkDef. The dedicated struct fields (Type, Path, Encoding,
+// Columns, ErrorSink) are also populated for typed access. buildSourceConfig
+// copies Options over the config map, so flat keys reach the source factory.
+func (s *SourceDef) UnmarshalJSON(data []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	if typ, ok := raw["type"].(string); ok {
+		s.Type = typ
+	}
+	if p, ok := raw["path"].(string); ok {
+		s.Path = p
+	}
+	if e, ok := raw["encoding"].(string); ok {
+		s.Encoding = e
+	}
+	// Decode columns (if present) into the typed slice.
+	if _, ok := raw["columns"]; ok {
+		var wrapper struct {
+			Columns []ColumnDef `json:"columns"`
+		}
+		if err := json.Unmarshal(data, &wrapper); err != nil {
+			return err
+		}
+		s.Columns = wrapper.Columns
+	}
+	if es, ok := raw["errorSink"].(map[string]interface{}); ok {
+		s.ErrorSink = es
+	}
+	// Flatten everything (except the reserved structural keys) into Options so
+	// flat top-level keys reach the source factory. Keys nested under an explicit
+	// "options" object are merged in as well and take precedence.
+	opts := make(map[string]interface{})
+	for k, v := range raw {
+		switch k {
+		case "type", "path", "encoding", "columns", "errorSink", "options":
+			continue
+		}
+		opts[k] = v
+	}
+	if nested, ok := raw["options"].(map[string]interface{}); ok {
+		for k, v := range nested {
+			opts[k] = v
+		}
+	}
+	if len(opts) > 0 {
+		s.Options = opts
+	}
+	return nil
 }
 
 // TransformDef describes a single transform stage.
@@ -72,7 +129,7 @@ func (t *TransformDef) UnmarshalJSON(data []byte) error {
 
 // SinkDef configures the data sink for the pipeline.
 type SinkDef struct {
-	Type    string                 `json:"type"`             // jdbc | parquet | csv | kafka | null
+	Type    string                 `json:"type"`              // jdbc | parquet | csv | kafka | null
 	Options map[string]interface{} `json:"options,omitempty"` // type-specific options (flattened at parse time)
 }
 
@@ -102,12 +159,12 @@ type CheckpointDef struct {
 
 // PerformanceDef tunes the pipeline execution parameters.
 type PerformanceDef struct {
-	BatchSize               int `json:"batchSize,omitempty"`               // rows per RecordBatch (default 5000)
-	TransformWorkers        int `json:"transformWorkers,omitempty"`        // parallel transform goroutines (default 1)
-	SourceBufferBatches     int `json:"sourceBufferBatches,omitempty"`     // channel depth between source and transforms (default 4)
-	SinkBufferBatches       int `json:"sinkBufferBatches,omitempty"`       // channel depth between transforms and sink (default 4)
-	MaxMemoryMB             int `json:"maxMemoryMB,omitempty"`             // backpressure: block source when in-flight batches exceed this (default 512)
-	RowGroupParallelism     int `json:"rowGroupParallelism,omitempty"`     // parquet: concurrent row-group readers (default 4)
+	BatchSize           int `json:"batchSize,omitempty"`           // rows per RecordBatch (default 5000)
+	TransformWorkers    int `json:"transformWorkers,omitempty"`    // parallel transform goroutines (default 1)
+	SourceBufferBatches int `json:"sourceBufferBatches,omitempty"` // channel depth between source and transforms (default 4)
+	SinkBufferBatches   int `json:"sinkBufferBatches,omitempty"`   // channel depth between transforms and sink (default 4)
+	MaxMemoryMB         int `json:"maxMemoryMB,omitempty"`         // backpressure: block source when in-flight batches exceed this (default 512)
+	RowGroupParallelism int `json:"rowGroupParallelism,omitempty"` // parquet: concurrent row-group readers (default 4)
 }
 
 // IncrementalDef configures incremental-load / CDC behaviour for the pipeline.
@@ -150,12 +207,12 @@ type IncrementalDef struct {
 
 // ScalingDef controls multi-instance horizontal scaling.
 type ScalingDef struct {
-	Mode           string         `json:"mode"`                     // single | sharded | distributed
-	InstanceIndex  int            `json:"instanceIndex,omitempty"`  // sharded: 0-based index of this instance
-	InstanceCount  int            `json:"instanceCount,omitempty"`  // sharded: total number of instances
-	Coordinator    *CoordinatorDef `json:"coordinator,omitempty"`   // distributed: work queue config
-	PartitionStrategy string      `json:"partitionStrategy,omitempty"` // rowgroup | file | byterange
-	PartitionsPerClaim int        `json:"partitionsPerClaim,omitempty"` // distributed: claim batch size
+	Mode               string          `json:"mode"`                         // single | sharded | distributed
+	InstanceIndex      int             `json:"instanceIndex,omitempty"`      // sharded: 0-based index of this instance
+	InstanceCount      int             `json:"instanceCount,omitempty"`      // sharded: total number of instances
+	Coordinator        *CoordinatorDef `json:"coordinator,omitempty"`        // distributed: work queue config
+	PartitionStrategy  string          `json:"partitionStrategy,omitempty"`  // rowgroup | file | byterange
+	PartitionsPerClaim int             `json:"partitionsPerClaim,omitempty"` // distributed: claim batch size
 }
 
 // CoordinatorDef configures the distributed work queue.
@@ -274,19 +331,30 @@ type ObservabilityDef struct {
 // Definition is the declarative pipeline spec carried by a "pipeline:" resource.
 // All fields map directly to the JSON structure of the pipeline resource file.
 type Definition struct {
-	Name        string           `json:"name,omitempty"`
-	Description string           `json:"description,omitempty"`
-	Source      SourceDef        `json:"source"`
-	Transforms  []TransformDef   `json:"transforms,omitempty"`
-	Sink        SinkDef          `json:"sink"`
-	Checkpoint  CheckpointDef    `json:"checkpoint,omitempty"`
-	Performance PerformanceDef   `json:"performance,omitempty"`
-	Scaling     ScalingDef       `json:"scaling,omitempty"`
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
+	// Mode selects the execution strategy for the transform stage:
+	//   "etl"  — Extract, Transform (in-flight), Load. Default. Transforms run
+	//            between source and sink.
+	//   "el"   — Extract, Load only. The in-flight transform pipeline is
+	//            bypassed and rows are written to the sink exactly as read.
+	//            Any declared transforms are ignored (a warning is logged).
+	//   "elt"  — Extract, Load, then Transform in-target. Behaves like "el" for
+	//            the movement stage (raw load); declared transforms are NOT run
+	//            in-flight because they are expected to execute in the target
+	//            system. A notice is logged so operators are not surprised.
+	Mode        string         `json:"mode,omitempty"`
+	Source      SourceDef      `json:"source"`
+	Transforms  []TransformDef `json:"transforms,omitempty"`
+	Sink        SinkDef        `json:"sink"`
+	Checkpoint  CheckpointDef  `json:"checkpoint,omitempty"`
+	Performance PerformanceDef `json:"performance,omitempty"`
+	Scaling     ScalingDef     `json:"scaling,omitempty"`
 	// SchemaDrift configures automatic schema evolution handling. When
 	// Policy is non-empty, a schemadrift transform is prepended to the
 	// transform pipeline automatically; the schemadrift package must be
 	// imported (blank import) in the main package alongside this package.
-	SchemaDrift   SchemaDriftDef   `json:"schemaDrift,omitempty"`
+	SchemaDrift SchemaDriftDef `json:"schemaDrift,omitempty"`
 	// Observability configures the metrics backend. When Metrics is empty or
 	// "none", a zero-cost NoopRecorder is used so there is no overhead.
 	Observability ObservabilityDef `json:"observability,omitempty"`
@@ -312,6 +380,9 @@ func (d *Definition) Validate() error { return d.validate() }
 
 // defaults fills in zero values with sensible production-ready defaults.
 func (d *Definition) defaults() {
+	if d.Mode == "" {
+		d.Mode = "etl"
+	}
 	if d.Performance.BatchSize == 0 {
 		d.Performance.BatchSize = 5000
 	}
@@ -370,6 +441,12 @@ func (d *Definition) validate() error {
 	if d.Sink.Type == "" {
 		return fmt.Errorf("pipeline definition: sink.type is required")
 	}
+	switch d.Mode {
+	case "", "etl", "el", "elt":
+		// valid
+	default:
+		return fmt.Errorf("pipeline definition: mode must be 'etl', 'el', or 'elt'")
+	}
 	if d.Incremental.Mode == "hwm" {
 		if d.Incremental.Column == "" {
 			return fmt.Errorf("pipeline definition: incremental.column is required when mode is 'hwm'")
@@ -403,9 +480,84 @@ func (defLoader) LoadResource(config *resource.Config) (*resource.Resource, erro
 	if err := json.Unmarshal(config.Data, &def); err != nil {
 		return nil, err
 	}
+	// Expand ${ENV_VAR} placeholders in string config values so deployed
+	// pipelines can inject secrets (DSNs, keys, tokens) via environment
+	// variables — e.g. a container references "${DB_PASSWORD}" and Kubernetes
+	// supplies it from a Secret. Unset variables expand to "" (like a shell).
+	def.expandEnv()
 	def.defaults()
 	if err := def.validate(); err != nil {
 		return nil, err
 	}
 	return resource.New(ResType, &def), nil
+}
+
+// envVarRe matches ${NAME} placeholders (NAME = letters, digits, underscore).
+var envVarRe = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
+
+// reservedTemplateVars are engine-internal placeholders expanded elsewhere
+// (incremental high-water mark, date/path templating). They must NOT be treated
+// as environment variables.
+var reservedTemplateVars = map[string]bool{
+	"hwm": true, "date": true, "year": true, "month": true, "day": true,
+	"uuid": true, "runId": true,
+}
+
+// expandEnvString replaces ${VAR} in s with the environment value of VAR — but
+// only when VAR is actually set in the environment and is not a reserved
+// engine template (e.g. ${hwm}, ${date}). Unset / reserved placeholders are
+// left untouched so their dedicated substitution still runs.
+func expandEnvString(s string) string {
+	return envVarRe.ReplaceAllStringFunc(s, func(m string) string {
+		name := envVarRe.FindStringSubmatch(m)[1]
+		if reservedTemplateVars[name] {
+			return m
+		}
+		if v, ok := os.LookupEnv(name); ok {
+			return v
+		}
+		return m
+	})
+}
+
+// expandEnvValue recursively expands ${ENV} placeholders in any string values
+// held in a config value (string, map, or slice).
+func expandEnvValue(v interface{}) interface{} {
+	switch t := v.(type) {
+	case string:
+		return expandEnvString(t)
+	case map[string]interface{}:
+		for k, val := range t {
+			t[k] = expandEnvValue(val)
+		}
+		return t
+	case []interface{}:
+		for i, val := range t {
+			t[i] = expandEnvValue(val)
+		}
+		return t
+	default:
+		return v
+	}
+}
+
+// expandEnv expands ${ENV} placeholders across the source, sink, dlq and
+// transform config maps (and the source path). Structural/numeric fields are
+// left untouched.
+func (d *Definition) expandEnv() {
+	d.Source.Path = expandEnvString(d.Source.Path)
+	if d.Source.Options != nil {
+		expandEnvValue(d.Source.Options)
+	}
+	if d.Sink.Options != nil {
+		expandEnvValue(d.Sink.Options)
+	}
+	if d.DLQ.Options != nil {
+		expandEnvValue(d.DLQ.Options)
+	}
+	for i := range d.Transforms {
+		if d.Transforms[i].Extra != nil {
+			expandEnvValue(d.Transforms[i].Extra)
+		}
+	}
 }

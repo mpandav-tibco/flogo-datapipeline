@@ -1,0 +1,8 @@
+node_modules/
+dist/
+*.vsix
+.harness/
+bin/
+.sandbox/
+# Resolved run files generated when connections are injected at run time
+*.resolved.datapipeline

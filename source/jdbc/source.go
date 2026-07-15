@@ -39,7 +39,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/mpandav-tibco/flogo-datapipeline/internal/sqlutil"
 	"github.com/mpandav-tibco/flogo-datapipeline/record"
@@ -59,11 +61,11 @@ func init() { source.Register("jdbc", newJDBCSource) }
 type jdbcSource struct {
 	db         *sql.DB
 	driver     string
-	baseQuery  string      // SELECT without LIMIT/OFFSET/WHERE-keyset suffix; built once in newJDBCSource
-	orderKey   string      // primary key column for keyset pagination; empty = use LIMIT/OFFSET
+	baseQuery  string // SELECT without LIMIT/OFFSET/WHERE-keyset suffix; built once in newJDBCSource
+	orderKey   string // primary key column for keyset pagination; empty = use LIMIT/OFFSET
 	batchSize  int
 	schema     []record.Column
-	rows       *sql.Rows   // live cursor held between ReadBatch calls; nil between pages (keyset)
+	rows       *sql.Rows // live cursor held between ReadBatch calls; nil between pages (keyset)
 	rowsRead   int64
 	lastKeyVal interface{} // last value of orderKey seen; drives the next keyset page query
 	useKeyset  bool
@@ -140,6 +142,14 @@ func newJDBCSource(cfg map[string]interface{}) (source.Source, error) {
 	var baseQuery string
 	if rawQuery != "" {
 		baseQuery = rawQuery
+		// HWM cannot be safely appended to an arbitrary raw query (it may already
+		// have GROUP BY / ORDER BY / subqueries). Incremental filtering is only
+		// applied in table mode; surface a hint so operators aren't surprised.
+		if col, _ := cfg["hwmColumn"].(string); col != "" {
+			if v, _ := cfg["hwmValue"].(string); v != "" {
+				fmt.Printf("jdbc source: incremental HWM is not applied to a raw 'query' — include the watermark predicate in your query WHERE clause, or use 'table' mode for automatic HWM filtering\n")
+			}
+		}
 	} else {
 		baseQuery = buildBaseQuery(cfg, table, driver)
 	}
@@ -200,12 +210,56 @@ func buildBaseQuery(cfg map[string]interface{}, table, driver string) string {
 	sb.WriteString(" FROM ")
 	sb.WriteString(sqlutil.QuoteIdent(table, driver))
 
+	// Optional user WHERE clause and/or an incremental high-water-mark predicate.
+	// The HWM predicate (col > lastValue) is injected by the engine via the
+	// hwmColumn/hwmValue config keys for incremental.mode=hwm pipelines so the
+	// database only returns rows newer than the last persisted watermark.
+	conds := make([]string, 0, 2)
 	if where, ok := cfg["where"].(string); ok && where != "" {
+		conds = append(conds, where)
+	}
+	if pred := hwmPredicate(cfg, driver); pred != "" {
+		conds = append(conds, pred)
+	}
+	if len(conds) > 0 {
 		sb.WriteString(" WHERE ")
-		sb.WriteString(where)
+		sb.WriteString(strings.Join(conds, " AND "))
 	}
 
 	return sb.String()
+}
+
+// hwmPredicate builds the incremental high-water-mark WHERE predicate
+// ("col" > <literal>) from the hwmColumn / hwmValue / hwmValueType config keys
+// injected by the engine for incremental.mode=hwm pipelines. Returns "" when no
+// watermark is configured or no prior value exists (first full-table load).
+//
+// The value originates from the watermark store (which the pipeline itself
+// wrote from earlier DB rows), not from end-user input; it is nonetheless
+// formatted defensively — numerics are validated, everything else is single-
+// quoted with embedded quotes escaped — so the resulting SQL is always well
+// formed and injection-safe.
+func hwmPredicate(cfg map[string]interface{}, driver string) string {
+	col, _ := cfg["hwmColumn"].(string)
+	val, _ := cfg["hwmValue"].(string)
+	if col == "" || val == "" {
+		return ""
+	}
+	valueType, _ := cfg["hwmValueType"].(string)
+	var lit string
+	switch valueType {
+	case "int":
+		if _, err := strconv.ParseInt(strings.TrimSpace(val), 10, 64); err != nil {
+			// Not a clean integer — fall back to a quoted literal so the query
+			// stays valid rather than embedding an unquoted bad token.
+			lit = "'" + strings.ReplaceAll(val, "'", "''") + "'"
+		} else {
+			lit = strings.TrimSpace(val)
+		}
+	default: // "datetime", "string", or unset — quote as a string literal.
+		lit = "'" + strings.ReplaceAll(val, "'", "''") + "'"
+	}
+	return sqlutil.QuoteIdent(col, driver) + " > " + lit
 }
 
 // Schema returns the column definitions derived from schema inference.
@@ -332,7 +386,11 @@ func (s *jdbcSource) ReadBatch(size int) (*record.RecordBatch, error) {
 		}
 
 		row := make([]interface{}, len(s.schema))
-		copy(row, vals)
+		for i := range s.schema {
+			if i < len(vals) {
+				row[i] = coerceScanned(vals[i], s.schema[i])
+			}
+		}
 		batch.Rows = append(batch.Rows, row)
 		s.rowsRead++
 
@@ -340,7 +398,7 @@ func (s *jdbcSource) ReadBatch(size int) (*record.RecordBatch, error) {
 		if s.useKeyset {
 			for i, col := range s.schema {
 				if col.Name == s.orderKey {
-					s.lastKeyVal = vals[i]
+					s.lastKeyVal = row[i]
 					break
 				}
 			}
@@ -728,6 +786,9 @@ func formatLiteral(v interface{}, driver string) string {
 		return fmt.Sprintf("%g", n)
 	case float64:
 		return fmt.Sprintf("%g", n)
+	case time.Time:
+		// ISO-8601 timestamp literal, valid across Postgres/MySQL/SQLite.
+		return "'" + n.Format("2006-01-02 15:04:05.999999-07:00") + "'"
 	case []byte:
 		// Treat raw bytes as a hex literal (Postgres, MySQL, SQLite all support this).
 		return fmt.Sprintf("'%s'", strings.ReplaceAll(string(n), "'", "''"))
@@ -735,4 +796,85 @@ func formatLiteral(v interface{}, driver string) string {
 		s := fmt.Sprintf("%v", v)
 		return "'" + strings.ReplaceAll(s, "'", "''") + "'"
 	}
+}
+
+// coerceScanned normalises a value produced by database/sql's Scan-into-any into
+// a typed Go value that matches the declared column type. Drivers (notably
+// lib/pq) return NUMERIC/DECIMAL columns as []byte and some return numbers as
+// strings; without this, arithmetic transforms (e.g. multiply) and typed sinks
+// (Parquet) see raw bytes instead of numbers. Values already scanned as the
+// right Go type (int64, float64, bool, time.Time) are passed through unchanged.
+func coerceScanned(v interface{}, col record.Column) interface{} {
+	if v == nil {
+		return nil
+	}
+	// Reduce []byte to string so the type-specific parsing below can run.
+	switch b := v.(type) {
+	case []byte:
+		v = string(b)
+	}
+
+	switch col.Type {
+	case record.TypeInt:
+		switch n := v.(type) {
+		case int64:
+			return n
+		case int32:
+			return int64(n)
+		case float64:
+			return int64(n)
+		case string:
+			if iv, err := strconv.ParseInt(strings.TrimSpace(n), 10, 64); err == nil {
+				return iv
+			}
+			// Some drivers hand back "12.0" for integer-typed expressions.
+			if fv, err := strconv.ParseFloat(strings.TrimSpace(n), 64); err == nil {
+				return int64(fv)
+			}
+		}
+	case record.TypeFloat, record.TypeDecimal:
+		switch n := v.(type) {
+		case float64:
+			return n
+		case float32:
+			return float64(n)
+		case int64:
+			return float64(n)
+		case string:
+			if fv, err := strconv.ParseFloat(strings.TrimSpace(n), 64); err == nil {
+				return fv
+			}
+		}
+	case record.TypeBool:
+		switch n := v.(type) {
+		case bool:
+			return n
+		case string:
+			switch strings.ToLower(strings.TrimSpace(n)) {
+			case "true", "t", "1", "yes", "y":
+				return true
+			case "false", "f", "0", "no", "n":
+				return false
+			}
+		case int64:
+			return n != 0
+		}
+	case record.TypeDate:
+		switch n := v.(type) {
+		case time.Time:
+			return n
+		case string:
+			for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02 15:04:05.999999-07:00", "2006-01-02 15:04:05", "2006-01-02"} {
+				if t, err := time.Parse(layout, strings.TrimSpace(n)); err == nil {
+					return t
+				}
+			}
+		}
+	case record.TypeString:
+		if s, ok := v.(string); ok {
+			return s
+		}
+		return fmt.Sprintf("%v", v)
+	}
+	return v
 }

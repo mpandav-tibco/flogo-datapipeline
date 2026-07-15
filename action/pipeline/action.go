@@ -6,12 +6,15 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"runtime/debug"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/project-flogo/core/action"
 	"github.com/project-flogo/core/app/resource"
 	"github.com/project-flogo/core/data/metadata"
+	"github.com/project-flogo/core/engine"
 	corelog "github.com/project-flogo/core/support/log"
 
 	"github.com/mpandav-tibco/flogo-datapipeline/checkpoint"
@@ -81,14 +84,32 @@ func shortName(ref string) string {
 	return strings.TrimPrefix(ref, "res://pipeline:")
 }
 
-// newRunLog builds a per-run child logger that permanently binds the pipeline
-// name and run ID as structured fields — identical to the flogo-agent pattern
-// where every log line carries {"agent": "...", "session": "..."}.
+// newRunLog builds a per-run logger following the OOTB Flogo Integration flow
+// logging convention (see project-flogo/flow instance.TaskInst, which attaches
+// activity.name / flow.name / flow.id / app.name / app.version /
+// deployment.environment as structured fields).
+//
+// The pipeline identity (pipeline.name + pipeline.runId — the analogues of the
+// flow's named logger + flow.id) is always bound so every run is correlatable.
+// The richer app/deployment metadata is attached only when contextual logging
+// is enabled (FLOGO_LOG_CTX=true / log.CtxLoggingEnabled()), exactly as a Flogo
+// flow only decorates its activity logger with that metadata when ctx logging
+// is on — keeping the default console output clean.
 func newRunLog(pipelineRef, runID string) corelog.Logger {
-	return corelog.ChildLoggerWithFields(flog,
-		corelog.FieldString("pipeline", shortName(pipelineRef)),
-		corelog.FieldString("runId", runID),
-	)
+	fields := []corelog.Field{
+		corelog.FieldString("pipeline.name", shortName(pipelineRef)),
+		corelog.FieldString("pipeline.runId", runID),
+	}
+	if corelog.CtxLoggingEnabled() {
+		fields = append(fields,
+			corelog.FieldString("app.name", engine.GetAppName()),
+			corelog.FieldString("app.version", engine.GetAppVersion()),
+		)
+		if env := engine.GetEnvName(); env != "" {
+			fields = append(fields, corelog.FieldString("deployment.environment", env))
+		}
+	}
+	return corelog.ChildLoggerWithFields(flog, fields...)
 }
 
 // RunDirect executes the pipeline synchronously in the calling goroutine and
@@ -211,9 +232,38 @@ func (a *DataPipelineAction) Shutdown(ctx context.Context) error {
 // executePipeline runs the full source → transform → sink loop.
 // Called from the goroutine spawned by Run() and directly from RunDirect().
 // runLog carries the per-run structured fields {"pipeline": "...", "runId": "..."}.
-func (a *DataPipelineAction) executePipeline(ctx context.Context, in *Input, runLog corelog.Logger, runID string) (*Output, error) {
+//
+// A deferred recover converts any panic from a source/transform/sink (e.g. a
+// type-mapping panic deep in a columnar writer) into a normal error return, so
+// one malformed run fails gracefully with status "failed" instead of crashing
+// the whole engine process (which would take down every other pipeline and the
+// REST API with it).
+func (a *DataPipelineAction) executePipeline(ctx context.Context, in *Input, runLog corelog.Logger, runID string) (out *Output, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			if out == nil {
+				out = &Output{}
+			}
+			err = fmt.Errorf("pipeline panicked: %v", r)
+			runLog.Errorf("recovered from panic in pipeline run: %v\n%s", r, debug.Stack())
+		}
+	}()
+	return a.executePipelineImpl(ctx, in, runLog, runID)
+}
+
+func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input, runLog corelog.Logger, runID string) (*Output, error) {
 	def := a.def
 	out := &Output{}
+
+	// Echo the effective run configuration so operators can confirm from the run
+	// log which settings were honored (many settings have no other visible
+	// side-effect). Kept to a single line to avoid log noise.
+	runLog.Infof("run config — mode=%s batchSize=%d bufferBatches=%d maxMemoryMB=%d transformWorkers=%d scaling=%s checkpoint=%s(rows=%d,secs=%d) incremental=%s metrics=%s",
+		orDefault(def.Mode, "etl"), def.Performance.BatchSize, def.Performance.SourceBufferBatches,
+		def.Performance.MaxMemoryMB, orDefaultInt(def.Performance.TransformWorkers, 1),
+		orDefault(def.Scaling.Mode, "single"), orDefault(def.Checkpoint.Type, "none"),
+		def.Checkpoint.IntervalRows, def.Checkpoint.IntervalSeconds,
+		orDefault(def.Incremental.Mode, "none"), orDefault(def.Observability.Metrics, "none"))
 
 	// --- checkpoint ---
 	ckpt, err := openCheckpoint(def)
@@ -273,28 +323,33 @@ func (a *DataPipelineAction) executePipeline(ctx context.Context, in *Input, run
 	}
 	defer src.Close()
 
-	// Resume from checkpoint.
-	token, err := ckpt.Load(runID)
-	if err != nil {
-		return out, fmt.Errorf("checkpoint load: %w", err)
-	}
-	if token != nil && token.RowsProcessed > 0 {
-		runLog.Infof("resuming — skipping %d already-processed rows", token.RowsProcessed)
-		if skipErr := src.Skip(token.RowsProcessed); skipErr != nil {
-			return out, fmt.Errorf("source skip: %w", skipErr)
-		}
-		out.RowsProcessed = token.RowsProcessed
-	}
-
 	// --- transforms ---
 	// Build the user-declared transform configs.
 	transformCfgs := make([]map[string]interface{}, 0, len(def.Transforms)+1)
+
+	// Execution mode gates the in-flight transform stage:
+	//   etl  → transforms run in-flight (default).
+	//   el   → raw extract-load; the transform pipeline is bypassed entirely.
+	//   elt  → load raw now, transform in-target later; in-flight transforms are
+	//          also bypassed (they are expected to run in the destination system).
+	mode := def.Mode
+	if mode == "" {
+		mode = "etl"
+	}
+	inFlightTransforms := mode == "etl"
+	if !inFlightTransforms && (len(def.Transforms) > 0 || def.SchemaDrift.Policy != "") {
+		if mode == "elt" {
+			runLog.Infof("mode=elt — %d declared transform(s) are NOT run in-flight; they are expected to execute in the target system", len(def.Transforms))
+		} else {
+			runLog.Warnf("mode=el — raw extract-load; %d declared transform(s) will be ignored", len(def.Transforms))
+		}
+	}
 
 	// Auto-prepend the schemadrift transform when a drift policy is configured.
 	// The schemadrift package must be imported (blank import) alongside this
 	// package in the main program; if it is not imported the Build call below
 	// will return an "unknown type" error with a clear message.
-	if def.SchemaDrift.Policy != "" {
+	if inFlightTransforms && def.SchemaDrift.Policy != "" {
 		driftCfg := map[string]interface{}{
 			"type":    "schemadrift",
 			"policy":  def.SchemaDrift.Policy,
@@ -303,8 +358,10 @@ func (a *DataPipelineAction) executePipeline(ctx context.Context, in *Input, run
 		transformCfgs = append(transformCfgs, driftCfg)
 	}
 
-	for _, td := range def.Transforms {
-		transformCfgs = append(transformCfgs, td.Extra)
+	if inFlightTransforms {
+		for _, td := range def.Transforms {
+			transformCfgs = append(transformCfgs, td.Extra)
+		}
 	}
 
 	txPipeline, err := transform.Build(transformCfgs)
@@ -328,7 +385,15 @@ func (a *DataPipelineAction) executePipeline(ctx context.Context, in *Input, run
 	if err != nil {
 		return out, fmt.Errorf("sink open: %w", err)
 	}
-	defer snk.Close()
+	// Guard against double-close: the happy path closes the sink explicitly (to
+	// surface upload/commit errors that only occur at Close); this deferred close
+	// then only runs on an early error return.
+	sinkClosed := false
+	defer func() {
+		if !sinkClosed {
+			_ = snk.Close()
+		}
+	}()
 
 	// --- DLQ sink (lazy: inner connection opened only on first bad row) ---
 	// dlq is nil when no DLQ is configured; rowLevelWrite handles nil safely.
@@ -343,93 +408,197 @@ func (a *DataPipelineAction) executePipeline(ctx context.Context, in *Input, run
 	// --- read → transform → write loop ---
 	batchSize := def.Performance.BatchSize
 	ckptIntervalRows := int64(def.Checkpoint.IntervalRows)
-	var rowsSinceCkpt int64
+	ckptIntervalSecs := def.Checkpoint.IntervalSeconds
 
-	for {
-		if ctx.Err() != nil {
-			return out, ctx.Err()
+	// maxMemoryMB backpressure budget for the read-ahead buffer. The reader
+	// goroutine reads ahead up to sourceBufferBatches batches, but never lets the
+	// total in-flight (un-consumed) bytes exceed this limit — protecting memory
+	// when a downstream stage (transform/sink) is slower than the source.
+	maxInFlightBytes := int64(def.Performance.MaxMemoryMB) * 1024 * 1024
+	bufDepth := def.Performance.SourceBufferBatches
+	if bufDepth < 1 {
+		bufDepth = 1
+	}
+
+	// transformWorkers > 1 requests multi-core transform parallelism. It is only
+	// safe when transforms are stateless AND checkpointing is off, because
+	// out-of-order batch completion would corrupt the checkpoint cursor and any
+	// order-dependent accumulator (HWM max-tracking, DQ gate stats, schemadrift
+	// baseline). When those correctness constraints apply we keep transform
+	// single-threaded — reads are still overlapped with transform+write by the
+	// read-ahead goroutine below, so the source never blocks the pipeline.
+	if def.Performance.TransformWorkers > 1 {
+		orderSensitive := hwmProvider != nil || dqProvider != nil ||
+			def.SchemaDrift.Policy != "" ||
+			(def.Checkpoint.Type != "" && def.Checkpoint.Type != "none")
+		if orderSensitive {
+			runLog.Infof("transformWorkers=%d — ordered processing required (checkpoint/HWM/DQ/drift); transform runs single-threaded, reads overlapped via read-ahead", def.Performance.TransformWorkers)
+		} else {
+			runLog.Infof("transformWorkers=%d — reads overlapped with transform+write via read-ahead buffer (depth %d)", def.Performance.TransformWorkers, bufDepth)
+		}
+	}
+
+	// drain processes a single already-open source to exhaustion, updating the
+	// shared Output. It is invoked once for single mode and once per assigned
+	// partition for sharded/distributed modes (ckptKey namespaces the checkpoint
+	// so partitions resume independently). A reader goroutine decouples reads
+	// from transform+write so the two overlap; transform+write stay sequential to
+	// preserve transform state (hwm/dq accumulators) and checkpoint-cursor order.
+	drain := func(pSrc source.Source, ckptKey string) error {
+		// Resume from checkpoint (per-source key).
+		token, lErr := ckpt.Load(ckptKey)
+		if lErr != nil {
+			return fmt.Errorf("checkpoint load: %w", lErr)
+		}
+		if token != nil && token.RowsProcessed > 0 {
+			runLog.Infof("resuming %q — skipping %d already-processed rows", ckptKey, token.RowsProcessed)
+			if skipErr := pSrc.Skip(token.RowsProcessed); skipErr != nil {
+				return fmt.Errorf("source skip: %w", skipErr)
+			}
+			out.RowsProcessed += token.RowsProcessed
 		}
 
-		// --- read ---
-		t0 := time.Now()
-		batch, readErr := src.ReadBatch(batchSize)
-		readDur := time.Since(t0)
+		var rowsSinceCkpt int64
+		lastCkpt := time.Now()
 
-		if readErr != nil && readErr != io.EOF {
-			return out, fmt.Errorf("source read: %w", readErr)
+		// Read-ahead: a dedicated goroutine reads batches into readCh while the
+		// main goroutine transforms+writes. A byte semaphore enforces maxMemoryMB.
+		type readItem struct {
+			batch   *record.RecordBatch
+			readDur time.Duration
+			err     error
 		}
-		done := readErr == io.EOF
+		readCh := make(chan readItem, bufDepth)
+		var inFlight int64 // bytes currently buffered (atomic)
+		readCtx, cancelRead := context.WithCancel(ctx)
+		defer cancelRead()
 
-		if batch != nil && batch.Len() > 0 {
-			batchLen := int64(batch.Len())
-			out.RowsProcessed += batchLen
-			rowsSinceCkpt += batchLen
-
-			// Emit read metric and check stall before touching the batch further.
-			// Note: readDur includes backpressure wait time in any future buffered
-			// pipeline design — this is intentional (wall-clock latency, not CPU time).
-			a.recorder.BatchRead(a.ref, def.Source.Type, int(batchLen), readDur)
-			a.checkStall(runLog, "read", readDur)
-
-			// --- transform ---
-			t1 := time.Now()
-			transformed, txErr := txPipeline.Apply(batch)
-			txDur := time.Since(t1)
-			record.Put(batch)
-
-			if txErr != nil {
-				runLog.Warnf("transform error on batch of %d rows (routing to failed): %v", batchLen, txErr)
-				a.recorder.BatchFailed(a.ref, int(batchLen))
-				out.RowsFailed += batchLen
-			} else if transformed == nil {
-				// A nil batch with no error means the transform pipeline deliberately
-				// dropped the batch (e.g. schemadrift policy=drop, or a filter that
-				// eliminated all rows). Track these rows as dropped rather than failed
-				// so callers can distinguish intentional drops from processing errors.
-				a.recorder.BatchTransformed(a.ref, int(batchLen), 0, txDur)
-				a.checkStall(runLog, "transform", txDur)
-				out.RowsDropped += batchLen
-			} else if transformed.Len() > 0 {
-				txOut := int(transformed.Len())
-				a.recorder.BatchTransformed(a.ref, int(batchLen), txOut, txDur)
-				a.checkStall(runLog, "transform", txDur)
-
-				// --- write (with per-row DLQ fallback) ---
-				t2 := time.Now()
-				written, writeErr := a.rowLevelWrite(runLog, snk, dlq, transformed, runID, out)
-				writeDur := time.Since(t2)
-				record.Put(transformed)
-				if writeErr != nil {
-					// rowLevelWrite only returns an error for unrecoverable problems
-					// (e.g. the DLQ sink itself failed).  Individual row failures are
-					// counted in out.RowsFailed and do not abort the loop.
-					return out, writeErr
+		go func() {
+			defer close(readCh)
+			for {
+				if readCtx.Err() != nil {
+					return
 				}
-				out.RowsWritten += int64(written)
-				a.recorder.BatchWritten(a.ref, def.Sink.Type, written, writeDur)
-				a.checkStall(runLog, "write", writeDur)
-			} else {
-				// transformed is non-nil but empty — all rows were filtered out and
-				// the transform returned an empty batch rather than nil.
-				a.recorder.BatchTransformed(a.ref, int(batchLen), 0, txDur)
-				a.checkStall(runLog, "transform", txDur)
-				record.Put(transformed)
+				// Backpressure: block while the buffer already holds ~maxMemoryMB.
+				for maxInFlightBytes > 0 && atomic.LoadInt64(&inFlight) >= maxInFlightBytes {
+					if readCtx.Err() != nil {
+						return
+					}
+					time.Sleep(2 * time.Millisecond)
+				}
+				t0 := time.Now()
+				b, rErr := pSrc.ReadBatch(batchSize)
+				rd := time.Since(t0)
+				if b != nil && b.Len() > 0 {
+					atomic.AddInt64(&inFlight, batchBytes(b))
+				}
+				select {
+				case readCh <- readItem{batch: b, readDur: rd, err: rErr}:
+				case <-readCtx.Done():
+					return
+				}
+				if rErr != nil {
+					return // EOF or hard error — stop reading.
+				}
+			}
+		}()
+
+		for item := range readCh {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			batch, readErr, readDur := item.batch, item.err, item.readDur
+			if readErr != nil && readErr != io.EOF {
+				return fmt.Errorf("source read: %w", readErr)
 			}
 
-			// Checkpoint at configured row interval.
-			if ckptIntervalRows > 0 && rowsSinceCkpt >= ckptIntervalRows {
-				if err := snk.Flush(); err != nil {
-					return out, fmt.Errorf("sink flush (checkpoint): %w", err)
+			if batch != nil && batch.Len() > 0 {
+				bBytes := batchBytes(batch)
+				batchLen := int64(batch.Len())
+				out.RowsProcessed += batchLen
+				rowsSinceCkpt += batchLen
+
+				a.recorder.BatchRead(a.ref, def.Source.Type, int(batchLen), readDur)
+				a.checkStall(runLog, "read", readDur)
+
+				// --- transform ---
+				t1 := time.Now()
+				transformed, txErr := txPipeline.Apply(batch)
+				txDur := time.Since(t1)
+				if transformed != batch {
+					record.Put(batch)
 				}
-				saveCheckpoint(runLog, ckpt, runID, def.Source.Type, out.RowsProcessed, src)
-				a.recorder.CheckpointSaved(a.ref)
-				saveWatermark(runLog, wmStore, hwmProvider, def, a.ref)
-				rowsSinceCkpt = 0
+				// Batch fully consumed from the buffer — release its bytes.
+				atomic.AddInt64(&inFlight, -bBytes)
+
+				if txErr != nil {
+					runLog.Warnf("transform error on batch of %d rows (routing to failed): %v", batchLen, txErr)
+					a.recorder.BatchFailed(a.ref, int(batchLen))
+					out.RowsFailed += batchLen
+				} else if transformed == nil {
+					a.recorder.BatchTransformed(a.ref, int(batchLen), 0, txDur)
+					a.checkStall(runLog, "transform", txDur)
+					out.RowsDropped += batchLen
+				} else if transformed.Len() > 0 {
+					txOut := int(transformed.Len())
+					a.recorder.BatchTransformed(a.ref, int(batchLen), txOut, txDur)
+					a.checkStall(runLog, "transform", txDur)
+
+					// --- write (with per-row DLQ fallback) ---
+					t2 := time.Now()
+					written, writeErr := a.rowLevelWrite(runLog, snk, dlq, transformed, runID, out)
+					writeDur := time.Since(t2)
+					record.Put(transformed)
+					if writeErr != nil {
+						return writeErr
+					}
+					out.RowsWritten += int64(written)
+					a.recorder.BatchWritten(a.ref, def.Sink.Type, written, writeDur)
+					a.checkStall(runLog, "write", writeDur)
+				} else {
+					a.recorder.BatchTransformed(a.ref, int(batchLen), 0, txDur)
+					a.checkStall(runLog, "transform", txDur)
+					record.Put(transformed)
+				}
+
+				// Checkpoint at configured row interval or time interval.
+				rowTrigger := ckptIntervalRows > 0 && rowsSinceCkpt >= ckptIntervalRows
+				timeTrigger := ckptIntervalSecs > 0 && time.Since(lastCkpt) >= time.Duration(ckptIntervalSecs)*time.Second
+				if rowTrigger || timeTrigger {
+					if err := snk.Flush(); err != nil {
+						return fmt.Errorf("sink flush (checkpoint): %w", err)
+					}
+					saveCheckpoint(runLog, ckpt, ckptKey, def.Source.Type, out.RowsProcessed, pSrc)
+					a.recorder.CheckpointSaved(a.ref)
+					saveWatermark(runLog, wmStore, hwmProvider, def, a.ref)
+					// Surface the checkpoint so operators can see progress being
+					// persisted and which trigger fired (row count vs. time).
+					reason := "rows"
+					if timeTrigger && !rowTrigger {
+						reason = "time"
+					}
+					runLog.Infof("checkpoint saved — %d rows processed (trigger=%s)", out.RowsProcessed, reason)
+					rowsSinceCkpt = 0
+					lastCkpt = time.Now()
+				}
 			}
 		}
+		return nil
+	}
 
-		if done {
-			break
+	// --- execution: single-instance vs horizontally scaled ---
+	scMode := def.Scaling.Mode
+	if scMode == "" {
+		scMode = "single"
+	}
+	switch scMode {
+	case "sharded", "distributed":
+		if err := a.runScaled(ctx, runLog, def, scMode, src, srcCfg, runID, drain); err != nil {
+			return out, err
+		}
+	default:
+		if err := drain(src, runID); err != nil {
+			return out, err
 		}
 	}
 
@@ -437,6 +606,16 @@ func (a *DataPipelineAction) executePipeline(ctx context.Context, in *Input, run
 	if err := snk.Flush(); err != nil {
 		return out, fmt.Errorf("sink final flush: %w", err)
 	}
+
+	// Explicitly close the sink and surface any error. This is critical for sinks
+	// whose durable write happens at Close (e.g. the object-store sink uploads the
+	// buffered object on Close) — relying only on the deferred Close would discard
+	// that error and mis-report a failed upload as a successful run. Closing here
+	// makes the deferred snk.Close() a harmless no-op (idempotent close).
+	if err := snk.Close(); err != nil {
+		return out, fmt.Errorf("sink close: %w", err)
+	}
+	sinkClosed = true
 
 	if def.Checkpoint.DeleteOnSuccess {
 		_ = ckpt.Delete(runID)
@@ -467,24 +646,46 @@ func (a *DataPipelineAction) executePipeline(ctx context.Context, in *Input, run
 }
 
 // buildSourceConfig merges definition config with runtime overrides.
-// a.def.Source.Columns is []ColumnDef; we convert to []record.Column here so
-// that parseColumnDefs in the csv (and other) source packages always receives
-// the concrete type it already handles, avoiding a type-switch miss that would
-// silently drop all explicit type/format/scale information.
+// a.def.Source.Columns is []ColumnDef; we convert it to a slice of maps that
+// carry every column attribute (name/type/format/scale plus the fixed-width
+// start/length/impliedDecimal/trim). Emitting maps — rather than
+// []record.Column — means every source parser (csv, fixedwidth, jsonlines, …)
+// receives the full schema instead of silently losing the fixed-width layout
+// fields that record.Column cannot represent.
 func (a *DataPipelineAction) buildSourceConfig(in *Input) map[string]interface{} {
-	cols := make([]record.Column, len(a.def.Source.Columns))
+	cols := make([]interface{}, len(a.def.Source.Columns))
 	for i, cd := range a.def.Source.Columns {
-		cols[i] = record.Column{
-			Name:   cd.Name,
-			Type:   record.ColumnType(cd.Type),
-			Format: cd.Format,
-			Scale:  cd.Scale,
+		m := map[string]interface{}{
+			"name": cd.Name,
+			"type": cd.Type,
 		}
+		if cd.Format != "" {
+			m["format"] = cd.Format
+		}
+		if cd.Scale != 0 {
+			m["scale"] = cd.Scale
+		}
+		if cd.Start != 0 {
+			m["start"] = cd.Start
+		}
+		if cd.Length != 0 {
+			m["length"] = cd.Length
+		}
+		if cd.ImpliedDecimal != 0 {
+			m["impliedDecimal"] = cd.ImpliedDecimal
+		}
+		if cd.Trim {
+			m["trim"] = cd.Trim
+		}
+		if cd.Nullable {
+			m["nullable"] = cd.Nullable
+		}
+		cols[i] = m
 	}
 	cfg := map[string]interface{}{
 		"type":     a.def.Source.Type,
 		"encoding": a.def.Source.Encoding,
-		"columns":  cols, // []record.Column — never a []ColumnDef type-switch miss
+		"columns":  cols, // []interface{} of maps — full schema incl. fixed-width layout
 	}
 	for k, v := range a.def.Source.Options {
 		cfg[k] = v
@@ -533,6 +734,39 @@ func newRunID() string {
 		return fmt.Sprintf("%d", time.Now().UnixNano())
 	}
 	return hex.EncodeToString(b)
+}
+
+// orDefault returns v, or def when v is empty. Used for log echoes of settings
+// whose zero value is filled in later by Definition.defaults().
+func orDefault(v, def string) string {
+	if v == "" {
+		return def
+	}
+	return v
+}
+
+// orDefaultInt returns v, or def when v is zero.
+func orDefaultInt(v, def int) int {
+	if v == 0 {
+		return def
+	}
+	return v
+}
+
+// batchBytes estimates the in-memory size of a batch for the maxMemoryMB
+// backpressure budget. It is a cheap heuristic — a fixed per-cell estimate — not
+// an exact sizeof; the goal is proportional accounting to bound the read-ahead
+// buffer, not precise memory measurement.
+func batchBytes(b *record.RecordBatch) int64 {
+	if b == nil || len(b.Rows) == 0 {
+		return 0
+	}
+	const bytesPerCell = 32 // rough average across numeric/string cells
+	cols := int64(len(b.Columns))
+	if cols == 0 && len(b.Rows) > 0 {
+		cols = int64(len(b.Rows[0]))
+	}
+	return int64(len(b.Rows)) * cols * bytesPerCell
 }
 
 // openWatermarkStore creates the watermark.Store configured in def.Incremental.

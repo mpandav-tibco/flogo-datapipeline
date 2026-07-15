@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <!-- Database cylinder -->
+  <ellipse cx="44" cy="30" rx="30" ry="12" fill="#0064D6"/>
+  <path d="M14 30 v40 a30 12 0 0 0 60 0 v-40" fill="#0064D6"/>
+  <ellipse cx="44" cy="30" rx="30" ry="12" fill="none" stroke="#ffffff" stroke-width="3" opacity="0.35"/>
+  <path d="M14 50 a30 12 0 0 0 60 0" fill="none" stroke="#ffffff" stroke-width="3" opacity="0.35"/>
+  <!-- Link / plug connector to the right -->
+  <line x1="74" y1="70" x2="92" y2="88" stroke="#0064D6" stroke-width="6" stroke-linecap="round"/>
+  <rect x="90" y="84" width="26" height="26" rx="7" ry="7" fill="#28A745"/>
+  <circle cx="103" cy="97" r="6" fill="#ffffff"/>
+</svg>

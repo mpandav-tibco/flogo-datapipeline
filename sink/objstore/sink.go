@@ -13,6 +13,9 @@
 //	{DD}    — two-digit day     (UTC)
 //	{HH}    — two-digit hour    (UTC)
 //	{mm}    — two-digit minute  (UTC)
+//	{ss}    — two-digit second  (UTC)
+//	{ts}    — unix timestamp    (UTC seconds)
+//	{uuid}  — random v4 UUID    (unique per run)
 //
 // Format decoupling: the sink delegates all serialisation to an inner sink
 // registered in the sink registry (csv, parquet, jsonlines, …).  For streaming
@@ -33,6 +36,7 @@ package objstore
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
@@ -45,23 +49,26 @@ import (
 	"github.com/mpandav-tibco/flogo-datapipeline/sink"
 )
 
-// streamingFormats is the set of inner sink formats that can write to an
-// arbitrary io.Writer (rather than requiring an os.File with a path).
-// For these formats we use an io.Pipe to stream directly to the object store.
-// All other formats write to a temp file and are uploaded on Close.
-var streamingFormats = map[string]bool{
-	"csv":       true,
-	"tsv":       true,
-	"jsonlines": true,
-	"ndjson":    true,
-}
+// streamingFormats is the set of inner sink formats that stream directly to the
+// object store via an io.Pipe. It is currently empty: all inner formats write to
+// a temp file that is uploaded synchronously on Close (see uploadTmpFile), which
+// gives deterministic completion and proper error propagation. The csv/jsonlines
+// file sinks write by path, so the temp-file path handles them correctly without
+// the extra pipe goroutine (whose completion was racy).
+var streamingFormats = map[string]bool{}
 
 func init() {
 	for _, provider := range []string{"s3", "gcs", "adls"} {
 		p := provider // capture for closure
-		sink.Register(p+"-sink", func(cfg map[string]interface{}) (sink.Sink, error) {
+		ctor := func(cfg map[string]interface{}) (sink.Sink, error) {
 			return newObjstoreSink(p, cfg)
-		})
+		}
+		// Register under both the "<provider>-sink" name and the bare provider
+		// name so the type is symmetric with the object-store source (which
+		// registers as "s3"/"gcs"/"adls") and so Studio-built pipelines that use
+		// the bare provider name resolve correctly.
+		sink.Register(p+"-sink", ctor)
+		sink.Register(p, ctor)
 	}
 }
 
@@ -76,13 +83,13 @@ func init() {
 // Temp-file path (parquet, …): the inner sink writes to a local temp file;
 // Close() uploads the file and then deletes it.
 type objstoreSink struct {
-	provider string
-	store    objstore.Store
-	key      string       // destination object key (macros already expanded)
-	inner    sink.Sink
-	tmpPath  string       // non-empty on temp-file path
-	pw       io.WriteCloser // write end of the pipe (streaming path)
-	uploadDone chan error  // receives the upload goroutine result (streaming path)
+	provider   string
+	store      objstore.Store
+	key        string // destination object key (macros already expanded)
+	inner      sink.Sink
+	tmpPath    string         // non-empty on temp-file path
+	pw         io.WriteCloser // write end of the pipe (streaming path)
+	uploadDone chan error     // receives the upload goroutine result (streaming path)
 	streaming  bool
 }
 
@@ -247,16 +254,54 @@ func (s *objstoreSink) uploadTmpFile() error {
 }
 
 // expandKeyMacros replaces date/time macros in the key template with UTC values.
+//
+// Two macro syntaxes are supported and may be mixed freely:
+//
+//   - Brace form (canonical):  {YYYY} {MM} {DD} {HH} {mm} {ss} {ts} {uuid}
+//   - Dollar-brace form:       ${date} ${year} ${month} ${day} ${uuid} ${runId}
+//
+// The dollar-brace form is the syntax surfaced in the Studio field tooltips
+// ("supports ${date}, ${uuid}, ${runId}"), so it is honoured here to keep the
+// authored key templates and the runtime expansion in sync — otherwise a key
+// like "${date}/part-${uuid}.parquet" would be written to the object store
+// verbatim.
 func expandKeyMacros(key string) string {
 	now := time.Now().UTC()
+	uuid := newUUID()
 	r := strings.NewReplacer(
 		"{YYYY}", fmt.Sprintf("%04d", now.Year()),
 		"{MM}", fmt.Sprintf("%02d", int(now.Month())),
 		"{DD}", fmt.Sprintf("%02d", now.Day()),
 		"{HH}", fmt.Sprintf("%02d", now.Hour()),
 		"{mm}", fmt.Sprintf("%02d", now.Minute()),
+		"{ss}", fmt.Sprintf("%02d", now.Second()),
+		"{ts}", fmt.Sprintf("%d", now.Unix()),
+		"{uuid}", uuid,
+		// Studio dollar-brace forms.
+		"${date}", now.Format("2006-01-02"),
+		"${year}", fmt.Sprintf("%04d", now.Year()),
+		"${month}", fmt.Sprintf("%02d", int(now.Month())),
+		"${day}", fmt.Sprintf("%02d", now.Day()),
+		"${ts}", fmt.Sprintf("%d", now.Unix()),
+		"${uuid}", uuid,
+		"${runId}", uuid,
 	)
 	return r.Replace(key)
+}
+
+// newUUID returns a random RFC-4122 v4 UUID string. Used to make object keys
+// unique per run (e.g. "orders-{uuid}.parquet") so concurrent writers and
+// re-runs never collide.
+func newUUID() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// Fall back to a timestamp-based value; collisions are still astronomically
+		// unlikely given the surrounding date macros.
+		return fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	b[6] = (b[6] & 0x0f) | 0x40 // version 4
+	b[8] = (b[8] & 0x3f) | 0x80 // variant 10
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
 // buildInnerCfg copies config keys that are relevant to the inner sink,
@@ -269,6 +314,9 @@ func buildInnerCfg(cfg map[string]interface{}, format string) map[string]interfa
 		"accessKeyIdEnv": true, "secretAccessKeyEnv": true, "sessionTokenEnv": true,
 		"credentialsFileEnv": true, "project": true,
 		"sasTokenEnv": true, "accountKeyEnv": true, "accountName": true, "serviceURL": true,
+		// Inline credentials (Studio connections / local dev) — never forward to the inner sink.
+		"accessKeyId": true, "secretAccessKey": true, "sessionToken": true,
+		"credentialsJson": true, "sasToken": true, "accountKey": true,
 	}
 	out := make(map[string]interface{}, len(cfg)+2)
 	for k, v := range cfg {
@@ -291,10 +339,10 @@ func buildInnerCfg(cfg map[string]interface{}, format string) map[string]interfa
 // streaming to the object store for line-oriented formats.
 
 type pipeWriterSink struct {
-	inner    sink.Sink    // inner sink writing to a named temp pipe file
-	tmpPath  string       // temp file that inner sink writes to
-	pw       io.Writer    // ultimate destination (object store pipe)
-	closed   bool
+	inner   sink.Sink // inner sink writing to a named temp pipe file
+	tmpPath string    // temp file that inner sink writes to
+	pw      io.Writer // ultimate destination (object store pipe)
+	closed  bool
 }
 
 func newPipeWriterSink(format string, cfg map[string]interface{}, pw io.Writer) (sink.Sink, error) {

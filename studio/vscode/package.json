@@ -1,8 +1,8 @@
 {
   "name": "flogo-datapipeline-studio",
   "displayName": "Flogo Data Pipeline Studio",
-  "description": "Visual ETL/ELT/EL pipeline designer for flogo-datapipeline — drag-and-drop source, transform and sink stages with live run metrics.",
-  "version": "0.1.0",
+  "description": "Visual ETL/ELT/EL pipeline designer for flogo-datapipeline — drag-and-drop source, transform and sink stages with live run metrics, DLQ triage, schema-drift review and streaming tail.",
+  "version": "0.2.0",
   "publisher": "tibco",
   "icon": "resources/icon-128.png",
   "repository": {
@@ -12,7 +12,7 @@
   "engines": {
     "vscode": "^1.83.0"
   },
-  "main": "./src/extension.js",
+  "main": "./dist/extension.js",
   "activationEvents": [
     "onStartupFinished"
   ],
@@ -35,6 +35,20 @@
           "dark": "resources/icon.svg"
         },
         "configuration": "./language-configuration.json"
+      },
+      {
+        "id": "flogo-connection",
+        "aliases": [
+          "Flogo Connection"
+        ],
+        "extensions": [
+          ".fgconn"
+        ],
+        "icon": {
+          "light": "resources/connection-icon.svg",
+          "dark": "resources/connection-icon.svg"
+        },
+        "configuration": "./language-configuration.json"
       }
     ],
     "grammars": [
@@ -47,10 +61,20 @@
     "customEditors": [
       {
         "viewType": "flogoDataPipelineStudio.pipelineEditor",
-        "displayName": "Flogo Data Pipeline Editor",
+        "displayName": "Flogo Data Pipeline Studio",
         "selector": [
           {
             "filenamePattern": "*.datapipeline"
+          }
+        ],
+        "priority": "default"
+      },
+      {
+        "viewType": "flogoDataPipelineStudio.connectionEditor",
+        "displayName": "Flogo Connection",
+        "selector": [
+          {
+            "filenamePattern": "*.fgconn"
           }
         ],
         "priority": "default"
@@ -60,64 +84,161 @@
       {
         "fileMatch": "*.datapipeline",
         "url": "./schemas/datapipeline.schema.json"
+      },
+      {
+        "fileMatch": "*.fgconn",
+        "url": "./schemas/fgconn.schema.json"
       }
     ],
     "commands": [
       {
         "command": "flogoDataPipelineStudio.runPipeline",
         "title": "Run in Data Pipeline Studio",
-        "category": "Flogo",
-        "icon": {
-          "light": "resources/icon.svg",
-          "dark": "resources/icon.svg"
-        }
+        "category": "Data Pipeline",
+        "icon": "$(play)"
       },
       {
         "command": "flogoDataPipelineStudio.stopPipeline",
         "title": "Stop Pipeline",
-        "category": "Flogo",
+        "category": "Data Pipeline",
         "icon": "$(debug-stop)"
       },
       {
         "command": "flogoDataPipelineStudio.newPipeline",
         "title": "New Data Pipeline File…",
-        "category": "Flogo",
+        "category": "Data Pipeline",
         "icon": "$(new-file)"
       },
       {
         "command": "flogoDataPipelineStudio.newFromTemplate",
         "title": "New Pipeline from Template…",
-        "category": "Flogo",
+        "category": "Data Pipeline",
         "icon": "$(library)"
       },
       {
         "command": "flogoDataPipelineStudio.build",
         "title": "Build",
-        "category": "Flogo",
+        "category": "Data Pipeline",
         "icon": "$(package)"
       },
       {
         "command": "flogoDataPipelineStudio.runWithOptions",
         "title": "Configure and Run",
-        "category": "Flogo",
+        "category": "Data Pipeline",
         "icon": "$(debug-coverage)"
       },
       {
         "command": "flogoDataPipelineStudio.configure",
         "title": "Configure Build & Run",
-        "category": "Flogo",
+        "category": "Data Pipeline",
         "icon": "$(gear)"
+      },
+      {
+        "command": "flogoDataPipelineStudio.openFleet",
+        "title": "Open Fleet Dashboard",
+        "category": "Data Pipeline",
+        "icon": "$(dashboard)"
+      },
+      {
+        "command": "flogoDataPipelineStudio.initProject",
+        "title": "Initialize Project Structure",
+        "category": "Data Pipeline",
+        "icon": "$(folder-library)"
+      },
+      {
+        "command": "flogoDataPipelineStudio.newConnection",
+        "title": "New Connection…",
+        "category": "Data Pipeline",
+        "icon": "$(add)"
+      },
+      {
+        "command": "flogoDataPipelineStudio.refreshConnections",
+        "title": "Refresh Connections",
+        "category": "Data Pipeline",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "flogoDataPipelineStudio.editConnection",
+        "title": "Edit Connection",
+        "category": "Data Pipeline",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "flogoDataPipelineStudio.testConnection",
+        "title": "Test Connection",
+        "category": "Data Pipeline",
+        "icon": "$(pulse)"
+      },
+      {
+        "command": "flogoDataPipelineStudio.deleteConnection",
+        "title": "Delete Connection",
+        "category": "Data Pipeline",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "flogoDataPipelineStudio.revealConnectionsFile",
+        "title": "Where are Connections stored?",
+        "category": "Data Pipeline",
+        "icon": "$(info)"
       }
     ],
     "views": {
-      "explorer": [
+      "flogoDataPipelineActivity": [
         {
           "id": "flogoDataPipelineStudio.pipelinesExplorer",
+          "name": "Pipelines",
+          "type": "tree",
+          "icon": "resources/icon.svg",
+          "contextualTitle": "Flogo Data Pipelines"
+        },
+        {
+          "id": "flogoDataPipelineStudio.connectionsExplorer",
+          "name": "Connections",
+          "type": "tree",
+          "icon": "resources/icon.svg",
+          "contextualTitle": "Flogo Data Pipelines"
+        }
+      ],
+      "explorer": [
+        {
+          "id": "flogoDataPipelineStudio.pipelinesExplorerMirror",
           "name": "Flogo Data Pipelines",
           "type": "tree",
           "icon": "resources/icon.svg",
           "contextualTitle": "Flogo Data Pipelines",
           "when": "workbenchState != empty"
+        },
+        {
+          "id": "flogoDataPipelineStudio.connectionsExplorerMirror",
+          "name": "Pipeline Connections",
+          "type": "tree",
+          "icon": "resources/icon.svg",
+          "contextualTitle": "Flogo Data Pipelines",
+          "when": "workbenchState != empty"
+        }
+      ],
+      "flogoDataPipelinePanel": [
+        {
+          "id": "flogoDataPipelineStudio.dataPreview",
+          "name": "Data Preview",
+          "type": "webview",
+          "contextualTitle": "Data Pipeline"
+        }
+      ]
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "flogoDataPipelineActivity",
+          "title": "Flogo Data Pipelines",
+          "icon": "resources/icon.svg"
+        }
+      ],
+      "panel": [
+        {
+          "id": "flogoDataPipelinePanel",
+          "title": "Data Preview",
+          "icon": "resources/icon.svg"
         }
       ]
     },
@@ -125,40 +246,50 @@
       "view/title": [
         {
           "command": "flogoDataPipelineStudio.build",
-          "when": "view == flogoDataPipelineStudio.pipelinesExplorer",
+          "when": "view == flogoDataPipelineStudio.pipelinesExplorer || view == flogoDataPipelineStudio.pipelinesExplorerMirror",
           "group": "navigation@0"
         },
         {
           "command": "flogoDataPipelineStudio.newFromTemplate",
-          "when": "view == flogoDataPipelineStudio.pipelinesExplorer",
+          "when": "view == flogoDataPipelineStudio.pipelinesExplorer || view == flogoDataPipelineStudio.pipelinesExplorerMirror",
           "group": "navigation@1"
         },
         {
           "command": "flogoDataPipelineStudio.newPipeline",
-          "when": "view == flogoDataPipelineStudio.pipelinesExplorer",
+          "when": "view == flogoDataPipelineStudio.pipelinesExplorer || view == flogoDataPipelineStudio.pipelinesExplorerMirror",
           "group": "navigation@2"
+        },
+        {
+          "command": "flogoDataPipelineStudio.initProject",
+          "when": "view == flogoDataPipelineStudio.pipelinesExplorer || view == flogoDataPipelineStudio.pipelinesExplorerMirror",
+          "group": "1_setup@0"
+        },
+        {
+          "command": "flogoDataPipelineStudio.newConnection",
+          "when": "view == flogoDataPipelineStudio.connectionsExplorer || view == flogoDataPipelineStudio.connectionsExplorerMirror",
+          "group": "navigation@0"
+        },
+        {
+          "command": "flogoDataPipelineStudio.refreshConnections",
+          "when": "view == flogoDataPipelineStudio.connectionsExplorer || view == flogoDataPipelineStudio.connectionsExplorerMirror",
+          "group": "navigation@1"
         }
       ],
       "view/item/context": [
         {
-          "command": "flogoDataPipelineStudio.configure",
-          "when": "view == flogoDataPipelineStudio.pipelinesExplorer && viewItem == actionsTitle",
-          "group": "inline"
-        },
-        {
-          "command": "flogoDataPipelineStudio.build",
-          "when": "view == flogoDataPipelineStudio.pipelinesExplorer && viewItem == pipelineAction",
+          "command": "flogoDataPipelineStudio.testConnection",
+          "when": "(view == flogoDataPipelineStudio.connectionsExplorer || view == flogoDataPipelineStudio.connectionsExplorerMirror) && viewItem == flogoConnection",
           "group": "inline@0"
         },
         {
-          "command": "flogoDataPipelineStudio.runWithOptions",
-          "when": "view == flogoDataPipelineStudio.pipelinesExplorer && viewItem == pipelineAction",
-          "group": "inline@1"
+          "command": "flogoDataPipelineStudio.editConnection",
+          "when": "(view == flogoDataPipelineStudio.connectionsExplorer || view == flogoDataPipelineStudio.connectionsExplorerMirror) && viewItem == flogoConnection",
+          "group": "1_modify@0"
         },
         {
-          "command": "flogoDataPipelineStudio.stopPipeline",
-          "when": "view == flogoDataPipelineStudio.pipelinesExplorer && viewItem == localPipeline",
-          "group": "inline"
+          "command": "flogoDataPipelineStudio.deleteConnection",
+          "when": "(view == flogoDataPipelineStudio.connectionsExplorer || view == flogoDataPipelineStudio.connectionsExplorerMirror) && viewItem == flogoConnection",
+          "group": "9_danger@0"
         }
       ],
       "explorer/context": [
@@ -186,42 +317,49 @@
       "editor/title": [
         {
           "command": "flogoDataPipelineStudio.runPipeline",
-          "when": "resourceExtname == .datapipeline",
+          "when": "resourceExtname == .datapipeline || activeCustomEditorId == flogoDataPipelineStudio.pipelineEditor",
           "group": "navigation@1"
         },
         {
           "command": "flogoDataPipelineStudio.build",
-          "when": "resourceExtname == .datapipeline",
+          "when": "resourceExtname == .datapipeline || activeCustomEditorId == flogoDataPipelineStudio.pipelineEditor",
           "group": "navigation@2"
-        }
-      ],
-      "editor/title/context": [
-        {
-          "command": "flogoDataPipelineStudio.runPipeline",
-          "when": "resourceExtname == .datapipeline",
-          "group": "flogo@1"
         }
       ],
       "commandPalette": [
         {
           "command": "flogoDataPipelineStudio.runPipeline",
-          "when": "resourceExtname == .datapipeline"
+          "when": "resourceExtname == .datapipeline || activeCustomEditorId == flogoDataPipelineStudio.pipelineEditor"
         },
         {
           "command": "flogoDataPipelineStudio.build",
-          "when": "resourceExtname == .datapipeline"
+          "when": "resourceExtname == .datapipeline || activeCustomEditorId == flogoDataPipelineStudio.pipelineEditor"
         },
         {
           "command": "flogoDataPipelineStudio.runWithOptions",
-          "when": "resourceExtname == .datapipeline"
+          "when": "resourceExtname == .datapipeline || activeCustomEditorId == flogoDataPipelineStudio.pipelineEditor"
         },
         {
-          "command": "flogoDataPipelineStudio.configure",
-          "when": "true"
+          "command": "flogoDataPipelineStudio.newConnection"
         },
         {
-          "command": "flogoDataPipelineStudio.stopPipeline",
-          "when": "true"
+          "command": "flogoDataPipelineStudio.revealConnectionsFile"
+        },
+        {
+          "command": "flogoDataPipelineStudio.editConnection",
+          "when": "false"
+        },
+        {
+          "command": "flogoDataPipelineStudio.testConnection",
+          "when": "false"
+        },
+        {
+          "command": "flogoDataPipelineStudio.deleteConnection",
+          "when": "false"
+        },
+        {
+          "command": "flogoDataPipelineStudio.refreshConnections",
+          "when": "false"
         }
       ]
     },
@@ -241,26 +379,28 @@
         "flogoDataPipelineStudio.sourcePath": {
           "type": "string",
           "default": "",
-          "description": "Absolute path to the flogo-datapipeline Go module root (the directory containing go.mod). When set, clicking 'Run Pipeline' rebuilds the binary from source before starting the engine — pick up Go source changes without reinstalling the VSIX. Leave empty to use the pre-built binary."
+          "description": "Absolute path to the flogo-datapipeline Go module root (the directory containing go.mod). When set, Run rebuilds the binary from source before starting the engine. Leave empty to use the pre-built binary."
         }
       }
     }
   },
   "scripts": {
-    "generate-icon": "node scripts/generate-icon.js",
-    "package": "bash scripts/package.sh",
-    "build:binaries": "bash scripts/build-binaries.sh",
-    "rebuild": "bash scripts/rebuild-and-install.sh",
-    "lint": "eslint src scripts eslint.config.js",
-    "typecheck": "tsc -p jsconfig.json --noEmit"
+    "vscode:prepublish": "npm run package",
+    "compile": "webpack",
+    "watch": "webpack --watch",
+    "package": "webpack --mode production --devtool hidden-source-map",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src webview --ext ts"
   },
   "devDependencies": {
-    "@eslint/js": "^9.39.4",
-    "@resvg/resvg-js": "^2.6.2",
     "@types/node": "^18.19.0",
     "@types/vscode": "^1.83.0",
-    "eslint": "^9.39.4",
-    "globals": "^17.7.0",
-    "typescript": "^5.6.3"
+    "@typescript-eslint/eslint-plugin": "^7.18.0",
+    "@typescript-eslint/parser": "^7.18.0",
+    "eslint": "^8.57.0",
+    "ts-loader": "^9.5.1",
+    "typescript": "^5.6.3",
+    "webpack": "^5.94.0",
+    "webpack-cli": "^5.1.4"
   }
 }

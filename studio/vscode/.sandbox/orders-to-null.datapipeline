@@ -1,0 +1,76 @@
+{
+  "name": "orders-to-null",
+  "type": "flogo:app",
+  "version": "1.0.0",
+  "appModel": "1.1.1",
+  "imports": [
+    "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+    "github.com/project-flogo/contrib/trigger/timer"
+  ],
+  "triggers": [
+    {
+      "id": "pipeline-timer",
+      "ref": "github.com/project-flogo/contrib/trigger/timer",
+      "settings": {
+        "repeating": true,
+        "startDelay": 0,
+        "interval": 86400000
+      },
+      "handlers": [
+        {
+          "settings": {},
+          "action": {
+            "ref": "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+            "settings": {
+              "pipelineRef": "res://pipeline:orders-to-null"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "resources": [
+    {
+      "id": "pipeline:orders-to-null",
+      "data": {
+        "name": "orders-to-null",
+        "description": "Sample: read orders CSV, drop cancelled rows, discard to null sink.",
+        "mode": "etl",
+        "source": {
+          "type": "csv",
+          "path": "c:\\Users\\mpandav\\Downloads\\Work\\TIBCO\\Flogo\\flogo-datapipeline\\studio\\vscode\\.sandbox\\data\\orders.csv",
+          "hasHeader": true,
+          "delimiter": ",",
+          "columns": [
+            {
+              "name": "id",
+              "type": "int"
+            },
+            {
+              "name": "name",
+              "type": "string"
+            },
+            {
+              "name": "amount",
+              "type": "int",
+              "nullable": true
+            },
+            {
+              "name": "status",
+              "type": "string"
+            }
+          ]
+        },
+        "transforms": [
+          {
+            "type": "filter",
+            "expr": "status != 'CANCELLED'"
+          }
+        ],
+        "sink": {
+          "type": "null"
+        }
+      }
+    }
+  ]
+}

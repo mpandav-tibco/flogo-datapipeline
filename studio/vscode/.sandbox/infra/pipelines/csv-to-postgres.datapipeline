@@ -1,0 +1,102 @@
+{
+    "version":  "1.0.0",
+    "name":  "csv-to-postgres",
+    "appModel":  "1.1.1",
+    "resources":  [
+                      {
+                          "id":  "pipeline:csv-to-postgres",
+                          "data":  {
+                                       "name":  "csv-to-postgres",
+                                       "source":  {
+                                                      "path":  "../data/orders.csv",
+                                                      "columns":  [
+                                                                      {
+                                                                          "name":  "id",
+                                                                          "type":  "int"
+                                                                      },
+                                                                      {
+                                                                          "name":  "order_id",
+                                                                          "type":  "string"
+                                                                      },
+                                                                      {
+                                                                          "name":  "customer_id",
+                                                                          "type":  "string"
+                                                                      },
+                                                                      {
+                                                                          "name":  "amount",
+                                                                          "type":  "int",
+                                                                          "nullable":  true
+                                                                      },
+                                                                      {
+                                                                          "name":  "status",
+                                                                          "type":  "string"
+                                                                      }
+                                                                  ],
+                                                      "delimiter":  ",",
+                                                      "type":  "csv",
+                                                      "hasHeader":  true
+                                                  },
+                                       "description":  "CSV source -\u003e filter + map -\u003e Postgres JDBC upsert.",
+                                       "sink":  {
+                                                    "autoMigrate":  true,
+                                                    "batchSize":  1000,
+                                                    "driver":  "postgres",
+                                                    "type":  "jdbc",
+                                                    "conflictKey":  [
+                                                                        "order_id"
+                                                                    ],
+                                                    "onConflict":  "upsert",
+                                                    "table":  "orders",
+                                                    "dsn":  "host=localhost port=55432 dbname=warehouse user=app password=secret sslmode=disable"
+                                                },
+                                       "mode":  "etl",
+                                       "transforms":  [
+                                                          {
+                                                              "expr":  "status != \u0027CANCELLED\u0027",
+                                                              "name":  "drop cancelled",
+                                                              "type":  "filter"
+                                                          },
+                                                          {
+                                                              "fields":  {
+                                                                             "amount":  "=$amount",
+                                                                             "customer_id":  "=$customer_id",
+                                                                             "status":  "=$status",
+                                                                             "order_id":  "=$order_id"
+                                                                         },
+                                                              "name":  "shape",
+                                                              "type":  "map"
+                                                          }
+                                                      ]
+                                   }
+                      }
+                  ],
+    "type":  "flogo:app",
+    "imports":  [
+                    "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+                    "github.com/project-flogo/contrib/trigger/timer"
+                ],
+    "triggers":  [
+                     {
+                         "handlers":  [
+                                          {
+                                              "settings":  {
+
+                                                           },
+                                              "action":  {
+                                                             "settings":  {
+                                                                              "pipelineRef":  "res://pipeline:csv-to-postgres"
+                                                                          },
+                                                             "ref":  "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline"
+                                                         }
+                                          }
+                                      ],
+                         "ref":  "github.com/project-flogo/contrib/trigger/timer",
+                         "id":  "pipeline-timer",
+                         "settings":  {
+                                          "repeating":  true,
+                                          "startDelay":  0,
+                                          "interval":  86400000
+                                      }
+                     }
+                 ]
+}

@@ -37,13 +37,23 @@ The binary exposes an optional REST API (`/v1/…`) for health checks, triggerin
 
 A custom editor for `.datapipeline` files that gives you:
 
-- A visual canvas to compose source → transform chain → sink
+- A visual canvas to compose source → transform chain → sink (plus a DLQ branch)
 - A properties panel to configure each stage — no raw JSON editing required
-- A function library (40+ functions across 6 categories) available while writing field expressions
+- Plain-language structured editors for columns, field mappings, validation
+  rules, data-quality expectations, filters and the JDBC conflict key
+- **Reusable connections** — define a database / stream / object-store / HTTP
+  endpoint once as a `*.fgconn` file and bind it by name on any source or sink.
+  Secrets are kept in VS Code Secret Storage, never written to a file
+- **Schema inference** — one click samples a CSV/TSV/JSON-lines file to fill in
+  column names and types
 - File/folder browse buttons for path inputs
-- One-click pipeline run and stop, with a live log and metrics view
+- One-click run and stop with streamed status, plus a side-effect-free dry-run
+  preview into the native Data Preview panel
 - Pipeline templates to bootstrap new pipelines in seconds
-- A sidebar explorer for all `.datapipeline` files in the workspace
+- An organized project layout (`pipelines/`, `connections/`, `data/`) and
+  sidebar views for pipelines and connections
+
+See [`studio/vscode/README.md`](studio/vscode/README.md) for full details.
 
 ---
 
@@ -155,7 +165,8 @@ go build -o flogo-datapipeline ./cmd/flogo-datapipeline/
 
 1. Open VS Code
 2. Go to Extensions → `…` → **Install from VSIX…**
-3. Select `studio/vscode/flogo-datapipeline-studio-0.1.0.vsix`
+3. Select the packaged `studio/vscode/flogo-datapipeline-studio-*.vsix`
+   (build it with `cd studio/vscode && npm install && npm run package && npx vsce package`)
 4. Set the binary path in settings: `flogoDataPipelineStudio.binaryPath`
 
 ### Run an example
