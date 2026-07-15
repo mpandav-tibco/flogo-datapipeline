@@ -47,8 +47,11 @@ type Config struct {
 	PartitionStrategy string // rowgroup | file | byterange
 	PartitionsPerClaim int
 	// Distributed-mode coordinator config.
-	CoordinatorType      string // postgres | memory
+	CoordinatorType      string // postgres | redis | memory
 	CoordinatorDSN       string // postgres connection string
+	CoordinatorAddr      string // redis: host:port
+	CoordinatorKeyPrefix string // redis: key namespace (default flogo:pipeline:wq)
+	CoordinatorPasswordEnv string // redis: env var holding the password
 	LeaseSeconds         int
 	HeartbeatSeconds     int
 	MaxRetries           int
@@ -230,11 +233,13 @@ func (w leaderAwareQueue) Enqueue(ctx context.Context, partitions []source.Parti
 }
 
 // BuildQueue constructs a WorkQueue from the coordinator config.
-// Supported types: "memory" (default), "postgres".
+// Supported types: "memory" (default), "postgres", "redis".
 //
 // For "postgres", the returned queue is wrapped in leaderAwareQueue so that
 // concurrent Enqueue calls across instances are serialised via a Postgres
-// advisory lock rather than relying solely on ON CONFLICT DO NOTHING.
+// advisory lock rather than relying solely on ON CONFLICT DO NOTHING. The
+// "redis" queue performs the equivalent leader-election + reset inside its own
+// Enqueue via a SETNX lock, so it needs no wrapper.
 func BuildQueue(cfg Config, pipelineID string) (workqueue.WorkQueue, error) {
 	switch cfg.CoordinatorType {
 	case "postgres":
@@ -245,6 +250,8 @@ func BuildQueue(cfg Config, pipelineID string) (workqueue.WorkQueue, error) {
 		// BuildPostgresQueue returns *workqueue.PostgresQueue directly; wrap it
 		// in leaderAwareQueue to activate advisory-lock leader election.
 		return leaderAwareQueue{pq}, nil
+	case "redis":
+		return workqueue.NewRedisQueue(cfg.CoordinatorAddr, cfg.CoordinatorKeyPrefix, cfg.CoordinatorPasswordEnv, pipelineID)
 	default:
 		return workqueue.NewMemoryQueue(), nil
 	}

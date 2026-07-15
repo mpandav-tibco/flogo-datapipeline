@@ -1,0 +1,67 @@
+{
+  "name": "otel-metrics",
+  "type": "flogo:app",
+  "version": "1.0.0",
+  "description": "Demonstrates the OpenTelemetry (OTLP/gRPC) metrics backend. Reads a small CSV, applies a filter + map, then discards rows via the null sink. Pipeline metrics (rows read/transformed/written, batch duration, run count) are exported to an OTLP collector endpoint instead of a scrape endpoint.",
+  "appModel": "1.1.1",
+  "imports": [
+    "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+    "github.com/project-flogo/contrib/trigger/timer"
+  ],
+  "triggers": [
+    {
+      "id": "pipeline-timer",
+      "ref": "github.com/project-flogo/contrib/trigger/timer",
+      "settings": { "repeating": true, "startDelay": 0, "interval": 86400000 },
+      "handlers": [
+        {
+          "settings": {},
+          "action": {
+            "ref": "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+            "settings": { "pipelineRef": "res://pipeline:otel-metrics" }
+          }
+        }
+      ]
+    }
+  ],
+  "resources": [
+    {
+      "id": "pipeline:otel-metrics",
+      "data": {
+        "name": "otel-metrics",
+        "description": "OpenTelemetry OTLP metrics export demo.",
+        "version": "1.0.0",
+        "mode": "etl",
+        "source": {
+          "type": "csv",
+          "path": "./data/dataset.csv",
+          "delimiter": ",",
+          "hasHeader": true,
+          "columns": [
+            { "name": "id", "type": "int" },
+            { "name": "value", "type": "float" },
+            { "name": "label", "type": "string" },
+            { "name": "category", "type": "string" },
+            { "name": "ts", "type": "string" }
+          ]
+        },
+        "transforms": [
+          { "type": "filter", "expr": "value > 100" },
+          { "type": "map", "fields": { "id": "=$id", "val": "=$value", "label": "=upper($.label)" } }
+        ],
+        "sink": { "type": "null" },
+        "observability": {
+          "metrics": "otel",
+          "options": {
+            "endpoint": "localhost:4317",
+            "serviceName": "flogo-datapipeline-otel-demo"
+          },
+          "stallSeconds": 30
+        },
+        "performance": { "batchSize": 5 },
+        "scaling": { "mode": "single" },
+        "checkpoint": { "type": "none" }
+      }
+    }
+  ]
+}

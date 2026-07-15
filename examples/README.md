@@ -25,6 +25,9 @@ These examples demonstrate each feature of flogo-datapipeline independently. Sta
 | 17 | [kafka-streaming](17-kafka-streaming) | Kafka as streaming source and sink | Docker |
 | 18 | [elt-mode](18-elt-mode) | ELT mode — load raw then transform in-database | SQLite |
 | 19 | [full-production](19-full-production) | Full production pipeline combining all major features | Docker |
+| 20 | [podlog](20-podlog) | 🚧 Kubernetes pod-log collector (design / WIP — not yet runnable) | — |
+| 21 | [otel-metrics](21-otel-metrics) | Export pipeline metrics via OpenTelemetry (OTLP/gRPC) | OTel collector |
+| 22 | [format-conversion](22-format-conversion) | Convert between data formats (CSV / JSON / Parquet) | zero setup |
 
 \* Example 08 requires Python/DuckDB to generate the test Parquet data file — see its README.
 

@@ -63,7 +63,7 @@ processed drops to only the new rows.
 | `batchSize` (5000) | **Wired** | Rows per `ReadBatch`. Echoed and drives batch metrics. |
 | `sourceBufferBatches` (4) | **Wired** | Depth of the read-ahead buffer. A dedicated reader goroutine reads ahead so the source overlaps with transform+write (source never blocks the pipeline). |
 | `maxMemoryMB` (512) | **Wired** | Backpressure: the reader blocks when buffered in-flight bytes exceed this budget, bounding memory. |
-| `transformWorkers` (1) | **Ordered-safe** | Reads are overlapped via read-ahead. True multi-core transform parallelism is **not** enabled because out-of-order batch completion would corrupt the checkpoint cursor and stateful transforms (HWM/DQ/drift). A notice is logged when >1 so the behavior is explicit. |
+| `transformWorkers` (1) | **Wired** | When >1 **and** the pipeline has no HWM/DQ/schema-drift transform **and** checkpointing is off, transforms run across N worker goroutines (each with a private transform pipeline) and an order-preserving collector reassembles results in read order — so the sink write and all counters stay single-threaded while transforms use N cores. When those safety constraints don't hold, processing stays ordered/single-threaded and a notice is logged. |
 | `sinkBufferBatches` (4) | Reserved | Accepted; sink writes stay ordered for checkpoint correctness. |
 | `rowGroupParallelism` (4) | Source-internal | Consumed by the Parquet source for concurrent row-group reads, not the engine loop. |
 
@@ -79,11 +79,11 @@ integration suite.
 |-------|----------|
 | `single` (default) | One instance processes all data. |
 | `sharded` | Static assignment: this instance owns partitions where `index % instanceCount == instanceIndex`. No coordinator needed. Reveals `instanceIndex`, `instanceCount`, `partitionStrategy`. |
-| `distributed` | Dynamic assignment via a shared **Postgres** work queue: every instance competes to claim partitions; failed partitions are re-queued up to `maxRetries`. Reveals the coordinator block (type, DSN, lease/heartbeat/retries). |
+| `distributed` | Dynamic assignment via a shared work queue (**PostgreSQL** or **Redis**): every instance competes to claim partitions; failed partitions are re-queued up to `maxRetries`. Reveals the coordinator block (type, DSN/addr, lease/heartbeat/retries). |
 
 Only **jdbc** and **object-store** (s3/gcs/adls) sources are partitionable.
 Non-partitionable sources (csv, sectioned, …) log a graceful fallback and run
-single-instance. Redis coordinator is not yet implemented (use Postgres).
+single-instance. Both PostgreSQL and Redis coordinators are supported.
 
 **Validated (UI):** `scaling=sharded` echoed and executed; sectioned source →
 `WARN … not partitionable — falling back to single-instance execution`.
@@ -155,6 +155,10 @@ running a jdbc source whose query includes `pg_sleep(1)` so a batch takes ~7s:
 
 **Wired but not stress-observed** (no visible effect on small, in-memory-fast
 datasets): `performance.sourceBufferBatches`, `sinkBufferBatches`,
-`maxMemoryMB` (backpressure only engages under memory pressure),
-`transformWorkers` (ordered-processing enforced for correctness).
+`maxMemoryMB` (backpressure only engages under memory pressure).
+
+**Parallel transforms validated (live):** a jdbc → filter → map → jsonlines
+pipeline with `transformWorkers=4` over 1000 rows (20 batches) produced output
+**byte-for-byte identical** to the `transformWorkers=1` run and strictly ordered
+(id 1 → 999), confirming the order-preserving collector.
 

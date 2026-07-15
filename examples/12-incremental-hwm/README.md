@@ -461,59 +461,66 @@ run — it will process all rows and write a new watermark.
 
 ## HWM backend options
 
-The `backendConfig` section changes depending on the chosen backend:
+Incremental loading is configured in the pipeline's top-level `incremental`
+block. The `storeType` selects where the watermark is persisted between runs,
+and `storeOptions` carries the backend connection details.
 
 ### File backend (this example)
 
 ```json
-{
-  "type": "hwm",
+"incremental": {
+  "mode": "hwm",
   "column": "created_at",
-  "backend": "file",
-  "backendConfig": {
-    "path": "./watermarks/events.hwm"
-  }
+  "valueType": "datetime",
+  "storeType": "file",
+  "storeOptions": { "path": "./watermarks" }
 }
 ```
 
 Good for: local development, single-node pipelines, simple batch jobs.
-Not suitable for: multi-node deployments (file is local to one machine).
+Not suitable for: multi-node deployments (the file is local to one machine).
+When `path` is omitted the OS temp directory is used.
 
 ### Redis backend
 
 ```json
-{
-  "type": "hwm",
+"incremental": {
+  "mode": "hwm",
   "column": "created_at",
-  "backend": "redis",
-  "backendConfig": {
+  "valueType": "datetime",
+  "storeType": "redis",
+  "storeOptions": {
     "addr": "localhost:6379",
-    "key": "pipeline:events:hwm",
-    "db": 0
+    "keyPrefix": "flogo:pipeline:hwm",
+    "passwordEnv": "REDIS_PASSWORD"
   }
 }
 ```
 
 Good for: distributed deployments where multiple pipeline instances share the
-same watermark. Redis atomic `SET`/`GET` prevents split-brain.
+same watermark. The mark is stored at `{keyPrefix}:{pipelineRef}`.
 
 ### PostgreSQL backend
 
 ```json
-{
-  "type": "hwm",
+"incremental": {
+  "mode": "hwm",
   "column": "created_at",
-  "backend": "postgres",
-  "backendConfig": {
-    "dsn": "postgres://user:pass@localhost:5432/pipeline_state",
-    "table": "watermarks",
-    "key": "events_hwm"
+  "valueType": "datetime",
+  "storeType": "postgres",
+  "storeOptions": {
+    "dsn": "host=localhost port=5432 dbname=pipeline_state user=etl password=secret sslmode=disable"
   }
 }
 ```
 
 Good for: teams already running PostgreSQL who want watermarks stored alongside
-other pipeline metadata, with full ACID guarantees.
+other pipeline metadata, with full ACID guarantees. The backend upserts into a
+`pipeline_watermarks` table (created automatically).
+
+> **Note:** `valueType` (`datetime` | `int` | `string`) tells the engine how to
+> order the watermark column. It must match the column's real type for the
+> `column > mark` predicate to compare correctly.
 
 ---
 
