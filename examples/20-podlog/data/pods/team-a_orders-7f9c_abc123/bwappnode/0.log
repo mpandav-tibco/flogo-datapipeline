@@ -1,0 +1,7 @@
+2026-07-14T10:00:00.100000000Z stdout F 2026-07-14 10:00:00 INFO  [main] BW6 engine starting
+2026-07-14T10:00:01.200000000Z stdout F 2026-07-14 10:00:01 INFO  [main] Loaded 12 processes
+2026-07-14T10:00:02.300000000Z stderr F 2026-07-14 10:00:02 ERROR [worker-3] Unhandled exception in process OrderFlow
+2026-07-14T10:00:02.301000000Z stderr F 	at com.tibco.bw.OrderFlow.execute(OrderFlow.java:142)
+2026-07-14T10:00:02.302000000Z stderr F 	at com.tibco.bw.Engine.run(Engine.java:88)
+2026-07-14T10:00:02.303000000Z stderr F 	at java.base/java.lang.Thread.run(Thread.java:840)
+2026-07-14T10:00:03.400000000Z stdout F 2026-07-14 10:00:03 INFO  [main] Recovered, resuming

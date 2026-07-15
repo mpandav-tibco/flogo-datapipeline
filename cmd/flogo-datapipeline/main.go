@@ -72,6 +72,11 @@ import (
 	// Streaming sources (gap-06)
 	_ "github.com/mpandav-tibco/flogo-datapipeline/source/kafka" // Kafka consumer with consumer-group offset checkpointing
 
+	// Kubernetes pod-log collector (Fluentd replacement) — tails CRI container
+	// logs, stitches multiline stack traces, at-least-once via a byte-offset
+	// position registry. See examples/20-podlog.
+	_ "github.com/mpandav-tibco/flogo-datapipeline/source/podlog"
+
 	// --- Sinks ---
 	// Relational sinks (round 1)
 	_ "github.com/mpandav-tibco/flogo-datapipeline/sink/jdbc" // JDBC upsert / insert sink
@@ -131,6 +136,13 @@ import (
 	// pipeline. Selectable from the Studio's Pipeline Settings → Trigger tab and
 	// materialised into the deploy app JSON. Inert unless referenced by a trigger.
 	_ "github.com/project-flogo/contrib/trigger/rest"
+	// Kafka trigger — run a pipeline per consumed message (event-driven ingestion).
+	_ "github.com/project-flogo/messaging-contrib/kafka/trigger"
+	// TIBCO General hooks — App Startup fires the pipeline once on engine boot
+	// (the correct driver for a long-running streaming source such as the podlog
+	// tailer); App Shutdown fires once on stop for final flush/cleanup.
+	_ "github.com/tibco/flogo-general/src/app/General/trigger/shutdownhook"
+	_ "github.com/tibco/flogo-general/src/app/General/trigger/startuphook"
 )
 
 var mlog = corelog.ChildLogger(corelog.RootLogger(), "main")

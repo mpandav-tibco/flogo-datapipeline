@@ -1,0 +1,97 @@
+package podlog
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"sync"
+)
+
+// position records how far a single log file has been durably delivered.
+//
+// Identity is deliberately OS-portable: rather than depend on device/inode
+// numbers (which require platform-specific syscalls and do not compile on
+// Windows dev machines), a file is keyed by its path and its rotation is
+// detected via a content Fingerprint of the first bytes plus size regression.
+// containerd/CRI-O rotate by renaming the active file and creating a fresh one
+// at the same path, so a changed fingerprint or a size smaller than the stored
+// offset unambiguously signals a new file whose offset must reset to zero.
+type position struct {
+	Offset      int64  `json:"offset"`
+	Fingerprint string `json:"fingerprint"`
+}
+
+// positionStore is the authoritative, crash-safe record of delivery progress —
+// the equivalent of Fluentd's pos file or Filebeat's registry. It is persisted
+// only after the sink has acknowledged the corresponding records, which is what
+// makes the pipeline at-least-once: a crash replays from the last persisted
+// offset, producing safe duplicates rather than silent loss.
+type positionStore struct {
+	path string
+	mu   sync.Mutex
+	m    map[string]position
+}
+
+func newPositionStore(path string) (*positionStore, error) {
+	ps := &positionStore{path: path, m: map[string]position{}}
+	if path == "" {
+		return ps, nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return ps, nil
+		}
+		return nil, err
+	}
+	if len(data) > 0 {
+		if err := json.Unmarshal(data, &ps.m); err != nil {
+			return nil, err
+		}
+	}
+	return ps, nil
+}
+
+func (ps *positionStore) get(key string) (position, bool) {
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+	p, ok := ps.m[key]
+	return p, ok
+}
+
+func (ps *positionStore) set(key string, p position) {
+	ps.mu.Lock()
+	ps.m[key] = p
+	ps.mu.Unlock()
+}
+
+// snapshot returns a JSON copy of all positions for the pipeline checkpoint
+// layer (Token.Payload) — used for observability/audit, not for resume.
+func (ps *positionStore) snapshot() json.RawMessage {
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+	b, _ := json.Marshal(ps.m)
+	return json.RawMessage(b)
+}
+
+// persist writes the position map atomically (temp file + rename) so a crash
+// mid-write can never corrupt the registry.
+func (ps *positionStore) persist() error {
+	if ps.path == "" {
+		return nil
+	}
+	ps.mu.Lock()
+	b, err := json.Marshal(ps.m)
+	ps.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	tmp := ps.path + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, ps.path)
+}

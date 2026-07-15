@@ -90,13 +90,13 @@ export const TRIGGER_CATALOG: TriggerTypeDef[] = [
     label: 'Kafka — run per consumed message',
     ref: 'github.com/project-flogo/messaging-contrib/kafka/trigger',
     triggerId: 'pipeline-kafka',
-    available: false,
+    available: true,
     summary: 'Consumes a Kafka topic; each message triggers a pipeline run.',
-    note: 'Requires the project-flogo Kafka messaging module (github.com/project-flogo/messaging-contrib/kafka) on the build path.',
+    note: 'Requires a Kafka connection resource in the app (the trigger references a shared connection object). Set the topic below; wire the connection at deploy.',
     fields: [
-      { name: 'brokerUrls', label: 'Broker URLs', type: 'string', scope: 'trigger', default: 'localhost:9092', placeholder: 'host1:9092,host2:9092', hint: 'Comma-separated Kafka bootstrap brokers.' },
       { name: 'topic', label: 'Topic', type: 'string', scope: 'handler', default: '', placeholder: 'orders', hint: 'Topic to consume.' },
-      { name: 'consumerGroup', label: 'Consumer group', type: 'string', scope: 'handler', default: 'flogo-datapipeline', placeholder: 'flogo-datapipeline', hint: 'Kafka consumer group id.' },
+      { name: 'partitions', label: 'Partitions', type: 'string', scope: 'handler', default: '', placeholder: '0,1', hint: 'Specific partitions to consume (blank = all).' },
+      { name: 'offset', label: 'Start offset', type: 'number', scope: 'handler', default: 0, placeholder: '0', hint: 'Offset to start consuming from.' },
     ],
     inputMapping: {
       params: '=$.message',
@@ -121,6 +121,26 @@ export const TRIGGER_CATALOG: TriggerTypeDef[] = [
     inputMapping: {
       inputPath: '=$.output.fileMetadata.fullPath',
     },
+  },
+  {
+    kind: 'startup',
+    label: 'App Startup — run once on boot',
+    ref: 'github.com/tibco/flogo-general/src/app/General/trigger/startuphook',
+    triggerId: 'pipeline-startup',
+    available: true,
+    summary: 'Fires once when the engine starts — the correct driver for a long-running streaming source (e.g. podlog tailer, Kafka).',
+    fields: [],
+    inputMapping: {},
+  },
+  {
+    kind: 'shutdown',
+    label: 'App Shutdown — run once on stop',
+    ref: 'github.com/tibco/flogo-general/src/app/General/trigger/shutdownhook',
+    triggerId: 'pipeline-shutdown',
+    available: true,
+    summary: 'Fires once after other triggers stop — useful for a final flush/cleanup pipeline.',
+    fields: [],
+    inputMapping: {},
   },
 ];
 
