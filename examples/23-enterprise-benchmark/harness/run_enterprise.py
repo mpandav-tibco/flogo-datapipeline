@@ -23,7 +23,10 @@ import lib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 EXAMPLE = os.path.dirname(HERE)
-BIN = os.path.join(EXAMPLE, "bin", "dp")
+REPO = os.path.dirname(os.path.dirname(EXAMPLE))
+MONO = os.environ.get("UC_BIN")
+DP_BUILD = os.path.join(EXAMPLE, "bin", "dp-build")
+LEAN_DIR = os.path.join(EXAMPLE, "bin", "lean")
 PIPES = os.path.join(EXAMPLE, "pipes")
 CONTAINER = os.environ.get("PG_CONTAINER", "pgbench")
 DB = os.environ.get("PG_DB", "warehouse")
@@ -66,7 +69,9 @@ def ckpt_rows():
 def run_ent01():
     print("== ent01  DLQ isolation ==")
     psql("TRUNCATE orders_rejects;")
-    r = lib.run_pipe(BIN, os.path.join(PIPES, "ent01_dlq_isolation.datapipeline"),
+    pipe = os.path.join(PIPES, "ent01_dlq_isolation.datapipeline")
+    binp = MONO or lib.ensure_lean_bin(DP_BUILD, pipe, LEAN_DIR)
+    r = lib.run_pipe(binp, pipe,
                      env=env(), cwd=EXAMPLE, max_seconds=int(os.environ.get("ENT_MAX_SECONDS", "3600")))
     good = r["written"]
     rejected = pg_count("orders_rejects")
@@ -85,17 +90,18 @@ def run_ent02(kill_seconds):
     for p in glob.glob(os.path.join(CKPT_DIR, "*")):
         os.remove(p)
     pipe = os.path.join(PIPES, "ent02_checkpoint_resume.datapipeline")
+    binp = MONO or lib.ensure_lean_bin(DP_BUILD, pipe, LEAN_DIR)
 
     # Run 1: interrupted after kill_seconds by the harness watchdog.
     t0 = time.time()
-    r1 = lib.run_pipe(BIN, pipe, env=env(), cwd=EXAMPLE, max_seconds=kill_seconds)
+    r1 = lib.run_pipe(binp, pipe, env=env(), cwd=EXAMPLE, max_seconds=kill_seconds)
     committed = ckpt_rows()
     interrupted = r1["status"] != "completed"
     print("   run1: status=%s  wall=%ds  checkpoint committed=%s rows"
           % (r1["status"], int(time.time() - t0), f"{committed:,}"))
 
     # Run 2: resume from the checkpoint, run to completion.
-    r2 = lib.run_pipe(BIN, pipe, env=env(), cwd=EXAMPLE,
+    r2 = lib.run_pipe(binp, pipe, env=env(), cwd=EXAMPLE,
                       max_seconds=int(os.environ.get("ENT_MAX_SECONDS", "3600")))
     print("   run2: status=%s  processed=%s  written=%s  dur=%dms"
           % (r2["status"], f"{r2['processed']:,}", f"{r2['written']:,}", r2["duration_ms"]))
@@ -106,6 +112,8 @@ def run_ent02(kill_seconds):
 
 def main():
     which = sys.argv[1] if len(sys.argv) > 1 else "all"
+    if not MONO:
+        lib.ensure_dp_build(REPO, DP_BUILD)
     kill_seconds = int(os.environ.get("ENT02_KILL_SECONDS", "8"))
     out = {}
     if which in ("all", "ent01"):

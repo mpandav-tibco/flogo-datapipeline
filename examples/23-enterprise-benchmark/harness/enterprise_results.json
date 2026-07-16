@@ -3,18 +3,18 @@
   "processed": 53000000,
   "good": 50589628,
   "rejected": 2410372,
-  "duration_ms": 192770,
-  "rows_per_sec": 274939,
+  "duration_ms": 477859,
+  "rows_per_sec": 110911,
   "conserved": true,
   "status": "completed"
  },
  "ent02_checkpoint_resume": {
   "run1_status": "timeout",
-  "run1_committed": 10000000,
+  "run1_committed": 3000000,
   "interrupted": true,
   "run2_status": "completed",
   "run2_processed": 53000000,
   "run2_written": 38677277,
-  "run2_duration_ms": 38608
+  "run2_duration_ms": 102553
  }
 }

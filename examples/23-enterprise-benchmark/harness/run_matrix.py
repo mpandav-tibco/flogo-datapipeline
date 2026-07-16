@@ -25,9 +25,14 @@ import lib  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 EXAMPLE = os.path.dirname(HERE)
+REPO = os.path.dirname(os.path.dirname(EXAMPLE))
 PIPES = os.path.join(EXAMPLE, "pipes")
 OUT = os.path.join(EXAMPLE, "out")
-BIN = os.environ.get("UC_BIN", os.path.join(EXAMPLE, "bin", "dp"))
+# Default: each pipe runs on its OWN lean binary compiled by dp-build (the exact
+# artifact you would deploy). Set UC_BIN to force one monolith binary instead.
+MONO = os.environ.get("UC_BIN")
+DP_BUILD = os.path.join(EXAMPLE, "bin", "dp-build")
+LEAN_DIR = os.path.join(EXAMPLE, "bin", "lean")
 MC = os.environ.get("UC_MC", os.path.join(EXAMPLE, "bin", "mc"))
 RESULTS = os.path.join(HERE, "results.json")
 CASES = os.path.join(HERE, "cases.json")
@@ -116,19 +121,24 @@ LINE_MAX = int(os.environ.get("UC_MAX_SECONDS", "3600"))
 
 
 def run(name):
+    binp = MONO or lib.ensure_lean_bin(DP_BUILD, os.path.join(PIPES, name + ".datapipeline"), LEAN_DIR)
     p = stage(name)
     reset(p)
-    res = lib.run_pipe(BIN, p, env=env, cwd=EXAMPLE, max_seconds=MAX_SECONDS)
+    res = lib.run_pipe(binp, p, env=env, cwd=EXAMPLE, max_seconds=MAX_SECONDS)
     reclaim(p)
     return res
 
 
 def main():
     sel = sys.argv[1:] or list(cases.keys())
+    if not MONO and not os.path.exists(DP_BUILD):
+        print("building dp-build (import-driven lean builder)…")
+        subprocess.run(["go", "build", "-o", DP_BUILD, "./cmd/dp-build"], cwd=REPO, check=True)
     try:
         results = json.load(open(RESULTS))
     except (OSError, ValueError):
         results = {}
+    print("binary: %s" % (("monolith " + MONO) if MONO else "lean per-pipe (dp-build)"))
     print("backends: postgres=%s kafka=%s s3=%s\n" % (
         "up" if PG_UP else "DOWN", "up" if KAFKA_UP else "DOWN", "up" if S3_UP else "DOWN"))
     for name in sel:
@@ -140,9 +150,10 @@ def main():
         res = run(name)
         results[name] = dict(cases[name], **res)
         json.dump(results, open(RESULTS, "w"), indent=1)  # persist after every case
-        print("%-32s %-4s %-10s proc=%8d wr=%8d dur=%7dms thr=%9d/s %s" % (
+        print("%-32s %-4s %-10s proc=%8d wr=%8d dur=%7dms thr=%9d/s rss=%6.0fMB cpu=%4.1fc %s" % (
             name, cases[name]["cat"], res["status"], res["processed"], res["written"],
-            res["duration_ms"], res["rows_per_sec"], res["err"]))
+            res["duration_ms"], res["rows_per_sec"], res.get("peak_rss_mb", 0),
+            res.get("cpu_cores", 0), res["err"]))
     json.dump(results, open(RESULTS, "w"), indent=1)
     print("\nDONE -> %s" % RESULTS)
 
