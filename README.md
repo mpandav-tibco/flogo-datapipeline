@@ -66,6 +66,53 @@ See [`studio/vscode/README.md`](studio/vscode/README.md) for full details.
 
 ---
 
+## Where we fit: one platform, not a second stack
+
+Flogo is already an **integration platform** — connectivity, triggers, API and event
+flows. Flogo Data Pipeline adds **data integration** (ETL / ELT, bulk and incremental
+movement) as a first-class Flogo paradigm, so a customer runs **both on one platform,
+one runtime, one skill set**. This is not a bid to out-feature Informatica, Talend, or
+Redpanda Connect — it removes the need to buy, run, and staff a *separate* ETL stack
+alongside the integration one. The competition we care about is the **redundant second
+stack**, not another tool in a feature grid.
+
+### The challenge
+
+Consolidation. Organisations — acutely in DACH — are collapsing tech stacks to cut
+infrastructure, operations, and skills cost. Running application integration and data
+integration on **separate** stacks doubles licences, runtimes, and people, and splits
+governance across two vendors.
+
+### The solution
+
+A new Flogo `action` that turns Flogo into a first-class data-pipeline engine: a single
+static Go binary (no JVM, no cluster) authored visually in VS Code — the **same**
+runtime, tooling, and skills your integration flows already use.
+
+### What consolidation buys you
+
+| Key value | Payoff |
+|---|---|
+| **One solution for integration + pipelines** | Retire the redundant ETL stack — one runtime, one skill set, one governance surface |
+| **Lowest possible TCO** | A deployed pipeline is a single ~8–14 MB binary; no per-connector SaaS metering; scales down to a job and up to sharded / distributed |
+| **Author in VS Code** | No design SaaS, no extra account; near-zero onboarding, reuses existing Flogo skills |
+| **Composability = expansion** | Pipelines compose with existing Flogo triggers and activities — every existing Flogo footprint becomes a data-integration expansion, not a new procurement |
+
+### An honest scope
+
+We cover the **common** integration and data-movement patterns — file / mainframe → lake
+or database, database → database incremental sync, and Kafka → lake — with operational
+primitives built in (checkpoint/resume, incremental high-water marks, schema-drift
+policies, data-quality scoring, and a dead-letter queue), including enterprise formats
+like EBCDIC / fixed-width mainframe, Parquet, and XML. We deliberately do **not** chase
+the deepest specialist features — log-based CDC, MDM, data governance / catalog, or a
+500+ SaaS-connector catalog. The aim is not to replace a specialist suite for every edge
+case; it is to let **one platform** handle the bulk of a customer's integration *and*
+data work, so the second stack — with its own vendor, licences, and headcount — is no
+longer needed.
+
+---
+
 ## Architecture overview
 
 ```mermaid
