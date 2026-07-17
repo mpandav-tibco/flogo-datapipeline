@@ -6,23 +6,23 @@ into the transform chain. Sources are registered with `source.Register(name, …
 `source` block selects one. Sources marked **Partitionable** implement
 `PartitionableSource` and can be split across [scaling](scaling.md) instances.
 
-> Full per-key tables live in the [Feature reference](FEATURES.md#sources). This page
-> is the conceptual guide and cheat-sheet.
+> Each source below links to its own detailed page under [`docs/sources/`](sources/) —
+> full configuration keys, behavior, and runnable examples.
 
 ## At a glance
 
 | Type(s) | Reads | Partitionable |
 |---|---|:--:|
-| `csv`, `tsv` | delimited text, optional header | — |
-| `parquet` | columnar Parquet, row-group parallel | ✅ |
-| `jdbc` | SQL query over PostgreSQL / MySQL / SQLite | ✅ |
-| `kafka` | consumer-group topic consumption | — |
-| `fixedwidth`, `flatfile` | positional / EBCDIC mainframe files | — |
-| `xml` | streaming element-per-record XML | — |
-| `jsonlines`, `ndjson` | newline-delimited JSON | — |
-| `s3`, `gcs`, `adls` | files from cloud object storage | ✅ |
-| `sectioned` | header block + delimited body table | — |
-| `podlog` 🚧 | Kubernetes / CRI container logs | — |
+| [`csv`, `tsv`](sources/csv.md) | delimited text, optional header | — |
+| [`parquet`](sources/parquet.md) | columnar Parquet, row-group parallel | ✅ |
+| [`jdbc`](sources/jdbc.md) | SQL query over PostgreSQL / MySQL / SQLite | ✅ |
+| [`kafka`](sources/kafka.md) | consumer-group topic consumption | — |
+| [`fixedwidth`, `flatfile`](sources/fixedwidth.md) | positional / EBCDIC mainframe files | — |
+| [`xml`](sources/xml.md) | streaming element-per-record XML | — |
+| [`jsonlines`, `ndjson`](sources/jsonlines.md) | newline-delimited JSON | — |
+| [`s3`, `gcs`, `adls`](sources/objstore.md) | files from cloud object storage | ✅ |
+| [`sectioned`](sources/sectioned.md) | header block + delimited body table | — |
+| [`podlog`](sources/podlog.md) | Kubernetes / CRI container logs | — |
 
 ## File sources
 
@@ -88,4 +88,4 @@ Registered and runnable but tracked as work-in-progress (see
 - [Sinks](sinks.md) · [Transforms](transforms.md)
 - [Connections](connections.md) — bind DSNs / buckets / brokers by name
 - [Reliability](reliability.md) — checkpoint resume and incremental (HWM) reads
-- [Feature reference](FEATURES.md#sources) — every key, every default
+- Per-source detail: [`docs/sources/`](sources/)

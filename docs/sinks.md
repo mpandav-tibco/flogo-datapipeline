@@ -5,21 +5,22 @@ registered with `sink.Register(name, …)` ([`sink/sink.go`](../sink/sink.go)); 
 `type` in a pipeline's `sink` block selects one. Any sink can be wrapped by the
 **Dead-Letter Queue** to capture rows that fail to write.
 
-> Full per-key tables live in the [Feature reference](FEATURES.md#sinks).
+> Each sink below links to its own detailed page under [`docs/sinks/`](sinks/) —
+> full configuration keys, behavior, and runnable examples.
 
 ## At a glance
 
 | Type(s) | Writes |
 |---|---|
-| `csv`, `tsv` | delimited text, optional header |
-| `jdbc` | bulk insert / upsert into PostgreSQL / MySQL / SQLite |
-| `parquet` | row-group-aligned Parquet, snappy/gzip/zstd |
-| `jsonlines`, `ndjson` | one JSON object per line |
-| `kafka` | producer with configurable acks & serialization |
-| `s3`, `gcs`, `adls` (+ `-sink`) | cloud object storage with key macros |
-| `template` | Go `text/template` rendering (fixed-width / legacy) |
-| `null`, `discard` | drops all rows (benchmarking / dry-run) |
-| `dlq` | wraps any sink; captures rejected rows |
+| [`csv`, `tsv`](sinks/csv.md) | delimited text, optional header |
+| [`jdbc`](sinks/jdbc.md) | bulk insert / upsert into PostgreSQL / MySQL / SQLite |
+| [`parquet`](sinks/parquet.md) | row-group-aligned Parquet, snappy/gzip/zstd |
+| [`jsonlines`, `ndjson`](sinks/jsonlines.md) | one JSON object per line |
+| [`kafka`](sinks/kafka.md) | producer with configurable acks & serialization |
+| [`s3`, `gcs`, `adls`](sinks/objstore.md) (+ `-sink`) | cloud object storage with key macros |
+| [`template`](sinks/template.md) | Go `text/template` rendering (fixed-width / legacy) |
+| [`null`, `discard`](sinks/null.md) | drops all rows (benchmarking / dry-run) |
+| [`dlq`](sinks/dlq.md) | wraps any sink; captures rejected rows |
 
 ## File sinks
 
@@ -77,4 +78,4 @@ and for DLQ routing during dry runs.
 
 - [Sources](sources.md) · [Transforms](transforms.md)
 - [Data quality](data-quality.md) — validate / DQ / DLQ routing
-- [Feature reference](FEATURES.md#sinks)
+- Per-sink detail: [`docs/sinks/`](sinks/)

@@ -108,6 +108,7 @@ const S = {
   sinkSample: null as SrcSample | null,
   db: {} as Record<string, DbIntrospect>,
   srcSchemaLoading: false,
+  bindPick: null as { nodeId: string; key: string; suggested: string; cur: string } | null,
 };
 
 // Live-DB introspection state, keyed by target ('source' | 'sink' | 'dlq').
@@ -330,7 +331,9 @@ const FIELD_LABELS: Record<string, string> = {
   partitionKey: 'Partition key', serializer: 'Serializer',
   // objstore
   bucket: 'Bucket', prefix: 'Prefix', format: 'Inner format', download: 'Download locally',
-  region: 'Region', key: 'Key template',
+  region: 'Region', key: 'Key template', endpoint: 'Endpoint URL', forcePathStyle: 'Force path-style',
+  rollMaxBytes: 'Roll at size (bytes)', rollMaxSeconds: 'Roll at age (seconds)',
+  accessKeyIdEnv: 'Access-key env var', secretAccessKeyEnv: 'Secret-key env var',
   // jdbc sink
   onConflict: 'On conflict', conflictKey: 'Conflict key', autoMigrate: 'Auto-migrate table',
   // dlq destination (top-level dlq block + options)
@@ -428,6 +431,12 @@ const FIELD_HINTS: Record<string, string> = {
   brokers: 'Comma-separated host:port list, e.g. broker-1:9092, broker-2:9092',
   recordElement: 'XML element that marks one record, e.g. "order".',
   key: 'Object key template, supports ${date}, ${uuid}, ${runId}.',
+  endpoint: 'Custom S3-compatible endpoint (MinIO/Ceph), e.g. http://minio:9000. Leave empty for real AWS S3.',
+  forcePathStyle: 'Path-style addressing (bucket in the URL path). Required for MinIO and most S3-compatible stores.',
+  rollMaxBytes: 'Close & upload the current object once it reaches this many bytes. 0 = one object per run (no size roll).',
+  rollMaxSeconds: 'Close & upload the current object after it has been open this many seconds. 0 = no time-based roll.',
+  accessKeyIdEnv: 'Name of the env var holding the access key ID (e.g. AWS_ACCESS_KEY_ID). Keeps the secret out of the pipeline file.',
+  secretAccessKeyEnv: 'Name of the env var holding the secret access key. Keeps the secret out of the pipeline file.',
   rules: 'JSON array of field rules: [{ "field": "amount", "notNull": true }]',
   expectations: 'JSON array of DQ expectations (expectColumnNotNull, expectValuesInSet, …).',
   url: 'Enrichment endpoint. Use {keyField} as the placeholder, e.g. https://api/enrich/{id} — substituted per row.',
@@ -441,7 +450,16 @@ const FIELD_HINTS: Record<string, string> = {
   pattern: 'Regex with named groups (?P<name>…); each group becomes a column. Use (?s) to span multiline stack traces.',
   prefix: 'Optional prefix added to each extracted column name (JSON mode), e.g. log_.',
   keepSource: 'Keep the original source field alongside the extracted columns.',
-};const SOURCE_TYPES = ['csv', 'tsv', 'fixedwidth', 'sectioned', 'parquet', 'xml', 'jsonlines', 'jdbc', 'kafka', 's3', 'gcs', 'adls'];
+  // podlog (K8s pod-log collector)
+  root: 'Directory to tail CRI pod logs from (default /var/log/pods). Point it at a local folder for testing.',
+  node: 'Node name stamped onto every record and metrics labels — usually the K8s node this collector runs on.',
+  positionFile: 'Crash-safe offset registry file — lets the collector resume where it left off after a restart. Recommended in production.',
+  fromBeginning: 'On: read existing log files from the start. Off: tail only new lines (from end of file).',
+  bounded: 'On (test/drain): stop with EOF once all logs are read. Off: run as a continuous live collector.',
+  pollMs: 'How often (ms) to poll idle files for new lines. Default 500.',
+  includeNamespaces: 'JSON array — if non-empty, ONLY these namespaces are tailed, e.g. ["team-a","team-b"]. Empty = all.',
+  excludeNamespaces: 'JSON array of namespaces to skip, e.g. ["kube-system","kube-public"].',
+}; const SOURCE_TYPES = ['csv', 'tsv', 'fixedwidth', 'sectioned', 'parquet', 'xml', 'jsonlines', 'jdbc', 'kafka', 's3', 'gcs', 'adls', 'podlog'];
 const SINK_TYPES = ['jdbc', 'parquet', 'csv', 'jsonlines', 'template', 'kafka', 's3', 'gcs', 'adls', 'null'];
 // Friendly, generic display labels for stage types whose engine id is jargon.
 // The engine id (used in the .datapipeline file) is unchanged; only the picker
@@ -450,6 +468,7 @@ const TYPE_LABELS: Record<string, string> = {
   sectioned: 'Text Document',
   template: 'Custom Text',
   null: 'Null (discard)',
+  podlog: 'Pod Logs (K8s)',
 };
 function typeLabel(t: string): string {
   return TYPE_LABELS[t] || t;
@@ -539,6 +558,17 @@ function defaultConfigFor(kind: 'source' | 'sink', type: string): Record<string,
     s3: { bucket: '', prefix: '', region: 'us-east-1', format: 'csv' },
     gcs: { bucket: '', prefix: '', format: 'csv' },
     adls: { bucket: '', prefix: '', format: 'csv' },
+    podlog: {
+      root: '/var/log/pods',
+      node: '',
+      positionFile: './out/positions.json',
+      fromBeginning: false,
+      bounded: false,
+      pollMs: 500,
+      includeNamespaces: [],
+      excludeNamespaces: ['kube-system'],
+      multiline: { startPattern: '', flushIdleMs: 2000, maxLines: 500 },
+    },
   };
   const sink: Record<string, Record<string, unknown>> = {
     jdbc: { driver: 'postgres', dsn: '', table: '', batchSize: 1000, onConflict: 'insert', autoMigrate: true },
@@ -547,7 +577,12 @@ function defaultConfigFor(kind: 'source' | 'sink', type: string): Record<string,
     jsonlines: { path: './out/output.jsonl' },
     template: { path: './out/{{index .Attr "id"}}.txt', template: '{{range .Rows}}{{.}}\n{{end}}' },
     kafka: { brokers: '', topic: '', ackMode: 'all', serializer: 'json' },
-    s3: { bucket: '', key: '${date}/part-${uuid}.parquet', format: 'parquet' },
+    s3: {
+      bucket: '', key: '${date}/part-${uuid}.parquet', format: 'parquet',
+      region: 'us-east-1', endpoint: '', forcePathStyle: false,
+      accessKeyIdEnv: '', secretAccessKeyEnv: '',
+      rollMaxBytes: 0, rollMaxSeconds: 0,
+    },
     gcs: { bucket: '', key: '${date}/part-${uuid}.parquet', format: 'parquet' },
     adls: { bucket: '', key: '${date}/part-${uuid}.parquet', format: 'parquet' },
     null: {},
@@ -562,7 +597,11 @@ function defaultDlqOptions(type: string): Record<string, unknown> {
     parquet: { path: './out/dlq.parquet', compression: 'snappy' },
     csv: { path: './out/dlq.csv', writeHeader: true },
     jsonlines: { path: './out/dlq.jsonl' },
-    s3: { bucket: '', key: 'dlq/${date}.jsonl', format: 'jsonlines' },
+    s3: {
+      bucket: '', key: 'dlq/${date}.jsonl', format: 'jsonlines',
+      region: 'us-east-1', endpoint: '', forcePathStyle: false,
+      accessKeyIdEnv: '', secretAccessKeyEnv: '',
+    },
     gcs: { bucket: '', key: 'dlq/${date}.jsonl', format: 'jsonlines' },
     adls: { bucket: '', key: 'dlq/${date}.jsonl', format: 'jsonlines' },
     null: {},
@@ -575,10 +614,10 @@ function humanize(k: string): string {
 }
 function isBoolField(k: string, v: string): boolean {
   return v === 'true' || v === 'false' ||
-    /^(has|is|enable|delete|trim|nullable|repeating|download|autoMigrate|caseSensitive|deleteOnSuccess)/i.test(k);
+    /^(has|is|enable|delete|trim|nullable|repeating|download|autoMigrate|caseSensitive|deleteOnSuccess|forcePathStyle)/i.test(k);
 }
 function isFileField(k: string): boolean {
-  return /(^path$|_path$|file$|dir$|directory$)/i.test(k);
+  return /(^path$|^root$|_path$|file$|dir$|directory$)/i.test(k);
 }
 function isNumField(k: string, v: string): boolean {
   return /(size|port|workers|batches|interval|memory|parallelism|scale|length|start|retries|threshold|rows|seconds|delay|lines|concurrency|ms$|bytes|offset|count|limit|poll)/i.test(k) &&
@@ -598,10 +637,146 @@ function requestBrowse(mode: 'file' | 'folder', onPick: (p: string) => void) {
   post({ type: 'browse', id, mode });
 }
 
+// ── app-property binding ($property) ──────────────────────────────────
+// A field value of `$property[name]` binds it to an app property; the ⚡ in the
+// field label opens a picker to bind. Declare/edit properties in the "App
+// Properties" section of Pipeline Settings. The engine resolves $property[...]
+// at load with env-override precedence (see internal/appprops).
+function isPropRef(v: string): boolean {
+  return /^\s*\$property\[/.test(v);
+}
+function propRefName(v: string): string {
+  const m = String(v).match(/\$property\[\s*"?([^\]"]+)"?\s*\]/);
+  return m ? m[1] : '';
+}
+function appProps(): any[] {
+  const doc: any = S.doc;
+  if (!Array.isArray(doc.__appProperties)) doc.__appProperties = [];
+  return doc.__appProperties;
+}
+const APP_PROP_TYPES: Array<[string, string]> = [
+  ['string', 'String'], ['number', 'Number'], ['boolean', 'Boolean'], ['password', 'Password (secret)'],
+];
+// Rows for the "App Properties" settings section: declare name / type / default.
+function appPropertiesGroupFields(): HTMLElement[] {
+  const props = appProps();
+  const out: HTMLElement[] = [];
+  out.push(el('div', 'hint', 'Named values injected into config via <code>$property[name]</code>. Override per environment with an env var of the same name (or a k8s ConfigMap / Secret). Bind a field with the ⚡ in its inspector.'));
+  props.forEach((p: any, i: number) => {
+    const row = el('div', 'inputrow');
+    row.style.marginBottom = '4px';
+    const name = el('input', 'v') as HTMLInputElement;
+    name.placeholder = 'name'; name.style.flex = '1.2';
+    name.value = String(p.name || '');
+    name.onchange = () => { p.name = name.value.trim(); saveSettings(); };
+    const type = el('select', 'v') as HTMLSelectElement;
+    APP_PROP_TYPES.forEach(([v, l]) => { const o = document.createElement('option'); o.value = v; o.textContent = l; if (v === String(p.type || 'string')) o.selected = true; type.appendChild(o); });
+    type.onchange = () => { p.type = type.value; saveSettings(); };
+    const val = el('input', 'v') as HTMLInputElement;
+    val.placeholder = 'default value'; val.style.flex = '1.2';
+    val.value = p.value != null ? String(p.value) : '';
+    val.onchange = () => { p.value = val.value; saveSettings(); };
+    const rm = el('button', 'browse', '✕');
+    rm.title = 'Remove property';
+    rm.onclick = () => { props.splice(i, 1); saveSettings(); renderEditor(); };
+    row.appendChild(name); row.appendChild(type); row.appendChild(val); row.appendChild(rm);
+    out.push(row);
+  });
+  const add = el('button', 'btn sm', '＋ Add property');
+  add.style.marginTop = '4px';
+  add.onclick = () => { props.push({ name: '', type: 'string', value: '' }); saveSettings(); renderEditor(); };
+  out.push(add);
+  return out;
+}
+function openBindPicker(node: Node, key: string): void {
+  const cur = String((cfgTarget(node) as any)[key] ?? '');
+  S.bindPick = { nodeId: node.id, key, suggested: key.replace(/[^A-Za-z0-9_.]/g, '_'), cur };
+  renderEditor();
+}
+function renderBindPicker(f: HTMLElement, node: Node, key: string): HTMLElement {
+  const bp = S.bindPick;
+  if (!bp) return f;
+  const props = appProps();
+  const sel = el('select', 'v') as HTMLSelectElement;
+  const optNew = document.createElement('option'); optNew.value = '__new'; optNew.textContent = '＋ New property…'; sel.appendChild(optNew);
+  props.forEach((p: any) => { if (p.name) { const o = document.createElement('option'); o.value = String(p.name); o.textContent = String(p.name); sel.appendChild(o); } });
+  const nameInp = el('input', 'v') as HTMLInputElement;
+  nameInp.placeholder = 'new property name';
+  nameInp.value = bp.suggested;
+  const refresh = () => { nameInp.style.display = sel.value === '__new' ? '' : 'none'; };
+  sel.onchange = refresh;
+  const bind = el('button', 'browse', 'Bind ⚡');
+  bind.onclick = () => {
+    let name = sel.value;
+    if (name === '__new') {
+      name = nameInp.value.trim();
+      if (!name) { toast('err', 'Property name is required'); return; }
+      if (!props.find((p: any) => p.name === name)) {
+        const isBool = bp.cur === 'true' || bp.cur === 'false';
+        const isNum = !isBool && bp.cur.trim() !== '' && !isNaN(Number(bp.cur));
+        props.push({ name, type: isBool ? 'boolean' : isNum ? 'number' : 'string', value: bp.cur });
+      }
+    }
+    S.bindPick = null;
+    setCfgValue(node, key, '$property[' + name + ']');
+    renderEditor();
+  };
+  const cancel = el('button', 'browse', '✕');
+  cancel.title = 'Cancel';
+  cancel.onclick = () => { S.bindPick = null; renderEditor(); };
+  const row = el('div', 'inputrow');
+  row.appendChild(sel); row.appendChild(bind); row.appendChild(cancel);
+  f.appendChild(row);
+  f.appendChild(nameInp);
+  refresh();
+  f.appendChild(el('div', 'hint', 'Pick an existing app property or create one — the field will use <code>$property[name]</code>.'));
+  return f;
+}
+function renderBoundField(f: HTMLElement, node: Node, key: string, value: string): HTMLElement {
+  const name = propRefName(value);
+  const row = el('div', 'inputrow');
+  const chip = el('div', 'v');
+  chip.style.cssText = 'flex:1;opacity:.9';
+  chip.innerHTML = '⚡ <b>' + escapeHtml(name) + '</b>';
+  chip.title = 'Bound to app property "' + name + '" (' + escapeHtml(value) + ')';
+  const unbind = el('button', 'browse', '✕ Unbind');
+  unbind.title = 'Replace with a literal value (uses the property default)';
+  unbind.onclick = () => {
+    const p = appProps().find((x: any) => x.name === name);
+    setCfgField(node, key, p && p.value != null ? String(p.value) : '');
+    renderEditor();
+  };
+  row.appendChild(chip); row.appendChild(unbind);
+  f.appendChild(row);
+  f.appendChild(el('div', 'hint', 'Uses app property <code>' + escapeHtml(name) + '</code> — set its default in <b>App Properties</b>; override per env with an env var named <code>' + escapeHtml(name) + '</code>.'));
+  return f;
+}
+
 // Build one config field widget appropriate to its key/value type.
 function renderField(node: Node, key: string, value: string): HTMLElement {
   const f = el('div', 'fld');
-  f.appendChild(el('div', 'k', humanize(key)));
+  const kdiv = el('div', 'k');
+  kdiv.textContent = humanize(key);
+  f.appendChild(kdiv);
+
+  // App-property binding: a mid-bind picker, an existing $property[...] binding,
+  // or a ⚡ affordance on an eligible scalar field.
+  if (S.bindPick && S.bindPick.nodeId === node.id && S.bindPick.key === key) {
+    return renderBindPicker(f, node, key);
+  }
+  if (isPropRef(String(value))) {
+    return renderBoundField(f, node, key, String(value));
+  }
+  const enumForBind = (FIELD_ENUMS_BY_TYPE[node.type] && FIELD_ENUMS_BY_TYPE[node.type][key]) || FIELD_ENUMS[key];
+  if (key !== 'columns' && !enumForBind && !(isJsonField(value) && key !== 'columns')) {
+    const bico = el('span', 'k-bind', '⚡ bind');
+    bico.title = 'Bind to an app property ($property) — override per environment';
+    bico.style.cssText = 'cursor:pointer;margin-left:8px;font-size:10px;padding:1px 6px;border:1px solid var(--vscode-widget-border,#454545);border-radius:3px;opacity:.85;color:var(--vscode-textLink-foreground,#3794ff);vertical-align:middle;white-space:nowrap';
+    bico.onmouseenter = () => { bico.style.opacity = '1'; bico.style.background = 'var(--vscode-toolbar-hoverBackground,rgba(90,93,94,.3))'; };
+    bico.onmouseleave = () => { bico.style.opacity = '.85'; bico.style.background = 'transparent'; };
+    bico.onclick = (e) => { e.stopPropagation(); openBindPicker(node, key); };
+    kdiv.appendChild(bico);
+  }
 
   // Boolean → toggle
   if (isBoolField(key, value)) {
@@ -672,7 +847,7 @@ function renderField(node: Node, key: string, value: string): HTMLElement {
     inp.value = value;
     inp.onchange = () => setCfgField(node, key, inp.value);
     const btn = el('button', 'browse', '📂 Browse');
-    const folder = node.type === 'file' || /checkpoint/i.test(node.type) || key.toLowerCase().includes('dir');
+    const folder = node.type === 'file' || /checkpoint/i.test(node.type) || key.toLowerCase().includes('dir') || key === 'root';
     btn.onclick = () => requestBrowse(folder ? 'folder' : 'file', (p) => { inp.value = p; setCfgField(node, key, p); });
     row.appendChild(inp);
     row.appendChild(btn);
@@ -717,6 +892,43 @@ function renderField(node: Node, key: string, value: string): HTMLElement {
   f.appendChild(inp);
   if (FIELD_HINTS[key]) f.appendChild(el('div', 'hint', FIELD_HINTS[key]));
   return f;
+}
+
+// Dedicated editor for the podlog `multiline` sub-object (stack-trace stitching).
+// Renders labeled inputs that read/write source.multiline.{startPattern,
+// flushIdleMs, maxLines}; the engine reads these as a nested object.
+function renderPodlogMultiline(node: Node): HTMLElement {
+  const wrap = el('div', 'pp-multiline');
+  wrap.appendChild(el('div', 'k', 'Multiline stitching'));
+  wrap.appendChild(el('div', 'hint', 'Reassemble stack traces / wrapped lines into ONE record. Leave Start pattern empty to disable (each line = one record).'));
+  const tgt = cfgTarget(node);
+  const ml: any = (tgt.multiline && typeof tgt.multiline === 'object') ? tgt.multiline : (tgt.multiline = {});
+  const save = () => {
+    if (Object.keys(ml).length === 0) delete tgt.multiline;
+    S.pipe = buildPipe(S.doc);
+    post({ type: 'save', doc: S.doc });
+  };
+  const row = (label: string, val: string, hint: string, num: boolean, apply: (v: string) => void) => {
+    const f = el('div', 'fld');
+    f.appendChild(el('div', 'k', label));
+    const inp = el('input', 'v') as HTMLInputElement;
+    if (num) inp.type = 'number';
+    inp.value = val;
+    inp.onchange = () => { apply(inp.value); save(); };
+    f.appendChild(inp);
+    f.appendChild(el('div', 'hint', hint));
+    wrap.appendChild(f);
+  };
+  row('Start pattern (regex)', String(ml.startPattern ?? ''),
+    'Regex a NEW record starts with, e.g. ^\\d{4}-\\d{2}-\\d{2} (a timestamp). Non-matching lines are appended to the previous record.',
+    false, (v) => { if (v === '') delete ml.startPattern; else ml.startPattern = v; });
+  row('Flush idle (ms)', ml.flushIdleMs != null ? String(ml.flushIdleMs) : '',
+    'Emit a pending stitched record after the file is idle this long (default 2000).',
+    true, (v) => { if (v === '') delete ml.flushIdleMs; else ml.flushIdleMs = Number(v); });
+  row('Max lines', ml.maxLines != null ? String(ml.maxLines) : '',
+    'Safety cap on stitched lines per record (default 500; 0 = unlimited).',
+    true, (v) => { if (v === '') delete ml.maxLines; else ml.maxLines = Number(v); });
+  return wrap;
 }
 
 // Config keys that a bound connection supplies — hidden from the generic field
@@ -1224,10 +1436,10 @@ function stGroup(title: string, subtitle: string, ...fields: HTMLElement[]): HTM
   // scaling / observability).
   const cat = /mode/i.test(title) ? 'exec'
     : /trigger/i.test(title) ? 'trig'
-    : /reliab|checkpoint|incremental/i.test(title) ? 'rel'
-    : /load|performance/i.test(title) ? 'perf'
-    : /scal/i.test(title) ? 'scale'
-    : /observ|metric/i.test(title) ? 'obs' : 'exec';
+      : /reliab|checkpoint|incremental/i.test(title) ? 'rel'
+        : /load|performance/i.test(title) ? 'perf'
+          : /scal/i.test(title) ? 'scale'
+            : /observ|metric/i.test(title) ? 'obs' : 'exec';
   const glyph = { exec: '◧', trig: '⇥', rel: '❖', perf: '⚡', scale: '⤢', obs: '📈' }[cat] || '◧';
   const g = el('div', 'setgroup sg-' + cat);
   const open = !!(S.setOpen && S.setOpen[title]);
@@ -1320,6 +1532,7 @@ function renderPipelineSettings(): HTMLElement {
   if (!S.setOpen) {
     S.setOpen = {
       'Execution mode': false,
+      'App Properties': true,
       'Trigger · Invocation': false,
       'Reliability · Checkpoint & resume': false,
       'Reliability · Incremental load': false,
@@ -1337,6 +1550,10 @@ function renderPipelineSettings(): HTMLElement {
       ['elt', 'ELT — load then transform in-target'],
     ], 'ETL runs the transform chain in-flight; EL/ELT skip or defer it.'),
   ));
+
+  // ── App Properties ─────────────────────────────────────────────────────────
+  ib.appendChild(stGroup('App Properties', 'Environment-overridable named values ($property)',
+    ...appPropertiesGroupFields()));
 
   // ── Trigger · invocation ───────────────────────────────────────────────────
   ib.appendChild(stGroup('Trigger · Invocation', 'How the pipeline is kicked off',
@@ -1618,12 +1835,19 @@ function renderColumnsEditor(node: Node): HTMLElement {
   // Read the schema straight from the source via the engine — works for
   // self-describing formats (Parquet footer) and for object-store sources where
   // the file isn't on the local disk. Available for any source stage.
+  // Sources with a FIXED built-in schema (e.g. podlog) don't read a file, so the
+  // action is labelled "Load Default Schema" to set the right expectation.
   if (node.kind === 'source') {
-    const readBtn = el('button', 'browse infer-btn', S.srcSchemaLoading ? 'Reading schema…' : '⤓ Read schema from source');
+    const fixedSchema = !!SOURCE_FIXED_SCHEMA[String(node.type)];
+    const readLabel = fixedSchema ? '⤓ Load Default Schema' : '⤓ Read schema from source';
+    const loadingLabel = fixedSchema ? 'Loading schema…' : 'Reading schema…';
+    const readBtn = el('button', 'browse infer-btn', S.srcSchemaLoading ? loadingLabel : readLabel);
     readBtn.style.marginTop = '6px';
     readBtn.onclick = () => { S.srcSchemaLoading = true; renderEditor(); post({ type: 'fetchSourceSchema' }); };
     f.appendChild(readBtn);
-    f.appendChild(el('div', 'hint', 'Opens the source (e.g. reads a Parquet footer) and fills columns from its actual schema.'));
+    f.appendChild(el('div', 'hint', fixedSchema
+      ? 'Loads the fixed built-in schema this source always emits — no files are read.'
+      : 'Opens the source (e.g. reads a Parquet footer) and fills columns from its actual schema.'));
   }
   return f;
 }
@@ -2644,6 +2868,8 @@ function renderCanvas(m: HTMLElement) {
       if (sn.type === 'template' && k === 'templatePath') {
         return; // handled inside renderTemplateEditor
       }
+      if (sn.type === 'podlog' && k === 'multiline') { ib.appendChild(renderPodlogMultiline(sn)); return; }
+      if (sn.type === 'podlog' && k === 'columns') return; // podlog: pin columns to the bottom (rendered after config, below)
       if (k === 'columns') ib.appendChild(renderColumnsEditor(sn));
       else if (k === 'fields' && (sn.type === 'map' || sn.type === 'mapper')) ib.appendChild(renderMapEditor(sn));
       else if (k === 'rules' && sn.type === 'validate') ib.appendChild(renderRulesEditor(sn));
@@ -2659,8 +2885,10 @@ function renderCanvas(m: HTMLElement) {
 
     // A source with no explicit `columns` key (e.g. Parquet is self-describing)
     // still gets a columns editor so users can view/declare columns and use the
-    // "Read schema from source" / "Infer" actions.
-    if (sn.kind === 'source' && !('columns' in sn.cfg)) {
+    // "Read schema from source" / "Infer" actions. podlog also renders it here
+    // (its `columns` key is skipped in the loop above) so its many config fields
+    // stay at the top and the columns/schema section is always last.
+    if (sn.kind === 'source' && (!('columns' in sn.cfg) || sn.type === 'podlog')) {
       ib.appendChild(renderColumnsEditor(sn));
     }
 
@@ -3256,22 +3484,38 @@ function persistAndRebuild() {
 
 // ── add / remove transforms ─────────────────────────────────────────────────
 const TRANSFORMS: Array<{ type: string; label: string; cfg: Record<string, unknown> }> = [
-  { type: 'filter', label: 'Filter — drop rows by a boolean expression',
-    cfg: { expr: "amount > 0 AND status != 'CANCELLED'" } },
-  { type: 'map', label: 'Map — project, rename, coerce & derive fields',
-    cfg: { fields: { net_amount: '=multiply($amount, 1.1)' } } },
-  { type: 'validate', label: 'Validate — per-field rules, route to DLQ',
-    cfg: { rules: [{ field: 'amount', notNull: true }], onViolation: 'route' } },
-  { type: 'lookup', label: 'Lookup — HTTP enrichment with LRU cache',
-    cfg: { keyField: 'id', url: 'https://api.internal/enrich/{id}', method: 'GET', cacheSize: 10000, onError: 'null' } },
-  { type: 'hwm', label: 'High-water mark — incremental cursor',
-    cfg: { column: 'updated_at', valueType: 'datetime' } },
-  { type: 'dq', label: 'Data quality — expectations + quality score',
-    cfg: { expectations: [{ type: 'expectColumnNotNull', column: 'id' }], onFail: 'warn', qualityThreshold: 0.95 } },
-  { type: 'schemadrift', label: 'Schema drift — detect column add/remove/type',
-    cfg: { policy: 'additive', onDrift: 'log' } },
-  { type: 'parse', label: 'Parse — structure a text field into columns (regex/JSON)',
-    cfg: { source: 'message', mode: 'regex', pattern: '^(?P<level>\\w+)\\s+(?P<msg>.*)$', onError: 'keep', keepSource: true } },
+  {
+    type: 'filter', label: 'Filter — drop rows by a boolean expression',
+    cfg: { expr: "amount > 0 AND status != 'CANCELLED'" }
+  },
+  {
+    type: 'map', label: 'Map — project, rename, coerce & derive fields',
+    cfg: { fields: { net_amount: '=multiply($amount, 1.1)' } }
+  },
+  {
+    type: 'validate', label: 'Validate — per-field rules, route to DLQ',
+    cfg: { rules: [{ field: 'amount', notNull: true }], onViolation: 'route' }
+  },
+  {
+    type: 'lookup', label: 'Lookup — HTTP enrichment with LRU cache',
+    cfg: { keyField: 'id', url: 'https://api.internal/enrich/{id}', method: 'GET', cacheSize: 10000, onError: 'null' }
+  },
+  {
+    type: 'hwm', label: 'High-water mark — incremental cursor',
+    cfg: { column: 'updated_at', valueType: 'datetime' }
+  },
+  {
+    type: 'dq', label: 'Data quality — expectations + quality score',
+    cfg: { expectations: [{ type: 'expectColumnNotNull', column: 'id' }], onFail: 'warn', qualityThreshold: 0.95 }
+  },
+  {
+    type: 'schemadrift', label: 'Schema drift — detect column add/remove/type',
+    cfg: { policy: 'additive', onDrift: 'log' }
+  },
+  {
+    type: 'parse', label: 'Parse — structure a text field into columns (regex/JSON)',
+    cfg: { source: 'message', mode: 'regex', pattern: '^(?P<level>\\w+)\\s+(?P<msg>.*)$', onError: 'keep', keepSource: true }
+  },
 ];
 
 // Compute the column names visible at a given transforms[] insert position,
@@ -3588,8 +3832,8 @@ function renderStatus() {
   runItem.title = S.running
     ? 'Stop the running pipeline (tears the engine down).'
     : S.port
-    ? 'Stop the engine (frees the port). Click Run again for a fresh run.'
-    : 'Start a fresh engine and run the pipeline (full boot→run→done log)';
+      ? 'Stop the engine (frees the port). Click Run again for a fresh run.'
+      : 'Start a fresh engine and run the pipeline (full boot→run→done log)';
   runItem.onclick = runAction;
   sb.appendChild(runItem);
   const pal = el('div', 'sbi', 'Data Pipeline');
@@ -3856,6 +4100,20 @@ function escapeHtml(s: string) {
 }
 
 // ── host message handling ─────────────────────────────────────────────────────
+// Flatten a podlog source's nested `options` block onto the source object so the
+// first-class labeled form renders. The engine reads flat or nested identically
+// (SourceDef.UnmarshalJSON), so this is a lossless, engine-equivalent migration.
+function migratePodlogSource(doc: any): void {
+  const src = doc && doc.source;
+  if (!src || src.type !== 'podlog') return;
+  const opts = src.options;
+  if (!opts || typeof opts !== 'object' || Array.isArray(opts)) return;
+  for (const [k, v] of Object.entries(opts)) {
+    if (!(k in src)) src[k] = v;
+  }
+  delete src.options;
+}
+
 window.addEventListener('message', (ev: MessageEvent<HostToWebview>) => {
   const msg = ev.data;
   switch (msg.type) {
@@ -3863,6 +4121,7 @@ window.addEventListener('message', (ev: MessageEvent<HostToWebview>) => {
       S.fileName = msg.fileName;
       S.ref = msg.ref;
       S.doc = msg.doc || {};
+      migratePodlogSource(S.doc);
       S.pipe = buildPipe(S.doc);
       if (!S.selNode) S.selNode = 'source';
       renderAll();
@@ -3870,6 +4129,7 @@ window.addEventListener('message', (ev: MessageEvent<HostToWebview>) => {
       break;
     case 'update':
       S.doc = msg.doc || {};
+      migratePodlogSource(S.doc);
       S.pipe = buildPipe(S.doc);
       if (cur()?.type === 'canvas') renderEditor();
       post({ type: 'validate' });
@@ -4035,7 +4295,7 @@ window.addEventListener('message', (ev: MessageEvent<HostToWebview>) => {
       const p = S.pipe;
       const node = msg.target === 'source' ? p?.nodes.find((n) => n.kind === 'source')
         : msg.target === 'sink' ? p?.nodes.find((n) => n.kind === 'sink')
-        : p?.dlqNode;
+          : p?.dlqNode;
       if (node) {
         const cols = msg.columns.map((c) => ({ name: c.name, type: c.type }));
         setCfgValue(node, 'columns', cols);

@@ -87,6 +87,58 @@ func TestStitcherMultiline(t *testing.T) {
 	}
 }
 
+func TestStitcherMaxLines(t *testing.T) {
+	// maxLines caps a stitched record at N physical lines; overflow lines open a
+	// fresh record so nothing is lost.
+	s := &stitcher{startPattern: mustMatch(t, `^\d{4}-\d{2}-\d{2}`), maxLines: 3}
+	if _, ok := s.push(criLine{stream: "stderr", message: "2026-07-14 ERROR boom", valid: true}, 100); ok {
+		t.Fatal("start line should not emit yet")
+	}
+	if _, ok := s.push(criLine{stream: "stderr", message: "\tline 2", valid: true}, 110); ok {
+		t.Fatal("2nd line (below cap) should not emit yet")
+	}
+	rec, ok := s.push(criLine{stream: "stderr", message: "\tline 3", valid: true}, 120)
+	if !ok {
+		t.Fatal("3rd line should hit maxLines and emit the capped record")
+	}
+	if want := "2026-07-14 ERROR boom\n\tline 2\n\tline 3"; rec.message != want {
+		t.Errorf("capped record:\n got %q\nwant %q", rec.message, want)
+	}
+	if rec.endOffset != 120 {
+		t.Errorf("capped endOffset: got %d want 120", rec.endOffset)
+	}
+	// Overflow continuation lines open a fresh pending record (never lost).
+	if _, ok := s.push(criLine{stream: "stderr", message: "\tline 4 overflow", valid: true}, 130); ok {
+		t.Fatal("overflow line should start a new pending record, not emit")
+	}
+	last, ok := s.flush()
+	if !ok || last.message != "\tline 4 overflow" {
+		t.Errorf("overflow record: ok=%v msg=%q want %q", ok, last.message, "\tline 4 overflow")
+	}
+
+	// maxLines == 0 means unlimited: a long record is never split.
+	u := &stitcher{startPattern: mustMatch(t, `^\d{4}-\d{2}-\d{2}`), maxLines: 0}
+	u.push(criLine{stream: "stderr", message: "2026-07-14 ERROR boom", valid: true}, 10)
+	for i := 0; i < 20; i++ {
+		if _, ok := u.push(criLine{stream: "stderr", message: "\tcont", valid: true}, int64(20+i*10)); ok {
+			t.Fatalf("unlimited stitcher emitted early at continuation %d", i)
+		}
+	}
+	rec2, ok := u.flush()
+	if !ok {
+		t.Fatal("unlimited stitcher should flush one record")
+	}
+	lines := 1
+	for _, ch := range rec2.message {
+		if ch == '\n' {
+			lines++
+		}
+	}
+	if lines != 21 {
+		t.Errorf("unlimited record line count: got %d want 21", lines)
+	}
+}
+
 // TestIntegrationBoundedDrain builds a synthetic /var/log/pods tree, runs the
 // source in bounded mode, and asserts every logical record is emitted with
 // correct enrichment and a stitched multiline stack trace.

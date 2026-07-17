@@ -7,20 +7,21 @@ registered with `transform.Register(name, …)`
 `dq`) can **route** rejected rows to an error sink / DLQ; see
 [Data quality](data-quality.md).
 
-> Full per-key tables live in the [Feature reference](FEATURES.md#transforms).
+> Each transform below links to its own detailed page under [`docs/transforms/`](transforms/),
+> and the shared expression language has a [dedicated reference](transforms/expression-language.md).
 
 ## At a glance
 
 | Type(s) | Does |
 |---|---|
-| `filter` | drop rows that fail a boolean expression |
-| `map`, `mapper` | project / rename / coerce / derive columns |
-| `validate` | per-field rules; violations route, fail, or drop |
-| `lookup`, `enrich` | append columns from an HTTP call (LRU-cached) |
-| `parse` | extract columns from a text field (regex / JSON) |
-| `dq` | evaluate data-quality expectations; emit a report |
-| `schemadrift` | detect column add/remove/type changes at runtime |
-| `hwm` | observe the max of a column for incremental loads |
+| [`filter`](transforms/filter.md) | drop rows that fail a boolean expression |
+| [`map`, `mapper`](transforms/map.md) | project / rename / coerce / derive columns |
+| [`validate`](transforms/validate.md) | per-field rules; violations route, fail, or drop |
+| [`lookup`, `enrich`](transforms/lookup.md) | append columns from an HTTP call (LRU-cached) |
+| [`parse`](transforms/parse.md) | extract columns from a text field (regex / JSON) |
+| [`dq`](transforms/dq.md) | evaluate data-quality expectations; emit a report |
+| [`schemadrift`](transforms/schemadrift.md) | detect column add/remove/type changes at runtime |
+| [`hwm`](transforms/hwm.md) | observe the max of a column for incremental loads |
 
 ## Filter — `filter`
 
@@ -85,47 +86,15 @@ watermark store. Does not modify rows.
 
 # Expression language
 
-`filter` predicates and `map` field expressions share a small, safe expression
-language (no arbitrary code). It is evaluated once per row.
+`filter` predicates and `map` field expressions share one small, safe expression
+language (no arbitrary code), evaluated once per row. It provides **60+ functions**
+across the `string.*`, `number.*`, `math.*`, `datetime.*`, `coerce.*`, `hash.*`,
+`encoding.*`, and `util.*` namespaces, plus SQL-like filter predicates with
+three-valued (NULL-aware) logic.
 
-## Field references
-
-- **`=$field`** — the value of an input column (in `map`).
-- **`=func(args…)`** — a function call; args may be literals or `$field` refs.
-- A bare string with no leading `=` is a **static literal**.
-
-## Filter predicates
-
-SQL-like booleans with three-valued (NULL-aware) logic:
-
-| Category | Operators / forms |
-|---|---|
-| Comparison | `>` `>=` `<` `<=` `=` `!=` |
-| Null | `IS NULL`, `IS NOT NULL` |
-| Boolean | `AND`, `OR` |
-| Literals | strings `'…'`, numbers, `true`/`false`, `null` |
-
-```
-amount > 0 AND status != 'VOID'
-```
-
-## Map functions
-
-| Group | Functions |
-|---|---|
-| String | `concat` `upper` `lower` `trim` `substr` `replace` |
-| Math | `add` `subtract` `multiply` `divide` `round` |
-| Hash / encode | `md5` `sha1` `sha256` `base64_encode` `base64_decode` |
-| Date | `now` `format_date` `parse_date` |
-| Utility | `coalesce` `if` `uuid` `random` |
-
-```
-=concat(upper($first), ' ', upper($last))
-=coalesce($email, 'unknown@example.com')
-=if($amount > 1000, 'HIGH', 'NORMAL')
-```
+➡ **Full, code-verified catalogue with signatures: [Expression language reference](transforms/expression-language.md).**
 
 ## See also
 
 - [Data quality](data-quality.md) — validate / dq / schemadrift and DLQ routing
-- [Feature reference](FEATURES.md#transforms) — every key and default
+- Per-transform detail: [`docs/transforms/`](transforms/)

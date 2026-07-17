@@ -100,4 +100,4 @@ not change shape silently. See [`examples/11-schema-drift`](../examples/11-schem
 
 - [Transforms](transforms.md) · [Sinks](sinks.md) (DLQ)
 - [Observability](observability.md) — `rows_failed_total` and DQ score metrics
-- [Feature reference](FEATURES.md#transforms)
+- Per-transform detail: [validate](transforms/validate.md) · [dq](transforms/dq.md) · [schemadrift](transforms/schemadrift.md)

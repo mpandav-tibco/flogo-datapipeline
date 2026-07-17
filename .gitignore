@@ -28,6 +28,9 @@ build/
 !/build/
 !/build/*.go
 
+# Local run output (checkpoints, positions, NDJSON written to ./out)
+/out/
+
 # IDE
 .idea/
 .vscode/settings.json

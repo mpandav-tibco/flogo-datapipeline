@@ -40,7 +40,10 @@ dead-letter branch) as one self-contained binary — no JVM, no cluster, no SaaS
 
 ## Reference
 
-- [Feature reference](FEATURES.md) — the exhaustive, code-level catalog of every registered
-  source, sink, transform, backend, and configuration key
+- Per-activity pages — one page per source, transform, and sink, with full configuration
+  keys, behavior, and runnable examples:
+  [`docs/sources/`](sources/) · [`docs/transforms/`](transforms/) · [`docs/sinks/`](sinks/)
+- [Feature matrix](FEATURES.md) — the one-screen catalog linking every source, sink,
+  transform, and engine subsystem to its detailed page
 
 Every feature has a runnable demo under [`examples/`](../examples/).
