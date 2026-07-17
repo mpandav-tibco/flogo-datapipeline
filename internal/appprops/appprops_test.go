@@ -62,11 +62,24 @@ func TestResolve_DefaultValue(t *testing.T) {
 	}
 }
 
-func TestResolve_DirectEnvWins(t *testing.T) {
+func TestResolve_EnvIgnoredWithoutOptIn(t *testing.T) {
+	// Matches project-flogo/core: with FLOGO_APP_PROPS_ENV unset, a same-named
+	// env var is NOT consulted, so the declared default stands.
 	t.Setenv("db.dsn", "ENV")
-	t.Setenv("FLOGO_APP_PROPS_OVERRIDE", "db.dsn=OVERRIDE") // env must beat override
-	if got := dsnOf(t, appDSN); got != "ENV" {
-		t.Errorf("direct env: got %v want ENV", got)
+	t.Setenv("db_dsn", "ENV")
+	if got := dsnOf(t, appDSN); got != "DEFAULT" {
+		t.Errorf("env without opt-in: got %v want DEFAULT", got)
+	}
+}
+
+func TestResolve_OverrideBeatsEnv(t *testing.T) {
+	// FLOGO_APP_PROPS_OVERRIDE is the explicit escape hatch — it wins over an
+	// opt-in FLOGO_APP_PROPS_ENV value.
+	t.Setenv("FLOGO_APP_PROPS_ENV", "auto")
+	t.Setenv("db_dsn", "AUTO")
+	t.Setenv("FLOGO_APP_PROPS_OVERRIDE", "db.dsn=OVERRIDE")
+	if got := dsnOf(t, appDSN); got != "OVERRIDE" {
+		t.Errorf("override vs env: got %v want OVERRIDE", got)
 	}
 }
 

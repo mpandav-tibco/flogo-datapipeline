@@ -15,11 +15,17 @@
 // Resolve substitutes every reference with the property's effective value,
 // resolved in this priority order (highest first):
 //
-//  1. Environment variable named NAME
-//  2. FLOGO_APP_PROPS_OVERRIDE entries (K=V,K2=V2)
-//  3. FLOGO_APP_PROPS_ENV ("auto" | {"mappings":{"prop":"ENV"}})
-//  4. FLOGO_APP_PROPS_JSON (comma-separated flat JSON files; later files win)
-//  5. Default value from properties[] in the file
+//  1. FLOGO_APP_PROPS_OVERRIDE entries (K=V,K2=V2) — explicit, always on
+//  2. FLOGO_APP_PROPS_ENV ("auto" | {"mappings":{"prop":"ENV"}}) — OPT-IN env
+//     lookup, matching project-flogo/core: the environment is read only when
+//     this is set (auto tries NAME, then NAME with dots→underscores, then the
+//     UPPERCASE form).
+//  3. FLOGO_APP_PROPS_JSON (comma-separated flat JSON files; later files win)
+//  4. Default value from properties[] in the file
+//
+// Env is opt-in exactly as in Flogo core (nothing is read from the environment
+// unless FLOGO_APP_PROPS_ENV is set); FLOGO_APP_PROPS_OVERRIDE is a documented
+// datapipeline/agents extension that acts as the explicit escape hatch.
 //
 // Number/boolean/json-typed properties whose value is a valid literal are
 // spliced as RAW (unquoted) JSON so typed config fields unmarshal correctly;
@@ -84,13 +90,14 @@ func Resolve(appJSON string) string {
 			continue
 		}
 		typ, _ := prop["type"].(string)
-		// Priority: env var > FLOGO_APP_PROPS_OVERRIDE > FLOGO_APP_PROPS_ENV >
-		// FLOGO_APP_PROPS_JSON > default value in file.
+		// Priority (highest first): FLOGO_APP_PROPS_OVERRIDE > FLOGO_APP_PROPS_ENV
+		// (opt-in) > FLOGO_APP_PROPS_JSON > default value in file. Environment
+		// variables are read ONLY through FLOGO_APP_PROPS_ENV, matching
+		// project-flogo/core — there is no unconditional per-name env lookup
+		// (which risked colliding with OS vars such as HOME/PATH).
 		var val string
 		var have bool
-		if v := os.Getenv(name); v != "" {
-			val, have = v, true
-		} else if v, ok := overrides[name]; ok {
+		if v, ok := overrides[name]; ok {
 			val, have = v, true
 		} else if v, ok := coreEnvPropValue(name, envAuto, envMappings); ok {
 			val, have = v, true
