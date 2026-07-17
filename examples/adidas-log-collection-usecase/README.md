@@ -216,8 +216,11 @@ Everything environment-specific is a **Flogo app property** (`$property[NAME]`) 
 default baked into the pipeline. To deploy in a customer environment you edit **only**
 [`k8s/25-collector-config.yaml`](k8s/25-collector-config.yaml) (a ConfigMap) — the
 pipeline definition never changes. Each key is an env var named exactly after a
-property; at startup the engine resolves `$property[NAME]` with precedence
-**env var > `FLOGO_APP_PROPS_OVERRIDE` > `FLOGO_APP_PROPS_ENV` > `FLOGO_APP_PROPS_JSON` > default**.
+property. The DaemonSet sets **`FLOGO_APP_PROPS_ENV=auto`** to turn on Flogo's
+opt-in env resolution (as in `project-flogo/core`); the engine then resolves
+`$property[NAME]` with precedence
+**`FLOGO_APP_PROPS_OVERRIDE` > `FLOGO_APP_PROPS_ENV` (opt-in) > `FLOGO_APP_PROPS_JSON` > default**.
+Without that flag the pipeline defaults are used and the ConfigMap keys are ignored.
 
 | Property | Default | Purpose |
 |---|---|---|
@@ -246,9 +249,11 @@ kubectl -n logging patch configmap adidas-log-collector-config --type merge -p '
 kubectl -n logging rollout restart daemonset/adidas-log-collector
 ```
 
-Verified: overriding `CLUSTER_NAME`/`ENVIRONMENT`/`LOG_INDEX_PREFIX` in the ConfigMap
-alone changed emitted records to `cluster=prod-eks-01 | environment=staging |
-index_hint=bw-prod-logs-…` — the pipeline file untouched.
+Verified end-to-end (opt-in engine): with `FLOGO_APP_PROPS_ENV=auto` set, overriding
+`CLUSTER_NAME`/`ENVIRONMENT` in the ConfigMap alone changed a freshly-rolled S3 record
+to `cluster=prod-eks-01 | environment=staging` — the pipeline file untouched. Without
+`FLOGO_APP_PROPS_ENV` the same keys are ignored and the `adidas-logs-demo` default
+stands (Flogo core's opt-in model).
 
 ---
 

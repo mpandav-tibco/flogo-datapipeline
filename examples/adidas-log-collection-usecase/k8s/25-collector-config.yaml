@@ -2,8 +2,11 @@
 #
 # The pipeline (adidas-log-collector.datapipeline) declares these as app
 # properties with defaults and references them as `$property[NAME]`. Each key
-# here is an env var named exactly after a property, so it OVERRIDES the default
-# at startup (Flogo app-property precedence: env var > ... > default).
+# here is an env var named exactly after a property. The DaemonSet sets
+# FLOGO_APP_PROPS_ENV=auto, which turns on Flogo's opt-in env resolution so each
+# key OVERRIDES the pipeline default at startup (precedence: FLOGO_APP_PROPS_OVERRIDE
+# > FLOGO_APP_PROPS_ENV=auto > FLOGO_APP_PROPS_JSON > default). Without that flag
+# the pipeline defaults are used and these keys are ignored.
 #
 # ==> To deploy in a customer environment, edit ONLY this file. The pipeline
 #     definition never changes.

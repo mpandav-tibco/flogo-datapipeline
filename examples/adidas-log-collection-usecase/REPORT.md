@@ -109,7 +109,13 @@ An ERROR + Java stack trace is collapsed into **one** record (newlines embedded 
 | Custom S3 pusher | `s3-sink` (rolling, partitioned) | ✅ 96 objects to MinIO |
 | Lossy drops | `validate` → DLQ + checkpoint | ✅ at-least-once |
 | Genuine BWCE app (proof) | real licensed EAR pod via Rosetta | ✅ logs collected in `team-bwce/` |
-| Hardcoded per-env config | app properties (`$property[...]`) via ConfigMap | ✅ change env with no pipeline edit |
+| Hardcoded per-env config | app properties (`$property[...]`) via ConfigMap + `FLOGO_APP_PROPS_ENV=auto` | ✅ change env with no pipeline edit |
+
+App-property resolution follows Flogo core's **opt-in** env model — the DaemonSet sets
+`FLOGO_APP_PROPS_ENV=auto` and the ConfigMap keys then override the pipeline defaults
+(precedence `FLOGO_APP_PROPS_OVERRIDE` > `FLOGO_APP_PROPS_ENV` > `FLOGO_APP_PROPS_JSON` >
+default). Re-verified after aligning the engine to `project-flogo/core`: a freshly-rolled
+S3 record showed `cluster=prod-eks-01 | environment=staging` from a ConfigMap-only override.
 
 ## 6. Real BWCE app — running in-cluster with a license (verified)
 
