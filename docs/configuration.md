@@ -27,10 +27,36 @@ and exits when done; the REST API is not started.
 | `PIPELINE_API_ADDR` | default for `-api-addr` (e.g. `:8888`) |
 | `INSTANCE_INDEX` | this instance's index for sharded / distributed [scaling](scaling.md) |
 | `INSTANCE_COUNT` | total instance count |
-| `FLOGO_APP_PROPS_OVERRIDE`, `FLOGO_APP_PROP_*` | standard Flogo app-property overrides resolved at startup |
 
 Secret env vars referenced by config (`passwordEnv`, `saslPasswordEnv`, `apiKeyEnv`,
-and the like) are read **by name** at run time — the value never appears in the file.
+`accessKeyIdEnv`, and the like) are read **by name** at run time — the value never
+appears in the file.
+
+## App properties
+
+A pipeline can declare typed `properties[]` at the app top level and reference them
+anywhere with `$property["name"]` (or the legacy `$property[name]`). This matches
+TIBCO Flogo — datapipeline embeds the same `project-flogo/core` runtime — so a
+pipeline externalises configuration exactly the way a flow does.
+
+Values resolve in this order (highest first). As in Flogo core, **environment
+variables are opt-in**: nothing is read from the environment unless
+`FLOGO_APP_PROPS_ENV` is set.
+
+| Priority | Source | Notes |
+|---|---|---|
+| 1 | `FLOGO_APP_PROPS_OVERRIDE=name=val,n2=v2` | explicit, always-on escape hatch (datapipeline/agents extension, not in core) |
+| 2 | `FLOGO_APP_PROPS_ENV` | **opt-in.** `auto` tries `name`, then `name` with dots→underscores, then `UPPERCASE`; or `{"mappings":{"prop":"ENV_VAR"}}` |
+| 3 | `FLOGO_APP_PROPS_JSON=a.json,b.json` | flat JSON overlays; later files win |
+| 4 | `properties[].value` | default declared in the file |
+
+> **Static resolution.** Datapipeline resolves `$property[...]` **once, at load**, then
+> strips `properties[]` before the engine starts. This keeps typed values (numbers,
+> booleans, JSON) correctly typed in config fields, but means there is **no runtime
+> hot-reconfigure** (`FLOGO_APP_PROP_SNAPSHOTS` / `_RECONFIGURE`) — the one behavioural
+> difference from a long-running Flogo flow. To override per environment in Kubernetes,
+> set `FLOGO_APP_PROPS_ENV=auto` and supply the values as container env (e.g. from a
+> ConfigMap/Secret).
 
 ## Enabling the REST API
 
