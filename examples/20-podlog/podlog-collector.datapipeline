@@ -2,7 +2,7 @@
   "name": "podlog-collector",
   "type": "flogo:app",
   "version": "1.0.0",
-  "description": "Kubernetes pod-log collector (Fluentd replacement). Tails CRI container logs from a node-local /var/log/pods tree, stitches multiline BW6/Java stack traces into single records, enriches with namespace/pod/container, validates, and writes newline-delimited JSON. Driven by the App Startup hook (the correct trigger for a long-running streaming collector); a file checkpoint advances the byte-offset position registry so a restart resumes with no loss (at-least-once). This self-contained example runs in bounded mode against a synthetic pod-log tree under ./data/pods so it can be run locally without a Kubernetes node.",
+  "description": "Tail CRI pod logs, stitch multiline stack traces, enrich + validate, write NDJSON.",
   "appModel": "1.1.1",
   "imports": [
     "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
@@ -36,19 +36,58 @@
         "mode": "etl",
         "source": {
           "type": "podlog",
-          "options": {
-            "root": "./data/pods",
-            "node": "node-1",
-            "positionFile": "./out/positions.json",
-            "fromBeginning": true,
-            "bounded": true,
-            "pollMs": 200,
-            "excludeNamespaces": ["kube-system", "kube-public"],
-            "multiline": {
-              "startPattern": "^\\d{4}-\\d{2}-\\d{2}[ T]\\d{2}:\\d{2}:\\d{2}",
-              "flushIdleMs": 500,
-              "maxLines": 500
+          "columns": [
+            {
+              "name": "namespace",
+              "type": "string"
+            },
+            {
+              "name": "pod",
+              "type": "string"
+            },
+            {
+              "name": "container",
+              "type": "string"
+            },
+            {
+              "name": "uid",
+              "type": "string"
+            },
+            {
+              "name": "stream",
+              "type": "string"
+            },
+            {
+              "name": "log_time",
+              "type": "string"
+            },
+            {
+              "name": "message",
+              "type": "string"
+            },
+            {
+              "name": "node",
+              "type": "string"
+            },
+            {
+              "name": "idempotency_key",
+              "type": "string"
             }
+          ],
+          "root": "./data/pods",
+          "node": "node-1",
+          "positionFile": "./out/positions.json",
+          "fromBeginning": true,
+          "bounded": true,
+          "pollMs": 200,
+          "excludeNamespaces": [
+            "kube-system",
+            "kube-public"
+          ],
+          "multiline": {
+            "startPattern": "^\\d{4}-\\d{2}-\\d{2}[ T]\\d{2}:\\d{2}:\\d{2}",
+            "flushIdleMs": 500,
+            "maxLines": 500
           }
         },
         "transforms": [
@@ -80,7 +119,10 @@
           {
             "type": "validate",
             "rules": [
-              { "field": "message", "notNull": true }
+              {
+                "field": "message",
+                "notNull": true
+              }
             ],
             "onViolation": "route"
           }
@@ -113,6 +155,9 @@
             "listenAddr": ":9095",
             "path": "/metrics"
           }
+        },
+        "trigger": {
+          "kind": "startup"
         }
       }
     }

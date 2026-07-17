@@ -1,0 +1,290 @@
+{
+  "name": "adidas-log-collector",
+  "type": "flogo:app",
+  "version": "1.0.0",
+  "description": "Tail CRI pod logs on this node, stitch multiline BW6/BWCE stack traces, enrich + parse the log line, and stream enriched NDJSON to the adidas-logs S3 bucket partitioned by namespace/pod/date.",
+  "appModel": "1.1.1",
+  "properties": [
+    {
+      "name": "S3_BUCKET",
+      "type": "string",
+      "value": "adidas-logs"
+    },
+    {
+      "name": "S3_REGION",
+      "type": "string",
+      "value": "us-east-1"
+    },
+    {
+      "name": "S3_ENDPOINT",
+      "type": "string",
+      "value": "http://host.minikube.internal:9000"
+    },
+    {
+      "name": "S3_FORCE_PATH_STYLE",
+      "type": "boolean",
+      "value": "true"
+    },
+    {
+      "name": "S3_ACCESS_KEY_ENV",
+      "type": "string",
+      "value": "MINIO_ACCESS_KEY"
+    },
+    {
+      "name": "S3_SECRET_KEY_ENV",
+      "type": "string",
+      "value": "MINIO_SECRET_KEY"
+    },
+    {
+      "name": "CLUSTER_NAME",
+      "type": "string",
+      "value": "adidas-logs-demo"
+    },
+    {
+      "name": "ENVIRONMENT",
+      "type": "string",
+      "value": "production"
+    },
+    {
+      "name": "LOG_INDEX_PREFIX",
+      "type": "string",
+      "value": "bwce-logs"
+    },
+    {
+      "name": "EXCLUDE_NAMESPACES",
+      "type": "array",
+      "value": "[\"kube-system\",\"kube-public\",\"kube-node-lease\",\"logging\"]"
+    },
+    {
+      "name": "POD_LOGS_ROOT",
+      "type": "string",
+      "value": "/var/log/pods"
+    },
+    {
+      "name": "FROM_BEGINNING",
+      "type": "boolean",
+      "value": "true"
+    },
+    {
+      "name": "POLL_MS",
+      "type": "integer",
+      "value": "250"
+    },
+    {
+      "name": "ROLL_MAX_BYTES",
+      "type": "integer",
+      "value": "4194304"
+    },
+    {
+      "name": "ROLL_MAX_SECONDS",
+      "type": "integer",
+      "value": "60"
+    },
+    {
+      "name": "BATCH_SIZE",
+      "type": "integer",
+      "value": "1000"
+    }
+  ],
+  "imports": [
+    "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+    "github.com/tibco/flogo-general/src/app/General/trigger/startuphook"
+  ],
+  "triggers": [
+    {
+      "id": "pipeline-startup",
+      "ref": "github.com/tibco/flogo-general/src/app/General/trigger/startuphook",
+      "settings": {},
+      "handlers": [
+        {
+          "settings": {},
+          "action": {
+            "ref": "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+            "settings": {
+              "pipelineRef": "res://pipeline:adidas-log-collector"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "resources": [
+    {
+      "id": "pipeline:adidas-log-collector",
+      "data": {
+        "name": "adidas-log-collector",
+        "description": "Tail CRI pod logs on this node, stitch multiline BW6/BWCE stack traces, enrich + parse the log line, and stream enriched NDJSON to the adidas-logs S3 bucket partitioned by namespace/pod/date.",
+        "version": "1.0.0",
+        "mode": "etl",
+        "source": {
+          "type": "podlog",
+          "columns": [
+            {
+              "name": "namespace",
+              "type": "string"
+            },
+            {
+              "name": "pod",
+              "type": "string"
+            },
+            {
+              "name": "container",
+              "type": "string"
+            },
+            {
+              "name": "uid",
+              "type": "string"
+            },
+            {
+              "name": "stream",
+              "type": "string"
+            },
+            {
+              "name": "log_time",
+              "type": "string"
+            },
+            {
+              "name": "message",
+              "type": "string"
+            },
+            {
+              "name": "node",
+              "type": "string"
+            },
+            {
+              "name": "idempotency_key",
+              "type": "string"
+            }
+          ],
+          "root": "$property[POD_LOGS_ROOT]",
+          "node": "${NODE_NAME}",
+          "positionFile": "/var/lib/flogo-datapipeline/positions.json",
+          "fromBeginning": "$property[FROM_BEGINNING]",
+          "bounded": false,
+          "pollMs": "$property[POLL_MS]",
+          "excludeNamespaces": "$property[EXCLUDE_NAMESPACES]",
+          "multiline": {
+            "startPattern": "^\\d{4}-\\d{2}-\\d{2}[ T]\\d{2}:\\d{2}:\\d{2}",
+            "flushIdleMs": 500,
+            "maxLines": 1000
+          }
+        },
+        "transforms": [
+          {
+            "type": "parse",
+            "source": "message",
+            "mode": "regex",
+            "pattern": "(?s)^(?P<log_ts>\\d{4}-\\d{2}-\\d{2}[ T]\\d{2}:\\d{2}:\\d{2}[.,]\\d{3})\\s+(?P<log_level>\\w+)\\s+\\[(?P<log_thread>[^\\]]+)\\]\\s+(?P<log_logger>\\S+)\\s+-\\s+(?P<log_text>.*)$",
+            "onError": "keep",
+            "keepSource": true
+          },
+          {
+            "type": "map",
+            "fields": {
+              "@timestamp": "=$log_text",
+              "event_time": "=string.replace(nvl($log_ts, $log_time), ',', '.')",
+              "log_level": "=upper(nvl($log_level, 'UNKNOWN'))",
+              "severity": "=coerce.toInt(decode(upper(nvl($log_level, 'INFO')), 'FATAL', 5, 'ERROR', 4, 'WARN', 3, 'WARNING', 3, 'INFO', 2, 'DEBUG', 1, 'TRACE', 0, 2))",
+              "is_error": "=or(equals(upper(nvl($log_level, '')), 'ERROR'), equals(upper(nvl($log_level, '')), 'FATAL'))",
+              "logger": "=$log_logger",
+              "thread": "=$log_thread",
+              "message": "=nvl($log_text, $message)",
+              "raw_log": "=$message",
+              "service_name": "=regex.replace($pod, '-[a-z0-9]+-[a-z0-9]{5}$', '')",
+              "namespace": "=$namespace",
+              "pod": "=$pod",
+              "container": "=$container",
+              "node": "=$node",
+              "stream": "=$stream",
+              "cluster": "$property[CLUSTER_NAME]",
+              "environment": "$property[ENVIRONMENT]",
+              "collector": "flogo-datapipeline",
+              "ingest_time": "=datetime.now()",
+              "ingest_date": "=datetime.today()",
+              "index_hint": "=string.concat('$property[LOG_INDEX_PREFIX]', '-', datetime.today())",
+              "idempotency_key": "=$idempotency_key"
+            },
+            "fieldOrder": [
+              "@timestamp",
+              "event_time",
+              "log_level",
+              "severity",
+              "is_error",
+              "logger",
+              "thread",
+              "message",
+              "raw_log",
+              "service_name",
+              "namespace",
+              "pod",
+              "container",
+              "node",
+              "stream",
+              "cluster",
+              "environment",
+              "collector",
+              "ingest_time",
+              "ingest_date",
+              "index_hint",
+              "idempotency_key"
+            ]
+          },
+          {
+            "type": "validate",
+            "rules": [
+              {
+                "field": "message",
+                "notNull": true
+              }
+            ],
+            "onViolation": "route"
+          }
+        ],
+        "dlq": {
+          "type": "jsonlines",
+          "options": {
+            "path": "/var/lib/flogo-datapipeline/dlq/dlq.ndjson"
+          }
+        },
+        "sink": {
+          "type": "s3-sink",
+          "bucket": "$property[S3_BUCKET]",
+          "key": "{namespace}/{pod}/{YYYY}/{MM}/{DD}/{node}-{HH}{mm}-{uuid}.ndjson",
+          "format": "jsonlines",
+          "region": "$property[S3_REGION]",
+          "endpoint": "$property[S3_ENDPOINT]",
+          "forcePathStyle": "$property[S3_FORCE_PATH_STYLE]",
+          "accessKeyIdEnv": "$property[S3_ACCESS_KEY_ENV]",
+          "secretAccessKeyEnv": "$property[S3_SECRET_KEY_ENV]",
+          "rollMaxBytes": "$property[ROLL_MAX_BYTES]",
+          "rollMaxSeconds": "$property[ROLL_MAX_SECONDS]"
+        },
+        "performance": {
+          "batchSize": "$property[BATCH_SIZE]",
+          "maxMemoryMB": 128
+        },
+        "scaling": {
+          "mode": "single"
+        },
+        "checkpoint": {
+          "type": "file",
+          "path": "/var/lib/flogo-datapipeline/ckpt",
+          "intervalSeconds": 5
+        },
+        "observability": {
+          "metrics": "prometheus",
+          "options": {
+            "listenAddr": ":9095",
+            "path": "/metrics"
+          }
+        },
+        "trigger": {
+          "kind": "startup",
+          "settings": {
+            "repeating": true
+          }
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,65 @@
+# The REAL TIBCO BWCE 6.12 app (Rest_Sample_Multiple_Endpoints EAR), deployed
+# alongside the emitters so the collector captures genuine BW6 console logs.
+#
+# The image is linux/amd64 (BWCE 6.12 ships an x86-64 JRE); it runs on the arm64
+# minikube nodes via Rosetta emulation. The TIBCO license (.bin) is mounted at
+# the BW6 default path /home/bwce/license from a Secret (created by
+# scripts/deploy-real-bwce.sh). See:
+#   https://docs.tibco.com/.../incorporating-tibco-license-file-for-BWCE.htm
+#   ( default path /home/<user>/license; else set env LICENSE_SOURCE / TIB_ACTIVATION )
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: team-bwce
+  labels: { tier: apps, workload: real-bwce }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rest-sample
+  namespace: team-bwce
+  labels:
+    app.kubernetes.io/name: rest-sample
+    app.kubernetes.io/part-of: bw-apps
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rest-sample
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: rest-sample
+        app.kubernetes.io/part-of: bw-apps
+    spec:
+      containers:
+        - name: bwce
+          # arm64-manifest image carrying the amd64 BWCE content, so containerd
+          # on the arm64 nodes accepts it and runs it via Rosetta. Built by
+          # scripts/deploy-real-bwce.sh (docker buildx --platform linux/arm64
+          # with `FROM --platform=linux/amd64 bwce-base:6.12-amd64`).
+          image: bwce-reqresp:cluster
+          imagePullPolicy: IfNotPresent
+          env:
+            # Default text console format (single line/event + multiline stack
+            # traces) — the format the collector's parse regex + multiline
+            # stitching are tuned for. Set BW_LOG_FORMAT=JSON for structured JSON.
+            - { name: BW_LOGLEVEL, value: "INFO" }
+          ports:
+            - name: http
+              containerPort: 8080
+          volumeMounts:
+            - name: tibco-license
+              mountPath: /home/bwce/license   # BW6 container default license path
+              readOnly: true
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "640Mi"
+            limits:
+              cpu: "2"
+              memory: "1536Mi"
+      volumes:
+        - name: tibco-license
+          secret:
+            secretName: tibco-license

@@ -1,0 +1,164 @@
+# Six "BW app" workloads (one per team namespace, 2 replicas each = 12 pods).
+# Each pod is an arm64-native emitter that writes BWCE-style console logs to
+# stdout (containerd persists them to /var/log/pods, where the collector tails).
+# Image: bwce-emitter:arm64-local (built by collector/build-image.sh).
+#
+# NOTE: this stands in for mpandav/demo-rest-app:1.0, which is an x86-64-only
+# BWCE 6.12 image and cannot run on the arm64 minikube nodes (see REPORT.md).
+# The emitted log format is byte-for-byte the BWCE AppNode console format.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-service
+  namespace: team-alpha
+  labels: { app.kubernetes.io/name: order-service, app.kubernetes.io/part-of: bw-apps }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app.kubernetes.io/name: order-service } }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: order-service, app.kubernetes.io/part-of: bw-apps }
+    spec:
+      containers:
+        - name: bwapp
+          image: bwce-emitter:arm64-local
+          imagePullPolicy: IfNotPresent
+          env:
+            - { name: APP_NAME, value: "OrderService" }
+            - { name: POD_NAMESPACE, valueFrom: { fieldRef: { fieldPath: metadata.namespace } } }
+            - { name: RATE_PER_SEC, value: "6" }
+            - { name: ERROR_EVERY, value: "35" }
+          resources:
+            requests: { cpu: "20m", memory: "32Mi" }
+            limits: { cpu: "150m", memory: "96Mi" }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: inventory-service
+  namespace: team-beta
+  labels: { app.kubernetes.io/name: inventory-service, app.kubernetes.io/part-of: bw-apps }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app.kubernetes.io/name: inventory-service } }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: inventory-service, app.kubernetes.io/part-of: bw-apps }
+    spec:
+      containers:
+        - name: bwapp
+          image: bwce-emitter:arm64-local
+          imagePullPolicy: IfNotPresent
+          env:
+            - { name: APP_NAME, value: "InventoryService" }
+            - { name: POD_NAMESPACE, valueFrom: { fieldRef: { fieldPath: metadata.namespace } } }
+            - { name: RATE_PER_SEC, value: "5" }
+            - { name: ERROR_EVERY, value: "50" }
+          resources:
+            requests: { cpu: "20m", memory: "32Mi" }
+            limits: { cpu: "150m", memory: "96Mi" }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: customer-service
+  namespace: team-gamma
+  labels: { app.kubernetes.io/name: customer-service, app.kubernetes.io/part-of: bw-apps }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app.kubernetes.io/name: customer-service } }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: customer-service, app.kubernetes.io/part-of: bw-apps }
+    spec:
+      containers:
+        - name: bwapp
+          image: bwce-emitter:arm64-local
+          imagePullPolicy: IfNotPresent
+          env:
+            - { name: APP_NAME, value: "CustomerService" }
+            - { name: POD_NAMESPACE, valueFrom: { fieldRef: { fieldPath: metadata.namespace } } }
+            - { name: RATE_PER_SEC, value: "7" }
+            - { name: ERROR_EVERY, value: "40" }
+          resources:
+            requests: { cpu: "20m", memory: "32Mi" }
+            limits: { cpu: "150m", memory: "96Mi" }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: shipping-service
+  namespace: team-delta
+  labels: { app.kubernetes.io/name: shipping-service, app.kubernetes.io/part-of: bw-apps }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app.kubernetes.io/name: shipping-service } }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: shipping-service, app.kubernetes.io/part-of: bw-apps }
+    spec:
+      containers:
+        - name: bwapp
+          image: bwce-emitter:arm64-local
+          imagePullPolicy: IfNotPresent
+          env:
+            - { name: APP_NAME, value: "ShippingService" }
+            - { name: POD_NAMESPACE, valueFrom: { fieldRef: { fieldPath: metadata.namespace } } }
+            - { name: RATE_PER_SEC, value: "4" }
+            - { name: ERROR_EVERY, value: "60" }
+          resources:
+            requests: { cpu: "20m", memory: "32Mi" }
+            limits: { cpu: "150m", memory: "96Mi" }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payment-service
+  namespace: team-epsilon
+  labels: { app.kubernetes.io/name: payment-service, app.kubernetes.io/part-of: bw-apps }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app.kubernetes.io/name: payment-service } }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: payment-service, app.kubernetes.io/part-of: bw-apps }
+    spec:
+      containers:
+        - name: bwapp
+          image: bwce-emitter:arm64-local
+          imagePullPolicy: IfNotPresent
+          env:
+            - { name: APP_NAME, value: "PaymentService" }
+            - { name: POD_NAMESPACE, valueFrom: { fieldRef: { fieldPath: metadata.namespace } } }
+            - { name: RATE_PER_SEC, value: "5" }
+            - { name: ERROR_EVERY, value: "30" }
+          resources:
+            requests: { cpu: "20m", memory: "32Mi" }
+            limits: { cpu: "150m", memory: "96Mi" }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notification-service
+  namespace: team-zeta
+  labels: { app.kubernetes.io/name: notification-service, app.kubernetes.io/part-of: bw-apps }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app.kubernetes.io/name: notification-service } }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: notification-service, app.kubernetes.io/part-of: bw-apps }
+    spec:
+      containers:
+        - name: bwapp
+          image: bwce-emitter:arm64-local
+          imagePullPolicy: IfNotPresent
+          env:
+            - { name: APP_NAME, value: "NotificationService" }
+            - { name: POD_NAMESPACE, valueFrom: { fieldRef: { fieldPath: metadata.namespace } } }
+            - { name: RATE_PER_SEC, value: "8" }
+            - { name: ERROR_EVERY, value: "45" }
+          resources:
+            requests: { cpu: "20m", memory: "32Mi" }
+            limits: { cpu: "150m", memory: "96Mi" }
