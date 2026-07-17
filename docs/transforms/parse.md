@@ -1,16 +1,17 @@
 # Parse transform — `parse`
 
-Structures **one text field into columns** — either by a regex with named groups or by
-decoding JSON. This is the grok / Fluent Bit-parser equivalent: the source emits a raw
-line, and `parse` extracts typed columns from it. Implemented in
-[`transform/parse/transform.go`](../../transform/parse/transform.go); registered as
-`parse`.
+Structures **one text or JSON field into columns** — either by a regex with named groups
+or by decoding JSON. This is the grok / Fluent Bit-parser equivalent, and it is
+**source-agnostic**: point it at any text-bearing field from any source — a log line, a
+delimited blob, an embedded JSON string, a composite key/SKU, a URL, or a free-text note.
+Implemented in [`transform/parse/transform.go`](../../transform/parse/transform.go);
+registered as `parse`.
 
 ## Configuration
 
 | Key | Type | Default | Required | Description |
 |---|---|---|:--:|---|
-| `source` | string | — | ✅ | Name of the text field to parse (e.g. `message`). |
+| `source` | string | — | ✅ | Name of **any** text/JSON field to parse — not just logs (e.g. `message`, `payload`, `sku`, `notes`). |
 | `mode` | string | `regex` | — | `regex` or `json`. |
 | `pattern` | string | — | regex only | Go regex with **named groups** `(?P<name>…)`. |
 | `fields` | `[]string` | all keys | json only | Allow-list of JSON keys to extract. |
@@ -62,6 +63,22 @@ exactly the same derived columns.
   "prefix": "evt_"
 }
 ```
+
+## Example — non-log (composite key)
+
+`parse` is not tied to logging — use it to split any structured value. Here it breaks a
+product SKU into typed columns:
+
+```json
+{
+  "type": "parse",
+  "source": "sku",
+  "mode": "regex",
+  "pattern": "^(?P<line>[A-Z]+)-(?P<region>[A-Z]{2})-(?P<seq>\\d+)$"
+}
+```
+
+`PROD-US-1234` yields `line=PROD`, `region=US`, `seq=1234`.
 
 ## See also
 

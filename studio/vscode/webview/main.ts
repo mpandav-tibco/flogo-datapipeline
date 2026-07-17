@@ -446,8 +446,8 @@ const FIELD_HINTS: Record<string, string> = {
   broadcastHeader: 'Stamp every header attribute onto each body row so downstream transforms and the sink see file-level context.',
   template: 'Go text/template. Available: .Rows (each row as a map), .Count, .Columns, .Attr (header fields). Helpers: rpad, lpad, padc, sci, upper, lower, trim, add, seq.',
   templatePath: 'Path to a .tmpl file. Overrides the inline template when set.',
-  source: 'Name of the text field to structure into columns (e.g. message).',
-  pattern: 'Regex with named groups (?P<name>…); each group becomes a column. Use (?s) to span multiline stack traces.',
+  source: 'Any text or JSON field to structure into columns — a log line, a delimited blob, an embedded JSON string, a composite key, etc. Not just logs (e.g. message).',
+  pattern: 'Regex with named groups (?P<name>…); each group becomes a column. Add (?s) to let . span multiple lines (e.g. stitched stack traces).',
   prefix: 'Optional prefix added to each extracted column name (JSON mode), e.g. log_.',
   keepSource: 'Keep the original source field alongside the extracted columns.',
   // podlog (K8s pod-log collector)
@@ -3514,7 +3514,7 @@ const TRANSFORMS: Array<{ type: string; label: string; cfg: Record<string, unkno
   },
   {
     type: 'parse', label: 'Parse — structure a text field into columns (regex/JSON)',
-    cfg: { source: 'message', mode: 'regex', pattern: '^(?P<level>\\w+)\\s+(?P<msg>.*)$', onError: 'keep', keepSource: true }
+    cfg: { source: 'text', mode: 'regex', pattern: '^(?P<key>\\w+)=(?P<value>.*)$', onError: 'keep', keepSource: true }
   },
 ];
 
