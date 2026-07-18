@@ -29,6 +29,7 @@ import (
 	"strings"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
+	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/blob"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/bloberror"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/blockblob"
 	"github.com/mpandav-tibco/flogo-datapipeline/objstore"
@@ -209,11 +210,13 @@ func (s *adlsStore) PutWriter(ctx context.Context, key string) (io.WriteCloser, 
 
 	pr, pw := io.Pipe()
 	uploadDone := make(chan error, 1)
+	ct := objstore.ContentTypeForKey(key)
 
 	go func() {
 		_, err := bbClient.UploadStream(ctx, pr, &blockblob.UploadStreamOptions{
 			BlockSize:   4 * 1024 * 1024, // 4 MB blocks
 			Concurrency: 4,
+			HTTPHeaders: &blob.HTTPHeaders{BlobContentType: &ct},
 		})
 		pr.CloseWithError(err)
 		uploadDone <- err
