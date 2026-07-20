@@ -1,0 +1,13 @@
+Copyright (c) 2024-2026 Cloud Software Group, Inc. All Rights Reserved.
+
+This software and associated documentation files (the "Software") are the
+proprietary and confidential property of Cloud Software Group, Inc.
+("Cloud SG"). The Software is licensed, not sold.
+
+Unauthorized copying, distribution, modification, public display, or use of
+the Software, in whole or in part, is strictly prohibited without the prior
+written consent of Cloud SG. All rights not expressly granted are reserved.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.

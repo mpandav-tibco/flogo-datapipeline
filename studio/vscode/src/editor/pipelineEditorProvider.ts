@@ -440,9 +440,9 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
           const brokers = Array.isArray((config as Record<string, unknown>).brokers)
             ? ((config as Record<string, unknown>).brokers as unknown[]).map((b) => String(b)).filter(Boolean)
             : String((config as Record<string, unknown>).brokers ?? '')
-                .split(',')
-                .map((b) => b.trim())
-                .filter(Boolean);
+              .split(',')
+              .map((b) => b.trim())
+              .filter(Boolean);
           if (brokers.length === 0) {
             this.post(panel, { type: 'kafkaTopicsError', target: msg.target, message: 'No brokers configured.' });
             break;
@@ -533,8 +533,8 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
           msg.kind === 'err'
             ? vscode.window.showErrorMessage
             : msg.kind === 'warn'
-            ? vscode.window.showWarningMessage
-            : vscode.window.showInformationMessage;
+              ? vscode.window.showWarningMessage
+              : vscode.window.showInformationMessage;
         fn(msg.message);
         break;
       }
@@ -618,20 +618,10 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
       this.post(panel, { type: 'runError', message: errText(err) });
       this.logRun(`[engine] start failed: ${errText(err)}`);
       if (err && err.code === 'NO_BINARY') {
-        const buildCmd = err.buildCmd || this.manager.buildCommand();
         vscode.window
-          .showErrorMessage(
-            'flogo-datapipeline binary not found. Build it or set the binary path in settings.',
-            'Show Build Command',
-            'Open Settings',
-          )
+          .showErrorMessage(errText(err), 'Open Settings')
           .then((choice) => {
-            if (choice === 'Show Build Command') {
-              const ch = this.manager.channel;
-              ch.show(true);
-              ch.appendLine('\n══ Build the binary ══');
-              ch.appendLine('  ' + buildCmd);
-            } else if (choice === 'Open Settings') {
+            if (choice === 'Open Settings') {
               vscode.commands.executeCommand('workbench.action.openSettings', 'flogoDataPipelineStudio.binaryPath');
             }
           });
@@ -895,31 +885,50 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
   }
 
   async exportFromUri(uri: vscode.Uri, format: string): Promise<void> {
-    // Delegates to the CLI build via the terminal — kept simple and transparent.
-    const cfg = vscode.workspace.getConfiguration('flogoDataPipelineStudio');
-    const sourcePath = cfg.get<string>('sourcePath') ?? '';
     const ch = this.manager.channel;
     ch.show(true);
     ch.appendLine(`[build] format=${format} pipeline=${path.basename(uri.fsPath)}`);
     if (format === 'binary') {
-      if (!sourcePath) {
-        vscode.window.showWarningMessage('Set flogoDataPipelineStudio.sourcePath to build a binary from source.');
-        return;
+      // OOTB-style lean build: compile a per-app binary from the sources bundled
+      // in the extension — no repo/source and no engine rebuild required. Needs a
+      // Go toolchain (running/previewing a pipeline does not).
+      const base = path.basename(uri.fsPath, '.datapipeline');
+      const out = path.join(path.dirname(uri.fsPath), base + (process.platform === 'win32' ? '.exe' : ''));
+      try {
+        await vscode.window.withProgress(
+          { location: vscode.ProgressLocation.Notification, title: `Building lean binary for ${base}…`, cancellable: false },
+          () => this.manager.buildLeanBinary({ pipelineFile: uri.fsPath, out, workRoot: this.context.globalStorageUri.fsPath }),
+        );
+        const pick = await vscode.window.showInformationMessage(`Built lean binary → ${out}`, 'Reveal');
+        if (pick === 'Reveal') void vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(out));
+      } catch (err) {
+        if ((err as { code?: string })?.code === 'NO_GO') {
+          const pick = await vscode.window.showErrorMessage(errText(err), 'Install Go');
+          if (pick === 'Install Go') void vscode.env.openExternal(vscode.Uri.parse('https://go.dev/dl/'));
+        } else {
+          vscode.window.showErrorMessage(errText(err));
+        }
       }
-      const out = path.join(this.context.extensionPath, 'bin', binaryName());
-      await this.manager.buildBinary({ sourcePath, out });
-      vscode.window.showInformationMessage(`Built binary → ${out}`);
     } else if (format === 'dockerfile' || format === 'image' || format === 'platform') {
-      const doc = await vscode.workspace.openTextDocument(uri);
-      const deploy = await this.buildDeployPipeline(doc);
-      await this.writeDockerfile(uri, deploy.deployFileName);
-      if (format === 'platform') {
-        await this.generateDeployArtifacts(doc, 4, deploy);
-      } else {
-        const envNote = deploy.env.length
-          ? ` Provide ${deploy.env.length} secret env var(s) at runtime — see the generated ${path.basename(deploy.deployFileName)}.env.example.`
-          : '';
-        vscode.window.showInformationMessage('Generated Dockerfile next to the pipeline.' + envNote);
+      try {
+        const doc = await vscode.workspace.openTextDocument(uri);
+        const deploy = await this.buildDeployPipeline(doc);
+        await this.writeDockerfile(uri, deploy.deployFileName);
+        if (format === 'platform') {
+          await this.generateDeployArtifacts(doc, 4, deploy);
+        } else {
+          const envNote = deploy.env.length
+            ? ` Provide ${deploy.env.length} secret env var(s) at runtime — see the generated ${path.basename(deploy.deployFileName)}.env.example.`
+            : '';
+          vscode.window.showInformationMessage('Generated a lean binary + Dockerfile next to the pipeline.' + envNote);
+        }
+      } catch (err) {
+        if ((err as { code?: string })?.code === 'NO_GO') {
+          const pick = await vscode.window.showErrorMessage(errText(err), 'Install Go');
+          if (pick === 'Install Go') void vscode.env.openExternal(vscode.Uri.parse('https://go.dev/dl/'));
+        } else {
+          vscode.window.showErrorMessage(errText(err));
+        }
       }
     } else {
       vscode.window.showInformationMessage(`Build target "${format}" — see the Flogo Data Pipeline output channel.`);
@@ -986,8 +995,18 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
     const { dockerfile } = await import('../deploy/manifests');
     const dir = vscode.Uri.joinPath(uri, '..');
     const fileName = pipelineFileName ?? path.basename(uri.fsPath);
+    // Build the lean linux/amd64 binary the image will run (OOTB prebuilt-binary
+    // model — the image copies it rather than compiling from source).
+    const binName = path.basename(fileName, '.datapipeline');
+    await this.manager.buildLeanBinary({
+      pipelineFile: path.join(dir.fsPath, fileName),
+      out: path.join(dir.fsPath, binName),
+      goos: 'linux',
+      goarch: 'amd64',
+      workRoot: this.context.globalStorageUri.fsPath,
+    });
     const target = vscode.Uri.joinPath(dir, 'Dockerfile');
-    await vscode.workspace.fs.writeFile(target, Buffer.from(dockerfile(fileName), 'utf8'));
+    await vscode.workspace.fs.writeFile(target, Buffer.from(dockerfile(binName, fileName), 'utf8'));
     return target;
   }
 
@@ -1119,12 +1138,6 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
 </body>
 </html>`;
   }
-}
-
-function binaryName(): string {
-  const goArch = process.arch === 'x64' ? 'amd64' : process.arch;
-  if (process.platform === 'win32') return `flogo-datapipeline-windows-${goArch}.exe`;
-  return `flogo-datapipeline-${process.platform}-${goArch}`;
 }
 
 function errText(err: unknown): string {

@@ -1,11 +1,11 @@
 import * as vscode from 'vscode';
 
-export interface BuildBinaryOpts {
-  sourcePath: string;
+export interface LeanBuildOpts {
+  pipelineFile: string;
   out: string;
   goos?: string;
   goarch?: string;
-  pipelinePath?: string;
+  workRoot?: string;
 }
 
 export interface RunInTerminalOpts {
@@ -27,6 +27,6 @@ export class BinaryManager {
   stop(): void;
   findFreePort(startPort?: number): Promise<number>;
   runInTerminal(opts: RunInTerminalOpts): Promise<number>;
-  buildBinary(opts: BuildBinaryOpts): Promise<void>;
-  buildCommand(): string;
+  hasGoToolchain(): boolean;
+  buildLeanBinary(opts: LeanBuildOpts): Promise<void>;
 }
