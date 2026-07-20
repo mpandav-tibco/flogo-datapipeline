@@ -121,6 +121,14 @@ type stitcher struct {
 	// folded into the pending record. It becomes the completed record's
 	// endOffset when the record is flushed.
 	pendingEnd int64
+	// maxLines caps the number of physical lines stitched into one logical
+	// record (0 = unlimited). When the cap is hit mid-record the record is
+	// emitted early and the next line opens a fresh record, bounding memory for
+	// a runaway stack trace.
+	maxLines int
+	// pendingLines counts the physical lines folded into the pending record so
+	// far (1 for the start line, +1 per continuation).
+	pendingLines int
 }
 
 // matcher abstracts the start-of-record test so the tailer can inject a
@@ -184,6 +192,12 @@ func (s *stitcher) push(line criLine, lineEnd int64) (logRecord, bool) {
 	s.pendingBuf.WriteByte('\n')
 	s.pendingBuf.WriteString(entry.message)
 	s.pendingEnd = lineEnd
+	s.pendingLines++
+	if s.maxLines > 0 && s.pendingLines >= s.maxLines {
+		// Safety cap reached: emit the (capped) record now. The next line opens a
+		// fresh pending record, so overflow lines are not lost.
+		return s.finishPending(), true
+	}
 	return logRecord{}, false
 }
 
@@ -193,6 +207,7 @@ func (s *stitcher) startPending(entry logRecord, lineEnd int64) {
 	s.pendingBuf.Reset()
 	s.pendingBuf.WriteString(entry.message)
 	s.pendingEnd = lineEnd
+	s.pendingLines = 1
 }
 
 func (s *stitcher) finishPending() logRecord {

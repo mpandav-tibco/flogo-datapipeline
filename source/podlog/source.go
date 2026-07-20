@@ -155,6 +155,7 @@ func newPodlogSource(cfg map[string]interface{}) (source.Source, error) {
 		positions:     ps,
 		flushIdle:     time.Duration(c.flushIdleMs) * time.Millisecond,
 		bounded:       c.bounded,
+		maxLines:      c.maxLines,
 		out:           make(chan enrichedRecord, 1024),
 	}
 
@@ -349,7 +350,14 @@ func parseConfig(cfg map[string]interface{}) podlogConfig {
 	if ml, ok := cfg["multiline"].(map[string]interface{}); ok {
 		c.startPattern = strFromCfg(ml, "startPattern")
 		c.flushIdleMs = intFromCfg(ml, "flushIdleMs")
-		c.maxLines = intFromCfg(ml, "maxLines")
+		// Honor an explicit maxLines (including 0 = unlimited); default to 500 when
+		// the key is omitted so a runaway stack trace can't grow a record without
+		// bound.
+		if _, has := ml["maxLines"]; has {
+			c.maxLines = intFromCfg(ml, "maxLines")
+		} else {
+			c.maxLines = 500
+		}
 	}
 	return c
 }

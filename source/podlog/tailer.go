@@ -75,6 +75,9 @@ type tailer struct {
 	// flushIdle is how long a file may be idle before a pending stitched
 	// (multiline) record is emitted so trailing records are not held forever.
 	flushIdle time.Duration
+	// maxLines caps stitched lines per logical record (0 = unlimited); passed to
+	// each file's stitcher.
+	maxLines int
 	// bounded runs a single scan → drain → flush → close pass instead of an
 	// unbounded poll loop. Used by tests and batch/drain scenarios so ReadBatch
 	// terminates deterministically with io.EOF.
@@ -264,7 +267,7 @@ func (t *tailer) openFile(path string, meta podMeta) *openLogFile {
 		offset: start,
 		fp:     fp,
 		meta:   meta,
-		st:     &stitcher{startPattern: t.startPattern},
+		st:     &stitcher{startPattern: t.startPattern, maxLines: t.maxLines},
 	}
 }
 
@@ -355,7 +358,7 @@ func (t *tailer) openFileAt(path string, meta podMeta, start int64) *openLogFile
 		offset: start,
 		fp:     fp,
 		meta:   meta,
-		st:     &stitcher{startPattern: t.startPattern},
+		st:     &stitcher{startPattern: t.startPattern, maxLines: t.maxLines},
 	}
 }
 

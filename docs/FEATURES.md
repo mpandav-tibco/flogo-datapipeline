@@ -1,31 +1,58 @@
-# Flogo Data Pipeline — Feature Reference
+# Flogo Data Pipeline — Feature matrix
 
-> A code-level reference for every capability registered in the engine. Each
-> component lists its **registered type name(s)** (the value you put in a
-> `.datapipeline` file), the file that implements it, its configuration keys, and
-> notable behaviors. Compiled by reviewing the `init()`/`Register(...)` calls and
-> config structs in the source tree, so it reflects what is actually wired in —
-> not aspirational scope.
-
-**Legend:** 🚧 = work-in-progress / not production-ready.
+> **Per-activity detail now lives in its own page.** This page is a one-screen matrix
+> linking to the authoritative reference for every source, sink, and transform (under
+> [`docs/sources/`](sources/), [`docs/transforms/`](transforms/),
+> [`docs/sinks/`](sinks/)), followed by the engine subsystems (checkpoint, watermark,
+> metrics, scaling, pipeline definition). Everything is code-derived from the
+> `init()`/`Register(...)` calls and config structs.
 
 **At a glance:** 10 source families · 9 sink families (incl. DLQ) · 8 transforms ·
 2 checkpoint backends · 3 watermark backends · 2 metrics backends · 3 scaling modes.
 
----
+## Sources → [index](sources.md)
 
-## Table of contents
+| Type(s) | Reads | Partitionable |
+|---|---|:--:|
+| [`csv`, `tsv`](sources/csv.md) | delimited text | — |
+| [`jsonlines`, `ndjson`](sources/jsonlines.md) | newline-delimited JSON | — |
+| [`xml`](sources/xml.md) | element-per-record XML | — |
+| [`fixedwidth`, `flatfile`](sources/fixedwidth.md) | positional / EBCDIC | — |
+| [`sectioned`](sources/sectioned.md) | header block + delimited body | — |
+| [`parquet`](sources/parquet.md) | columnar Parquet | ✅ |
+| [`jdbc`](sources/jdbc.md) | PostgreSQL / MySQL / SQLite | ✅ |
+| [`kafka`](sources/kafka.md) | consumer-group topic | — |
+| [`s3`, `gcs`, `adls`](sources/objstore.md) | cloud object storage | ✅ |
+| [`podlog`](sources/podlog.md) | Kubernetes / CRI logs | — |
 
-- [Pipeline model](#pipeline-model)
-- [Sources](#sources)
-- [Sinks](#sinks)
-- [Transforms](#transforms)
-- [Checkpoint backends](#checkpoint-backends)
-- [Watermark backends (incremental load)](#watermark-backends-incremental-load)
-- [Metrics backends](#metrics-backends)
-- [Scaling & coordination](#scaling--coordination)
-- [Pipeline definition reference](#pipeline-definition-reference)
-- [Go SDK (pipeline-as-code)](#go-sdk-pipeline-as-code)
+## Transforms → [index](transforms.md)
+
+| Type(s) | Does |
+|---|---|
+| [`filter`](transforms/filter.md) | drop rows by a boolean expression |
+| [`map`, `mapper`](transforms/map.md) | project / rename / coerce / derive |
+| [`validate`](transforms/validate.md) | per-field rules → route / fail / drop |
+| [`lookup`, `enrich`](transforms/lookup.md) | HTTP enrichment (LRU-cached) |
+| [`parse`](transforms/parse.md) | text/JSON → columns (regex named groups) |
+| [`dq`](transforms/dq.md) | data-quality expectations + score |
+| [`schemadrift`](transforms/schemadrift.md) | detect add/remove/retype columns |
+| [`hwm`](transforms/hwm.md) | track a column max for incremental loads |
+
+Plus the shared [expression-language reference](transforms/expression-language.md).
+
+## Sinks → [index](sinks.md)
+
+| Type(s) | Writes |
+|---|---|
+| [`csv`, `tsv`](sinks/csv.md) | delimited text |
+| [`jsonlines`, `ndjson`](sinks/jsonlines.md) | one JSON object per line |
+| [`parquet`](sinks/parquet.md) | typed, row-group-aligned Parquet |
+| [`jdbc`](sinks/jdbc.md) | insert / upsert into SQL |
+| [`kafka`](sinks/kafka.md) | producer with acks & serialization |
+| [`template`](sinks/template.md) | Go text/template (fixed-width / legacy) |
+| [`s3`, `gcs`, `adls`](sinks/objstore.md) | cloud object storage (macros, rolling) |
+| [`null`, `discard`](sinks/null.md) | drop all rows |
+| [`dlq`](sinks/dlq.md) | wrap any sink; capture rejects |
 
 ---
 
@@ -55,305 +82,29 @@ ETL/ELT/EL switch — the *mode* is emergent from which transforms you declare:
 
 ## Sources
 
-Registered via `source.Register(name, factory)`. Sources marked **Partitionable**
-implement `PartitionableSource` and can be split across scaling instances.
-
-### CSV / TSV — `csv`, `tsv`
-`source/csv/source.go`
-
-| Key | Default | Notes |
-|---|---|---|
-| `path` | — | required |
-| `delimiter` | `,` | any single char (`tsv` presets `\t`) |
-| `hasHeader` | `true` | first row supplies column names |
-| `columns` | inferred | explicit schema; required if no header |
-
-Type coercion (int/float/bool/date via per-column `format`), lazy-quote tolerance,
-sequential skip, approximate byte-offset checkpoint tokens.
-
-### Parquet — `parquet` · **Partitionable**
-`source/parquet/source.go`
-
-| Key | Default | Notes |
-|---|---|---|
-| `path` | — | required |
-| `columns` | all | column pruning (only listed columns read from disk) |
-| `rowGroupParallelism` | `4` | concurrent row-group readers |
-
-Row-group predicate/column pushdown, row-group partition enumeration, sequential
-reader caching, partial row-group resume.
-
-### JDBC — `jdbc` · **Partitionable**
-`source/jdbc/source.go` · drivers: PostgreSQL, MySQL, SQLite (Oracle via ODBC)
-
-| Key | Default | Notes |
-|---|---|---|
-| `driver` | `postgres` | SQL driver name |
-| `dsn` | — | required connection string |
-| `table` / `query` | — | table mode or raw SELECT |
-| `columns` | all | column subset |
-| `where` | — | extra predicate |
-| `orderKey` | — | enables keyset pagination |
-| `batchSize` | `5000` | rows per fetch |
-
-Keyset pagination (`WHERE orderKey > $last LIMIT N`, safe under concurrent
-inserts) with LIMIT/OFFSET fallback; HWM injection in table mode; connection
-pooling; O(1) cursor-based checkpoint resume.
-
-### Kafka — `kafka`
-`source/kafka/source.go` · library: IBM sarama (pure Go)
-
-| Key | Default | Notes |
-|---|---|---|
-| `brokers` | — | required list |
-| `topic` | — | required |
-| `groupId` | — | required consumer group |
-| `startOffset` | `latest` | `earliest` \| `latest` \| int64 |
-| `mode` | `streaming` | `streaming` \| `batch` |
-| `stopOffset` / `stopTimestamp` / `stopAtCurrentEnd` | — | batch-mode stop conditions |
-| `deserializer` | `json` | `json` \| `avro` \| `raw` |
-| `schemaRegistryURL` | — | Confluent registry for avro |
-| `pollMs` | `500` | poll window |
-| `saslMechanism` / `saslUser` / `saslPasswordEnv` | — | `PLAIN`/`SCRAM-SHA-256`/`SCRAM-SHA-512` |
-| `tlsCertFile` / `tlsKeyFile` / `tlsCACertFile` | — | TLS client certs |
-
-Consumer-group with auto-commit, buffered channel decoupled from rebalances,
-schema inference from first message, bounded batch mode for one-shot loads.
-
-### Fixed-Width / Flat File — `fixedwidth`, `flatfile`
-`source/fixedwidth/source.go`
-
-| Key | Default | Notes |
-|---|---|---|
-| `path` | — | required |
-| `encoding` | `utf-8` | `ebcdic-037`, `ebcdic-500`, `latin-1`, … |
-| `skipLines` | `0` | header/trailer lines to skip |
-| `recordLength` | `0` | fixed byte length (0 = newline-delimited) |
-| `columns[]` | — | `name`, `type`, `start` (1-based), `length`, `format`, `trim`, `impliedDecimal` |
-
-Mainframe positional extraction, EBCDIC/ASCII decoding, implied-decimal scaling
-(banking/insurance).
-
-### XML — `xml`
-`source/xml/source.go`
-
-| Key | Default | Notes |
-|---|---|---|
-| `path` | — | required |
-| `recordElement` | — | element that delimits one record |
-| `fields[]` | — | `name`, `xpath` (element path / `@attr`), `type` |
-
-SAX-style streaming (no full-document load); simple XPath (element paths,
-attributes, text) — no predicates or axes.
-
-### JSON Lines / NDJSON — `jsonlines`, `ndjson`
-`source/jsonlines/source.go`
-
-| Key | Default | Notes |
-|---|---|---|
-| `path` | — | required |
-| `fields` | inferred | column order; inferred from first record if omitted |
-
-Schema-on-read, missing keys → `nil`, 4 MB line buffer.
-
-### Object Store — `s3`, `gcs`, `adls` · **Partitionable**
-`source/objstore/source.go`
-
-| Key | Default | Notes |
-|---|---|---|
-| `prefix` | — | object glob, e.g. `data/2024/*.parquet` |
-| `format` | — | inner source type (`csv`, `parquet`, `jsonlines`, …) |
-| `bucket` (S3/GCS) / `container` (ADLS) | — | storage location |
-| `download` | format-dependent | spool to temp file (always on for parquet) |
-
-Each matched object becomes one partition; parsing delegated to the inner source;
-streaming (csv/jsonlines) or temp-file (parquet) paths.
-
-### Sectioned (header/body) — `sectioned`
-`source/sectioned/source.go`
-
-| Key | Default | Notes |
-|---|---|---|
-| `path` | — | required |
-| `headerKVRegex` | `^(\S[\S ]*?)\s{2,}(.*?)\s*$` | key-value header lines |
-| `bodyColumnMarker` | — | regex identifying the column-name line |
-| `bodyDelimiter` | `\s+` | body row splitter |
-| `broadcastHeader` | `true` | stamp header KVs on every body row |
-
-For report-style files (semiconductor, mainframe reports) that carry file-level
-context followed by a tabular body.
-
-### 🚧 Kubernetes Pod Log — `podlog`
-`source/podlog/source.go`
-
-Tails CRI/containerd logs under `/var/log/pods` with multiline (stack-trace)
-reassembly, namespace filters, and a crash-safe position registry. Config:
-`root`, `node`, `positionFile`, `fromBeginning`, `pollMs`, `bounded`,
-`includeNamespaces`/`excludeNamespaces`, and a `multiline` object
-(`startPattern`, `flushIdleMs`, `maxLines`). Registered and runnable but tracked
-as WIP (see `examples/20-podlog`).
+Registered via `source.Register(name, factory)`. **Per-source detail — every key,
+default, behavior, and example — lives on the [per-source pages](sources/)** linked in
+the matrix above. Sources marked ✅ in the matrix implement `PartitionableSource` and can
+be split across [scaling](scaling.md) instances.
 
 ---
 
 ## Sinks
 
-Registered via `sink.Register(name, factory)`.
-
-### CSV / TSV — `csv`, `tsv`
-`sink/csv/sink.go` — `path`, `delimiter` (`,`), `writeHeader` (`true`). Creates
-missing directories; header from first batch.
-
-### JDBC — `jdbc`
-`sink/jdbc/sink.go` — drivers: PostgreSQL, MySQL, SQLite (Oracle via ODBC)
-
-| Key | Default | Notes |
-|---|---|---|
-| `dsn` | — | required |
-| `table` | — | required |
-| `batchSize` | `1000` | rows per INSERT batch |
-| `onConflict` | `insert` | `insert` \| `upsert` \| `ignore` |
-| `conflictKey` | — | columns forming the upsert key |
-| `autoMigrate` | `false` | `ALTER TABLE` to add new columns |
-
-Dialect-aware upsert (`ON CONFLICT DO UPDATE` / `ON DUPLICATE KEY UPDATE`) and
-ignore (`DO NOTHING` / `INSERT IGNORE`); sink-owned buffering for idempotency;
-connection pooling.
-
-### Parquet — `parquet`
-`sink/parquet/sink.go` — `path`, `compression` (`snappy` | `gzip` | `zstd` |
-`uncompressed`), `rowGroupSize` (`100000`). Dynamic schema from first batch,
-typed nodes, row-group-aligned flush.
-
-### JSON Lines / NDJSON — `jsonlines`, `ndjson`
-`sink/jsonlines/sink.go` — `path`. One JSON object per line, buffered.
-
-### Kafka — `kafka`
-`sink/kafka/sink.go` — sarama `SyncProducer`
-
-| Key | Default | Notes |
-|---|---|---|
-| `brokers` / `topic` | — | required |
-| `ackMode` | `all` | `none` \| `leader` \| `all` |
-| `compressionCodec` | `none` | `snappy` \| `lz4` \| `zstd` |
-| `maxMessageBytes` | `1000000` | max message size |
-| `partitionKey` | — | column for hash partitioning |
-| `serializer` | `json` | `json` \| `avro` (+ `schemaRegistryURL`) |
-| SASL/TLS | — | same keys as the Kafka source |
-
-Blocking producer with broker acks; idempotent producer when broker-enabled.
-
-### Object Store — `s3`, `gcs`, `adls` (+ `-sink` aliases)
-`sink/objstore/sink.go`
-
-| Key | Default | Notes |
-|---|---|---|
-| `key` | — | destination key template with macros |
-| `format` | — | inner sink type |
-| `bucket` / `container` | — | storage location |
-
-Key macros: `{YYYY} {MM} {DD} {HH} {mm} {ss}` (UTC), `{ts}` (unix seconds),
-`{uuid}`. Streaming (csv/jsonlines) or temp-file-then-upload (parquet).
-
-### Dead-Letter Queue — `dlq`
-`sink/dlq/sink.go`
-
-| Key | Default | Notes |
-|---|---|---|
-| `innerType` | — | wrapped sink type |
-| `innerOptions` | — | inner sink config |
-| `envelopeColumn` | `_dlq_error` | error-JSON column name |
-| `maxRowsPerBatch` | `0` | 0 = unlimited |
-| `onFull` | `block` | `block` \| `drop` |
-
-Lazily initializes the inner sink (zero cost when there are no failures). Each
-row is wrapped in an error envelope (`pipeline`, `runId`, `batchSeq`, `rowIndex`,
-`errorMessage`, `originalRow`, `routedAt`).
-
-### Template — `template`
-`sink/template/sink.go` — `path`, `template` (Go `text/template` body) or
-`templatePath`. Renders the whole batch at close with context `.Rows`, `.Count`,
-`.Columns`, `.Attr` and helpers `rpad/lpad/padc`, `sci`, `upper/lower/trim`,
-`add`, `seq`. Use for fixed-width and legacy layouts.
-
-### Null / Discard — `null`, `discard`
-`sink/null/sink.go` — no config; no-op for benchmarking and DLQ routing.
+Registered via `sink.Register(name, factory)`. **Per-sink detail — every key, default,
+key-template macro, partitioning/rolling behavior, credential resolution, and example —
+lives on the [per-sink pages](sinks/)** linked in the matrix above. Any sink can be
+wrapped by the [`dlq`](sinks/dlq.md) sink to capture rejected rows.
 
 ---
 
 ## Transforms
 
-Registered via `transform.Register(name, factory)`. Executed in declared order.
-
-### Filter — `filter`
-`transform/filter/transform.go` — `expr`. SQL-like predicate with `> >= < <= = !=`,
-`IS [NOT] NULL`, `AND`/`OR`, string/number/bool/null literals. Three-valued logic.
-Example: `amount > 0 AND status != 'VOID'`.
-
-### Map / Mapper — `map`, `mapper`
-`transform/mapper/transform.go` — `fields` (out-name → expression), optional
-`fieldOrder`. Expressions: static literal, `=$field` reference, or
-`=func(args…)`. Built-ins include string (`concat/upper/lower/trim/substr/replace`),
-math (`add/subtract/multiply/divide/round`), hash/encode
-(`md5/sha1/sha256/base64_encode/base64_decode`), date (`now/format_date/parse_date`),
-utility (`coalesce/if/uuid/random`). Deterministic column ordering; pass-through
-when nothing changes.
-
-### Lookup / Enrich — `lookup`, `enrich`
-`transform/lookup/transform.go`
-
-| Key | Default | Notes |
-|---|---|---|
-| `keyField` | — | column to look up |
-| `url` | — | endpoint template with `{keyField}` macro |
-| `method` | `GET` | HTTP method |
-| `outputFields` | — | columns to extract from JSON response |
-| `concurrency` | `10` | parallel HTTP workers |
-| `cacheSize` | `1000` | LRU cache entries |
-| `timeoutMs` | `5000` | per-request timeout |
-| `onError` | `null` | `null` \| `skip` \| `fail` |
-
-LRU cache + singleflight dedup, worker pool, URL templating.
-
-### High-Water Mark — `hwm`
-`transform/hwm/transform.go` — `column`, `valueType` (`datetime` | `int` |
-`string`). Pass-through observer; exposes `MaxSeen()` for the incremental-load
-watermark. Type-safe max tracking, thread-safe.
-
-### Schema Drift — `schemadrift`
-`transform/schemadrift/transform.go` — `policy` (`project` default | `additive` |
-`strict` | `drop`), `onDrift` (`log` | `alert` | `silent`). Baseline from first
-batch; `additive` grows the schema, `strict` aborts, `drop` skips drifted
-batches, `project` keeps only baseline columns.
-
-### Data Quality — `dq`
-`transform/dq/transform.go`
-
-| Key | Default | Notes |
-|---|---|---|
-| `expectations[]` | — | see below |
-| `onFail` | `route` | `route` \| `fail` \| `warn` \| `drop` |
-| `qualityThreshold` | `0.95` | gate threshold |
-| `scoreColumn` | — | append per-row score |
-| `errorSinkType` / `errorSinkConfig` | — | DLQ for failing rows |
-| `reportSinkType` / `reportSinkConfig` | — | DQ report sink (e.g. JDBC) |
-
-Expectation kinds: `expectColumnNotNull`, `expectColumnValuesBetween`,
-`expectColumnValuesInSet`, `expectColumnValuesMatchRegex`,
-`expectTableRowCountBetween`, `expectTableRowCountNotZero`. Emits a `DQReport`
-(counts, per-expectation results, `overallScore`, `passedGate`) surfaced in the
-run output metadata.
-
-### Validate — `validate`
-`transform/validate/transform.go` — `rules[]` (`field`, `notNull`, `min`, `max`,
-`minLen`, `maxLen`, `pattern`, `in`), `onViolation` (`route` | `fail` | `drop`),
-optional `errorSinkType`/`errorSinkConfig`. Multiple rules per column; type-safe
-numeric comparison.
-
-### Parse — `parse`
-`transform/parse/transform.go` — `source`, `mode` (`regex` | `json`), `pattern`
-(named groups `(?P<name>…)` for regex), `fields`/`prefix` (json), `onError`
-(`keep` | `drop` | `route`), `keepSource` (`true`). Extracts columns from a text
-or JSON field.
+Registered via `transform.Register(name, factory)`, executed in declared order.
+**Per-transform detail — every config key, rule/expectation type, routing behavior, and
+example — lives on the [per-transform pages](transforms/)** linked in the matrix above,
+and the full 60+-function map/filter expression catalogue is in the
+[expression-language reference](transforms/expression-language.md).
 
 ---
 
