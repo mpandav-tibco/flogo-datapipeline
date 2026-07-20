@@ -6,6 +6,7 @@ const http = require('http')
 const net = require('net')
 const path = require('path')
 const fs = require('fs')
+const os = require('os')
 const vscode = require('vscode')
 
 // Readiness probe: the pipeline engine exposes /health on the same port it is
@@ -30,6 +31,14 @@ function _platformBinaryName() {
   const baseName = 'flogo-datapipeline'
   if (process.platform === 'win32') return `${baseName}-windows-${goArch}.exe`
   return `${baseName}-${process.platform}-${goArch}`
+}
+
+// Platform-specific filename of the bundled dp-build lean builder (mirrors the
+// engine naming so a build script can emit both with one convention).
+function _dpbuildBinaryName() {
+  const goArch = process.arch === 'x64' ? 'amd64' : process.arch
+  if (process.platform === 'win32') return `dp-build-windows-${goArch}.exe`
+  return `dp-build-${process.platform}-${goArch}`
 }
 
 class BinaryManager {
@@ -204,42 +213,102 @@ class BinaryManager {
     return port
   }
 
-  // Build the flogo-datapipeline binary for a specific platform.
-  // Runs `go build` in the source directory and writes the binary to `out`.
-  /** @returns {Promise<void>} */
-  buildBinary({ sourcePath, out, goos, goarch, pipelinePath }) {
-    return new Promise((resolve, reject) => {
-      if (!sourcePath) {
-        return reject(new Error('buildBinary: sourcePath is required'))
-      }
-      if (!out) {
-        return reject(new Error('buildBinary: out (output path) is required'))
-      }
-      const env = {
-        ...process.env,
-        GOOS: goos || process.platform.replace('win32', 'windows'),
-        GOARCH: goarch || (process.arch === 'x64' ? 'amd64' : process.arch),
-        CGO_ENABLED: '0',
-      }
-      const cmd = `go build -o "${out}" ./cmd/flogo-datapipeline/`
-      this._channel.appendLine(`[build] ${cmd} (cwd: ${sourcePath})`)
-      exec(cmd, { cwd: sourcePath, env }, (err, stdout, stderr) => {
-        if (stdout) this._channel.append(stdout)
-        if (stderr) this._channel.append(stderr)
-        if (err) {
-          return reject(new Error(`go build failed: ${stderr || err.message}`))
-        }
-        this._channel.appendLine(`[build] binary written to ${out}`)
-        resolve()
-      })
-    })
+  // ── Lean (OOTB-style) per-app build ─────────────────────────────────────────
+
+  // True when a Go toolchain is on PATH. Required ONLY for the lean Deploy build
+  // (running/previewing a pipeline uses the bundled engine and needs no Go).
+  hasGoToolchain() {
+    try { execSync('go version', { stdio: ['ignore', 'pipe', 'ignore'] }); return true }
+    catch (_) { return false }
   }
 
-  // Returns the build command string for display (tooltips / setup screens).
-  buildCommand() {
-    const name = _platformBinaryName()
-    const out = path.join(this._extensionPath, 'bin', name)
-    return `go build -o "${out}" ./cmd/flogo-datapipeline/`
+  // Resolve the bundled dp-build helper (the import-driven lean builder), the
+  // datapipeline analogue of `flogo build`. Ships next to the engine in bin/.
+  _resolveDpBuild() {
+    const name = _dpbuildBinaryName()
+    const inBin = path.join(this._extensionPath, 'bin', name)
+    if (fs.existsSync(inBin)) return inBin
+    const bare = process.platform === 'win32' ? 'dp-build.exe' : 'dp-build'
+    try {
+      const which = process.platform === 'win32' ? 'where' : 'which'
+      const found = execSync(`${which} ${bare}`, { stdio: ['ignore', 'pipe', 'ignore'] })
+        .toString().trim().split(/\r?\n/)[0]
+      if (found && fs.existsSync(found)) return found
+    } catch (_) { }
+    const err = /** @type {Error & { code?: string }} */ (
+      new Error(`dp-build helper not found (${name}) — reinstall the Flogo Data Pipeline Studio extension.`))
+    err.code = 'NO_DPBUILD'
+    throw err
+  }
+
+  // Sync the read-only bundled module sources (media/dp-src) into a writable work
+  // dir, because `go build` writes a transient .dpbuild/ inside the module. The
+  // copy is reused across builds and only refreshed when the bundle version marker
+  // changes (extension update).
+  _ensureBuildWorkDir(workRoot) {
+    const srcBundle = path.join(this._extensionPath, 'media', 'dp-src')
+    if (!fs.existsSync(path.join(srcBundle, 'go.mod'))) {
+      const err = /** @type {Error & { code?: string }} */ (
+        new Error('bundled build sources (media/dp-src) are missing — reinstall the extension.'))
+      err.code = 'NO_SRC'
+      throw err
+    }
+    const root = workRoot || path.join(os.tmpdir(), 'flogo-dp-build')
+    const workDir = path.join(root, 'dp-src')
+    const srcMarker = path.join(srcBundle, '.bundle-version')
+    const dstMarker = path.join(workDir, '.bundle-version')
+    const srcVer = fs.existsSync(srcMarker) ? fs.readFileSync(srcMarker, 'utf8') : 'unversioned'
+    const dstVer = fs.existsSync(dstMarker) ? fs.readFileSync(dstMarker, 'utf8') : null
+    if (dstVer !== srcVer || !fs.existsSync(path.join(workDir, 'go.mod'))) {
+      this._channel.appendLine(`[build] preparing build workspace at ${workDir}…`)
+      fs.rmSync(workDir, { recursive: true, force: true })
+      fs.mkdirSync(workDir, { recursive: true })
+      fs.cpSync(srcBundle, workDir, { recursive: true })
+    }
+    return workDir
+  }
+
+  // Build a LEAN, import-driven binary for one pipeline using the bundled dp-build
+  // helper + bundled module sources — no user source or repo needed (the OOTB
+  // Flogo `flogo build` model). Requires a Go toolchain. goos/goarch cross-compile
+  // the target (e.g. linux/amd64 for a container image). The build is fully offline
+  // (vendored deps), so no network or module proxy is used.
+  /** @returns {Promise<void>} */
+  buildLeanBinary({ pipelineFile, out, goos, goarch, workRoot }) {
+    return new Promise((resolve, reject) => {
+      if (!pipelineFile || !out) {
+        return reject(new Error('buildLeanBinary: pipelineFile and out are required'))
+      }
+      if (!this.hasGoToolchain()) {
+        const err = /** @type {Error & { code?: string }} */ (new Error(
+          'A Go toolchain is required to build a deployable binary. Install Go (https://go.dev/dl) and retry. Running or previewing a pipeline does not need Go.'))
+        err.code = 'NO_GO'
+        return reject(err)
+      }
+      let dpbuild, workDir
+      try {
+        dpbuild = this._resolveDpBuild()
+        workDir = this._ensureBuildWorkDir(workRoot)
+      } catch (e) { return reject(e) }
+      this._prepBinary(dpbuild)
+      const absOut = path.resolve(out)
+      /** @type {Record<string, string|undefined>} */
+      const env = { ...process.env, GOPROXY: 'off', GOFLAGS: '-mod=vendor' }
+      if (goos) env.GOOS = goos
+      if (goarch) env.GOARCH = goarch
+      this._channel.appendLine(
+        `[build] lean build → ${absOut}${goos ? ` (${goos}/${goarch || ''})` : ''}`)
+      const proc = spawn(dpbuild, ['-f', path.resolve(pipelineFile), '-o', absOut], {
+        cwd: workDir, env, stdio: ['ignore', 'pipe', 'pipe'], shell: false,
+      })
+      proc.stdout.on('data', (d) => this._channel.append(d.toString()))
+      proc.stderr.on('data', (d) => this._channel.append(d.toString()))
+      proc.on('error', reject)
+      proc.once('exit', (code) => {
+        if (code === 0) { this._channel.appendLine(`[build] built ${absOut}`); resolve() }
+        else reject(new Error(`dp-build exited with code ${code} — see the Flogo Data Pipeline output channel.`))
+      })
+    })
   }
 
   // ── Private ───────────────────────────────────────────────────────────────
@@ -282,10 +351,9 @@ class BinaryManager {
 
     // Structured error so callers can show a setup prompt.
     const err = /** @type {Error & { code?: string, buildCmd?: string }} */ (
-      new Error(`flogo-datapipeline binary not found (${name}). Run:\n  ${this.buildCommand()}`)
+      new Error(`flogo-datapipeline engine not found for this platform (${name}). Reinstall the Flogo Data Pipeline Studio extension — the engine ships inside it — or set flogoDataPipelineStudio.binaryPath to a compatible engine binary.`)
     )
     err.code = 'NO_BINARY'
-    err.buildCmd = this.buildCommand()
     throw err
   }
 
