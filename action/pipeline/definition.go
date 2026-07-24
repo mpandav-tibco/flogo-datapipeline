@@ -155,6 +155,7 @@ type CheckpointDef struct {
 	IntervalRows    int    `json:"intervalRows,omitempty"`    // checkpoint every N rows (default 10000)
 	IntervalSeconds int    `json:"intervalSeconds,omitempty"` // checkpoint every N seconds (default 30)
 	DeleteOnSuccess bool   `json:"deleteOnSuccess,omitempty"` // delete checkpoint on successful completion
+	Key             string `json:"key,omitempty"`             // stable checkpoint key for single-instance streaming resume (default: per-run id)
 }
 
 // PerformanceDef tunes the pipeline execution parameters.

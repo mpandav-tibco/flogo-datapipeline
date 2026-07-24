@@ -57,6 +57,32 @@ It fires as soon as newer data arrives (or on a graceful drain).
 | Kafka source | `type:kafka`, `mode` default (streaming poll loop), `deserializer:json`, `groupId`, `startOffset:earliest` |
 | Window | `kind:tumbling`, `sizeMs:60000`, `eventTime.column:ts` (RFC3339), `groupBy:[sensor]` |
 | Sink flush | `checkpoint.intervalSeconds:2` so results reach disk continuously (streaming has no EOF flush) |
+| Durable state | `checkpoint.key:"kafka-windowed-stream"` — a **stable** key so open windows resume across restarts |
+
+## Durable window state — survives a restart (verified live)
+
+Open windows are **checkpointed and restored**, so killing the consumer mid‑stream
+does not lose in‑flight aggregations. The window state is written **inside the
+checkpoint token** (`checkpoints/kafka-windowed-stream.ckpt.json` → `windowState`)
+at the same instant as the Kafka position, and replayed on the next start.
+
+```bash
+# 1. Publish only the first two 10:00 readings (window stays open, nothing fires).
+#    Then run the consumer briefly and stop it — the open window is checkpointed.
+../../flogo-datapipeline -f kafka-windowed.datapipeline   # Ctrl-C after ~3s
+
+cat checkpoints/kafka-windowed-stream.ckpt.json           # → windowState with the open window
+
+# 2. Restart the consumer — it logs "restored window state (N bytes)" and resumes.
+../../flogo-datapipeline -f kafka-windowed.datapipeline
+#   → later events advance the watermark and the restored window fires with the
+#     exact pre-restart aggregate (no double-count, no loss).
+```
+
+Guarantee: **at‑least‑once** (Kafka offset via consumer‑group commit + window state
+via checkpoint). Combine with an **idempotent/upsert sink** keyed by
+`(sensor, window_start)` for **exactly‑once *results***. See
+[`docs/stream-processing.md`](../../docs/stream-processing.md) §13.
 
 ## Turn it into a service
 

@@ -57,7 +57,7 @@
           }
         ],
         "sink": { "type": "jsonlines", "path": "./out/windowed.jsonl" },
-        "checkpoint": { "type": "file", "path": "./checkpoints", "intervalRows": 1, "intervalSeconds": 2 }
+        "checkpoint": { "type": "file", "path": "./checkpoints", "key": "kafka-windowed-stream", "intervalRows": 1, "intervalSeconds": 2 }
       }
     }
   ]

@@ -778,6 +778,14 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 		return writeErr
 	}
 
+	// resumeKey is the checkpoint key for single-instance runs. Streaming
+	// pipelines set checkpoint.key to a stable value so window state and source
+	// position resume across restarts; batch runs default to the per-run id.
+	resumeKey := runID
+	if def.Checkpoint.Key != "" {
+		resumeKey = def.Checkpoint.Key
+	}
+
 	switch {
 	case scMode == "sharded" || scMode == "distributed":
 		if err := a.runScaled(ctx, runLog, def, scMode, src, srcCfg, runID, drain); err != nil {
@@ -788,7 +796,7 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 			return out, err
 		}
 	default:
-		if err := drain(src, runID); err != nil {
+		if err := drain(src, resumeKey); err != nil {
 			return out, err
 		}
 	}
@@ -842,9 +850,9 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 	sinkClosed = true
 
 	if def.Checkpoint.DeleteOnSuccess {
-		_ = ckpt.Delete(runID)
+		_ = ckpt.Delete(resumeKey)
 	} else {
-		saveCheckpoint(runLog, ckpt, runID, def.Source.Type, out.RowsProcessed, src, winOp)
+		saveCheckpoint(runLog, ckpt, resumeKey, def.Source.Type, out.RowsProcessed, src, winOp)
 		a.recorder.CheckpointSaved(a.ref)
 	}
 

@@ -323,9 +323,48 @@ We adopt the **model**; we deliberately skip Beam's **portability/runner** layer
 
 ---
 
-## 13. Next actions
+## 13. Delivery semantics & durable resume (implemented + verified)
 
-- [x] §11 decisions resolved (2026‑07‑24) — options chosen; see §11.
-- [ ] Review & agree scope / non‑goals (this doc).
-- [ ] Build the **Spike** (§10) to prove one config over bounded + unbounded.
-- [ ] Land Phase 0 `windowing/` core + `window` transform behind a feature flag.
+The window operator's keyed state is **checkpointed and restored** so a streaming
+pipeline survives a restart. Mechanism:
+
+- On each checkpoint (row/time interval or completion) the engine takes an
+  `Operator.Snapshot()` — a compact JSON of every open window's per‑key
+  accumulator internals, the early‑fire cadence, and the current watermark — and
+  stores it **inside the checkpoint `Token`** (`Token.WindowState`), captured at
+  the *same instant* as the source position. File and Redis backends persist it
+  verbatim (whole‑token JSON); no backend change is needed.
+- On resume the engine loads the token and calls `Operator.Restore()` before
+  reading, so open windows and their aggregations continue exactly where they
+  stopped. Set `checkpoint.key` to a stable value (e.g. the pipeline name) so a
+  single‑instance streaming job finds its state across restarts — otherwise the
+  per‑run id is used (correct for batch, useless for resume).
+- **Guarantee (per §11.4): at‑least‑once.** The Kafka source resumes its offset
+  via consumer‑group commit; the window state resumes via the checkpoint token.
+  Because the state checkpoint bounds replay to one checkpoint interval, and the
+  window result for a `(key, windowStart)` is deterministic, pairing this with an
+  **idempotent (upsert) sink** yields **exactly‑once *results***. Fully
+  transactional offset↔state atomicity (offset carried in the token + seek on
+  resume, instead of consumer‑group auto‑commit) is a **Phase 3** hardening item.
+
+**Verified live (2026‑07‑24, real Kafka):** a consumer buffered two events into an
+open 1‑minute window and checkpointed the state; the process was killed; a fresh
+process logged `restored window state (575 bytes)`; a later event advanced the
+watermark and the restored window fired with the **exact pre‑crash aggregate**
+(`avg=20.75 max=21 n=2`) — no double‑count, no loss. See
+[`examples/25-kafka-windowed-stream`](../examples/25-kafka-windowed-stream/README.md).
+
+## 14. Status & next actions
+
+- [x] §11 decisions resolved (2026‑07‑24).
+- [x] **Phase 0** — `windowing/` core (tumbling/sliding/session/global, event‑time,
+  watermarks) + `window` transform; blank‑imported in the engine.
+- [x] **Phase 1** — session windows, state TTL, late data `onLate: drop|route`,
+  observability (`windowStats` in run output + logs).
+- [x] **Phase 2** — early‑firing triggers + discarding/accumulating modes; durable
+  keyed state (`Snapshot`/`Restore`) wired through the checkpoint (§13).
+- [x] **Phase 4 (partial)** — Studio `window` node (visual editor) + schema/syntax.
+- [ ] **Phase 3** — spillable high‑cardinality state backend; co‑partition sharding
+  validation at load; transactional offset↔state resume.
+- [ ] **Phase 4 (remaining)** — windowed keyed JOIN; Prometheus/OTLP window gauges;
+  Studio config for triggers / accumulation / late‑route sink.
