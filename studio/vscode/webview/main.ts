@@ -441,7 +441,7 @@ const FIELD_HINTS: Record<string, string> = {
   pattern: 'Regex with named groups (?P<name>…); each group becomes a column. Use (?s) to span multiline stack traces.',
   prefix: 'Optional prefix added to each extracted column name (JSON mode), e.g. log_.',
   keepSource: 'Keep the original source field alongside the extracted columns.',
-};const SOURCE_TYPES = ['csv', 'tsv', 'fixedwidth', 'sectioned', 'parquet', 'xml', 'jsonlines', 'jdbc', 'kafka', 's3', 'gcs', 'adls'];
+}; const SOURCE_TYPES = ['csv', 'tsv', 'fixedwidth', 'sectioned', 'parquet', 'xml', 'jsonlines', 'jdbc', 'kafka', 's3', 'gcs', 'adls'];
 const SINK_TYPES = ['jdbc', 'parquet', 'csv', 'jsonlines', 'template', 'kafka', 's3', 'gcs', 'adls', 'null'];
 // Friendly, generic display labels for stage types whose engine id is jargon.
 // The engine id (used in the .datapipeline file) is unchanged; only the picker
@@ -1225,10 +1225,10 @@ function stGroup(title: string, subtitle: string, ...fields: HTMLElement[]): HTM
   // scaling / observability).
   const cat = /mode/i.test(title) ? 'exec'
     : /trigger/i.test(title) ? 'trig'
-    : /reliab|checkpoint|incremental/i.test(title) ? 'rel'
-    : /load|performance/i.test(title) ? 'perf'
-    : /scal/i.test(title) ? 'scale'
-    : /observ|metric/i.test(title) ? 'obs' : 'exec';
+      : /reliab|checkpoint|incremental/i.test(title) ? 'rel'
+        : /load|performance/i.test(title) ? 'perf'
+          : /scal/i.test(title) ? 'scale'
+            : /observ|metric/i.test(title) ? 'obs' : 'exec';
   const glyph = { exec: '◧', trig: '⇥', rel: '❖', perf: '⚡', scale: '⤢', obs: '📈' }[cat] || '◧';
   const g = el('div', 'setgroup sg-' + cat);
   const open = !!(S.setOpen && S.setOpen[title]);
@@ -2713,79 +2713,79 @@ function renderCanvas(m: HTMLElement) {
     if (sn.type === 'window') {
       ib.appendChild(renderWindowEditor(sn));
     } else {
-    const connSel = renderConnectionSelector(sn);
-    if (connSel) ib.appendChild(connSel);
-    const fam = familyOfType(sn.type);
-    const boundConn = fam && typeof cfgTarget(sn).connection === 'string' && cfgTarget(sn).connection;
-    const hiddenKeys = new Set<string>(['connection']);
-    if (boundConn && fam) for (const k of CONN_MANAGED_KEYS[fam] || []) hiddenKeys.add(k);
-    Object.entries(sn.cfg).forEach(([k, v]) => {
-      if (hiddenKeys.has(k)) return;
-      // JDBC: the conflict key only applies to upsert — hide it otherwise, and
-      // render it as a column picker rather than a JSON blob.
-      const isJdbc = sn.type === 'jdbc';
-      if (isJdbc && k === 'conflictKey') {
-        const oc = String((cfgTarget(sn) as any).onConflict || 'insert');
-        if (oc === 'upsert') ib.appendChild(renderConflictKeyEditor(sn));
-        return;
-      }
-      // JDBC table: offer a live "pick from database" dropdown + refresh.
-      if (isJdbc && k === 'table') {
-        ib.appendChild(renderTableField(sn, v));
-        return;
-      }
-      // Object-store key/prefix: offer a "browse objects" picker.
-      const isObjStore = ['s3', 'gcs', 'adls', 's3-sink', 'gcs-sink', 'adls-sink'].includes(sn.type);
-      if (isObjStore && (k === 'key' || k === 'prefix')) {
-        ib.appendChild(renderObjectField(sn, k, v));
-        return;
-      }
-      // Kafka: topic picker + schema-registry schema reader.
-      if (sn.type === 'kafka' && k === 'topic') {
-        ib.appendChild(renderKafkaTopicField(sn, v));
-        return;
-      }
-      if (sn.type === 'kafka' && k === 'schemaRegistryURL') {
-        ib.appendChild(renderSchemaRegistryField(sn, v));
-        return;
-      }
-      // XML: recordElement gets a "detect structure from file" action.
-      if (sn.type === 'xml' && k === 'recordElement') {
-        ib.appendChild(renderXmlRecordField(sn, v));
-        return;
-      }
-      // Custom Text (template) sink: fold template + templatePath into one editor
-      // with an Inline/File toggle and a variable/helper reference strip.
-      if (sn.type === 'template' && k === 'template') {
-        ib.appendChild(renderTemplateEditor(sn));
-        return;
-      }
-      if (sn.type === 'template' && k === 'templatePath') {
-        return; // handled inside renderTemplateEditor
-      }
-      if (k === 'columns') ib.appendChild(renderColumnsEditor(sn));
-      else if (k === 'fields' && (sn.type === 'map' || sn.type === 'mapper')) ib.appendChild(renderMapEditor(sn));
-      else if (k === 'rules' && sn.type === 'validate') ib.appendChild(renderRulesEditor(sn));
-      else if (k === 'expectations' && sn.type === 'dq') ib.appendChild(renderExpectationsEditor(sn));
-      else if (k === 'expr' && sn.type === 'filter') ib.appendChild(renderFilterEditor(sn));
-      else ib.appendChild(renderField(sn, k, v));
-    });
+      const connSel = renderConnectionSelector(sn);
+      if (connSel) ib.appendChild(connSel);
+      const fam = familyOfType(sn.type);
+      const boundConn = fam && typeof cfgTarget(sn).connection === 'string' && cfgTarget(sn).connection;
+      const hiddenKeys = new Set<string>(['connection']);
+      if (boundConn && fam) for (const k of CONN_MANAGED_KEYS[fam] || []) hiddenKeys.add(k);
+      Object.entries(sn.cfg).forEach(([k, v]) => {
+        if (hiddenKeys.has(k)) return;
+        // JDBC: the conflict key only applies to upsert — hide it otherwise, and
+        // render it as a column picker rather than a JSON blob.
+        const isJdbc = sn.type === 'jdbc';
+        if (isJdbc && k === 'conflictKey') {
+          const oc = String((cfgTarget(sn) as any).onConflict || 'insert');
+          if (oc === 'upsert') ib.appendChild(renderConflictKeyEditor(sn));
+          return;
+        }
+        // JDBC table: offer a live "pick from database" dropdown + refresh.
+        if (isJdbc && k === 'table') {
+          ib.appendChild(renderTableField(sn, v));
+          return;
+        }
+        // Object-store key/prefix: offer a "browse objects" picker.
+        const isObjStore = ['s3', 'gcs', 'adls', 's3-sink', 'gcs-sink', 'adls-sink'].includes(sn.type);
+        if (isObjStore && (k === 'key' || k === 'prefix')) {
+          ib.appendChild(renderObjectField(sn, k, v));
+          return;
+        }
+        // Kafka: topic picker + schema-registry schema reader.
+        if (sn.type === 'kafka' && k === 'topic') {
+          ib.appendChild(renderKafkaTopicField(sn, v));
+          return;
+        }
+        if (sn.type === 'kafka' && k === 'schemaRegistryURL') {
+          ib.appendChild(renderSchemaRegistryField(sn, v));
+          return;
+        }
+        // XML: recordElement gets a "detect structure from file" action.
+        if (sn.type === 'xml' && k === 'recordElement') {
+          ib.appendChild(renderXmlRecordField(sn, v));
+          return;
+        }
+        // Custom Text (template) sink: fold template + templatePath into one editor
+        // with an Inline/File toggle and a variable/helper reference strip.
+        if (sn.type === 'template' && k === 'template') {
+          ib.appendChild(renderTemplateEditor(sn));
+          return;
+        }
+        if (sn.type === 'template' && k === 'templatePath') {
+          return; // handled inside renderTemplateEditor
+        }
+        if (k === 'columns') ib.appendChild(renderColumnsEditor(sn));
+        else if (k === 'fields' && (sn.type === 'map' || sn.type === 'mapper')) ib.appendChild(renderMapEditor(sn));
+        else if (k === 'rules' && sn.type === 'validate') ib.appendChild(renderRulesEditor(sn));
+        else if (k === 'expectations' && sn.type === 'dq') ib.appendChild(renderExpectationsEditor(sn));
+        else if (k === 'expr' && sn.type === 'filter') ib.appendChild(renderFilterEditor(sn));
+        else ib.appendChild(renderField(sn, k, v));
+      });
 
-    // JDBC upsert selected but no conflictKey field present yet — add the picker.
-    if (sn.type === 'jdbc' && String((cfgTarget(sn) as any).onConflict) === 'upsert' && !('conflictKey' in sn.cfg)) {
-      ib.appendChild(renderConflictKeyEditor(sn));
-    }
+      // JDBC upsert selected but no conflictKey field present yet — add the picker.
+      if (sn.type === 'jdbc' && String((cfgTarget(sn) as any).onConflict) === 'upsert' && !('conflictKey' in sn.cfg)) {
+        ib.appendChild(renderConflictKeyEditor(sn));
+      }
 
-    // A source with no explicit `columns` key (e.g. Parquet is self-describing)
-    // still gets a columns editor so users can view/declare columns and use the
-    // "Read schema from source" / "Infer" actions.
-    if (sn.kind === 'source' && !('columns' in sn.cfg)) {
-      ib.appendChild(renderColumnsEditor(sn));
-    }
+      // A source with no explicit `columns` key (e.g. Parquet is self-describing)
+      // still gets a columns editor so users can view/declare columns and use the
+      // "Read schema from source" / "Infer" actions.
+      if (sn.kind === 'source' && !('columns' in sn.cfg)) {
+        ib.appendChild(renderColumnsEditor(sn));
+      }
 
-    if (!Object.keys(sn.cfg).length && sn.kind !== 'source') {
-      ib.appendChild(el('div', 'muted', '<div style="font-size:11.5px;padding:4px 0">No configuration for this stage yet.</div>'));
-    }
+      if (!Object.keys(sn.cfg).length && sn.kind !== 'source') {
+        ib.appendChild(el('div', 'muted', '<div style="font-size:11.5px;padding:4px 0">No configuration for this stage yet.</div>'));
+      }
     }
 
     if (sn.kind === 'dlq') {
@@ -3388,24 +3388,42 @@ function persistAndRebuild() {
 
 // ── add / remove transforms ─────────────────────────────────────────────────
 const TRANSFORMS: Array<{ type: string; label: string; cfg: Record<string, unknown> }> = [
-  { type: 'filter', label: 'Filter — drop rows by a boolean expression',
-    cfg: { expr: "amount > 0 AND status != 'CANCELLED'" } },
-  { type: 'map', label: 'Map — project, rename, coerce & derive fields',
-    cfg: { fields: { net_amount: '=multiply($amount, 1.1)' } } },
-  { type: 'validate', label: 'Validate — per-field rules, route to DLQ',
-    cfg: { rules: [{ field: 'amount', notNull: true }], onViolation: 'route' } },
-  { type: 'lookup', label: 'Lookup — HTTP enrichment with LRU cache',
-    cfg: { keyField: 'id', url: 'https://api.internal/enrich/{id}', method: 'GET', cacheSize: 10000, onError: 'null' } },
-  { type: 'hwm', label: 'High-water mark — incremental cursor',
-    cfg: { column: 'updated_at', valueType: 'datetime' } },
-  { type: 'dq', label: 'Data quality — expectations + quality score',
-    cfg: { expectations: [{ type: 'expectColumnNotNull', column: 'id' }], onFail: 'warn', qualityThreshold: 0.95 } },
-  { type: 'schemadrift', label: 'Schema drift — detect column add/remove/type',
-    cfg: { policy: 'additive', onDrift: 'log' } },
-  { type: 'parse', label: 'Parse — structure a text field into columns (regex/JSON)',
-    cfg: { source: 'message', mode: 'regex', pattern: '^(?P<level>\\w+)\\s+(?P<msg>.*)$', onError: 'keep', keepSource: true } },
-  { type: 'window', label: 'Window — event-time aggregation (tumbling/sliding/session)',
-    cfg: { window: { kind: 'tumbling', sizeMs: 60000 }, eventTime: { column: 'ts', format: 'RFC3339' }, groupBy: [], aggregations: [{ as: 'n', fn: 'count' }], watermark: { strategy: 'boundedOutOfOrderness', maxLatenessMs: 0 } } },
+  {
+    type: 'filter', label: 'Filter — drop rows by a boolean expression',
+    cfg: { expr: "amount > 0 AND status != 'CANCELLED'" }
+  },
+  {
+    type: 'map', label: 'Map — project, rename, coerce & derive fields',
+    cfg: { fields: { net_amount: '=multiply($amount, 1.1)' } }
+  },
+  {
+    type: 'validate', label: 'Validate — per-field rules, route to DLQ',
+    cfg: { rules: [{ field: 'amount', notNull: true }], onViolation: 'route' }
+  },
+  {
+    type: 'lookup', label: 'Lookup — HTTP enrichment with LRU cache',
+    cfg: { keyField: 'id', url: 'https://api.internal/enrich/{id}', method: 'GET', cacheSize: 10000, onError: 'null' }
+  },
+  {
+    type: 'hwm', label: 'High-water mark — incremental cursor',
+    cfg: { column: 'updated_at', valueType: 'datetime' }
+  },
+  {
+    type: 'dq', label: 'Data quality — expectations + quality score',
+    cfg: { expectations: [{ type: 'expectColumnNotNull', column: 'id' }], onFail: 'warn', qualityThreshold: 0.95 }
+  },
+  {
+    type: 'schemadrift', label: 'Schema drift — detect column add/remove/type',
+    cfg: { policy: 'additive', onDrift: 'log' }
+  },
+  {
+    type: 'parse', label: 'Parse — structure a text field into columns (regex/JSON)',
+    cfg: { source: 'message', mode: 'regex', pattern: '^(?P<level>\\w+)\\s+(?P<msg>.*)$', onError: 'keep', keepSource: true }
+  },
+  {
+    type: 'window', label: 'Window — event-time aggregation (tumbling/sliding/session)',
+    cfg: { window: { kind: 'tumbling', sizeMs: 60000 }, eventTime: { column: 'ts', format: 'RFC3339' }, groupBy: [], aggregations: [{ as: 'n', fn: 'count' }], watermark: { strategy: 'boundedOutOfOrderness', maxLatenessMs: 0 } }
+  },
 ];
 
 // Compute the column names visible at a given transforms[] insert position,
@@ -3722,8 +3740,8 @@ function renderStatus() {
   runItem.title = S.running
     ? 'Stop the running pipeline (tears the engine down).'
     : S.port
-    ? 'Stop the engine (frees the port). Click Run again for a fresh run.'
-    : 'Start a fresh engine and run the pipeline (full boot→run→done log)';
+      ? 'Stop the engine (frees the port). Click Run again for a fresh run.'
+      : 'Start a fresh engine and run the pipeline (full boot→run→done log)';
   runItem.onclick = runAction;
   sb.appendChild(runItem);
   const pal = el('div', 'sbi', 'Data Pipeline');
@@ -4169,7 +4187,7 @@ window.addEventListener('message', (ev: MessageEvent<HostToWebview>) => {
       const p = S.pipe;
       const node = msg.target === 'source' ? p?.nodes.find((n) => n.kind === 'source')
         : msg.target === 'sink' ? p?.nodes.find((n) => n.kind === 'sink')
-        : p?.dlqNode;
+          : p?.dlqNode;
       if (node) {
         const cols = msg.columns.map((c) => ({ name: c.name, type: c.type }));
         setCfgValue(node, 'columns', cols);
