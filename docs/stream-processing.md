@@ -31,7 +31,7 @@ We benchmark against these to *position*, not to reach feature parity.
 | Windowed state | Rich (keyed, event time) | Rich (KTable, windows) | Rich | Rich | **Target: tumbling/sliding/session + triggers** |
 | Connectors | Many | Kafka only | Many | Many | **file / DB / object store / Kafka + Flogo ecosystem** |
 | Authoring | Java/Python/SQL | Java/Scala DSL | Java/Python/Go/SQL | Scala/Python/SQL | **Declarative JSON + VS Code canvas + Go SDK** |
-| Delivery guarantee | Exactly‑once (distributed) | Exactly‑once (Kafka) | Runner‑dependent | Exactly‑once | **Sharded + idempotent sinks (at‑least‑once)** |
+| Delivery guarantee | Exactly‑once (distributed) | Exactly‑once (Kafka) | Runner‑dependent | Exactly‑once | **Exactly‑once *results* via idempotent sinks (at‑least‑once core)** |
 | Best fit | Complex CEP at cluster scale | Stream‑to‑stream inside Kafka | Portable pipelines | Lakehouse streaming | **Lightweight unified ETL + windowed aggregation, incl. the edge** |
 
 **How we talk about it:** "Beam‑class windowed semantics without the cluster."
@@ -273,27 +273,39 @@ Each phase is independently shippable and demoable.
 | **0** | Foundations | `windowing/` core (assign + typed accumulators); `window` transform; `WindowedOperator` engine hooks; processing‑time tumbling/sliding | CSV → `window(groupBy)` → sink correct at 2M rows within `maxMemoryMB`; unit tests |
 | **1** | Correctness + bounded memory | Event‑time extract; `boundedOutOfOrderness` watermark; allowed‑lateness + `onLate` route/drop; **session** windows; **window-state GC/TTL** (`stateTtlMs`) so unbounded streams stay memory-bounded; **stream-only smoke** (continuous Kafka + startup-hook) | Out‑of‑order input yields correct event‑time windows; late rows routed to DLQ; session gaps verified; a **continuous stream-only** pipeline runs indefinitely with **bounded memory** (fired windows evicted past allowed lateness) |
 | **2** | Semantics + resilience | Trigger subsystem (early/late); discarding vs accumulating; **durable keyed state** via checkpoint + recovery | Early firings emit partials; kill/restart resumes state with no double‑count (accumulating + idempotent sink) |
-| **3** | Continuous + scale | Continuous Kafka driver on the same core; keyed partitioning aligned to sharded scaling; backpressure with stateful windows | Unbounded Kafka run matches bounded replay; N‑way shard by key; bounded memory under sustained load |
+| **3** | Continuous + scale | Continuous Kafka driver on the same core; keyed partitioning aligned to sharded scaling; backpressure with stateful windows; **spillable state backend** (embedded KV) for high-cardinality key-spaces | Unbounded Kafka run matches bounded replay; N‑way shard by key; bounded memory under sustained load and high key cardinality (via spill) |
 | **4** | Productization | Windowed keyed **join**; Studio window/trigger node; window/watermark/lateness **metrics** | Join example passes; Studio round‑trips window config; metrics exported to Prometheus/OTLP |
 
 ---
 
-## 11. Open decisions (need a call)
+## 11. Decisions (resolved 2026‑07‑24)
 
-1. **State backend for large key‑spaces** — in‑memory map first; when do we spill
-   to disk / an embedded KV? (Basic time/lateness-based **eviction is a Phase 1 deliverable** — see the Stream-only section; this item is only the *spill-to-disk* question for very large key-spaces.)
-2. **Watermark plumbing** — extend the transform interface (as in §6) vs. a
-   side‑channel the action passes to stages. (Leaning: explicit interface.)
-3. **Key ↔ shard routing** — with sharded scaling, a `groupBy` key must map to a
-   single shard. If source partitioning ≠ `groupBy` key, we need a repartition
-   step (or document the constraint that the source key must align).
-4. **Exactly‑once story** — commit to *at‑least‑once + idempotent sinks +
-   checkpointed state*; explicitly not distributed exactly‑once. Confirm this is
-   acceptable for target use cases.
-5. **Processing‑time vs event‑time default** — default to event‑time when a
-   timestamp column is configured, else processing‑time; make the fallback loud.
-6. **Backfill semantics** — for bounded sources, do we honor `allowedLateness`
-   (irrelevant post‑EOF) or fast‑path straight to `Flush()`?
+All calls are made; residual sub‑questions are flagged inline.
+
+1. **State backend — DECIDED: `StateStore` interface — in‑memory default + a spillable backend.**
+   Target includes **server‑side, high‑cardinality** key‑spaces (not edge‑only), so bounded‑memory
+   spill is a **planned deliverable, not deferred**: in‑memory (fast path, small cardinality) →
+   embedded‑KV spill‑to‑disk (single‑node high cardinality — keeps the no‑cluster story) → Redis
+   shared state (multi‑instance). `maxMemoryMB` triggers spill/backpressure; lands with scale in **Phase 3**.
+2. **Watermark plumbing — DECIDED: explicit `WindowedOperator` interface (§6).**
+   The engine drives `AddBatch` / `OnWatermark` / `Flush`; the batch transform path stays untouched.
+3. **Key ↔ shard routing — DECIDED: co‑partitioning constraint, no shuffle.**
+   The source partition key must cover the `groupBy` key (validated at load + documented — the same
+   model as Kafka Streams). When alignment can't be guaranteed, fall back to a **single instance for
+   the keyed windowed stage** (shard only stateless stages). We do **not** build a cross‑instance
+   shuffle — that stays outside the "no cluster" line.
+4. **Delivery guarantee — DECIDED: at‑least‑once core, positioned as "exactly‑once *results*".**
+   Mechanism = at‑least‑once + **idempotent (upsert) sinks** + checkpointed state. Customer‑facing
+   wording = *"exactly‑once results"*, **always** paired with the idempotent‑sink precondition and
+   **never** implying distributed/transactional exactly‑once. (This is already how the Kafka → JDBC
+   path behaves today.)
+5. **Time default — DECIDED: event‑time when a timestamp column is set; else processing‑time + a loud warning.**
+   The fallback raises a Problems‑panel diagnostic (*"no eventTime set → processing time; late /
+   out‑of‑order data will be mis‑bucketed"*).
+6. **Backfill semantics — DECIDED: on EOF, watermark → +∞ → fire all open windows once (`Flush()`).**
+   `allowedLateness` is moot post‑EOF and final aggregates match the live path. Replaying the exact
+   intermediate early/late firing *sequence* during backfill is out of scope (revisit only if a
+   customer needs bit‑identical reprocessing).
 
 ---
 
@@ -313,6 +325,7 @@ We adopt the **model**; we deliberately skip Beam's **portability/runner** layer
 
 ## 13. Next actions
 
+- [x] §11 decisions resolved (2026‑07‑24) — options chosen; see §11.
 - [ ] Review & agree scope / non‑goals (this doc).
 - [ ] Build the **Spike** (§10) to prove one config over bounded + unbounded.
 - [ ] Land Phase 0 `windowing/` core + `window` transform behind a feature flag.
