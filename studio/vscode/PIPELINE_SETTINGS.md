@@ -33,9 +33,11 @@ run config — mode=etl batchSize=5000 bufferBatches=4 maxMemoryMB=512 transform
 | `type` = `none` / `file` / `redis` | Selects the checkpoint store. `none` disables resume. |
 | `path` (file) | Directory for `{runId}.ckpt.json`. Defaults to the OS temp dir. |
 | `addr` / `keyPrefix` / `passwordEnv` (redis) | Redis connection; key = `{keyPrefix}:{runId}`. |
+| `ttlSeconds` (redis, default 604800 = 7 days) | Token expiry. Set high (or leave default) for long-lived streaming state so open windows survive extended downtime. |
 | `intervalRows` (default 10000) | Save progress after N rows. |
 | `intervalSeconds` (default 30) | **Also** save on this wall-clock interval — bounds re-processed work for slow, low-volume streams that never reach the row threshold. |
 | `deleteOnSuccess` | Remove the checkpoint on a clean finish (fresh load next run). |
+| `key` | Stable checkpoint key for single-instance streaming resume. Defaults to the per-run id; set a fixed value so a long-lived job finds its state across restarts. |
 
 **Validated (UI):** checkpoint file written as
 `{"format":"sectioned","payload":null,"rowsProcessed":7}`; `intervalSeconds`

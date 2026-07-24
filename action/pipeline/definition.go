@@ -152,6 +152,7 @@ type CheckpointDef struct {
 	Addr            string `json:"addr,omitempty"`            // redis: host:port
 	PasswordEnv     string `json:"passwordEnv,omitempty"`     // redis: env var holding password
 	KeyPrefix       string `json:"keyPrefix,omitempty"`       // redis: key namespace
+	TTLSeconds      int    `json:"ttlSeconds,omitempty"`      // redis: token expiry in seconds (default 604800 = 7 days; set high or omit for long-lived streaming state)
 	IntervalRows    int    `json:"intervalRows,omitempty"`    // checkpoint every N rows (default 10000)
 	IntervalSeconds int    `json:"intervalSeconds,omitempty"` // checkpoint every N seconds (default 30)
 	DeleteOnSuccess bool   `json:"deleteOnSuccess,omitempty"` // delete checkpoint on successful completion

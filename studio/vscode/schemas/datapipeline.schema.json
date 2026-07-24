@@ -550,24 +550,38 @@
         "keyPrefix": {
           "type": "string",
           "description": "Redis key prefix used to namespace checkpoint entries (redis backend).",
-          "default": "flogo:pipeline:"
+          "default": "flogo:pipeline:ckpt"
+        },
+        "passwordEnv": {
+          "type": "string",
+          "description": "Name of the environment variable holding the Redis password (redis backend). Never put the secret itself here."
+        },
+        "ttlSeconds": {
+          "type": "integer",
+          "description": "Redis checkpoint token expiry in seconds (redis backend). Omit or set high for long-lived streaming state.",
+          "default": 604800,
+          "minimum": 0
         },
         "intervalRows": {
           "type": "integer",
-          "description": "Flush the checkpoint every N committed rows. 0 = only on clean shutdown.",
+          "description": "Flush the checkpoint every N committed rows. Omit (or 0) to use the default.",
           "default": 10000,
           "minimum": 0
         },
         "intervalSeconds": {
           "type": "integer",
-          "description": "Flush the checkpoint every N seconds. 0 = only on clean shutdown.",
-          "default": 60,
+          "description": "Flush the checkpoint every N seconds. Omit (or 0) to use the default.",
+          "default": 30,
           "minimum": 0
         },
         "deleteOnSuccess": {
           "type": "boolean",
           "description": "Remove the checkpoint file/key when the pipeline exits cleanly.",
           "default": false
+        },
+        "key": {
+          "type": "string",
+          "description": "Stable checkpoint key for single-instance streaming resume. Defaults to the per-run id; set a fixed value so a long-lived streaming job finds its state across restarts."
         }
       }
     }
