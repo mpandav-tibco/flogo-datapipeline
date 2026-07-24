@@ -58,9 +58,13 @@ type keyState struct {
 	earlyFired map[Window]int64 // last watermark a window early-fired at (lazy)
 }
 
-// New constructs an Operator. It validates the aggregate function names up front
-// so a bad config fails at build time rather than at first row.
+// New constructs an Operator. It validates the window spec and aggregate function
+// names up front so a bad config fails at build time rather than panicking on the
+// first row.
 func New(spec Spec, aggs []AggSpec, maxLatenessMs int64) (*Operator, error) {
+	if err := spec.validate(); err != nil {
+		return nil, err
+	}
 	for _, ag := range aggs {
 		if _, err := newAccumulator(ag.Fn); err != nil {
 			return nil, err

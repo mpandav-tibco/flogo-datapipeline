@@ -36,3 +36,33 @@ func TestOpenWindowCounter(t *testing.T) {
 		t.Errorf("session disjoint: OpenWindows=%d, want 2", sop.OpenWindows())
 	}
 }
+
+// TestNewValidatesSpec ensures the constructor rejects specs that would otherwise
+// panic (zero size → divide-by-zero) or explode (extreme sliding pane count).
+func TestNewValidatesSpec(t *testing.T) {
+	aggs := []AggSpec{{As: "n", Fn: "count"}}
+	cases := []struct {
+		name string
+		spec Spec
+		ok   bool
+	}{
+		{"tumbling size 0 rejected", Spec{Kind: Tumbling, SizeMs: 0}, false},
+		{"tumbling valid", Spec{Kind: Tumbling, SizeMs: 1000}, true},
+		{"sliding size 0 rejected", Spec{Kind: Sliding, SizeMs: 0, SlideMs: 100}, false},
+		{"sliding pane explosion rejected", Spec{Kind: Sliding, SizeMs: 3_600_000, SlideMs: 1}, false},
+		{"sliding valid", Spec{Kind: Sliding, SizeMs: 60000, SlideMs: 1000}, true},
+		{"session gap 0 rejected", Spec{Kind: Session, GapMs: 0}, false},
+		{"session valid", Spec{Kind: Session, GapMs: 500}, true},
+		{"global valid", Spec{Kind: Global}, true},
+		{"unknown kind rejected", Spec{Kind: "bogus", SizeMs: 1000}, false},
+	}
+	for _, c := range cases {
+		_, err := New(c.spec, aggs, 0)
+		if c.ok && err != nil {
+			t.Errorf("%s: unexpected error: %v", c.name, err)
+		}
+		if !c.ok && err == nil {
+			t.Errorf("%s: expected an error, got nil", c.name)
+		}
+	}
+}

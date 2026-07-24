@@ -7,6 +7,8 @@
 // All times are epoch milliseconds. Windows are half-open intervals [Start, End).
 package windowing
 
+import "fmt"
+
 // Kind enumerates the supported window shapes.
 type Kind string
 
@@ -25,6 +27,43 @@ const (
 // globalWindowEnd is the End of the single Global window — far enough in the
 // future that no watermark closes it before Flush.
 const globalWindowEnd int64 = 1 << 62
+
+// maxSlidingPanes caps sizeMs/slideMs, i.e. the number of windows a single record
+// is assigned to. Beyond this a sliding config is almost always a mistake (e.g. a
+// 1-hour window sliding every 1ms = 3.6M panes/record) that would exhaust memory.
+const maxSlidingPanes = 100_000
+
+// validate reports whether the spec is well-formed. It is enforced by New so the
+// core cannot panic (a zero SizeMs would divide by zero in assign) or explode
+// (an extreme sizeMs/slideMs ratio) regardless of the caller.
+func (s Spec) validate() error {
+	switch s.Kind {
+	case Tumbling:
+		if s.SizeMs <= 0 {
+			return fmt.Errorf("windowing: window.sizeMs must be > 0 for %s windows", s.Kind)
+		}
+	case Sliding:
+		if s.SizeMs <= 0 {
+			return fmt.Errorf("windowing: window.sizeMs must be > 0 for %s windows", s.Kind)
+		}
+		slide := s.SlideMs
+		if slide <= 0 {
+			slide = s.SizeMs
+		}
+		if s.SizeMs/slide > maxSlidingPanes {
+			return fmt.Errorf("windowing: sliding window sizeMs/slideMs = %d exceeds the %d-pane limit; increase slideMs or decrease sizeMs", s.SizeMs/slide, maxSlidingPanes)
+		}
+	case Session:
+		if s.GapMs <= 0 {
+			return fmt.Errorf("windowing: window.gapMs must be > 0 for session windows")
+		}
+	case Global:
+		// no size needed
+	default:
+		return fmt.Errorf("windowing: unknown window.kind %q (want tumbling|sliding|session|global)", s.Kind)
+	}
+	return nil
+}
 
 // Spec configures window assignment. Times are epoch milliseconds.
 type Spec struct {
