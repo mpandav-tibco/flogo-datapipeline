@@ -32,6 +32,12 @@ type Operator struct {
 	// currentWatermark is the highest watermark passed to Emit so far; windows at
 	// or below it are considered closed, and records for them are "late".
 	currentWatermark int64
+
+	// stateTtlMs, when > 0, bounds memory by dropping windows whose End falls more
+	// than stateTtlMs behind the max event time (a safety valve for high-churn keys
+	// and long-idle session windows). ttlEvicted counts such drops.
+	stateTtlMs int64
+	ttlEvicted int64
 }
 
 type keyState struct {
@@ -56,6 +62,13 @@ func New(spec Spec, aggs []AggSpec, maxLatenessMs int64) (*Operator, error) {
 	}, nil
 }
 
+// SetStateTTL sets the state time-to-live in millis (0 disables). Windows whose
+// End falls more than ttlMs behind the max event time are dropped on Emit.
+func (o *Operator) SetStateTTL(ttlMs int64) { o.stateTtlMs = ttlMs }
+
+// EvictedCount returns the number of windows dropped by the state-TTL sweep.
+func (o *Operator) EvictedCount() int64 { return o.ttlEvicted }
+
 // Add folds a row (identified by its groupBy key values and event time ts) into
 // the windows it belongs to. It returns late=true only when EVERY window the row
 // belongs to has already closed (End <= current watermark) — the caller may then
@@ -64,6 +77,10 @@ func (o *Operator) Add(keyVals []interface{}, ts int64, row map[string]interface
 	if !o.hasEvent || ts > o.maxEventTime {
 		o.maxEventTime = ts
 		o.hasEvent = true
+	}
+
+	if o.spec.Kind == Session {
+		return o.addSession(keyVals, ts, row)
 	}
 
 	windows := o.spec.assign(ts)
@@ -98,6 +115,61 @@ func (o *Operator) Add(keyVals []interface{}, ts int64, row map[string]interface
 	return late
 }
 
+// addSession folds a record into session windows, merging any existing windows for
+// the key that overlap (or are within GapMs of) the new record's provisional
+// window [ts, ts+gap). Merged accumulators combine the overlapping windows in
+// start order, then the new record is added — so first/last follow window start
+// order (best-effort for out-of-order arrivals).
+func (o *Operator) addSession(keyVals []interface{}, ts int64, row map[string]interface{}) (late bool) {
+	newStart, newEnd := ts, ts+o.spec.GapMs
+
+	ks := o.state[keyString(keyVals)]
+	if ks == nil {
+		ks = &keyState{keyVals: cloneVals(keyVals), windows: make(map[Window][]Accumulator)}
+		o.state[keyString(keyVals)] = ks
+	}
+
+	var overlap []Window
+	mergedStart, mergedEnd := newStart, newEnd
+	for w := range ks.windows {
+		if w.Start <= newEnd && w.End >= newStart { // overlapping or adjacent
+			overlap = append(overlap, w)
+			if w.Start < mergedStart {
+				mergedStart = w.Start
+			}
+			if w.End > mergedEnd {
+				mergedEnd = w.End
+			}
+		}
+	}
+
+	// A session entirely at/below the watermark has already fired — treat as late.
+	if mergedEnd <= o.currentWatermark {
+		return true
+	}
+
+	sort.Slice(overlap, func(i, j int) bool { return overlap[i].Start < overlap[j].Start })
+	accs := make([]Accumulator, len(o.aggs))
+	for i, ag := range o.aggs {
+		accs[i], _ = newAccumulator(ag.Fn)
+	}
+	for _, w := range overlap {
+		for i := range o.aggs {
+			accs[i].Merge(ks.windows[w][i])
+		}
+		delete(ks.windows, w)
+	}
+	for i, ag := range o.aggs {
+		if ag.Fn == "count" {
+			accs[i].Add(nil)
+			continue
+		}
+		accs[i].Add(row[ag.Column])
+	}
+	ks.windows[Window{Start: mergedStart, End: mergedEnd}] = accs
+	return false
+}
+
 // Watermark returns the current event-time watermark: the highest event time
 // seen minus the configured out-of-orderness allowance. Returns math.MinInt64
 // when no rows have been observed.
@@ -127,8 +199,30 @@ func (o *Operator) Emit(watermark int64) []Result {
 			delete(o.state, ks)
 		}
 	}
+	o.sweepTTL()
 	sortResults(out)
 	return out
+}
+
+// sweepTTL drops windows abandoned far behind the max event time, bounding memory
+// for high-churn keys and long-idle sessions. In normal operation the watermark
+// fires windows first, so this only catches pathological/very-late state.
+func (o *Operator) sweepTTL() {
+	if o.stateTtlMs <= 0 || !o.hasEvent {
+		return
+	}
+	cutoff := o.maxEventTime - o.stateTtlMs
+	for ks, st := range o.state {
+		for w := range st.windows {
+			if w.End <= cutoff {
+				delete(st.windows, w)
+				o.ttlEvicted++
+			}
+		}
+		if len(st.windows) == 0 {
+			delete(o.state, ks)
+		}
+	}
 }
 
 // Flush closes and returns ALL remaining windows regardless of watermark (the

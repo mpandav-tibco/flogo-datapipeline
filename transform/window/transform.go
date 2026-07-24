@@ -118,6 +118,9 @@ func newTransform(cfg map[string]interface{}) (transform.Transform, error) {
 	if err != nil {
 		return nil, fmt.Errorf("window transform: %w", err)
 	}
+	if ttl := asInt64(cfg["stateTtlMs"]); ttl > 0 {
+		op.SetStateTTL(ttl)
+	}
 
 	// --- groupBy ---
 	groupBy := asStringSlice(cfg["groupBy"])

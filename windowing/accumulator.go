@@ -14,6 +14,9 @@ type Accumulator interface {
 	Add(v interface{})
 	// Result returns the aggregated value (nil when no contributing value was seen).
 	Result() interface{}
+	// Merge folds another accumulator of the SAME concrete type into this one. Used
+	// to combine session windows that overlap and merge into a single session.
+	Merge(other Accumulator)
 }
 
 // AggSpec declares one output aggregation column.
@@ -162,7 +165,13 @@ func (a *firstAcc) Add(v interface{}) {
 }
 func (a *firstAcc) Result() interface{} { return a.val }
 
-type lastAcc struct{ val interface{} }
+type lastAcc struct {
+	val interface{}
+	set bool
+}
 
-func (a *lastAcc) Add(v interface{}) { a.val = v }
+func (a *lastAcc) Add(v interface{}) {
+	a.val = v
+	a.set = true
+}
 func (a *lastAcc) Result() interface{} { return a.val }
