@@ -204,7 +204,15 @@ func (h *consumerGroupHandler) ConsumeClaim(
 			h.reachedStop.Store(1)
 			return nil
 		}
-		h.msgCh <- msgEnvelope{session: session, msg: msg}
+		// Guard the send with the session context so a torn-down session (on
+		// shutdown, cancelCg → Consume ends the session) unblocks a send that
+		// would otherwise block forever on a full msgCh — which would hang Close's
+		// wait on cgDone. An abandoned message is simply re-read on the next run.
+		select {
+		case h.msgCh <- msgEnvelope{session: session, msg: msg}:
+		case <-session.Context().Done():
+			return nil
+		}
 		if h.autoMark {
 			session.MarkMessage(msg, "")
 		}
