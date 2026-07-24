@@ -220,6 +220,9 @@ func (o *Operator) addSession(keyVals []interface{}, ts int64, row map[string]in
 			accs[i].Merge(ks.windows[w][i])
 		}
 		delete(ks.windows, w)
+		if ks.earlyFired != nil {
+			delete(ks.earlyFired, w) // merged window is replaced; drop stale early-fire mark
+		}
 	}
 	for i, ag := range o.aggs {
 		if ag.Fn == "count" {
