@@ -61,7 +61,11 @@ func (o *Operator) Snapshot() ([]byte, error) {
 		HasEvent:     o.hasEvent,
 		Watermark:    o.currentWatermark,
 	}
-	for _, st := range o.state {
+	for _, key := range o.store.keys() {
+		st, ok := o.store.get(key)
+		if !ok {
+			continue
+		}
 		ks := keySnapshot{KeyVals: st.keyVals}
 		for w, accs := range st.windows {
 			ws := windowSnapshot{Start: w.Start, End: w.End, Accs: make([]accState, len(accs))}
@@ -88,7 +92,7 @@ func (o *Operator) Restore(data []byte) error {
 	o.maxEventTime = snap.MaxEventTime
 	o.hasEvent = snap.HasEvent
 	o.currentWatermark = snap.Watermark
-	o.state = make(map[string]*keyState, len(snap.Keys))
+	o.store.clear()
 	for _, ks := range snap.Keys {
 		st := &keyState{keyVals: ks.KeyVals, windows: make(map[Window][]Accumulator, len(ks.Windows))}
 		for _, ws := range ks.Windows {
@@ -109,7 +113,7 @@ func (o *Operator) Restore(data []byte) error {
 				st.earlyFired[w] = ws.EarlyFired
 			}
 		}
-		o.state[keyString(ks.KeyVals)] = st
+		o.store.put(keyString(ks.KeyVals), st)
 	}
 	return nil
 }

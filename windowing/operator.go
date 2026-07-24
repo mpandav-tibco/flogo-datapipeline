@@ -25,7 +25,7 @@ type Operator struct {
 	aggs          []AggSpec
 	maxLatenessMs int64
 
-	state map[string]*keyState
+	store stateStore
 
 	maxEventTime int64
 	hasEvent     bool
@@ -65,7 +65,7 @@ func New(spec Spec, aggs []AggSpec, maxLatenessMs int64) (*Operator, error) {
 		spec:             spec,
 		aggs:             aggs,
 		maxLatenessMs:    maxLatenessMs,
-		state:            make(map[string]*keyState),
+		store:            newMemStore(),
 		currentWatermark: math.MinInt64,
 	}, nil
 }
@@ -91,8 +91,10 @@ func (o *Operator) EvictedCount() int64 { return o.ttlEvicted }
 // key churn without a state TTL.
 func (o *Operator) OpenWindows() int {
 	n := 0
-	for _, st := range o.state {
-		n += len(st.windows)
+	for _, key := range o.store.keys() {
+		if st, ok := o.store.get(key); ok {
+			n += len(st.windows)
+		}
 	}
 	return n
 }
@@ -113,16 +115,20 @@ func (o *Operator) Add(keyVals []interface{}, ts int64, row map[string]interface
 
 	windows := o.spec.assign(ts)
 	late = true
+	key := keyString(keyVals)
+	var ks *keyState
 	for _, w := range windows {
 		if w.End <= o.currentWatermark {
 			continue // this window already fired — row is late for it
 		}
 		late = false
 
-		ks := o.state[keyString(keyVals)]
 		if ks == nil {
-			ks = &keyState{keyVals: cloneVals(keyVals), windows: make(map[Window][]Accumulator)}
-			o.state[keyString(keyVals)] = ks
+			if existing, ok := o.store.get(key); ok {
+				ks = existing
+			} else {
+				ks = &keyState{keyVals: cloneVals(keyVals), windows: make(map[Window][]Accumulator)}
+			}
 		}
 		accs := ks.windows[w]
 		if accs == nil {
@@ -140,6 +146,9 @@ func (o *Operator) Add(keyVals []interface{}, ts int64, row map[string]interface
 			accs[i].Add(row[ag.Column])
 		}
 	}
+	if ks != nil {
+		o.store.put(key, ks)
+	}
 	return late
 }
 
@@ -151,10 +160,10 @@ func (o *Operator) Add(keyVals []interface{}, ts int64, row map[string]interface
 func (o *Operator) addSession(keyVals []interface{}, ts int64, row map[string]interface{}) (late bool) {
 	newStart, newEnd := ts, ts+o.spec.GapMs
 
-	ks := o.state[keyString(keyVals)]
-	if ks == nil {
+	key := keyString(keyVals)
+	ks, ok := o.store.get(key)
+	if !ok {
 		ks = &keyState{keyVals: cloneVals(keyVals), windows: make(map[Window][]Accumulator)}
-		o.state[keyString(keyVals)] = ks
 	}
 
 	var overlap []Window
@@ -195,6 +204,7 @@ func (o *Operator) addSession(keyVals []interface{}, ts int64, row map[string]in
 		accs[i].Add(row[ag.Column])
 	}
 	ks.windows[Window{Start: mergedStart, End: mergedEnd}] = accs
+	o.store.put(key, ks)
 	return false
 }
 
@@ -218,7 +228,11 @@ func (o *Operator) Emit(watermark int64) []Result {
 		o.currentWatermark = watermark
 	}
 	var out []Result
-	for ks, st := range o.state {
+	for _, key := range o.store.keys() {
+		st, ok := o.store.get(key)
+		if !ok {
+			continue
+		}
 		for w, accs := range st.windows {
 			if w.End <= watermark {
 				// final firing
@@ -254,7 +268,9 @@ func (o *Operator) Emit(watermark int64) []Result {
 			}
 		}
 		if len(st.windows) == 0 {
-			delete(o.state, ks)
+			o.store.remove(key)
+		} else {
+			o.store.put(key, st)
 		}
 	}
 	o.sweepTTL()
@@ -270,7 +286,12 @@ func (o *Operator) sweepTTL() {
 		return
 	}
 	cutoff := o.maxEventTime - o.stateTtlMs
-	for ks, st := range o.state {
+	for _, key := range o.store.keys() {
+		st, ok := o.store.get(key)
+		if !ok {
+			continue
+		}
+		changed := false
 		for w := range st.windows {
 			if w.End <= cutoff {
 				delete(st.windows, w)
@@ -278,10 +299,13 @@ func (o *Operator) sweepTTL() {
 					delete(st.earlyFired, w)
 				}
 				o.ttlEvicted++
+				changed = true
 			}
 		}
 		if len(st.windows) == 0 {
-			delete(o.state, ks)
+			o.store.remove(key)
+		} else if changed {
+			o.store.put(key, st)
 		}
 	}
 }
@@ -290,12 +314,16 @@ func (o *Operator) sweepTTL() {
 // end-of-input path for bounded sources), clearing state.
 func (o *Operator) Flush() []Result {
 	var out []Result
-	for _, st := range o.state {
+	for _, key := range o.store.keys() {
+		st, ok := o.store.get(key)
+		if !ok {
+			continue
+		}
 		for w, accs := range st.windows {
 			out = append(out, o.buildResult(st.keyVals, w, accs))
 		}
 	}
-	o.state = make(map[string]*keyState)
+	o.store.clear()
 	sortResults(out)
 	return out
 }
