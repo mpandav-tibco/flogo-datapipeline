@@ -2300,6 +2300,29 @@ function renderWindowEditor(node: Node): HTMLElement {
   wrap.appendChild(inpF('Allowed lateness (ms)', t.watermark.maxLatenessMs, '0', (v) => { t.watermark.strategy = 'boundedOutOfOrderness'; t.watermark.maxLatenessMs = Number(v) || 0; persist(); }, 'Out-of-order tolerance before a window fires'));
   wrap.appendChild(inpF('State TTL (ms)', t.stateTtlMs, 'optional', (v) => { if (v === '') delete t.stateTtlMs; else t.stateTtlMs = Number(v) || 0; persist(); }, 'Drop abandoned window state older than this (bounds memory)'));
 
+  // Spillable state — bound memory for high-cardinality key spaces by paging
+  // colder keys to disk (state.maxResidentKeys / state.spillDir).
+  const stateCfg = t.state || {};
+  wrap.appendChild(inpF('Max resident keys (spill)', stateCfg.maxResidentKeys, 'optional', (v) => {
+    if (v === '') { if (t.state) { delete t.state.maxResidentKeys; if (!t.state.spillDir) delete t.state; } }
+    else { t.state = t.state || {}; t.state.maxResidentKeys = Number(v) || 0; }
+    persist(); renderEditor();
+  }, 'Keep at most N keys in memory; page the rest to disk. Blank = all in memory'));
+  if (stateCfg.maxResidentKeys) wrap.appendChild(inpF('Spill directory', stateCfg.spillDir, 'optional (OS temp)', (v) => {
+    if (v === '') { if (t.state) delete t.state.spillDir; }
+    else { t.state = t.state || {}; t.state.spillDir = v; }
+    persist();
+  }, 'Directory for paged-out state files'));
+
+  // Trigger (early firing) + accumulation mode.
+  const trig = t.trigger || {};
+  wrap.appendChild(inpF('Early firing every (ms)', trig.earlyEveryMs, 'optional', (v) => {
+    if (v === '') { if (t.trigger) { delete t.trigger.earlyEveryMs; if (!Object.keys(t.trigger).length) delete t.trigger; } }
+    else { t.trigger = t.trigger || {}; t.trigger.earlyEveryMs = Number(v) || 0; }
+    persist(); renderEditor();
+  }, 'Emit partial results before a window closes (blank = only on close)'));
+  if (trig.earlyEveryMs) wrap.appendChild(selF('Accumulation', t.accumulation || 'discarding', ['discarding', 'accumulating'], (v) => { t.accumulation = v; persist(); }, 'accumulating = running totals; discarding = deltas since last firing'));
+
   // Group by
   const gbF = el('div', 'fld');
   gbF.appendChild(el('div', 'k', 'Group by (aggregation keys)'));
@@ -2357,7 +2380,53 @@ function renderWindowEditor(node: Node): HTMLElement {
   aggF.appendChild(cards);
   wrap.appendChild(aggF);
 
-  wrap.appendChild(selF('On late record', t.onLate || 'drop', ['drop', 'route'], (v) => { t.onLate = v; persist(); }, 'route → DLQ (drop discards late rows)'));
+  wrap.appendChild(selF('On late record', t.onLate || 'drop', ['drop', 'route'], (v) => { t.onLate = v; persist(); renderEditor(); }, 'route → error sink (drop discards late rows)'));
+  if (t.onLate === 'route') {
+    wrap.appendChild(selF('Late sink type', t.errorSinkType || 'jsonlines', ['jsonlines', 'csv', 'kafka', 'null'], (v) => { t.errorSinkType = v; persist(); }, 'Where late rows are routed'));
+    const esc = t.errorSinkConfig || {};
+    wrap.appendChild(inpF('Late sink path', esc.path, 'e.g. ./out/late.jsonl', (v) => { t.errorSinkConfig = t.errorSinkConfig || {}; if (v === '') delete t.errorSinkConfig.path; else t.errorSinkConfig.path = v; persist(); }, 'File path (file sinks) — or broker/topic for kafka'));
+  }
+
+  return wrap;
+}
+
+// Structured editor for the `join` transform: match keys, join type, and the
+// right-side reference source (loaded once into a keyed table).
+function renderJoinEditor(node: Node): HTMLElement {
+  const wrap = el('div');
+  const t: any = cfgTarget(node);
+  t.right = t.right || { type: 'csv' };
+  const colNames = upstreamSchema(node).map((c) => c.name);
+  const persist = () => persistAndRebuild();
+  const hintEl = (h: string) => el('div', 'muted', `<div style="font-size:11px;padding:2px 0 6px">${h}</div>`);
+  const inpF = (label: string, value: any, ph: string, onChange: (v: string) => void, hint?: string) => {
+    const f = el('div', 'fld'); f.appendChild(el('div', 'k', label));
+    const i = el('input', 'v') as HTMLInputElement; i.placeholder = ph; i.value = value != null ? String(value) : '';
+    i.onchange = () => onChange(i.value.trim()); f.appendChild(i);
+    if (hint) f.appendChild(hintEl(hint)); return f;
+  };
+  const selF = (label: string, value: string, opts: string[], onChange: (v: string) => void, hint?: string) => {
+    const f = el('div', 'fld'); f.appendChild(el('div', 'k', label));
+    const s = el('select', 'v') as HTMLSelectElement;
+    const list = (opts.includes(value) || !value) ? opts : [value, ...opts];
+    list.forEach((o) => { const op = document.createElement('option'); op.value = o; op.textContent = o || '(select)'; if (o === value) op.selected = true; s.appendChild(op); });
+    s.onchange = () => onChange(s.value); f.appendChild(s);
+    if (hint) f.appendChild(hintEl(hint)); return f;
+  };
+
+  if (colNames.length) {
+    wrap.appendChild(selF('Left key (stream column)', t.leftKey || '', ['', ...colNames], (v) => { if (v) t.leftKey = v; else delete t.leftKey; persist(); }, 'Column in the incoming stream to match on'));
+  } else {
+    wrap.appendChild(inpF('Left key (stream column)', t.leftKey, 'e.g. customerId', (v) => { if (v) t.leftKey = v; else delete t.leftKey; persist(); }, 'Column in the incoming stream to match on'));
+  }
+  wrap.appendChild(inpF('Right key (reference column)', t.rightKey, 'default: same as left key', (v) => { if (v === '') delete t.rightKey; else t.rightKey = v; persist(); }, 'Join column in the reference source'));
+  wrap.appendChild(selF('Join type', t.joinType || 'inner', ['inner', 'left'], (v) => { t.joinType = v; persist(); }, 'inner drops unmatched rows; left keeps them with null right columns'));
+  wrap.appendChild(inpF('Right column prefix', t.prefix, 'optional, e.g. cust_', (v) => { if (v === '') delete t.prefix; else t.prefix = v; persist(); }, 'Prefix added to imported right columns (avoid name clashes)'));
+  wrap.appendChild(inpF('Right columns', Array.isArray(t.rightColumns) ? t.rightColumns.join(', ') : '', 'default: all but the key', (v) => { const a = v.split(',').map((s) => s.trim()).filter(Boolean); if (a.length) t.rightColumns = a; else delete t.rightColumns; persist(); }, 'Comma-separated right columns to add'));
+
+  wrap.appendChild(el('div', 'k', 'Reference source (right side)'));
+  wrap.appendChild(selF('Type', t.right.type || 'csv', ['csv', 'tsv', 'jsonlines', 'parquet', 'jdbc'], (v) => { t.right.type = v; persist(); }, 'A bounded source loaded once into a keyed table'));
+  wrap.appendChild(inpF('Path / location', t.right.path, 'e.g. customers.csv', (v) => { if (v === '') delete t.right.path; else t.right.path = v; persist(); }, 'File path (file sources) — or use a connection for jdbc'));
 
   return wrap;
 }
@@ -2712,6 +2781,8 @@ function renderCanvas(m: HTMLElement) {
     // DSNs/secrets can be bound by name instead of typed into the file.
     if (sn.type === 'window') {
       ib.appendChild(renderWindowEditor(sn));
+    } else if (sn.type === 'join') {
+      ib.appendChild(renderJoinEditor(sn));
     } else {
       const connSel = renderConnectionSelector(sn);
       if (connSel) ib.appendChild(connSel);
@@ -2845,6 +2916,14 @@ function schemaForNode(node: Node): Array<{ name: string; type: string; derived?
     if (t.type === 'parse') {
       parseProducedColumns(t).forEach((n) => {
         if (!cols.some((c) => c.name === n)) cols.push({ name: n, type: 'derived', derived: true });
+      });
+    }
+    if (t.type === 'join' && Array.isArray(t.rightColumns)) {
+      // join APPENDS the selected right columns (optionally prefixed).
+      const pfx = typeof t.prefix === 'string' ? t.prefix : '';
+      t.rightColumns.forEach((f: any) => {
+        const name = pfx + String(f);
+        if (!cols.some((c) => c.name === name)) cols.push({ name, type: 'derived', derived: true });
       });
     }
   }
@@ -3423,6 +3502,10 @@ const TRANSFORMS: Array<{ type: string; label: string; cfg: Record<string, unkno
   {
     type: 'window', label: 'Window — event-time aggregation (tumbling/sliding/session)',
     cfg: { window: { kind: 'tumbling', sizeMs: 60000 }, eventTime: { column: 'ts', format: 'RFC3339' }, groupBy: [], aggregations: [{ as: 'n', fn: 'count' }], watermark: { strategy: 'boundedOutOfOrderness', maxLatenessMs: 0 } }
+  },
+  {
+    type: 'join', label: 'Join — keyed join against a reference source (stream-table)',
+    cfg: { leftKey: 'id', rightKey: 'id', joinType: 'inner', right: { type: 'csv', path: 'reference.csv', hasHeader: true } }
   },
 ];
 

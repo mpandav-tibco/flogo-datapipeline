@@ -393,5 +393,7 @@ watermark and the restored window fired with the **exact pre‑crash aggregate**
   + prefix). Composes with `window` for a **windowed keyed join** (join to enrich →
   window + aggregate). A true stream‑stream *temporal* join (two live streams)
   remains a follow‑up — it needs dual‑source pipeline support.
-- [ ] **Phase 4 (remaining)** — Studio config for triggers / accumulation /
-  late‑route sink.
+- [x] **Phase 4 Studio config** — window editor gains trigger (early firing),
+  accumulation, spillable‑state, and late‑route‑sink controls; a new `join` node
+  with a keys / join‑type / reference‑source editor; JSON‑schema autocomplete for
+  the `join` transform and Kafka `commitMode`.

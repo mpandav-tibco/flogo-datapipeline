@@ -127,6 +127,15 @@
           ],
           "default": "earliest"
         },
+        "commitMode": {
+          "type": "string",
+          "description": "Kafka offset commit mode (kafka source): \"auto\" (sarama auto-commit, default) or \"checkpoint\" (commit offsets only after the pipeline checkpoint token is durable — no lost messages on resume).",
+          "enum": [
+            "auto",
+            "checkpoint"
+          ],
+          "default": "auto"
+        },
         "bucket": {
           "type": "string",
           "description": "Object store bucket name (objstore source)."
@@ -177,7 +186,8 @@
               "schemadrift",
               "dq",
               "parse",
-              "window"
+              "window",
+              "join"
             ]
           },
           "id": {
