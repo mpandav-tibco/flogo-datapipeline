@@ -479,6 +479,15 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 			}
 			out.RowsProcessed += token.RowsProcessed
 		}
+		// Restore window operator state captured at the same offset as the token so
+		// open windows and their aggregations resume in sync with the source cursor.
+		if token != nil && len(token.WindowState) > 0 && winOp != nil {
+			if rErr := winOp.Restore(token.WindowState); rErr != nil {
+				runLog.Warnf("window state restore failed (starting fresh): %v", rErr)
+			} else {
+				runLog.Infof("resuming %q — restored window state (%d bytes)", ckptKey, len(token.WindowState))
+			}
+		}
 
 		var rowsSinceCkpt int64
 		lastCkpt := time.Now()
@@ -590,7 +599,7 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 					if err := snk.Flush(); err != nil {
 						return fmt.Errorf("sink flush (checkpoint): %w", err)
 					}
-					saveCheckpoint(runLog, ckpt, ckptKey, def.Source.Type, out.RowsProcessed, pSrc)
+					saveCheckpoint(runLog, ckpt, ckptKey, def.Source.Type, out.RowsProcessed, pSrc, winOp)
 					a.recorder.CheckpointSaved(a.ref)
 					saveWatermark(runLog, wmStore, hwmProvider, def, a.ref)
 					// Surface the checkpoint so operators can see progress being
@@ -835,7 +844,7 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 	if def.Checkpoint.DeleteOnSuccess {
 		_ = ckpt.Delete(runID)
 	} else {
-		saveCheckpoint(runLog, ckpt, runID, def.Source.Type, out.RowsProcessed, src)
+		saveCheckpoint(runLog, ckpt, runID, def.Source.Type, out.RowsProcessed, src, winOp)
 		a.recorder.CheckpointSaved(a.ref)
 	}
 
@@ -932,12 +941,21 @@ func openCheckpoint(def *Definition) (checkpoint.Checkpoint, error) {
 	return checkpoint.New(cd.Type, cfg)
 }
 
-func saveCheckpoint(runLog corelog.Logger, ckpt checkpoint.Checkpoint, runID, format string, rowsProcessed int64, src source.Source) {
+func saveCheckpoint(runLog corelog.Logger, ckpt checkpoint.Checkpoint, runID, format string, rowsProcessed int64, src source.Source, winOp wintransform.WindowedOperator) {
 	var cp checkpoint.CursorProvider
 	if p, ok := src.(checkpoint.CursorProvider); ok {
 		cp = p
 	}
 	t := checkpoint.NewToken(format, rowsProcessed, cp)
+	// Attach a window-state snapshot (if this pipeline has a window transform) so
+	// it is persisted atomically with the source cursor and replayed on resume.
+	if winOp != nil {
+		if snap, err := winOp.Snapshot(); err != nil {
+			runLog.Warnf("window snapshot failed (checkpoint without window state): %v", err)
+		} else {
+			t.WindowState = snap
+		}
+	}
 	if err := ckpt.Save(runID, t); err != nil {
 		runLog.Warnf("checkpoint save failed (continuing): %v", err)
 	}
