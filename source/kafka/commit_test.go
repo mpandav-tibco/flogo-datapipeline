@@ -53,3 +53,26 @@ func TestCommitWithoutSessionIsNoOp(t *testing.T) {
 		t.Errorf("Commit with no session should be nil, got %v", err)
 	}
 }
+
+// TestPollTimeoutMsAlias verifies the poll window is read from the documented
+// "pollTimeoutMs" key (and the "pollMs" alias), defaulting to 500.
+func TestPollTimeoutMsAlias(t *testing.T) {
+	base := map[string]interface{}{"brokers": "localhost:9092", "topic": "t", "groupId": "g"}
+	for _, key := range []string{"pollTimeoutMs", "pollMs"} {
+		cfg := map[string]interface{}{"brokers": "localhost:9092", "topic": "t", "groupId": "g", key: float64(1234)}
+		kc, err := parseSourceConfig(cfg)
+		if err != nil {
+			t.Fatalf("%s: parse: %v", key, err)
+		}
+		if kc.pollMs != 1234 {
+			t.Errorf("%s: pollMs = %d, want 1234", key, kc.pollMs)
+		}
+	}
+	kc, err := parseSourceConfig(base)
+	if err != nil {
+		t.Fatalf("default: parse: %v", err)
+	}
+	if kc.pollMs != 500 {
+		t.Errorf("default pollMs = %d, want 500", kc.pollMs)
+	}
+}

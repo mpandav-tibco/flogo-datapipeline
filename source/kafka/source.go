@@ -12,7 +12,7 @@
 //	topic             string    Kafka topic to consume (required)
 //	groupId           string    Consumer group ID (required)
 //	startOffset       string    "earliest" | "latest" | int64 string (default "latest")
-//	pollMs            int       Poll window in milliseconds (default 500)
+//	pollTimeoutMs     int       Poll window in milliseconds (alias: pollMs; default 500)
 //	deserializer      string    "json" | "avro" | "raw" (default "json")
 //	schemaRegistryURL string    Confluent Schema Registry URL (avro only)
 //	mode              string    "streaming" | "batch" (default "streaming")
@@ -970,10 +970,16 @@ func parseSourceConfig(cfg map[string]interface{}) (*kafkaSourceConfig, error) {
 		kc.startOffset = int64(v)
 	}
 
-	if ms, ok := cfg["pollMs"].(int); ok && ms > 0 {
-		kc.pollMs = ms
-	} else if ms, ok := cfg["pollMs"].(float64); ok && ms > 0 {
-		kc.pollMs = int(ms)
+	// Poll window: accept "pollTimeoutMs" (the user-facing key in the docs and
+	// examples) with "pollMs" as an alias. Whichever is present and > 0 wins.
+	for _, k := range []string{"pollTimeoutMs", "pollMs"} {
+		if ms, ok := cfg[k].(int); ok && ms > 0 {
+			kc.pollMs = ms
+			break
+		} else if ms, ok := cfg[k].(float64); ok && ms > 0 {
+			kc.pollMs = int(ms)
+			break
+		}
 	}
 
 	if d, ok := cfg["deserializer"].(string); ok && d != "" {
