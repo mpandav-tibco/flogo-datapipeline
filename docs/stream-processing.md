@@ -388,5 +388,10 @@ watermark and the restored window fired with the **exact pre‑crash aggregate**
   records the per‑partition offset cursor in the token atomically with window
   state (`source.Committer` + `Cursor`); default `auto` is unchanged.
 - [ ] **Phase 3 (remaining)** — bit‑exact seek‑to‑token‑offset on resume.
-- [ ] **Phase 4 (remaining)** — windowed keyed JOIN;
-  Studio config for triggers / accumulation / late‑route sink.
+- [x] **Phase 4 keyed JOIN** — `join` transform: keyed stream‑table join against a
+  source‑loaded reference table (inner/left, many‑to‑many, right‑column selection
+  + prefix). Composes with `window` for a **windowed keyed join** (join to enrich →
+  window + aggregate). A true stream‑stream *temporal* join (two live streams)
+  remains a follow‑up — it needs dual‑source pipeline support.
+- [ ] **Phase 4 (remaining)** — Studio config for triggers / accumulation /
+  late‑route sink.

@@ -106,6 +106,7 @@ import (
 	// Additional transforms (gap-08)
 	_ "github.com/mpandav-tibco/flogo-datapipeline/transform/dq"          // Data-quality expectations with pass-rate thresholds
 	_ "github.com/mpandav-tibco/flogo-datapipeline/transform/hwm"         // High-water-mark observer (pure passthrough)
+	_ "github.com/mpandav-tibco/flogo-datapipeline/transform/join"        // Keyed join against a source-loaded reference table (stream-table)
 	_ "github.com/mpandav-tibco/flogo-datapipeline/transform/lookup"      // Enrichment via LRU-cached flow/HTTP call
 	_ "github.com/mpandav-tibco/flogo-datapipeline/transform/parse"       // Structure a text field into columns (regex/JSON) — Fluent Bit parser equivalent
 	_ "github.com/mpandav-tibco/flogo-datapipeline/transform/schemadrift" // Schema-drift detection and remediation
