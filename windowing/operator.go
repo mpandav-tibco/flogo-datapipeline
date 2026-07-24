@@ -69,6 +69,17 @@ func (o *Operator) SetStateTTL(ttlMs int64) { o.stateTtlMs = ttlMs }
 // EvictedCount returns the number of windows dropped by the state-TTL sweep.
 func (o *Operator) EvictedCount() int64 { return o.ttlEvicted }
 
+// OpenWindows returns the number of windows currently held in state (not yet
+// closed). Useful for observability — an ever-growing count on a stream signals
+// key churn without a state TTL.
+func (o *Operator) OpenWindows() int {
+	n := 0
+	for _, st := range o.state {
+		n += len(st.windows)
+	}
+	return n
+}
+
 // Add folds a row (identified by its groupBy key values and event time ts) into
 // the windows it belongs to. It returns late=true only when EVERY window the row
 // belongs to has already closed (End <= current watermark) — the caller may then

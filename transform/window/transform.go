@@ -30,6 +30,7 @@ import (
 	corelog "github.com/project-flogo/core/support/log"
 
 	"github.com/mpandav-tibco/flogo-datapipeline/record"
+	"github.com/mpandav-tibco/flogo-datapipeline/sink"
 	"github.com/mpandav-tibco/flogo-datapipeline/transform"
 	"github.com/mpandav-tibco/flogo-datapipeline/windowing"
 )
@@ -43,6 +44,8 @@ type WindowedOperator interface {
 	Flush() (*record.RecordBatch, error)
 	// LateCount reports how many records arrived after their window had closed.
 	LateCount() int64
+	// Stats returns window-operator counters for observability.
+	Stats() Stats
 }
 
 func init() {
@@ -50,16 +53,18 @@ func init() {
 }
 
 type windowTransform struct {
-	op       *windowing.Operator
-	groupBy  []string
-	aggs     []windowing.AggSpec
-	eventCol string // "" → processing time
-	layout   string // Go time layout for string event-time columns
-	epochMillis bool // event-time column holds epoch-millis (numeric or numeric-string)
-	onLate   string // drop (default)
+	op          *windowing.Operator
+	groupBy     []string
+	aggs        []windowing.AggSpec
+	eventCol    string // "" → processing time
+	layout      string // Go time layout for string event-time columns
+	epochMillis bool   // event-time column holds epoch-millis (numeric or numeric-string)
+	onLate      string // drop (default) | route
+	lateSink    sink.Sink // non-nil when onLate=route
 
-	outCols   []record.Column
-	lateCount int64
+	outCols        []record.Column
+	lateCount      int64
+	windowsEmitted int64
 }
 
 func newTransform(cfg map[string]interface{}) (transform.Transform, error) {
@@ -158,6 +163,18 @@ func newTransform(cfg map[string]interface{}) (transform.Transform, error) {
 	if onLate == "" {
 		onLate = "drop"
 	}
+	var lateSink sink.Sink
+	if onLate == "route" {
+		st := asString(cfg["errorSinkType"])
+		if st == "" {
+			st = "null"
+		}
+		ls, err := sink.New(st, asMap(cfg["errorSinkConfig"]))
+		if err != nil {
+			return nil, fmt.Errorf("window transform: open late-route sink %q: %w", st, err)
+		}
+		lateSink = ls
+	}
 
 	// --- precompute the (static) output schema ---
 	outCols := make([]record.Column, 0, len(groupBy)+2+len(aggs))
@@ -174,7 +191,8 @@ func newTransform(cfg map[string]interface{}) (transform.Transform, error) {
 
 	return &windowTransform{
 		op: op, groupBy: groupBy, aggs: aggs,
-		eventCol: eventCol, layout: layout, epochMillis: epochMillis, onLate: onLate, outCols: outCols,
+		eventCol: eventCol, layout: layout, epochMillis: epochMillis, onLate: onLate,
+		lateSink: lateSink, outCols: outCols,
 	}, nil
 }
 
@@ -185,11 +203,13 @@ func (w *windowTransform) Name() string { return "window" }
 // the engine does not mis-count buffered rows as "dropped" — buffered rows are
 // held in window state and emitted on a later batch or at Flush.
 func (w *windowTransform) Apply(in *record.RecordBatch) (*record.RecordBatch, error) {
+	var lateBatch *record.RecordBatch // lazily built when onLate=route
 	for i := range in.Rows {
 		row := in.RowMap(i)
 		ts, err := w.eventMillis(row)
 		if err != nil {
-			w.lateCount++ // unparseable/absent event time: treat as unusable, drop
+			w.lateCount++ // unparseable/absent event time: treat as unusable
+			lateBatch = w.collectLate(lateBatch, in, i)
 			continue
 		}
 		keyVals := make([]interface{}, len(w.groupBy))
@@ -197,11 +217,34 @@ func (w *windowTransform) Apply(in *record.RecordBatch) (*record.RecordBatch, er
 			keyVals[j] = row[g]
 		}
 		if late := w.op.Add(keyVals, ts, row); late {
-			w.lateCount++ // onLate=drop: the row was not added to any open window
+			w.lateCount++ // the row's window had already closed
+			lateBatch = w.collectLate(lateBatch, in, i)
+		}
+	}
+	if lateBatch != nil && lateBatch.Len() > 0 {
+		err := w.lateSink.WriteBatch(lateBatch)
+		record.Put(lateBatch)
+		if err != nil {
+			return nil, fmt.Errorf("window: route late rows: %w", err)
 		}
 	}
 	results := w.op.Emit(w.op.Watermark())
 	return w.toBatch(results, true), nil
+}
+
+// collectLate appends input row i to a late-route batch (nil-safe, lazily
+// created). Returns b unchanged when no late sink is configured (onLate != route).
+func (w *windowTransform) collectLate(b *record.RecordBatch, in *record.RecordBatch, i int) *record.RecordBatch {
+	if w.lateSink == nil {
+		return b
+	}
+	if b == nil {
+		b = record.Get()
+		b.Columns = in.Columns
+		b.Rows = b.Rows[:0]
+	}
+	b.Rows = append(b.Rows, in.Rows[i])
+	return b
 }
 
 // Flush emits all remaining open windows (end-of-input).
@@ -212,7 +255,33 @@ func (w *windowTransform) Flush() (*record.RecordBatch, error) {
 // LateCount returns the number of records dropped for arriving after their window closed.
 func (w *windowTransform) LateCount() int64 { return w.lateCount }
 
-func (w *windowTransform) Close() error { return nil }
+// Stats is a snapshot of window-operator counters for observability.
+type Stats struct {
+	WindowsEmitted  int64
+	LateDropped     int64
+	StateEvicted    int64
+	OpenWindows     int64
+	WatermarkMillis int64
+}
+
+// Stats returns the current window-operator counters.
+func (w *windowTransform) Stats() Stats {
+	return Stats{
+		WindowsEmitted:  w.windowsEmitted,
+		LateDropped:     w.lateCount,
+		StateEvicted:    w.op.EvictedCount(),
+		OpenWindows:     int64(w.op.OpenWindows()),
+		WatermarkMillis: w.op.Watermark(),
+	}
+}
+
+func (w *windowTransform) Close() error {
+	if w.lateSink != nil {
+		_ = w.lateSink.Flush()
+		return w.lateSink.Close()
+	}
+	return nil
+}
 
 // toBatch materialises window results into a RecordBatch with the precomputed
 // schema. When emptyNonNil is true and there are no results, it returns an empty
@@ -227,6 +296,7 @@ func (w *windowTransform) toBatch(results []windowing.Result, emptyNonNil bool) 
 		b.Rows = b.Rows[:0]
 		return b
 	}
+	w.windowsEmitted += int64(len(results))
 	b := record.Get()
 	b.Columns = w.outCols
 	rows := make([][]interface{}, 0, len(results))

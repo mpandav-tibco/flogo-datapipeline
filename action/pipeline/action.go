@@ -802,8 +802,18 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 		if flushed != nil {
 			record.Put(flushed)
 		}
-		if lc := winOp.LateCount(); lc > 0 {
-			runLog.Infof("window: %d late record(s) dropped (onLate=drop)", lc)
+		st := winOp.Stats()
+		runLog.Infof("window stats — emitted=%d openAtEnd=%d lateDropped=%d evicted=%d watermark=%dms",
+			st.WindowsEmitted, st.OpenWindows, st.LateDropped, st.StateEvicted, st.WatermarkMillis)
+		if out.Metadata == nil {
+			out.Metadata = make(map[string]interface{})
+		}
+		out.Metadata["windowStats"] = map[string]interface{}{
+			"windowsEmitted":  st.WindowsEmitted,
+			"lateDropped":     st.LateDropped,
+			"stateEvicted":    st.StateEvicted,
+			"openWindows":     st.OpenWindows,
+			"watermarkMillis": st.WatermarkMillis,
 		}
 	}
 
