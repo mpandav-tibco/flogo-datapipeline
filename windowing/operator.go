@@ -86,6 +86,24 @@ func (o *Operator) SetTrigger(earlyEveryMs int64, accumulating bool) {
 // EvictedCount returns the number of windows dropped by the state-TTL sweep.
 func (o *Operator) EvictedCount() int64 { return o.ttlEvicted }
 
+// UseSpillableState swaps the default in-memory state store for a spillable one
+// that keeps at most maxResidentKeys keys in memory and pages colder keys to
+// disk under baseDir (empty = OS temp dir). This bounds heap for high-cardinality
+// key spaces at the cost of disk I/O on cold-key access. Call once, right after
+// New and before any rows are added.
+func (o *Operator) UseSpillableState(baseDir string, maxResidentKeys int) error {
+	ss, err := newSpillStore(o.aggs, maxResidentKeys, baseDir)
+	if err != nil {
+		return err
+	}
+	o.store = ss
+	return nil
+}
+
+// Close releases resources held by the state store (e.g. the spill directory).
+// A no-op for the default in-memory store.
+func (o *Operator) Close() error { return o.store.close() }
+
 // OpenWindows returns the number of windows currently held in state (not yet
 // closed). Useful for observability — an ever-growing count on a stream signals
 // key churn without a state TTL.

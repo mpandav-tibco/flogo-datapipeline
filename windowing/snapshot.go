@@ -66,20 +66,66 @@ func (o *Operator) Snapshot() ([]byte, error) {
 		if !ok {
 			continue
 		}
-		ks := keySnapshot{KeyVals: st.keyVals}
-		for w, accs := range st.windows {
-			ws := windowSnapshot{Start: w.Start, End: w.End, Accs: make([]accState, len(accs))}
-			for i, a := range accs {
-				ws.Accs[i] = a.snap()
-			}
-			if st.earlyFired != nil {
-				ws.EarlyFired = st.earlyFired[w]
-			}
-			ks.Windows = append(ks.Windows, ws)
-		}
-		snap.Keys = append(snap.Keys, ks)
+		snap.Keys = append(snap.Keys, keyStateToSnapshot(st))
 	}
 	return json.Marshal(snap)
+}
+
+// keyStateToSnapshot converts one live keyState into its serialisable form.
+// Shared by Snapshot and the spillable state store.
+func keyStateToSnapshot(st *keyState) keySnapshot {
+	ks := keySnapshot{KeyVals: st.keyVals}
+	for w, accs := range st.windows {
+		ws := windowSnapshot{Start: w.Start, End: w.End, Accs: make([]accState, len(accs))}
+		for i, a := range accs {
+			ws.Accs[i] = a.snap()
+		}
+		if st.earlyFired != nil {
+			ws.EarlyFired = st.earlyFired[w]
+		}
+		ks.Windows = append(ks.Windows, ws)
+	}
+	return ks
+}
+
+// keySnapshotToState rebuilds a keyState from its serialised form, constructing
+// fresh accumulators of the operator's aggregate types. Shared by Restore and
+// the spillable state store.
+func keySnapshotToState(ks keySnapshot, aggs []AggSpec) *keyState {
+	st := &keyState{keyVals: ks.KeyVals, windows: make(map[Window][]Accumulator, len(ks.Windows))}
+	for _, ws := range ks.Windows {
+		accs := make([]Accumulator, len(aggs))
+		for i, ag := range aggs {
+			acc, _ := newAccumulator(ag.Fn)
+			if i < len(ws.Accs) {
+				acc.load(ws.Accs[i])
+			}
+			accs[i] = acc
+		}
+		w := Window{Start: ws.Start, End: ws.End}
+		st.windows[w] = accs
+		if ws.EarlyFired != 0 {
+			if st.earlyFired == nil {
+				st.earlyFired = make(map[Window]int64)
+			}
+			st.earlyFired[w] = ws.EarlyFired
+		}
+	}
+	return st
+}
+
+// encodeKeyState / decodeKeyState serialise a single keyState for spill-to-disk,
+// reusing the same compact accumulator format as the operator snapshot.
+func encodeKeyState(st *keyState) ([]byte, error) {
+	return json.Marshal(keyStateToSnapshot(st))
+}
+
+func decodeKeyState(data []byte, aggs []AggSpec) (*keyState, error) {
+	var ks keySnapshot
+	if err := json.Unmarshal(data, &ks); err != nil {
+		return nil, err
+	}
+	return keySnapshotToState(ks, aggs), nil
 }
 
 // Restore rebuilds keyed window state from a Snapshot, replacing any existing
@@ -94,26 +140,7 @@ func (o *Operator) Restore(data []byte) error {
 	o.currentWatermark = snap.Watermark
 	o.store.clear()
 	for _, ks := range snap.Keys {
-		st := &keyState{keyVals: ks.KeyVals, windows: make(map[Window][]Accumulator, len(ks.Windows))}
-		for _, ws := range ks.Windows {
-			accs := make([]Accumulator, len(o.aggs))
-			for i, ag := range o.aggs {
-				acc, _ := newAccumulator(ag.Fn)
-				if i < len(ws.Accs) {
-					acc.load(ws.Accs[i])
-				}
-				accs[i] = acc
-			}
-			w := Window{Start: ws.Start, End: ws.End}
-			st.windows[w] = accs
-			if ws.EarlyFired != 0 {
-				if st.earlyFired == nil {
-					st.earlyFired = make(map[Window]int64)
-				}
-				st.earlyFired[w] = ws.EarlyFired
-			}
-		}
-		o.store.put(keyString(ks.KeyVals), st)
+		o.store.put(keyString(ks.KeyVals), keySnapshotToState(ks, o.aggs))
 	}
 	return nil
 }

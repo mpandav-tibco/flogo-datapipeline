@@ -373,7 +373,12 @@ watermark and the restored window fired with the **exact pre‑crash aggregate**
   produce split aggregates. Run windowed pipelines in `single` mode (or scale a
   Kafka source partitioned by the `groupBy` key, which is orthogonal to
   `scaling.mode`).
-- [ ] **Phase 3 (remaining)** — spillable high‑cardinality state backend;
-  transactional offset↔state resume.
+- [x] **Phase 3 spillable state** — bounded‑memory `stateStore`: keeps only
+  `state.maxResidentKeys` keys resident (LRU) and pages colder keys to per‑key
+  files under `state.spillDir` (default OS temp), so a single instance can
+  aggregate over high‑cardinality key spaces without OOMing. Emit scans page cold
+  keys transiently; only surviving (active) keys stay resident. Snapshot/Restore
+  span spilled keys, so durable resume is unaffected.
+- [ ] **Phase 3 (remaining)** — transactional offset↔state resume.
 - [ ] **Phase 4 (remaining)** — windowed keyed JOIN;
   Studio config for triggers / accumulation / late‑route sink.

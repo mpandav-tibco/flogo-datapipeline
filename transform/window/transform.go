@@ -141,6 +141,18 @@ func newTransform(cfg map[string]interface{}) (transform.Transform, error) {
 		op.SetTrigger(earlyMs, accumulating)
 	}
 
+	// spillable state: bound heap for high-cardinality key spaces by keeping only
+	// maxResidentKeys keys in memory and paging colder keys to disk under spillDir
+	// (default OS temp dir). Omit or set maxResidentKeys<=0 to keep all state in
+	// memory (the default).
+	if stcfg := asMap(cfg["state"]); stcfg != nil {
+		if maxKeys := asInt64(stcfg["maxResidentKeys"]); maxKeys > 0 {
+			if err := op.UseSpillableState(asString(stcfg["spillDir"]), int(maxKeys)); err != nil {
+				return nil, fmt.Errorf("window transform: spillable state: %w", err)
+			}
+		}
+	}
+
 	// --- groupBy ---
 	groupBy := asStringSlice(cfg["groupBy"])
 
@@ -294,11 +306,15 @@ func (w *windowTransform) Snapshot() ([]byte, error) { return w.op.Snapshot() }
 func (w *windowTransform) Restore(data []byte) error { return w.op.Restore(data) }
 
 func (w *windowTransform) Close() error {
+	var err error
 	if w.lateSink != nil {
 		_ = w.lateSink.Flush()
-		return w.lateSink.Close()
+		err = w.lateSink.Close()
 	}
-	return nil
+	if cerr := w.op.Close(); cerr != nil && err == nil {
+		err = cerr
+	}
+	return err
 }
 
 // toBatch materialises window results into a RecordBatch with the precomputed
