@@ -24,6 +24,7 @@ package window
 
 import (
 	"fmt"
+	"strconv"
 	"time"
 
 	corelog "github.com/project-flogo/core/support/log"
@@ -54,6 +55,7 @@ type windowTransform struct {
 	aggs     []windowing.AggSpec
 	eventCol string // "" → processing time
 	layout   string // Go time layout for string event-time columns
+	epochMillis bool // event-time column holds epoch-millis (numeric or numeric-string)
 	onLate   string // drop (default)
 
 	outCols   []record.Column
@@ -127,9 +129,15 @@ func newTransform(cfg map[string]interface{}) (transform.Transform, error) {
 
 	// --- event time ---
 	var eventCol, layout string
+	var epochMillis bool
 	if et := asMap(cfg["eventTime"]); et != nil {
 		eventCol = asString(et["column"])
-		layout = goLayout(asString(et["format"]))
+		f := asString(et["format"])
+		if f == "epochMillis" || f == "epoch" {
+			epochMillis = true
+		} else {
+			layout = goLayout(f)
+		}
 	}
 	if eventCol == "" {
 		corelog.RootLogger().Warnf("window transform: no eventTime.column configured — using processing time; late/out-of-order data will be mis-bucketed")
@@ -166,7 +174,7 @@ func newTransform(cfg map[string]interface{}) (transform.Transform, error) {
 
 	return &windowTransform{
 		op: op, groupBy: groupBy, aggs: aggs,
-		eventCol: eventCol, layout: layout, onLate: onLate, outCols: outCols,
+		eventCol: eventCol, layout: layout, epochMillis: epochMillis, onLate: onLate, outCols: outCols,
 	}, nil
 }
 
@@ -257,6 +265,13 @@ func (w *windowTransform) eventMillis(row map[string]interface{}) (int64, error)
 	case float32:
 		return int64(v), nil
 	case string:
+		if w.epochMillis {
+			ms, err := strconv.ParseInt(v, 10, 64)
+			if err != nil {
+				return 0, fmt.Errorf("parse eventTime %q as epoch millis: %w", v, err)
+			}
+			return ms, nil
+		}
 		t, err := time.Parse(w.layout, v)
 		if err != nil {
 			return 0, fmt.Errorf("parse eventTime %q with layout %q: %w", v, w.layout, err)

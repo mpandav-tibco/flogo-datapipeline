@@ -135,7 +135,7 @@
           "type": {
             "type": "string",
             "description": "Transform stage type.",
-            "enum": ["filter", "map", "mapper", "validate", "lookup", "hwm", "schemadrift", "dq"]
+            "enum": ["filter", "map", "mapper", "validate", "lookup", "hwm", "schemadrift", "dq", "parse", "window"]
           },
           "id": {
             "type": "string",

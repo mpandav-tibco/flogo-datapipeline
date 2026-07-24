@@ -29,7 +29,7 @@
 
     "transform-types": {
       "comment": "Known transform stage type values.",
-      "match": "\"(filter|map|mapper|validate|lookup|hwm|schemadrift|dq)\"",
+      "match": "\"(filter|map|mapper|validate|lookup|hwm|schemadrift|dq|parse|window)\"",
       "name": "support.type.transform.flogo-datapipeline"
     },
 

@@ -468,6 +468,7 @@ const TF_LABELS: Record<string, string> = {
   dq: 'Data Quality',
   schemadrift: 'Schema Drift',
   parse: 'Parse',
+  window: 'Window (aggregate)',
 };
 function transformLabel(t: string): string {
   return TF_LABELS[t] || t;
@@ -2246,6 +2247,121 @@ function renderFilterEditor(node: Node): HTMLElement {
 }
 
 // ── render root ───────────────────────────────────────────────────────────
+const WIN_KINDS = ['tumbling', 'sliding', 'session', 'global'];
+const AGG_FNS = ['sum', 'avg', 'min', 'max', 'count', 'first', 'last'];
+const TIME_FORMATS = ['RFC3339', 'RFC3339Nano', 'DateTime', 'DateOnly', 'epochMillis'];
+
+// Structured editor for the `window` transform: window kind + size, event-time
+// column/format, group-by keys, an aggregations builder, and watermark / lateness
+// / TTL controls. Reads and writes the transform object (nested config) directly.
+function renderWindowEditor(node: Node): HTMLElement {
+  const wrap = el('div');
+  const t: any = cfgTarget(node);
+  t.window = t.window || {};
+  t.eventTime = t.eventTime || {};
+  t.watermark = t.watermark || {};
+  if (!Array.isArray(t.groupBy)) t.groupBy = [];
+  if (!Array.isArray(t.aggregations)) t.aggregations = [];
+  const colNames = upstreamSchema(node).map((c) => c.name);
+  const persist = () => persistAndRebuild();
+  const hintEl = (h: string) => el('div', 'muted', `<div style="font-size:11px;padding:2px 0 6px">${h}</div>`);
+
+  const selF = (label: string, value: string, opts: string[], onChange: (v: string) => void, hint?: string) => {
+    const f = el('div', 'fld');
+    f.appendChild(el('div', 'k', label));
+    const s = el('select', 'v') as HTMLSelectElement;
+    const list = (opts.includes(value) || !value) ? opts : [value, ...opts];
+    list.forEach((o) => { const op = document.createElement('option'); op.value = o; op.textContent = o || '(processing time)'; if (o === value) op.selected = true; s.appendChild(op); });
+    s.onchange = () => onChange(s.value);
+    f.appendChild(s);
+    if (hint) f.appendChild(hintEl(hint));
+    return f;
+  };
+  const inpF = (label: string, value: any, ph: string, onChange: (v: string) => void, hint?: string) => {
+    const f = el('div', 'fld');
+    f.appendChild(el('div', 'k', label));
+    const i = el('input', 'v') as HTMLInputElement;
+    i.placeholder = ph; i.value = value != null ? String(value) : '';
+    i.onchange = () => onChange(i.value.trim());
+    f.appendChild(i);
+    if (hint) f.appendChild(hintEl(hint));
+    return f;
+  };
+
+  const kind = t.window.kind || 'tumbling';
+  wrap.appendChild(selF('Window type', kind, WIN_KINDS, (v) => { t.window.kind = v; persist(); renderEditor(); }));
+  if (kind === 'tumbling' || kind === 'sliding') wrap.appendChild(inpF('Window size (ms)', t.window.sizeMs, 'e.g. 60000', (v) => { t.window.sizeMs = Number(v) || 0; persist(); }, '60000 = 1 minute'));
+  if (kind === 'sliding') wrap.appendChild(inpF('Slide (ms)', t.window.slideMs, 'e.g. 30000', (v) => { t.window.slideMs = Number(v) || 0; persist(); }, 'How often a new window starts'));
+  if (kind === 'session') wrap.appendChild(inpF('Inactivity gap (ms)', t.window.gapMs, 'e.g. 300000', (v) => { t.window.gapMs = Number(v) || 0; persist(); }, 'Close a session after this idle gap'));
+
+  wrap.appendChild(selF('Event-time column', t.eventTime.column || '', colNames.length ? ['', ...colNames] : [''], (v) => { if (v) t.eventTime.column = v; else delete t.eventTime.column; persist(); renderEditor(); }, 'Blank = processing time (wall clock)'));
+  if (t.eventTime.column) wrap.appendChild(selF('Time format', t.eventTime.format || 'RFC3339', TIME_FORMATS, (v) => { t.eventTime.format = v; persist(); }, 'Numeric columns are treated as epoch millis'));
+
+  wrap.appendChild(inpF('Allowed lateness (ms)', t.watermark.maxLatenessMs, '0', (v) => { t.watermark.strategy = 'boundedOutOfOrderness'; t.watermark.maxLatenessMs = Number(v) || 0; persist(); }, 'Out-of-order tolerance before a window fires'));
+  wrap.appendChild(inpF('State TTL (ms)', t.stateTtlMs, 'optional', (v) => { if (v === '') delete t.stateTtlMs; else t.stateTtlMs = Number(v) || 0; persist(); }, 'Drop abandoned window state older than this (bounds memory)'));
+
+  // Group by
+  const gbF = el('div', 'fld');
+  gbF.appendChild(el('div', 'k', 'Group by (aggregation keys)'));
+  if (colNames.length) {
+    const box = el('div');
+    box.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px;padding:4px 0';
+    colNames.forEach((c) => {
+      const lab = document.createElement('label'); lab.style.cssText = 'display:inline-flex;align-items:center;gap:4px;font-size:12px';
+      const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = t.groupBy.includes(c);
+      cb.onchange = () => { if (cb.checked) { if (!t.groupBy.includes(c)) t.groupBy.push(c); } else t.groupBy = t.groupBy.filter((x: string) => x !== c); persist(); };
+      lab.appendChild(cb); lab.appendChild(document.createTextNode(c));
+      box.appendChild(lab);
+    });
+    gbF.appendChild(box);
+  } else {
+    const i = el('input', 'v') as HTMLInputElement; i.placeholder = 'comma-separated keys'; i.value = t.groupBy.join(', ');
+    i.onchange = () => { t.groupBy = i.value.split(',').map((s) => s.trim()).filter(Boolean); persist(); };
+    gbF.appendChild(i);
+  }
+  wrap.appendChild(gbF);
+
+  // Aggregations
+  const aggF = el('div', 'fld');
+  aggF.appendChild(el('div', 'k', 'Aggregations'));
+  const cards = el('div', 'rcards');
+  (t.aggregations as any[]).forEach((a, i) => {
+    const card = el('div', 'rcard');
+    const head = el('div', 'rhead');
+    const asI = el('input') as HTMLInputElement; asI.placeholder = 'output name'; asI.value = a.as || ''; asI.style.flex = '1'; asI.onchange = () => { a.as = asI.value.trim(); persist(); };
+    const fnS = el('select') as HTMLSelectElement; AGG_FNS.forEach((o) => { const op = document.createElement('option'); op.value = o; op.textContent = o; if (o === a.fn) op.selected = true; fnS.appendChild(op); }); fnS.onchange = () => { a.fn = fnS.value; persist(); renderEditor(); };
+    const del = el('span', 'del', '✕'); del.title = 'Remove'; del.onclick = () => { (t.aggregations as any[]).splice(i, 1); persist(); renderEditor(); };
+    head.appendChild(asI); head.appendChild(fnS); head.appendChild(del);
+    card.appendChild(head);
+    if (a.fn !== 'count') {
+      const row = el('div', 'rrow');
+      row.appendChild(el('label', undefined, 'Column'));
+      let col: HTMLSelectElement | HTMLInputElement;
+      if (colNames.length) {
+        const s = el('select') as HTMLSelectElement;
+        const opts = a.column && !colNames.includes(a.column) ? [a.column, ...colNames] : colNames;
+        opts.forEach((o) => { const op = document.createElement('option'); op.value = o; op.textContent = o; if (o === a.column) op.selected = true; s.appendChild(op); });
+        col = s;
+      } else {
+        const inp2 = el('input') as HTMLInputElement; inp2.placeholder = 'column'; inp2.value = a.column || '';
+        col = inp2;
+      }
+      col.onchange = () => { a.column = (col as HTMLInputElement).value; persist(); };
+      row.appendChild(col);
+      card.appendChild(row);
+    }
+    cards.appendChild(card);
+  });
+  const add = el('button', 'addcard', '＋ Add aggregation'); add.onclick = () => { (t.aggregations as any[]).push({ as: 'value', fn: 'count' }); persist(); renderEditor(); };
+  cards.appendChild(add);
+  aggF.appendChild(cards);
+  wrap.appendChild(aggF);
+
+  wrap.appendChild(selF('On late record', t.onLate || 'drop', ['drop', 'route'], (v) => { t.onLate = v; persist(); }, 'route → DLQ (drop discards late rows)'));
+
+  return wrap;
+}
+
 function renderAll() {
   renderTabs();
   renderEditor();
@@ -2594,6 +2710,9 @@ function renderCanvas(m: HTMLElement) {
     // and functions), like the Flogo mapper — instead of a raw JSON textarea.
     // A "Connection" picker is shown first for stages whose type uses one, so
     // DSNs/secrets can be bound by name instead of typed into the file.
+    if (sn.type === 'window') {
+      ib.appendChild(renderWindowEditor(sn));
+    } else {
     const connSel = renderConnectionSelector(sn);
     if (connSel) ib.appendChild(connSel);
     const fam = familyOfType(sn.type);
@@ -2667,6 +2786,7 @@ function renderCanvas(m: HTMLElement) {
     if (!Object.keys(sn.cfg).length && sn.kind !== 'source') {
       ib.appendChild(el('div', 'muted', '<div style="font-size:11.5px;padding:4px 0">No configuration for this stage yet.</div>'));
     }
+    }
 
     if (sn.kind === 'dlq') {
       const rm = el('button', 'btn sm', '✕ Remove DLQ');
@@ -2704,6 +2824,18 @@ function schemaForNode(node: Node): Array<{ name: string; type: string; derived?
     if (t.type === 'map' && t.fields && typeof t.fields === 'object') {
       // map replaces the projected set with its output fields
       cols = Object.keys(t.fields).map((k) => ({ name: k, type: 'derived', derived: true }));
+    }
+    if (t.type === 'window') {
+      // window replaces the schema with groupBy keys + window bounds + aggregates
+      const gb = Array.isArray(t.groupBy) ? t.groupBy : [];
+      const aggs = Array.isArray(t.aggregations) ? t.aggregations : [];
+      const em = t.emit || {};
+      cols = [
+        ...gb.map((g: any) => ({ name: String(g), type: 'string' })),
+        { name: String(em.windowStartAs || 'window_start'), type: 'int' },
+        { name: String(em.windowEndAs || 'window_end'), type: 'int' },
+        ...aggs.map((a: any) => ({ name: String(a.as), type: 'derived', derived: true })),
+      ];
     }
     // filter/validate/hwm/dq/schemadrift are passthrough for schema purposes.
     // lookup and parse APPEND columns to the existing set.
@@ -3272,6 +3404,8 @@ const TRANSFORMS: Array<{ type: string; label: string; cfg: Record<string, unkno
     cfg: { policy: 'additive', onDrift: 'log' } },
   { type: 'parse', label: 'Parse — structure a text field into columns (regex/JSON)',
     cfg: { source: 'message', mode: 'regex', pattern: '^(?P<level>\\w+)\\s+(?P<msg>.*)$', onError: 'keep', keepSource: true } },
+  { type: 'window', label: 'Window — event-time aggregation (tumbling/sliding/session)',
+    cfg: { window: { kind: 'tumbling', sizeMs: 60000 }, eventTime: { column: 'ts', format: 'RFC3339' }, groupBy: [], aggregations: [{ as: 'n', fn: 'count' }], watermark: { strategy: 'boundedOutOfOrderness', maxLatenessMs: 0 } } },
 ];
 
 // Compute the column names visible at a given transforms[] insert position,
