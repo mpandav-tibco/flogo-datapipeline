@@ -128,6 +128,15 @@ func newTransform(cfg map[string]interface{}) (transform.Transform, error) {
 	if ttl := asInt64(cfg["stateTtlMs"]); ttl > 0 {
 		op.SetStateTTL(ttl)
 	}
+	// trigger (early firing) + accumulation mode
+	accumulating := asString(cfg["accumulation"]) == "accumulating"
+	var earlyMs int64
+	if tr := asMap(cfg["trigger"]); tr != nil {
+		earlyMs = asInt64(tr["earlyEveryMs"])
+	}
+	if earlyMs > 0 || accumulating {
+		op.SetTrigger(earlyMs, accumulating)
+	}
 
 	// --- groupBy ---
 	groupBy := asStringSlice(cfg["groupBy"])

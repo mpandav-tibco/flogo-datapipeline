@@ -38,11 +38,19 @@ type Operator struct {
 	// and long-idle session windows). ttlEvicted counts such drops.
 	stateTtlMs int64
 	ttlEvicted int64
+
+	// earlyEveryMs, when > 0, emits partial results for still-open windows every
+	// earlyEveryMs of watermark (event-time) progress. accumulating selects whether
+	// each firing is the running total (accumulating) or the delta since the last
+	// firing (discarding — accumulators are reset after each early fire).
+	earlyEveryMs int64
+	accumulating bool
 }
 
 type keyState struct {
-	keyVals []interface{}
-	windows map[Window][]Accumulator
+	keyVals    []interface{}
+	windows    map[Window][]Accumulator
+	earlyFired map[Window]int64 // last watermark a window early-fired at (lazy)
 }
 
 // New constructs an Operator. It validates the aggregate function names up front
@@ -65,6 +73,15 @@ func New(spec Spec, aggs []AggSpec, maxLatenessMs int64) (*Operator, error) {
 // SetStateTTL sets the state time-to-live in millis (0 disables). Windows whose
 // End falls more than ttlMs behind the max event time are dropped on Emit.
 func (o *Operator) SetStateTTL(ttlMs int64) { o.stateTtlMs = ttlMs }
+
+// SetTrigger configures early firing: still-open windows emit a partial result
+// every earlyEveryMs of watermark progress (0 disables). accumulating=true emits
+// the running total each firing; false (discarding) emits the delta since the
+// previous firing.
+func (o *Operator) SetTrigger(earlyEveryMs int64, accumulating bool) {
+	o.earlyEveryMs = earlyEveryMs
+	o.accumulating = accumulating
+}
 
 // EvictedCount returns the number of windows dropped by the state-TTL sweep.
 func (o *Operator) EvictedCount() int64 { return o.ttlEvicted }
@@ -191,8 +208,10 @@ func (o *Operator) Watermark() int64 {
 	return o.maxEventTime - o.maxLatenessMs
 }
 
-// Emit closes and returns every window whose End <= watermark, removing them from
-// state (discarding accumulation: each window fires exactly once). Results are
+// Emit fires windows and returns their results. A window whose End <= watermark
+// fires finally and is removed. A still-open window fires early (a partial result)
+// when early triggers are enabled and the watermark has advanced earlyEveryMs past
+// its last firing; in discarding mode its accumulators are then reset. Results are
 // returned in deterministic order (window start, then key).
 func (o *Operator) Emit(watermark int64) []Result {
 	if watermark > o.currentWatermark {
@@ -202,8 +221,36 @@ func (o *Operator) Emit(watermark int64) []Result {
 	for ks, st := range o.state {
 		for w, accs := range st.windows {
 			if w.End <= watermark {
+				// final firing
 				out = append(out, o.buildResult(st.keyVals, w, accs))
 				delete(st.windows, w)
+				if st.earlyFired != nil {
+					delete(st.earlyFired, w)
+				}
+				continue
+			}
+			if o.earlyEveryMs <= 0 {
+				continue
+			}
+			// early firing on trigger cadence
+			last, ok := st.earlyFired[w]
+			if !ok {
+				last = w.Start
+			}
+			if watermark >= last+o.earlyEveryMs {
+				out = append(out, o.buildResult(st.keyVals, w, accs))
+				if st.earlyFired == nil {
+					st.earlyFired = make(map[Window]int64)
+				}
+				st.earlyFired[w] = watermark
+				if !o.accumulating {
+					// discarding: reset so the next pane is a delta
+					fresh := make([]Accumulator, len(o.aggs))
+					for i, ag := range o.aggs {
+						fresh[i], _ = newAccumulator(ag.Fn)
+					}
+					st.windows[w] = fresh
+				}
 			}
 		}
 		if len(st.windows) == 0 {
@@ -227,6 +274,9 @@ func (o *Operator) sweepTTL() {
 		for w := range st.windows {
 			if w.End <= cutoff {
 				delete(st.windows, w)
+				if st.earlyFired != nil {
+					delete(st.earlyFired, w)
+				}
 				o.ttlEvicted++
 			}
 		}
