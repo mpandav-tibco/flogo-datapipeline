@@ -1,0 +1,52 @@
+{
+  "name": "sensor-producer",
+  "type": "flogo:app",
+  "version": "1.0.0",
+  "appModel": "1.1.1",
+  "imports": [
+    "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+    "github.com/project-flogo/contrib/trigger/timer"
+  ],
+  "triggers": [
+    {
+      "id": "run-once",
+      "ref": "github.com/project-flogo/contrib/trigger/timer",
+      "settings": { "repeating": false, "startDelay": 0 },
+      "handlers": [
+        {
+          "settings": {},
+          "action": {
+            "ref": "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+            "settings": { "pipelineRef": "res://pipeline:sensor-producer" }
+          }
+        }
+      ]
+    }
+  ],
+  "resources": [
+    {
+      "id": "pipeline:sensor-producer",
+      "data": {
+        "name": "sensor-producer",
+        "description": "Publish the sensor CSV to the Kafka topic 'sensor-events' (one JSON message per row) so the windowed consumer has a live stream.",
+        "source": {
+          "type": "csv",
+          "path": "./data/sensor-events.csv",
+          "hasHeader": true,
+          "columns": [
+            { "name": "sensor", "type": "string" },
+            { "name": "ts", "type": "string" },
+            { "name": "temperature", "type": "float" }
+          ]
+        },
+        "sink": {
+          "type": "kafka",
+          "brokers": "localhost:9092",
+          "topic": "sensor-events",
+          "ackMode": "leader",
+          "serializer": "json"
+        }
+      }
+    }
+  ]
+}
