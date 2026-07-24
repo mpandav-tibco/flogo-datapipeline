@@ -367,7 +367,13 @@ watermark and the restored window fired with the **exact pre‑crash aggregate**
   window observability gauges (`flogo_pipeline_window_open`, `…_emitted_total`,
   `…_late_dropped_total`, `…_state_evicted_total`, `…_watermark_ms`) emitted through
   the configured metrics backend at each checkpoint and at end‑of‑run.
-- [ ] **Phase 3** — spillable high‑cardinality state backend; co‑partition sharding
-  validation at load; transactional offset↔state resume.
+- [x] **Phase 3 (partial)** — co‑partition guard: a keyed window (`groupBy`) is
+  rejected at load under `sharded`/`distributed` scaling, because the rowgroup/
+  file/byterange partition strategies split by position, not by key, and would
+  produce split aggregates. Run windowed pipelines in `single` mode (or scale a
+  Kafka source partitioned by the `groupBy` key, which is orthogonal to
+  `scaling.mode`).
+- [ ] **Phase 3 (remaining)** — spillable high‑cardinality state backend;
+  transactional offset↔state resume.
 - [ ] **Phase 4 (remaining)** — windowed keyed JOIN;
   Studio config for triggers / accumulation / late‑route sink.

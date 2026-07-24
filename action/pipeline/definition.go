@@ -467,6 +467,25 @@ func (d *Definition) validate() error {
 			return fmt.Errorf("pipeline definition: dlq.onFull must be 'block' or 'drop', got %q", d.DLQ.OnFull)
 		}
 	}
+	// Keyed windowed aggregation requires co-partitioned input: every record for
+	// a given groupBy key must reach the same instance. The rowgroup/file/
+	// byterange partition strategies used by sharded/distributed scaling split
+	// data by position, not by key, so per-instance windows would compute split
+	// (incorrect) aggregates for keys that span partitions. Reject the
+	// combination at load; the windowed stage must run in scaling.mode "single"
+	// (a Kafka source partitioned by the groupBy key scales natively via its
+	// consumer group, which is orthogonal to scaling.mode).
+	if d.Scaling.Mode == "sharded" || d.Scaling.Mode == "distributed" {
+		for i := range d.Transforms {
+			if d.Transforms[i].Type != "window" {
+				continue
+			}
+			if gb, ok := d.Transforms[i].Extra["groupBy"].([]interface{}); ok && len(gb) > 0 {
+				return fmt.Errorf("pipeline definition: a keyed window (groupBy) cannot run in scaling.mode %q — the %q partition strategy splits data by position, not by key, so per-instance windows would produce split aggregates; run the windowed pipeline in scaling.mode \"single\" or partition a Kafka source by the groupBy key",
+					d.Scaling.Mode, orDefault(d.Scaling.PartitionStrategy, "rowgroup"))
+			}
+		}
+	}
 	return nil
 }
 
