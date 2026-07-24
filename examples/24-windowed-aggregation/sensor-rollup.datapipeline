@@ -1,0 +1,60 @@
+{
+  "name": "sensor-rollup",
+  "type": "flogo:app",
+  "version": "1.0.0",
+  "appModel": "1.1.1",
+  "imports": [
+    "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+    "github.com/project-flogo/contrib/trigger/timer"
+  ],
+  "triggers": [
+    {
+      "id": "run-once",
+      "ref": "github.com/project-flogo/contrib/trigger/timer",
+      "settings": { "repeating": false, "startDelay": 0 },
+      "handlers": [
+        {
+          "settings": {},
+          "action": {
+            "ref": "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+            "settings": { "pipelineRef": "res://pipeline:sensor-rollup" }
+          }
+        }
+      ]
+    }
+  ],
+  "resources": [
+    {
+      "id": "pipeline:sensor-rollup",
+      "data": {
+        "name": "sensor-rollup",
+        "description": "Per-sensor 1-minute event-time rollup (avg/max/count) of temperature readings.",
+        "source": {
+          "type": "csv",
+          "path": "./data/sensor-events.csv",
+          "hasHeader": true,
+          "columns": [
+            { "name": "sensor", "type": "string" },
+            { "name": "ts", "type": "string" },
+            { "name": "temperature", "type": "float" }
+          ]
+        },
+        "transforms": [
+          {
+            "type": "window",
+            "eventTime": { "column": "ts", "format": "RFC3339" },
+            "watermark": { "strategy": "boundedOutOfOrderness", "maxLatenessMs": 0 },
+            "window": { "kind": "tumbling", "sizeMs": 60000 },
+            "groupBy": ["sensor"],
+            "aggregations": [
+              { "as": "avg_temp", "fn": "avg", "column": "temperature" },
+              { "as": "max_temp", "fn": "max", "column": "temperature" },
+              { "as": "n", "fn": "count" }
+            ]
+          }
+        ],
+        "sink": { "type": "jsonlines", "path": "./out/rollup.jsonl" }
+      }
+    }
+  ]
+}
