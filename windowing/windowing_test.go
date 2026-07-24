@@ -7,8 +7,8 @@ import (
 func TestTumblingAssign(t *testing.T) {
 	s := Spec{Kind: Tumbling, SizeMs: 1000}
 	cases := []struct {
-		ts          int64
-		start, end  int64
+		ts         int64
+		start, end int64
 	}{
 		{100, 0, 1000},
 		{999, 0, 1000},

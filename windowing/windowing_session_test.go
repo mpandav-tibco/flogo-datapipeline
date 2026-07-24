@@ -13,7 +13,7 @@ func TestOperatorSession(t *testing.T) {
 	}
 	// Two records within the 1s gap → one session [100,1500); a third far later → new session.
 	add(100, 1)
-	add(500, 2) // 500 within gap of [100,1100) → merges → [100,1500)
+	add(500, 2)  // 500 within gap of [100,1100) → merges → [100,1500)
 	add(2000, 3) // gap from 1500 → new session [2000,3000)
 
 	// Watermark (maxLateness 0) = 2000; session [100,1500) fires, [2000,3000) stays.
@@ -35,9 +35,9 @@ func TestOperatorSessionBridge(t *testing.T) {
 	// A record can bridge two existing sessions into one.
 	op, _ := New(Spec{Kind: Session, GapMs: 100},
 		[]AggSpec{{As: "n", Fn: "count"}}, 0)
-	op.Add([]interface{}{"A"}, 0, nil)    // [0,100)
-	op.Add([]interface{}{"A"}, 300, nil)  // [300,400)  (separate)
-	op.Add([]interface{}{"A"}, 150, nil)  // [150,250): bridges [0,100)? 150<=100? no. [300,400)? 250>=300? no → own session
+	op.Add([]interface{}{"A"}, 0, nil)   // [0,100)
+	op.Add([]interface{}{"A"}, 300, nil) // [300,400)  (separate)
+	op.Add([]interface{}{"A"}, 150, nil) // [150,250): bridges [0,100)? 150<=100? no. [300,400)? 250>=300? no → own session
 	// 150's window [150,250): overlaps [0,100)? 150<=100 false. overlaps [300,400)? 250>=300 false. So 3 sessions.
 	all := op.Flush()
 	if len(all) != 3 {

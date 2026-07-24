@@ -17,6 +17,9 @@ type Accumulator interface {
 	// Merge folds another accumulator of the SAME concrete type into this one. Used
 	// to combine session windows that overlap and merge into a single session.
 	Merge(other Accumulator)
+	// snap/load serialise the accumulator's internal state for durable snapshots.
+	snap() accState
+	load(s accState)
 }
 
 // AggSpec declares one output aggregation column.
@@ -149,7 +152,7 @@ func (a *maxAcc) Result() interface{} {
 // countAcc counts every row added (including nil values), matching SQL COUNT(*).
 type countAcc struct{ n int64 }
 
-func (a *countAcc) Add(interface{}) { a.n++ }
+func (a *countAcc) Add(interface{})     { a.n++ }
 func (a *countAcc) Result() interface{} { return a.n }
 
 type firstAcc struct {

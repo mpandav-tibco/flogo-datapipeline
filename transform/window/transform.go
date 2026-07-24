@@ -46,6 +46,9 @@ type WindowedOperator interface {
 	LateCount() int64
 	// Stats returns window-operator counters for observability.
 	Stats() Stats
+	// Snapshot/Restore persist and restore window state (durable streaming resume).
+	Snapshot() ([]byte, error)
+	Restore([]byte) error
 }
 
 func init() {
@@ -283,6 +286,12 @@ func (w *windowTransform) Stats() Stats {
 		WatermarkMillis: w.op.Watermark(),
 	}
 }
+
+// Snapshot serialises the window operator's keyed state for durable streaming resume.
+func (w *windowTransform) Snapshot() ([]byte, error) { return w.op.Snapshot() }
+
+// Restore restores window operator state from a Snapshot (same config assumed).
+func (w *windowTransform) Restore(data []byte) error { return w.op.Restore(data) }
 
 func (w *windowTransform) Close() error {
 	if w.lateSink != nil {
