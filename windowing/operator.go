@@ -65,6 +65,9 @@ func New(spec Spec, aggs []AggSpec, maxLatenessMs int64) (*Operator, error) {
 	if err := spec.validate(); err != nil {
 		return nil, err
 	}
+	if maxLatenessMs < 0 {
+		return nil, fmt.Errorf("windowing: maxLatenessMs must be >= 0, got %d (a negative value pushes the watermark ahead of event time and fires windows early)", maxLatenessMs)
+	}
 	for _, ag := range aggs {
 		if _, err := newAccumulator(ag.Fn); err != nil {
 			return nil, err

@@ -65,4 +65,7 @@ func TestNewValidatesSpec(t *testing.T) {
 			t.Errorf("%s: expected an error, got nil", c.name)
 		}
 	}
+	if _, err := New(Spec{Kind: Tumbling, SizeMs: 1000}, aggs, -1); err == nil {
+		t.Error("negative maxLatenessMs should be rejected")
+	}
 }
