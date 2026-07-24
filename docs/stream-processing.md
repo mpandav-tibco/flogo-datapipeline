@@ -363,8 +363,11 @@ watermark and the restored window fired with the **exact pre‑crash aggregate**
   observability (`windowStats` in run output + logs).
 - [x] **Phase 2** — early‑firing triggers + discarding/accumulating modes; durable
   keyed state (`Snapshot`/`Restore`) wired through the checkpoint (§13).
-- [x] **Phase 4 (partial)** — Studio `window` node (visual editor) + schema/syntax.
+- [x] **Phase 4 (partial)** — Studio `window` node (visual editor) + schema/syntax;
+  window observability gauges (`flogo_pipeline_window_open`, `…_emitted_total`,
+  `…_late_dropped_total`, `…_state_evicted_total`, `…_watermark_ms`) emitted through
+  the configured metrics backend at each checkpoint and at end‑of‑run.
 - [ ] **Phase 3** — spillable high‑cardinality state backend; co‑partition sharding
   validation at load; transactional offset↔state resume.
-- [ ] **Phase 4 (remaining)** — windowed keyed JOIN; Prometheus/OTLP window gauges;
+- [ ] **Phase 4 (remaining)** — windowed keyed JOIN;
   Studio config for triggers / accumulation / late‑route sink.

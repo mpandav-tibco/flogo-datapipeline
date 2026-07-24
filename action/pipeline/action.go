@@ -602,6 +602,7 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 					saveCheckpoint(runLog, ckpt, ckptKey, def.Source.Type, out.RowsProcessed, pSrc, winOp)
 					a.recorder.CheckpointSaved(a.ref)
 					saveWatermark(runLog, wmStore, hwmProvider, def, a.ref)
+					a.emitWindowMetrics(winOp)
 					// Surface the checkpoint so operators can see progress being
 					// persisted and which trigger fired (row count vs. time).
 					reason := "rows"
@@ -832,6 +833,7 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 			"openWindows":     st.OpenWindows,
 			"watermarkMillis": st.WatermarkMillis,
 		}
+		a.emitWindowMetrics(winOp)
 	}
 
 	// Final flush.
@@ -947,6 +949,23 @@ func openCheckpoint(def *Definition) (checkpoint.Checkpoint, error) {
 		"keyPrefix":   cd.KeyPrefix,
 	}
 	return checkpoint.New(cd.Type, cfg)
+}
+
+// emitWindowMetrics publishes the window operator's counters through the active
+// metrics backend (prometheus/otel/none) via the generic Gauge escape hatch, so
+// streaming windowed pipelines are observable without any backend-specific code.
+// Called at each checkpoint (for continuous streams) and at end-of-run flush.
+func (a *DataPipelineAction) emitWindowMetrics(winOp wintransform.WindowedOperator) {
+	if winOp == nil {
+		return
+	}
+	st := winOp.Stats()
+	labels := map[string]string{"pipeline": a.ref}
+	a.recorder.Gauge("flogo_pipeline_window_open", "Currently open (unfired) windows held in operator state.", labels, float64(st.OpenWindows))
+	a.recorder.Gauge("flogo_pipeline_window_emitted_total", "Cumulative windows fired to the sink.", labels, float64(st.WindowsEmitted))
+	a.recorder.Gauge("flogo_pipeline_window_late_dropped_total", "Cumulative records dropped for arriving beyond the watermark + allowed lateness.", labels, float64(st.LateDropped))
+	a.recorder.Gauge("flogo_pipeline_window_state_evicted_total", "Cumulative window state entries evicted by TTL.", labels, float64(st.StateEvicted))
+	a.recorder.Gauge("flogo_pipeline_window_watermark_ms", "Current event-time watermark (epoch milliseconds).", labels, float64(st.WatermarkMillis))
 }
 
 func saveCheckpoint(runLog corelog.Logger, ckpt checkpoint.Checkpoint, runID, format string, rowsProcessed int64, src source.Source, winOp wintransform.WindowedOperator) {
