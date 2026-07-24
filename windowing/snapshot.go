@@ -1,6 +1,11 @@
 package windowing
 
-import "encoding/json"
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"strconv"
+)
 
 // accState is the serialisable union of all accumulator internal fields. Each
 // accumulator maps only the fields it uses; compact JSON keys keep snapshots small.
@@ -14,30 +19,27 @@ type accState struct {
 	Val  interface{} `json:"v,omitempty"`
 }
 
-func (a *sumAcc) snap() accState   { return accState{Sum: a.sum, Seen: a.seen} }
-func (a *sumAcc) load(s accState)  { a.sum, a.seen = s.Sum, s.Seen }
-func (a *avgAcc) snap() accState   { return accState{Sum: a.sum, N: a.n} }
-func (a *avgAcc) load(s accState)  { a.sum, a.n = s.Sum, s.N }
-func (a *minAcc) snap() accState   { return accState{Min: a.min, Seen: a.seen} }
-func (a *minAcc) load(s accState)  { a.min, a.seen = s.Min, s.Seen }
-func (a *maxAcc) snap() accState   { return accState{Max: a.max, Seen: a.seen} }
-func (a *maxAcc) load(s accState)  { a.max, a.seen = s.Max, s.Seen }
-func (a *countAcc) snap() accState { return accState{N: a.n} }
+func (a *sumAcc) snap() accState    { return accState{Sum: a.sum, Seen: a.seen} }
+func (a *sumAcc) load(s accState)   { a.sum, a.seen = s.Sum, s.Seen }
+func (a *avgAcc) snap() accState    { return accState{Sum: a.sum, N: a.n} }
+func (a *avgAcc) load(s accState)   { a.sum, a.n = s.Sum, s.N }
+func (a *minAcc) snap() accState    { return accState{Min: a.min, Seen: a.seen} }
+func (a *minAcc) load(s accState)   { a.min, a.seen = s.Min, s.Seen }
+func (a *maxAcc) snap() accState    { return accState{Max: a.max, Seen: a.seen} }
+func (a *maxAcc) load(s accState)   { a.max, a.seen = s.Max, s.Seen }
+func (a *countAcc) snap() accState  { return accState{N: a.n} }
 func (a *countAcc) load(s accState) { a.n = s.N }
-func (a *firstAcc) snap() accState { return accState{Val: a.val, Set: a.set} }
+func (a *firstAcc) snap() accState  { return accState{Val: a.val, Set: a.set} }
 func (a *firstAcc) load(s accState) { a.val, a.set = s.Val, s.Set }
-func (a *lastAcc) snap() accState  { return accState{Val: a.val, Set: a.set} }
-func (a *lastAcc) load(s accState) { a.val, a.set = s.Val, s.Set }
+func (a *lastAcc) snap() accState   { return accState{Val: a.val, Set: a.set} }
+func (a *lastAcc) load(s accState)  { a.val, a.set = s.Val, s.Set }
 
 // --- operator snapshot ---
 
-type opSnapshot struct {
-	Version      int           `json:"version"`
-	MaxEventTime int64         `json:"maxEventTime"`
-	HasEvent     bool          `json:"hasEvent"`
-	Watermark    int64         `json:"watermark"`
-	Keys         []keySnapshot `json:"keys"`
-}
+// A snapshot is a single JSON object
+// {version,maxEventTime,hasEvent,watermark,keys:[keySnapshot...]} whose "keys"
+// array is streamed one element at a time on both encode and decode, so a spilled
+// operator is snapshotted/restored without materialising its entire state at once.
 
 type keySnapshot struct {
 	KeyVals []interface{}    `json:"key"`
@@ -51,24 +53,39 @@ type windowSnapshot struct {
 	EarlyFired int64      `json:"earlyFired,omitempty"`
 }
 
-// Snapshot serialises the operator's keyed window state to JSON so a streaming
-// pipeline can persist it and resume after a restart. The spec/aggregations are
-// NOT included — Restore into an operator built with the same config.
+// Snapshot serialises the operator's keyed window state as a single JSON object
+// so a streaming pipeline can persist it (as an opaque token) and resume after a
+// restart. The "keys" array is built by marshalling one key at a time, so a
+// spilled operator is snapshotted without loading its entire state into memory at
+// once. The spec/aggregations are NOT included — Restore into an operator built
+// with the same config.
 func (o *Operator) Snapshot() ([]byte, error) {
-	snap := opSnapshot{
-		Version:      1,
-		MaxEventTime: o.maxEventTime,
-		HasEvent:     o.hasEvent,
-		Watermark:    o.currentWatermark,
-	}
+	var buf bytes.Buffer
+	buf.WriteString(`{"version":1,"maxEventTime":`)
+	buf.WriteString(strconv.FormatInt(o.maxEventTime, 10))
+	buf.WriteString(`,"hasEvent":`)
+	buf.WriteString(strconv.FormatBool(o.hasEvent))
+	buf.WriteString(`,"watermark":`)
+	buf.WriteString(strconv.FormatInt(o.currentWatermark, 10))
+	buf.WriteString(`,"keys":[`)
+	first := true
 	for _, key := range o.store.keys() {
 		st, ok := o.store.get(key)
 		if !ok {
 			continue
 		}
-		snap.Keys = append(snap.Keys, keyStateToSnapshot(st))
+		b, err := json.Marshal(keyStateToSnapshot(st))
+		if err != nil {
+			return nil, err
+		}
+		if !first {
+			buf.WriteByte(',')
+		}
+		first = false
+		buf.Write(b)
 	}
-	return json.Marshal(snap)
+	buf.WriteString("]}")
+	return buf.Bytes(), nil
 }
 
 // keyStateToSnapshot converts one live keyState into its serialisable form.
@@ -129,18 +146,60 @@ func decodeKeyState(data []byte, aggs []AggSpec) (*keyState, error) {
 }
 
 // Restore rebuilds keyed window state from a Snapshot, replacing any existing
-// state. The operator must have been constructed with the same aggregations.
+// state. It streams the "keys" array one element at a time via a JSON decoder,
+// so restoring a large (spilled) snapshot does not materialise the whole state in
+// memory. The operator must have been constructed with the same aggregations.
 func (o *Operator) Restore(data []byte) error {
-	var snap opSnapshot
-	if err := json.Unmarshal(data, &snap); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	tok, err := dec.Token()
+	if err != nil {
 		return err
 	}
-	o.maxEventTime = snap.MaxEventTime
-	o.hasEvent = snap.HasEvent
-	o.currentWatermark = snap.Watermark
+	if d, ok := tok.(json.Delim); !ok || d != '{' {
+		return fmt.Errorf("windowing: snapshot is not a JSON object")
+	}
 	o.store.clear()
-	for _, ks := range snap.Keys {
-		o.store.put(keyString(ks.KeyVals), keySnapshotToState(ks, o.aggs))
+	o.openWindowCount = 0
+	o.hasEvent = false
+	for dec.More() {
+		nameTok, err := dec.Token()
+		if err != nil {
+			return err
+		}
+		switch nameTok {
+		case "maxEventTime":
+			if err := dec.Decode(&o.maxEventTime); err != nil {
+				return err
+			}
+		case "hasEvent":
+			if err := dec.Decode(&o.hasEvent); err != nil {
+				return err
+			}
+		case "watermark":
+			if err := dec.Decode(&o.currentWatermark); err != nil {
+				return err
+			}
+		case "keys":
+			if _, err := dec.Token(); err != nil { // consume '['
+				return err
+			}
+			for dec.More() {
+				var ks keySnapshot
+				if err := dec.Decode(&ks); err != nil {
+					return err
+				}
+				o.store.put(keyString(ks.KeyVals), keySnapshotToState(ks, o.aggs))
+				o.openWindowCount += len(ks.Windows)
+			}
+			if _, err := dec.Token(); err != nil { // consume ']'
+				return err
+			}
+		default: // "version" or any unknown field
+			var skip json.RawMessage
+			if err := dec.Decode(&skip); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }

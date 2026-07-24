@@ -94,12 +94,26 @@ type kafkaSource struct {
 	// commitMode: "auto" (sarama auto-commit, default) or "checkpoint" (offsets
 	// committed only when the pipeline checkpoints, via Commit()).
 	commitMode string
-	// pending is the next offset to commit per partition — the position of
-	// messages already RETURNED by ReadBatch (hence processed by checkpoint time).
-	// Cursor snapshots it into the checkpoint token; Commit acks it to Kafka.
-	pendingMu   sync.Mutex
-	pending     map[int32]int64
-	lastSession sarama.ConsumerGroupSession
+	// Offset-commit bookkeeping (guarded by pendingMu). The consumer runs on a
+	// read-ahead goroutine, so the offset a batch reaches at ReadBatch time is
+	// AHEAD of what the pipeline has processed. To avoid committing (and thus
+	// losing) un-processed read-ahead messages, each ReadBatch records a mark of
+	// (cumulative rows returned, per-partition next-offset); Commit(processedRows)
+	// then commits only the offset at the pipeline's processed-row boundary.
+	pendingMu    sync.Mutex
+	pending      map[int32]int64 // running max next-offset per partition
+	returnedRows int64           // cumulative rows returned by ReadBatch this run
+	marks        []offMark       // (row, offsets) boundaries, pruned on commit
+	commitTarget map[int32]int64 // offsets of the last committed (processed) position
+	lastSession  sarama.ConsumerGroupSession
+}
+
+// offMark records the per-partition next-offset once a cumulative number of rows
+// have been returned by ReadBatch, letting a later Commit map the pipeline's
+// processed-row count back to the exact offset to acknowledge.
+type offMark struct {
+	row     int64
+	offsets map[int32]int64
 }
 
 // kafkaSourceConfig holds parsed configuration.
@@ -352,15 +366,16 @@ func (ks *kafkaSource) Skip(n int64) error {
 	return nil
 }
 
-// Cursor returns the per-partition next-offset position of messages already
-// returned by ReadBatch, as a JSON object keyed by partition. It is captured
-// into the checkpoint token atomically with the pipeline state, so a resume can
-// see exactly where consumption had reached at the checkpoint.
+// Cursor returns the per-partition offset of the last COMMITTED (processed)
+// position as a JSON object keyed by partition. It is captured into the
+// checkpoint token atomically with the pipeline state; because it reflects the
+// processed boundary (not the read-ahead position), the token's offset and window
+// state stay consistent for resume.
 func (ks *kafkaSource) Cursor() json.RawMessage {
 	ks.pendingMu.Lock()
 	defer ks.pendingMu.Unlock()
-	m := make(map[string]int64, len(ks.pending))
-	for p, o := range ks.pending {
+	m := make(map[string]int64, len(ks.commitTarget))
+	for p, o := range ks.commitTarget {
 		m[strconv.Itoa(int(p))] = o
 	}
 	data, err := json.Marshal(m)
@@ -370,30 +385,51 @@ func (ks *kafkaSource) Cursor() json.RawMessage {
 	return data
 }
 
-// Commit acknowledges consumption up to the last-returned offset per partition.
-// In "checkpoint" commitMode the engine calls this only after the checkpoint
-// token is durable, so committed offsets never run ahead of persisted progress
-// (no lost messages on resume). In "auto" mode sarama also auto-commits; this
-// call simply makes the checkpoint boundary an explicit commit point too.
-func (ks *kafkaSource) Commit() error {
+// Commit acknowledges consumption up to processedRows — the pipeline's run-local
+// processed-row count, which trails the read-ahead position. It maps that count
+// to the exact offset via the recorded batch marks and commits only that offset,
+// so a crash never loses un-processed read-ahead messages. In "checkpoint" mode
+// the engine calls this only after the checkpoint token is durable; in "auto"
+// mode sarama owns offsets and this is a no-op.
+func (ks *kafkaSource) Commit(processedRows int64) error {
 	if ks.commitMode != "checkpoint" {
 		return nil // auto mode: sarama auto-commit owns offset progress
 	}
 	ks.pendingMu.Lock()
-	sess := ks.lastSession
-	snapshot := make(map[int32]int64, len(ks.pending))
-	for p, o := range ks.pending {
-		snapshot[p] = o
+	if target, keep := targetForRows(ks.marks, processedRows); target != nil {
+		ks.commitTarget = target
+		ks.marks = ks.marks[keep:]
 	}
+	sess := ks.lastSession
+	target := ks.commitTarget
 	ks.pendingMu.Unlock()
-	if sess == nil {
+	if sess == nil || target == nil {
 		return nil
 	}
-	for p, o := range snapshot {
+	// lastSession is the session of the most recent ReadBatch. After a rebalance
+	// it may reference an ended session until the next ReadBatch; MarkOffset/Commit
+	// on it is then a harmless no-op and the next checkpoint re-commits on the new
+	// session. This is sufficient for the single-instance streaming target.
+	for p, o := range target {
 		sess.MarkOffset(ks.cfg.topic, p, o, "")
 	}
 	sess.Commit()
 	return nil
+}
+
+// targetForRows returns the offsets of the newest mark at or before processedRows
+// (the pipeline's processed boundary) and how many leading marks can be pruned.
+// A nil target means no mark has been reached yet.
+func targetForRows(marks []offMark, processedRows int64) (target map[int32]int64, keep int) {
+	for i, m := range marks {
+		if m.row <= processedRows {
+			target = m.offsets
+			keep = i + 1
+			continue
+		}
+		break
+	}
+	return target, keep
 }
 
 // ReadBatch polls the consumer channel for up to pollMs milliseconds and
@@ -462,6 +498,7 @@ func (ks *kafkaSource) ReadBatch(size int) (*record.RecordBatch, error) {
 			if off := env.msg.Offset + 1; off > ks.pending[env.msg.Partition] {
 				ks.pending[env.msg.Partition] = off
 			}
+			ks.returnedRows++
 			ks.lastSession = env.session
 			ks.pendingMu.Unlock()
 		}
@@ -471,6 +508,18 @@ done:
 	ks.mu.RLock()
 	batch.Columns = ks.schema
 	ks.mu.RUnlock()
+
+	// Record an offset mark at this batch boundary so a later Commit can map the
+	// pipeline's processed-row count to the exact offset to acknowledge.
+	if len(batch.Rows) > 0 {
+		ks.pendingMu.Lock()
+		snap := make(map[int32]int64, len(ks.pending))
+		for p, o := range ks.pending {
+			snap[p] = o
+		}
+		ks.marks = append(ks.marks, offMark{row: ks.returnedRows, offsets: snap})
+		ks.pendingMu.Unlock()
+	}
 
 	// Batch mode: only signal end-of-stream once the stop boundary is reached
 	// AND the channel is fully drained, so no buffered messages are lost when

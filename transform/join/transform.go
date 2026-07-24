@@ -21,12 +21,17 @@
 //	  "rightKey": "id",          // right column to match on (default: leftKey)
 //	  "joinType": "inner",       // "inner" (default) | "left"
 //	  "rightColumns": ["name","tier"], // right columns to add (default: all but rightKey)
-//	  "prefix": "cust_"          // optional prefix for added right columns
+//	  "prefix": "cust_",         // optional prefix for added right columns
+//	  "maxRows": 1000000         // cap on right rows loaded (default 1,000,000)
 //	}
 //
 // Semantics: inner drops left rows with no right match; left keeps them with
 // null right columns. A left row matching N right rows yields N output rows
-// (many-to-many). The right dataset is held in memory — size it accordingly.
+// (many-to-many). The right dataset is held in memory — size it accordingly; it
+// MUST be bounded (a Kafka right source is auto-drained to its current end), and
+// loading more than maxRows rows is a hard error. Keys are matched by string
+// form, so align key column types across the two sides (e.g. both int or both
+// string) to avoid surprises.
 package join
 
 import (
@@ -90,6 +95,38 @@ func newJoinTransform(cfg map[string]interface{}) (transform.Transform, error) {
 		}
 	}
 
+	// The right side is read fully into memory (a broadcast / stream-table join),
+	// so it MUST be bounded. A Kafka right source defaults to a batch drain-to-
+	// current-end so it terminates instead of blocking forever on a live topic.
+	if rtype == "kafka" {
+		if _, ok := rmap["mode"]; !ok {
+			rmap["mode"] = "batch"
+		}
+		_, hasEnd := rmap["stopAtCurrentEnd"]
+		_, hasOff := rmap["stopOffset"]
+		_, hasTS := rmap["stopTimestamp"]
+		if !hasEnd && !hasOff && !hasTS {
+			rmap["stopAtCurrentEnd"] = true
+		}
+	}
+	// maxRows caps the in-memory reference table (guards OOM and catches a source
+	// that never ends). Default 1,000,000; override with 'maxRows'.
+	maxRows := int64(1_000_000)
+	switch v := cfg["maxRows"].(type) {
+	case float64:
+		if v > 0 {
+			maxRows = int64(v)
+		}
+	case int:
+		if v > 0 {
+			maxRows = int64(v)
+		}
+	case int64:
+		if v > 0 {
+			maxRows = v
+		}
+	}
+
 	// Load the right side fully into a keyed multimap.
 	rs, err := source.New(rtype, rmap)
 	if err != nil {
@@ -99,6 +136,7 @@ func newJoinTransform(cfg map[string]interface{}) (transform.Transform, error) {
 
 	table := make(map[string][][]interface{})
 	var rightCols []string
+	var loaded int64
 	first := true
 	for {
 		b, rErr := rs.ReadBatch(1000)
@@ -115,6 +153,10 @@ func newJoinTransform(cfg map[string]interface{}) (transform.Transform, error) {
 					vals[j] = m[c]
 				}
 				table[key] = append(table[key], vals)
+			}
+			loaded += int64(b.Len())
+			if loaded > maxRows {
+				return nil, fmt.Errorf("join transform: right source exceeded maxRows=%d — it must be a bounded reference dataset (raise 'maxRows' or use a bounded/batch source)", maxRows)
 			}
 		}
 		if rErr == io.EOF {

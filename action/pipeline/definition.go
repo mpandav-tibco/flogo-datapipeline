@@ -486,6 +486,15 @@ func (d *Definition) validate() error {
 			}
 		}
 	}
+	// A source commitMode of "checkpoint" advances the source's acknowledged
+	// position (e.g. Kafka offsets) only after a durable checkpoint. Without a
+	// real checkpoint backend the offset would advance while window/pipeline state
+	// is never persisted, silently losing data on restart — reject the combination.
+	if cm, _ := d.Source.Options["commitMode"].(string); cm == "checkpoint" {
+		if d.Checkpoint.Type == "" || d.Checkpoint.Type == "none" {
+			return fmt.Errorf("pipeline definition: source.commitMode \"checkpoint\" requires a durable checkpoint backend — set checkpoint.type to \"file\" or \"redis\"")
+		}
+	}
 	return nil
 }
 

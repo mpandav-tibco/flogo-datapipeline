@@ -59,10 +59,10 @@ type windowTransform struct {
 	op          *windowing.Operator
 	groupBy     []string
 	aggs        []windowing.AggSpec
-	eventCol    string // "" → processing time
-	layout      string // Go time layout for string event-time columns
-	epochMillis bool   // event-time column holds epoch-millis (numeric or numeric-string)
-	onLate      string // drop (default) | route
+	eventCol    string    // "" → processing time
+	layout      string    // Go time layout for string event-time columns
+	epochMillis bool      // event-time column holds epoch-millis (numeric or numeric-string)
+	onLate      string    // drop (default) | route
 	lateSink    sink.Sink // non-nil when onLate=route
 
 	outCols        []record.Column
@@ -286,6 +286,7 @@ type Stats struct {
 	StateEvicted    int64
 	OpenWindows     int64
 	WatermarkMillis int64
+	SpillFailures   int64
 }
 
 // Stats returns the current window-operator counters.
@@ -296,6 +297,7 @@ func (w *windowTransform) Stats() Stats {
 		StateEvicted:    w.op.EvictedCount(),
 		OpenWindows:     int64(w.op.OpenWindows()),
 		WatermarkMillis: w.op.Watermark(),
+		SpillFailures:   w.op.SpillFailures(),
 	}
 }
 

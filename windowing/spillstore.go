@@ -14,6 +14,11 @@ import (
 // heap so a single instance can aggregate over high-cardinality key spaces
 // without OOMing.
 //
+// Bound: maxResident bounds the number of RESIDENT KEYS, not bytes — it is a
+// proxy for memory, not a hard byte cap. A byte-accurate bound (tracking encoded
+// state size per key) is a future enhancement; size maxResident from the expected
+// per-key state size and headroom.
+//
 // Design note: get() deliberately does NOT promote a spilled key into memory, so
 // a full Emit scan (which visits every key) does not pull the entire cold set
 // into the heap. put() is what makes a key resident; in the windowed operator
@@ -26,10 +31,11 @@ type spillStore struct {
 	maxResident int
 	dir         string
 
-	hot  map[string]*keyState     // resident values (bounded by maxResident)
-	lru  *list.List               // MRU at front; element value is the key string
-	elem map[string]*list.Element // key -> its lru element
-	disk map[string]struct{}      // keys whose value currently lives on disk
+	hot        map[string]*keyState     // resident values (bounded by maxResident)
+	lru        *list.List               // MRU at front; element value is the key string
+	elem       map[string]*list.Element // key -> its lru element
+	disk       map[string]struct{}      // keys whose value currently lives on disk
+	spillFails int64                    // keys dropped because spill-to-disk failed
 }
 
 // newSpillStore creates a spillable store rooted at a fresh unique subdirectory
@@ -160,14 +166,23 @@ func (s *spillStore) evictIfNeeded() {
 		delete(s.elem, vk)
 		victim := s.hot[vk]
 		delete(s.hot, vk)
+		spilled := false
 		if data, err := encodeKeyState(victim); err == nil {
 			p := s.path(vk)
 			if os.MkdirAll(filepath.Dir(p), 0o755) == nil && atomicWrite(p, data) == nil {
 				s.disk[vk] = struct{}{}
+				spilled = true
 			}
+		}
+		if !spilled {
+			// Dropping a victim loses its partial aggregation — a correctness
+			// hazard (e.g. disk full). Count it so the operator can surface it.
+			s.spillFails++
 		}
 	}
 }
+
+func (s *spillStore) evictFailures() int64 { return s.spillFails }
 
 // atomicWrite writes data to path via a temp file + rename so a crash never
 // leaves a partially written key file.

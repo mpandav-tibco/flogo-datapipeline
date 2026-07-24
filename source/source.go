@@ -43,9 +43,11 @@ type Source interface {
 // after the last checkpoint, so no in-flight record is lost. Sources without an
 // external ack simply do not implement this (a clean no-op).
 type Committer interface {
-	// Commit durably acknowledges consumption up to the position reported by the
-	// most recent ReadBatch. Called by the engine at checkpoint and completion.
-	Commit() error
+	// Commit durably acknowledges consumption up to processedRows — the pipeline's
+	// run-local count of rows the transform stage has actually processed (which
+	// trails the read-ahead position). Called by the engine at checkpoint and
+	// completion. Passing a value >= all rows returned acknowledges everything.
+	Commit(processedRows int64) error
 }
 
 // PartitionableSource extends Source with the ability to enumerate and open

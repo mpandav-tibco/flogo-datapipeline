@@ -40,14 +40,16 @@ func TestEmitWindowMetrics(t *testing.T) {
 		StateEvicted:    2,
 		OpenWindows:     5,
 		WatermarkMillis: 1784887260000,
+		SpillFailures:   1,
 	}})
 
 	want := map[string]float64{
-		"flogo_pipeline_window_open":                5,
-		"flogo_pipeline_window_emitted_total":       7,
-		"flogo_pipeline_window_late_dropped_total":  3,
-		"flogo_pipeline_window_state_evicted_total": 2,
-		"flogo_pipeline_window_watermark_ms":        1784887260000,
+		"flogo_pipeline_window_open":                 5,
+		"flogo_pipeline_window_emitted_total":        7,
+		"flogo_pipeline_window_late_dropped_total":   3,
+		"flogo_pipeline_window_state_evicted_total":  2,
+		"flogo_pipeline_window_watermark_ms":         1784887260000,
+		"flogo_pipeline_window_spill_failures_total": 1,
 	}
 	for name, v := range want {
 		got, ok := rec.gauges[name]

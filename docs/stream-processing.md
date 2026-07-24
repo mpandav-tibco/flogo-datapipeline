@@ -341,15 +341,19 @@ pipeline survives a restart. Mechanism:
   per‑run id is used (correct for batch, useless for resume).
 - **Guarantee (per §11.4): at‑least‑once, no loss.** With `source.commitMode:
   "checkpoint"` the Kafka source disables auto‑commit and the engine commits
-  offsets only *after* the checkpoint token is durable, so committed offsets never
-  run ahead of persisted state — a crash re‑delivers everything after the last
-  checkpoint (nothing lost). The token also carries the per‑partition offset
-  `Cursor` (`payload`) atomically with the window state. Pairing this with an
-  **idempotent (upsert) sink** keyed by `(key, windowStart)` yields **exactly‑once
-  *results***. The default `commitMode: "auto"` keeps today's sarama auto‑commit
-  behaviour. Bit‑exact once (seek to the token offset on resume, ignoring the
-  consumer‑group commit) is the remaining step — it needs a consumer‑group
-  start‑offset override.
+  offsets only *after* the checkpoint token is durable **and only up to the offset
+  the pipeline has actually processed**. Because the consumer reads ahead of
+  processing, the source records a per‑batch offset mark of
+  `(cumulative rows returned → next offset)` and commits at the pipeline's
+  processed‑row boundary — so read‑ahead still in flight is never committed and a
+  crash re‑delivers everything after the last checkpoint (nothing lost). The token
+  also carries that processed offset `Cursor` (`payload`) atomically with the
+  window state. Pairing this with an **idempotent (upsert) sink** keyed by
+  `(key, windowStart)` yields **exactly‑once *results***. The default
+  `commitMode: "auto"` keeps today's sarama auto‑commit behaviour, and a load‑time
+  check rejects `commitMode:"checkpoint"` without a durable checkpoint backend.
+  Bit‑exact once (seek to the token offset on resume, ignoring the consumer‑group
+  commit) is the remaining step — it needs a consumer‑group start‑offset override.
 
 **Verified live (2026‑07‑24, real Kafka):** a consumer buffered two events into an
 open 1‑minute window and checkpointed the state; the process was killed; a fresh
@@ -382,11 +386,16 @@ watermark and the restored window fired with the **exact pre‑crash aggregate**
   files under `state.spillDir` (default OS temp), so a single instance can
   aggregate over high‑cardinality key spaces without OOMing. Emit scans page cold
   keys transiently; only surviving (active) keys stay resident. Snapshot/Restore
-  span spilled keys, so durable resume is unaffected.
+  stream keys one at a time (bounded memory) and span spilled keys, so durable
+  resume is unaffected. `maxResidentKeys` bounds key *count* (a memory proxy, not
+  a byte cap); a `…_spill_failures_total` gauge surfaces any keys dropped when a
+  spill write fails.
 - [x] **Phase 3 coordinated commit** — Kafka `commitMode: "checkpoint"` commits
-  offsets only after the checkpoint token is durable (no lost messages) and
-  records the per‑partition offset cursor in the token atomically with window
-  state (`source.Committer` + `Cursor`); default `auto` is unchanged.
+  offsets only after the checkpoint token is durable and only up to the pipeline's
+  processed‑row boundary (read‑ahead‑safe, via per‑batch offset marks); records the
+  offset cursor in the token atomically with window state
+  (`source.Committer(processedRows)` + `Cursor`). Default `auto` is unchanged; a
+  load‑time check requires a durable checkpoint backend for `checkpoint` mode.
 - [ ] **Phase 3 (remaining)** — bit‑exact seek‑to‑token‑offset on resume.
 - [x] **Phase 4 keyed JOIN** — `join` transform: keyed stream‑table join against a
   source‑loaded reference table (inner/left, many‑to‑many, right‑column selection

@@ -2251,6 +2251,39 @@ const WIN_KINDS = ['tumbling', 'sliding', 'session', 'global'];
 const AGG_FNS = ['sum', 'avg', 'min', 'max', 'count', 'first', 'last'];
 const TIME_FORMATS = ['RFC3339', 'RFC3339Nano', 'DateTime', 'DateOnly', 'epochMillis'];
 
+// Shared structured-editor field builders (used by the window and join editors).
+function fieldHint(h: string): HTMLElement {
+  return el('div', 'muted', `<div style="font-size:11px;padding:2px 0 6px">${h}</div>`);
+}
+function fieldInput(label: string, value: any, ph: string, onChange: (v: string) => void, hint?: string): HTMLElement {
+  const f = el('div', 'fld');
+  f.appendChild(el('div', 'k', label));
+  const i = el('input', 'v') as HTMLInputElement;
+  i.placeholder = ph;
+  i.value = value != null ? String(value) : '';
+  i.onchange = () => onChange(i.value.trim());
+  f.appendChild(i);
+  if (hint) f.appendChild(fieldHint(hint));
+  return f;
+}
+function fieldSelect(label: string, value: string, opts: string[], onChange: (v: string) => void, hint?: string, emptyLabel = '(select)'): HTMLElement {
+  const f = el('div', 'fld');
+  f.appendChild(el('div', 'k', label));
+  const s = el('select', 'v') as HTMLSelectElement;
+  const list = (opts.includes(value) || !value) ? opts : [value, ...opts];
+  list.forEach((o) => {
+    const op = document.createElement('option');
+    op.value = o;
+    op.textContent = o || emptyLabel;
+    if (o === value) op.selected = true;
+    s.appendChild(op);
+  });
+  s.onchange = () => onChange(s.value);
+  f.appendChild(s);
+  if (hint) f.appendChild(fieldHint(hint));
+  return f;
+}
+
 // Structured editor for the `window` transform: window kind + size, event-time
 // column/format, group-by keys, an aggregations builder, and watermark / lateness
 // / TTL controls. Reads and writes the transform object (nested config) directly.
@@ -2264,29 +2297,8 @@ function renderWindowEditor(node: Node): HTMLElement {
   if (!Array.isArray(t.aggregations)) t.aggregations = [];
   const colNames = upstreamSchema(node).map((c) => c.name);
   const persist = () => persistAndRebuild();
-  const hintEl = (h: string) => el('div', 'muted', `<div style="font-size:11px;padding:2px 0 6px">${h}</div>`);
-
-  const selF = (label: string, value: string, opts: string[], onChange: (v: string) => void, hint?: string) => {
-    const f = el('div', 'fld');
-    f.appendChild(el('div', 'k', label));
-    const s = el('select', 'v') as HTMLSelectElement;
-    const list = (opts.includes(value) || !value) ? opts : [value, ...opts];
-    list.forEach((o) => { const op = document.createElement('option'); op.value = o; op.textContent = o || '(processing time)'; if (o === value) op.selected = true; s.appendChild(op); });
-    s.onchange = () => onChange(s.value);
-    f.appendChild(s);
-    if (hint) f.appendChild(hintEl(hint));
-    return f;
-  };
-  const inpF = (label: string, value: any, ph: string, onChange: (v: string) => void, hint?: string) => {
-    const f = el('div', 'fld');
-    f.appendChild(el('div', 'k', label));
-    const i = el('input', 'v') as HTMLInputElement;
-    i.placeholder = ph; i.value = value != null ? String(value) : '';
-    i.onchange = () => onChange(i.value.trim());
-    f.appendChild(i);
-    if (hint) f.appendChild(hintEl(hint));
-    return f;
-  };
+  const selF = fieldSelect;
+  const inpF = fieldInput;
 
   const kind = t.window.kind || 'tumbling';
   wrap.appendChild(selF('Window type', kind, WIN_KINDS, (v) => { t.window.kind = v; persist(); renderEditor(); }));
@@ -2294,7 +2306,7 @@ function renderWindowEditor(node: Node): HTMLElement {
   if (kind === 'sliding') wrap.appendChild(inpF('Slide (ms)', t.window.slideMs, 'e.g. 30000', (v) => { t.window.slideMs = Number(v) || 0; persist(); }, 'How often a new window starts'));
   if (kind === 'session') wrap.appendChild(inpF('Inactivity gap (ms)', t.window.gapMs, 'e.g. 300000', (v) => { t.window.gapMs = Number(v) || 0; persist(); }, 'Close a session after this idle gap'));
 
-  wrap.appendChild(selF('Event-time column', t.eventTime.column || '', colNames.length ? ['', ...colNames] : [''], (v) => { if (v) t.eventTime.column = v; else delete t.eventTime.column; persist(); renderEditor(); }, 'Blank = processing time (wall clock)'));
+  wrap.appendChild(fieldSelect('Event-time column', t.eventTime.column || '', colNames.length ? ['', ...colNames] : [''], (v) => { if (v) t.eventTime.column = v; else delete t.eventTime.column; persist(); renderEditor(); }, 'Blank = processing time (wall clock)', '(processing time)'));
   if (t.eventTime.column) wrap.appendChild(selF('Time format', t.eventTime.format || 'RFC3339', TIME_FORMATS, (v) => { t.eventTime.format = v; persist(); }, 'Numeric columns are treated as epoch millis'));
 
   wrap.appendChild(inpF('Allowed lateness (ms)', t.watermark.maxLatenessMs, '0', (v) => { t.watermark.strategy = 'boundedOutOfOrderness'; t.watermark.maxLatenessMs = Number(v) || 0; persist(); }, 'Out-of-order tolerance before a window fires'));
@@ -2398,21 +2410,8 @@ function renderJoinEditor(node: Node): HTMLElement {
   t.right = t.right || { type: 'csv' };
   const colNames = upstreamSchema(node).map((c) => c.name);
   const persist = () => persistAndRebuild();
-  const hintEl = (h: string) => el('div', 'muted', `<div style="font-size:11px;padding:2px 0 6px">${h}</div>`);
-  const inpF = (label: string, value: any, ph: string, onChange: (v: string) => void, hint?: string) => {
-    const f = el('div', 'fld'); f.appendChild(el('div', 'k', label));
-    const i = el('input', 'v') as HTMLInputElement; i.placeholder = ph; i.value = value != null ? String(value) : '';
-    i.onchange = () => onChange(i.value.trim()); f.appendChild(i);
-    if (hint) f.appendChild(hintEl(hint)); return f;
-  };
-  const selF = (label: string, value: string, opts: string[], onChange: (v: string) => void, hint?: string) => {
-    const f = el('div', 'fld'); f.appendChild(el('div', 'k', label));
-    const s = el('select', 'v') as HTMLSelectElement;
-    const list = (opts.includes(value) || !value) ? opts : [value, ...opts];
-    list.forEach((o) => { const op = document.createElement('option'); op.value = o; op.textContent = o || '(select)'; if (o === value) op.selected = true; s.appendChild(op); });
-    s.onchange = () => onChange(s.value); f.appendChild(s);
-    if (hint) f.appendChild(hintEl(hint)); return f;
-  };
+  const inpF = fieldInput;
+  const selF = fieldSelect;
 
   if (colNames.length) {
     wrap.appendChild(selF('Left key (stream column)', t.leftKey || '', ['', ...colNames], (v) => { if (v) t.leftKey = v; else delete t.leftKey; persist(); }, 'Column in the incoming stream to match on'));

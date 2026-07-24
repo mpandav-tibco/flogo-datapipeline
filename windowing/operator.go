@@ -39,6 +39,11 @@ type Operator struct {
 	stateTtlMs int64
 	ttlEvicted int64
 
+	// openWindowCount tracks the total number of (key,window) entries in state,
+	// maintained incrementally so OpenWindows() is O(1) instead of scanning every
+	// key (which, under spill, would page the whole cold set back from disk).
+	openWindowCount int
+
 	// earlyEveryMs, when > 0, emits partial results for still-open windows every
 	// earlyEveryMs of watermark (event-time) progress. accumulating selects whether
 	// each firing is the running total (accumulating) or the delta since the last
@@ -107,15 +112,12 @@ func (o *Operator) Close() error { return o.store.close() }
 // OpenWindows returns the number of windows currently held in state (not yet
 // closed). Useful for observability — an ever-growing count on a stream signals
 // key churn without a state TTL.
-func (o *Operator) OpenWindows() int {
-	n := 0
-	for _, key := range o.store.keys() {
-		if st, ok := o.store.get(key); ok {
-			n += len(st.windows)
-		}
-	}
-	return n
-}
+func (o *Operator) OpenWindows() int { return o.openWindowCount }
+
+// SpillFailures returns the cumulative number of keys the spillable state store
+// failed to page to disk (e.g. disk full) and therefore dropped — a correctness
+// signal that should be zero. Always 0 for the in-memory store.
+func (o *Operator) SpillFailures() int64 { return o.store.evictFailures() }
 
 // Add folds a row (identified by its groupBy key values and event time ts) into
 // the windows it belongs to. It returns late=true only when EVERY window the row
@@ -155,6 +157,7 @@ func (o *Operator) Add(keyVals []interface{}, ts int64, row map[string]interface
 				accs[i], _ = newAccumulator(ag.Fn) // validated in New
 			}
 			ks.windows[w] = accs
+			o.openWindowCount++
 		}
 		for i, ag := range o.aggs {
 			if ag.Fn == "count" {
@@ -222,6 +225,7 @@ func (o *Operator) addSession(keyVals []interface{}, ts int64, row map[string]in
 		accs[i].Add(row[ag.Column])
 	}
 	ks.windows[Window{Start: mergedStart, End: mergedEnd}] = accs
+	o.openWindowCount += 1 - len(overlap)
 	o.store.put(key, ks)
 	return false
 }
@@ -256,6 +260,7 @@ func (o *Operator) Emit(watermark int64) []Result {
 				// final firing
 				out = append(out, o.buildResult(st.keyVals, w, accs))
 				delete(st.windows, w)
+				o.openWindowCount--
 				if st.earlyFired != nil {
 					delete(st.earlyFired, w)
 				}
@@ -317,6 +322,7 @@ func (o *Operator) sweepTTL() {
 					delete(st.earlyFired, w)
 				}
 				o.ttlEvicted++
+				o.openWindowCount--
 				changed = true
 			}
 		}
@@ -342,6 +348,7 @@ func (o *Operator) Flush() []Result {
 		}
 	}
 	o.store.clear()
+	o.openWindowCount = 0
 	sortResults(out)
 	return out
 }

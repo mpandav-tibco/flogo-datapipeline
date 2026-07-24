@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"math"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -489,6 +490,10 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 			}
 		}
 
+		// resumeBaseline is out.RowsProcessed after any resume skip; subtracting it
+		// yields this run's processed-row count, which aligns with a Committer
+		// source's run-local returned-row marks for read-ahead-safe offset commits.
+		resumeBaseline := out.RowsProcessed
 		var rowsSinceCkpt int64
 		lastCkpt := time.Now()
 
@@ -599,7 +604,7 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 					if err := snk.Flush(); err != nil {
 						return fmt.Errorf("sink flush (checkpoint): %w", err)
 					}
-					saveCheckpoint(runLog, ckpt, ckptKey, def.Source.Type, out.RowsProcessed, pSrc, winOp)
+					saveCheckpoint(runLog, ckpt, ckptKey, def.Source.Type, out.RowsProcessed, pSrc, winOp, out.RowsProcessed-resumeBaseline)
 					a.recorder.CheckpointSaved(a.ref)
 					saveWatermark(runLog, wmStore, hwmProvider, def, a.ref)
 					a.emitWindowMetrics(winOp)
@@ -821,8 +826,11 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 			record.Put(flushed)
 		}
 		st := winOp.Stats()
-		runLog.Infof("window stats — emitted=%d openAtEnd=%d lateDropped=%d evicted=%d watermark=%dms",
-			st.WindowsEmitted, st.OpenWindows, st.LateDropped, st.StateEvicted, st.WatermarkMillis)
+		runLog.Infof("window stats — emitted=%d openAtEnd=%d lateDropped=%d evicted=%d spillFailures=%d watermark=%dms",
+			st.WindowsEmitted, st.OpenWindows, st.LateDropped, st.StateEvicted, st.SpillFailures, st.WatermarkMillis)
+		if st.SpillFailures > 0 {
+			runLog.Warnf("window state: %d keys dropped because spill-to-disk failed — results may be incomplete (check disk space/permissions)", st.SpillFailures)
+		}
 		if out.Metadata == nil {
 			out.Metadata = make(map[string]interface{})
 		}
@@ -831,6 +839,7 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 			"lateDropped":     st.LateDropped,
 			"stateEvicted":    st.StateEvicted,
 			"openWindows":     st.OpenWindows,
+			"spillFailures":   st.SpillFailures,
 			"watermarkMillis": st.WatermarkMillis,
 		}
 		a.emitWindowMetrics(winOp)
@@ -854,7 +863,7 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 	if def.Checkpoint.DeleteOnSuccess {
 		_ = ckpt.Delete(resumeKey)
 	} else {
-		saveCheckpoint(runLog, ckpt, resumeKey, def.Source.Type, out.RowsProcessed, src, winOp)
+		saveCheckpoint(runLog, ckpt, resumeKey, def.Source.Type, out.RowsProcessed, src, winOp, math.MaxInt64)
 		a.recorder.CheckpointSaved(a.ref)
 	}
 
@@ -966,9 +975,10 @@ func (a *DataPipelineAction) emitWindowMetrics(winOp wintransform.WindowedOperat
 	a.recorder.Gauge("flogo_pipeline_window_late_dropped_total", "Cumulative records dropped for arriving beyond the watermark + allowed lateness.", labels, float64(st.LateDropped))
 	a.recorder.Gauge("flogo_pipeline_window_state_evicted_total", "Cumulative window state entries evicted by TTL.", labels, float64(st.StateEvicted))
 	a.recorder.Gauge("flogo_pipeline_window_watermark_ms", "Current event-time watermark (epoch milliseconds).", labels, float64(st.WatermarkMillis))
+	a.recorder.Gauge("flogo_pipeline_window_spill_failures_total", "Cumulative keys dropped because spill-to-disk failed (should stay 0).", labels, float64(st.SpillFailures))
 }
 
-func saveCheckpoint(runLog corelog.Logger, ckpt checkpoint.Checkpoint, runID, format string, rowsProcessed int64, src source.Source, winOp wintransform.WindowedOperator) {
+func saveCheckpoint(runLog corelog.Logger, ckpt checkpoint.Checkpoint, runID, format string, rowsProcessed int64, src source.Source, winOp wintransform.WindowedOperator, committerRows int64) {
 	var cp checkpoint.CursorProvider
 	if p, ok := src.(checkpoint.CursorProvider); ok {
 		cp = p
@@ -989,9 +999,10 @@ func saveCheckpoint(runLog corelog.Logger, ckpt checkpoint.Checkpoint, runID, fo
 	}
 	// Advance the source's external acknowledgement (e.g. Kafka offsets) only
 	// after the token is durable, so a crash re-delivers everything after this
-	// checkpoint — at-least-once with no lost in-flight records.
+	// checkpoint. committerRows is the pipeline's processed-row boundary, so the
+	// commit never runs ahead of processed (read-ahead-safe) — no lost records.
 	if c, ok := src.(source.Committer); ok {
-		if err := c.Commit(); err != nil {
+		if err := c.Commit(committerRows); err != nil {
 			runLog.Warnf("source commit failed (continuing): %v", err)
 		}
 	}

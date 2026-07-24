@@ -35,3 +35,28 @@ func TestValidateRejectsKeyedWindowUnderSharding(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateRejectsCheckpointCommitWithoutBackend(t *testing.T) {
+	base := func() *Definition {
+		return &Definition{Source: SourceDef{Type: "kafka"}, Sink: SinkDef{Type: "jsonlines"}}
+	}
+	// commitMode checkpoint + no checkpoint backend → error (silent-loss footgun).
+	d := base()
+	d.Source.Options = map[string]interface{}{"commitMode": "checkpoint"}
+	if err := d.Validate(); err == nil {
+		t.Error("expected error for commitMode=checkpoint without a checkpoint backend")
+	}
+	// commitMode checkpoint + durable file checkpoint → ok.
+	d = base()
+	d.Source.Options = map[string]interface{}{"commitMode": "checkpoint"}
+	d.Checkpoint = CheckpointDef{Type: "file"}
+	if err := d.Validate(); err != nil {
+		t.Errorf("commitMode=checkpoint with file checkpoint should be valid: %v", err)
+	}
+	// default auto commit needs no checkpoint.
+	d = base()
+	d.Source.Options = map[string]interface{}{"commitMode": "auto"}
+	if err := d.Validate(); err != nil {
+		t.Errorf("commitMode=auto should be valid without a checkpoint: %v", err)
+	}
+}
