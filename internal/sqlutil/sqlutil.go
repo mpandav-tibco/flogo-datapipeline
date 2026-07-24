@@ -32,6 +32,29 @@ func Placeholder(n int, driver string) string {
 	}
 }
 
+// QuoteLiteral renders s as a safely-escaped, single-quoted SQL string literal
+// for the given driver. Prefer bind parameters over this; it exists for the few
+// places that must embed a value in a reusable query string (e.g. the jdbc
+// source's high-water-mark predicate and keyset bound).
+//
+// All drivers double embedded single quotes ('→''). MySQL additionally treats a
+// backslash as an escape character inside string literals (unless the server has
+// NO_BACKSLASH_ESCAPES set), so backslashes are doubled for MySQL — without this
+// a trailing backslash would escape the closing quote (a SQL-injection / broken-
+// query vector) and interior "\x" sequences would silently drop the backslash
+// (a correctness bug). Standard-conforming drivers (postgres, sqlite3) treat the
+// backslash literally, so doubling it there would corrupt the value.
+func QuoteLiteral(s, driver string) string {
+	switch driver {
+	case "mysql":
+		s = strings.ReplaceAll(s, "\\", "\\\\")
+		s = strings.ReplaceAll(s, "'", "''")
+		return "'" + s + "'"
+	default: // postgres, sqlite3 — standard-conforming string literals
+		return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+	}
+}
+
 // LimitClause returns a LIMIT/OFFSET SQL fragment for the given driver.
 // When limit is 0 the clause contains only OFFSET (useful for schema inference).
 // When both are 0, an empty string is returned.
