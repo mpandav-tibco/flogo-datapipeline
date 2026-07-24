@@ -985,6 +985,15 @@ func saveCheckpoint(runLog corelog.Logger, ckpt checkpoint.Checkpoint, runID, fo
 	}
 	if err := ckpt.Save(runID, t); err != nil {
 		runLog.Warnf("checkpoint save failed (continuing): %v", err)
+		return
+	}
+	// Advance the source's external acknowledgement (e.g. Kafka offsets) only
+	// after the token is durable, so a crash re-delivers everything after this
+	// checkpoint — at-least-once with no lost in-flight records.
+	if c, ok := src.(source.Committer); ok {
+		if err := c.Commit(); err != nil {
+			runLog.Warnf("source commit failed (continuing): %v", err)
+		}
 	}
 }
 

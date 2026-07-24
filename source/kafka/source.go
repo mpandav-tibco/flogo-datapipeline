@@ -90,6 +90,16 @@ type kafkaSource struct {
 	hwmValueType string
 
 	schemaRegistry *schemaRegistryClient // non-nil only for avro deserializer
+
+	// commitMode: "auto" (sarama auto-commit, default) or "checkpoint" (offsets
+	// committed only when the pipeline checkpoints, via Commit()).
+	commitMode string
+	// pending is the next offset to commit per partition — the position of
+	// messages already RETURNED by ReadBatch (hence processed by checkpoint time).
+	// Cursor snapshots it into the checkpoint token; Commit acks it to Kafka.
+	pendingMu   sync.Mutex
+	pending     map[int32]int64
+	lastSession sarama.ConsumerGroupSession
 }
 
 // kafkaSourceConfig holds parsed configuration.
@@ -119,6 +129,7 @@ type consumerGroupHandler struct {
 	readyOnce sync.Once
 
 	batchMode  bool
+	autoMark   bool // mark offsets on enqueue (auto commitMode); false = commit at checkpoint
 	stopOffset int64
 	stopTS     time.Time
 
@@ -180,7 +191,9 @@ func (h *consumerGroupHandler) ConsumeClaim(
 			return nil
 		}
 		h.msgCh <- msgEnvelope{session: session, msg: msg}
-		session.MarkMessage(msg, "")
+		if h.autoMark {
+			session.MarkMessage(msg, "")
+		}
 
 		// Drain-to-end: this partition is complete once we've consumed the last
 		// message that existed at source-open time (end offset - 1).
@@ -205,8 +218,12 @@ func newKafkaSource(cfg map[string]interface{}) (source.Source, error) {
 		return nil, fmt.Errorf("kafka source: %w", err)
 	}
 
+	commitMode, _ := cfg["commitMode"].(string)
+	if commitMode == "" {
+		commitMode = "auto"
+	}
 	sc.Consumer.Offsets.Initial = kc.startOffset
-	sc.Consumer.Offsets.AutoCommit.Enable = true
+	sc.Consumer.Offsets.AutoCommit.Enable = commitMode != "checkpoint"
 	sc.Consumer.Offsets.AutoCommit.Interval = 1 * time.Second
 	sc.Consumer.Group.Rebalance.GroupStrategies = []sarama.BalanceStrategy{
 		sarama.NewBalanceStrategyRoundRobin(),
@@ -223,6 +240,7 @@ func newKafkaSource(cfg map[string]interface{}) (source.Source, error) {
 		msgCh:      make(chan msgEnvelope, batchSize*2),
 		ready:      make(chan struct{}),
 		batchMode:  kc.mode == "batch",
+		autoMark:   commitMode != "checkpoint",
 		stopOffset: kc.stopOffset,
 		stopTS:     kc.stopTS,
 		stopAtEnd:  kc.stopAtEnd,
@@ -272,11 +290,13 @@ func newKafkaSource(cfg map[string]interface{}) (source.Source, error) {
 	}
 
 	ks := &kafkaSource{
-		cfg:      kc,
-		cg:       cg,
-		handler:  handler,
-		cancelCg: cgCancel,
-		cgDone:   cgDone,
+		cfg:        kc,
+		cg:         cg,
+		handler:    handler,
+		cancelCg:   cgCancel,
+		cgDone:     cgDone,
+		commitMode: commitMode,
+		pending:    make(map[int32]int64),
 	}
 
 	ks.hwmColumn, _ = cfg["hwmColumn"].(string)
@@ -329,6 +349,50 @@ func (ks *kafkaSource) Skip(n int64) error {
 	if ks.cfg.mode == "batch" {
 		return fmt.Errorf("kafka source: Skip not supported in batch mode — offset resumption uses consumer group commits")
 	}
+	return nil
+}
+
+// Cursor returns the per-partition next-offset position of messages already
+// returned by ReadBatch, as a JSON object keyed by partition. It is captured
+// into the checkpoint token atomically with the pipeline state, so a resume can
+// see exactly where consumption had reached at the checkpoint.
+func (ks *kafkaSource) Cursor() json.RawMessage {
+	ks.pendingMu.Lock()
+	defer ks.pendingMu.Unlock()
+	m := make(map[string]int64, len(ks.pending))
+	for p, o := range ks.pending {
+		m[strconv.Itoa(int(p))] = o
+	}
+	data, err := json.Marshal(m)
+	if err != nil {
+		return json.RawMessage("null")
+	}
+	return data
+}
+
+// Commit acknowledges consumption up to the last-returned offset per partition.
+// In "checkpoint" commitMode the engine calls this only after the checkpoint
+// token is durable, so committed offsets never run ahead of persisted progress
+// (no lost messages on resume). In "auto" mode sarama also auto-commits; this
+// call simply makes the checkpoint boundary an explicit commit point too.
+func (ks *kafkaSource) Commit() error {
+	if ks.commitMode != "checkpoint" {
+		return nil // auto mode: sarama auto-commit owns offset progress
+	}
+	ks.pendingMu.Lock()
+	sess := ks.lastSession
+	snapshot := make(map[int32]int64, len(ks.pending))
+	for p, o := range ks.pending {
+		snapshot[p] = o
+	}
+	ks.pendingMu.Unlock()
+	if sess == nil {
+		return nil
+	}
+	for p, o := range snapshot {
+		sess.MarkOffset(ks.cfg.topic, p, o, "")
+	}
+	sess.Commit()
 	return nil
 }
 
@@ -394,6 +458,12 @@ func (ks *kafkaSource) ReadBatch(size int) (*record.RecordBatch, error) {
 			}
 
 			batch.Rows = append(batch.Rows, ks.extractRow(obj))
+			ks.pendingMu.Lock()
+			if off := env.msg.Offset + 1; off > ks.pending[env.msg.Partition] {
+				ks.pending[env.msg.Partition] = off
+			}
+			ks.lastSession = env.session
+			ks.pendingMu.Unlock()
 		}
 	}
 

@@ -34,6 +34,20 @@ type Source interface {
 	Close() error
 }
 
+// Committer is an optional Source interface for sources whose read position is
+// acknowledged to an external system (e.g. a Kafka consumer committing offsets).
+// When implemented, the pipeline engine calls Commit() at each checkpoint AFTER
+// the sink is flushed and the checkpoint token (including this source's Cursor)
+// is persisted. Advancing the external acknowledgement only after the token is
+// durable guarantees at-least-once delivery: a crash re-delivers everything
+// after the last checkpoint, so no in-flight record is lost. Sources without an
+// external ack simply do not implement this (a clean no-op).
+type Committer interface {
+	// Commit durably acknowledges consumption up to the position reported by the
+	// most recent ReadBatch. Called by the engine at checkpoint and completion.
+	Commit() error
+}
+
 // PartitionableSource extends Source with the ability to enumerate and open
 // independent sub-ranges of the data, enabling multi-instance parallel reads.
 // Not all formats support partitioning; the pipeline falls back to single-

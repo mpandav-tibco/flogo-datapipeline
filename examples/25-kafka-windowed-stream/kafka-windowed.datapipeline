@@ -36,6 +36,7 @@
           "groupId": "window-demo",
           "startOffset": "earliest",
           "deserializer": "json",
+          "commitMode": "checkpoint",
           "pollTimeoutMs": 1000
         },
         "transforms": [
