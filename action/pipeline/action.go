@@ -26,6 +26,7 @@ import (
 	"github.com/mpandav-tibco/flogo-datapipeline/transform"
 	dqtransform "github.com/mpandav-tibco/flogo-datapipeline/transform/dq"
 	hwmtransform "github.com/mpandav-tibco/flogo-datapipeline/transform/hwm"
+	wintransform "github.com/mpandav-tibco/flogo-datapipeline/transform/window"
 	"github.com/mpandav-tibco/flogo-datapipeline/watermark"
 )
 
@@ -389,6 +390,11 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 	// A nil dqProvider means no dq transform was declared; metadata is skipped.
 	dqProvider := findDQGateProvider(txPipeline)
 
+	// Locate the window transform (if present). The engine flushes its remaining
+	// open windows after the source EOF, and excludes windowed pipelines from the
+	// parallel transform path (windowed aggregation is stateful and order-sensitive).
+	winOp := findWindowedOperator(txPipeline)
+
 	// --- sink ---
 	snk, err := sink.New(def.Sink.Type, def.Sink.Options)
 	if err != nil {
@@ -443,7 +449,7 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 		txWorkers = 1
 	}
 	parallelEligible := txWorkers > 1 &&
-		hwmProvider == nil && dqProvider == nil &&
+		hwmProvider == nil && dqProvider == nil && winOp == nil &&
 		def.SchemaDrift.Policy == "" &&
 		(def.Checkpoint.Type == "" || def.Checkpoint.Type == "none")
 	if txWorkers > 1 {
@@ -778,6 +784,29 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 		}
 	}
 
+	// Emit any windows still open once the source is exhausted (bounded-source EOF).
+	// The window transform fires closed windows incrementally during Apply; Flush
+	// drains whatever remains and writes it through the normal sink path.
+	if winOp != nil {
+		flushed, ferr := winOp.Flush()
+		if ferr != nil {
+			return out, fmt.Errorf("window flush: %w", ferr)
+		}
+		if flushed != nil && flushed.Len() > 0 {
+			written, werr := a.rowLevelWrite(runLog, snk, dlq, flushed, runID, out)
+			if werr != nil {
+				return out, werr
+			}
+			out.RowsWritten += int64(written)
+		}
+		if flushed != nil {
+			record.Put(flushed)
+		}
+		if lc := winOp.LateCount(); lc > 0 {
+			runLog.Infof("window: %d late record(s) dropped (onLate=drop)", lc)
+		}
+	}
+
 	// Final flush.
 	if err := snk.Flush(); err != nil {
 		return out, fmt.Errorf("sink final flush: %w", err)
@@ -1003,6 +1032,19 @@ func saveWatermark(
 	} else {
 		runLog.Infof("watermark saved — %s = %s", m.Column, m.Value)
 	}
+}
+
+// findWindowedOperator walks the pipeline stages and returns the first stage that
+// implements wintransform.WindowedOperator (i.e. the "window" transform), or nil
+// when no windowed aggregation is declared. The engine calls Flush() on it after
+// the source is exhausted to emit windows still open.
+func findWindowedOperator(p *transform.Pipeline) wintransform.WindowedOperator {
+	for _, stage := range p.Stages() {
+		if w, ok := stage.(wintransform.WindowedOperator); ok {
+			return w
+		}
+	}
+	return nil
 }
 
 // findHWMTransform walks the pipeline stages and returns the first stage that

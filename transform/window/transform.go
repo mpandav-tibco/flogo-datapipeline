@@ -1,0 +1,295 @@
+// Package window registers a stateful, event-time windowed aggregation transform.
+//
+//	import _ "github.com/mpandav-tibco/flogo-datapipeline/transform/window"
+//
+// Unlike the stateless row transforms, this stage buffers keyed window state and
+// emits one output row per (key, closed window). It implements WindowedOperator so
+// the pipeline engine can Flush() remaining open windows at end-of-input (a bounded
+// source) — the same operator also fires windows incrementally as the event-time
+// watermark advances (a streaming source).
+//
+// Config (see docs/stream-processing.md §9):
+//
+//	{
+//	  "type": "window",
+//	  "eventTime": { "column": "ts", "format": "RFC3339" },   // omit → processing time
+//	  "watermark": { "strategy": "boundedOutOfOrderness", "maxLatenessMs": 5000 },
+//	  "window":    { "kind": "tumbling", "sizeMs": 60000 },    // sliding{sizeMs,slideMs} | global
+//	  "groupBy":   ["sensor_id"],
+//	  "aggregations": [ { "as": "avg_temp", "fn": "avg", "column": "temperature" } ],
+//	  "emit":      { "windowStartAs": "window_start", "windowEndAs": "window_end" },
+//	  "onLate":    "drop"                                      // drop (default)
+//	}
+package window
+
+import (
+	"fmt"
+	"time"
+
+	corelog "github.com/project-flogo/core/support/log"
+
+	"github.com/mpandav-tibco/flogo-datapipeline/record"
+	"github.com/mpandav-tibco/flogo-datapipeline/transform"
+	"github.com/mpandav-tibco/flogo-datapipeline/windowing"
+)
+
+// WindowedOperator is implemented by the window transform. The pipeline engine
+// locates it in the transform chain and calls Flush() after the source is
+// exhausted, writing the remaining open windows to the sink.
+type WindowedOperator interface {
+	// Flush emits every window still open (end-of-input). Returns nil when there
+	// are no open windows.
+	Flush() (*record.RecordBatch, error)
+	// LateCount reports how many records arrived after their window had closed.
+	LateCount() int64
+}
+
+func init() {
+	transform.Register("window", newTransform)
+}
+
+type windowTransform struct {
+	op       *windowing.Operator
+	groupBy  []string
+	aggs     []windowing.AggSpec
+	eventCol string // "" → processing time
+	layout   string // Go time layout for string event-time columns
+	onLate   string // drop (default)
+
+	outCols   []record.Column
+	lateCount int64
+}
+
+func newTransform(cfg map[string]interface{}) (transform.Transform, error) {
+	// --- window spec ---
+	wm := asMap(cfg["window"])
+	if wm == nil {
+		return nil, fmt.Errorf("window transform: 'window' config is required")
+	}
+	spec := windowing.Spec{
+		Kind:    windowing.Kind(asString(wm["kind"])),
+		SizeMs:  asInt64(wm["sizeMs"]),
+		SlideMs: asInt64(wm["slideMs"]),
+		GapMs:   asInt64(wm["gapMs"]),
+	}
+	switch spec.Kind {
+	case windowing.Tumbling, windowing.Sliding:
+		if spec.SizeMs <= 0 {
+			return nil, fmt.Errorf("window transform: window.sizeMs must be > 0 for %s", spec.Kind)
+		}
+	case windowing.Session:
+		if spec.GapMs <= 0 {
+			return nil, fmt.Errorf("window transform: window.gapMs must be > 0 for session windows")
+		}
+	case windowing.Global:
+		// no size needed
+	default:
+		return nil, fmt.Errorf("window transform: unknown window.kind %q (want tumbling|sliding|session|global)", spec.Kind)
+	}
+
+	// --- aggregations ---
+	aggsRaw := asSlice(cfg["aggregations"])
+	if len(aggsRaw) == 0 {
+		return nil, fmt.Errorf("window transform: at least one aggregation is required")
+	}
+	aggs := make([]windowing.AggSpec, 0, len(aggsRaw))
+	for i, a := range aggsRaw {
+		am := asMap(a)
+		as, fn, col := asString(am["as"]), asString(am["fn"]), asString(am["column"])
+		if as == "" {
+			return nil, fmt.Errorf("window transform: aggregations[%d].as is required", i)
+		}
+		if fn == "" {
+			return nil, fmt.Errorf("window transform: aggregations[%d].fn is required", i)
+		}
+		if fn != "count" && col == "" {
+			return nil, fmt.Errorf("window transform: aggregations[%d].column is required for fn %q", i, fn)
+		}
+		aggs = append(aggs, windowing.AggSpec{As: as, Fn: fn, Column: col})
+	}
+
+	// --- watermark ---
+	var maxLatenessMs int64
+	if wmk := asMap(cfg["watermark"]); wmk != nil {
+		maxLatenessMs = asInt64(wmk["maxLatenessMs"])
+	}
+
+	op, err := windowing.New(spec, aggs, maxLatenessMs)
+	if err != nil {
+		return nil, fmt.Errorf("window transform: %w", err)
+	}
+
+	// --- groupBy ---
+	groupBy := asStringSlice(cfg["groupBy"])
+
+	// --- event time ---
+	var eventCol, layout string
+	if et := asMap(cfg["eventTime"]); et != nil {
+		eventCol = asString(et["column"])
+		layout = goLayout(asString(et["format"]))
+	}
+	if eventCol == "" {
+		corelog.RootLogger().Warnf("window transform: no eventTime.column configured — using processing time; late/out-of-order data will be mis-bucketed")
+	}
+
+	// --- emit column names ---
+	wStart, wEnd := "window_start", "window_end"
+	if em := asMap(cfg["emit"]); em != nil {
+		if s := asString(em["windowStartAs"]); s != "" {
+			wStart = s
+		}
+		if s := asString(em["windowEndAs"]); s != "" {
+			wEnd = s
+		}
+	}
+
+	onLate := asString(cfg["onLate"])
+	if onLate == "" {
+		onLate = "drop"
+	}
+
+	// --- precompute the (static) output schema ---
+	outCols := make([]record.Column, 0, len(groupBy)+2+len(aggs))
+	for _, g := range groupBy {
+		outCols = append(outCols, record.Column{Name: g, Type: record.TypeAny})
+	}
+	outCols = append(outCols,
+		record.Column{Name: wStart, Type: record.TypeInt},
+		record.Column{Name: wEnd, Type: record.TypeInt},
+	)
+	for _, ag := range aggs {
+		outCols = append(outCols, record.Column{Name: ag.As, Type: aggColType(ag.Fn)})
+	}
+
+	return &windowTransform{
+		op: op, groupBy: groupBy, aggs: aggs,
+		eventCol: eventCol, layout: layout, onLate: onLate, outCols: outCols,
+	}, nil
+}
+
+func (w *windowTransform) Name() string { return "window" }
+
+// Apply folds every input row into its windows and emits any windows that the
+// advancing watermark has closed. It returns a NON-nil (possibly empty) batch so
+// the engine does not mis-count buffered rows as "dropped" — buffered rows are
+// held in window state and emitted on a later batch or at Flush.
+func (w *windowTransform) Apply(in *record.RecordBatch) (*record.RecordBatch, error) {
+	for i := range in.Rows {
+		row := in.RowMap(i)
+		ts, err := w.eventMillis(row)
+		if err != nil {
+			w.lateCount++ // unparseable/absent event time: treat as unusable, drop
+			continue
+		}
+		keyVals := make([]interface{}, len(w.groupBy))
+		for j, g := range w.groupBy {
+			keyVals[j] = row[g]
+		}
+		if late := w.op.Add(keyVals, ts, row); late {
+			w.lateCount++ // onLate=drop: the row was not added to any open window
+		}
+	}
+	results := w.op.Emit(w.op.Watermark())
+	return w.toBatch(results, true), nil
+}
+
+// Flush emits all remaining open windows (end-of-input).
+func (w *windowTransform) Flush() (*record.RecordBatch, error) {
+	return w.toBatch(w.op.Flush(), false), nil
+}
+
+// LateCount returns the number of records dropped for arriving after their window closed.
+func (w *windowTransform) LateCount() int64 { return w.lateCount }
+
+func (w *windowTransform) Close() error { return nil }
+
+// toBatch materialises window results into a RecordBatch with the precomputed
+// schema. When emptyNonNil is true and there are no results, it returns an empty
+// (len 0) but non-nil batch so the engine treats the input as buffered, not dropped.
+func (w *windowTransform) toBatch(results []windowing.Result, emptyNonNil bool) *record.RecordBatch {
+	if len(results) == 0 {
+		if !emptyNonNil {
+			return nil
+		}
+		b := record.Get()
+		b.Columns = w.outCols
+		b.Rows = b.Rows[:0]
+		return b
+	}
+	b := record.Get()
+	b.Columns = w.outCols
+	rows := make([][]interface{}, 0, len(results))
+	for _, r := range results {
+		row := make([]interface{}, 0, len(w.outCols))
+		row = append(row, r.Key...)
+		row = append(row, r.Window.Start, r.Window.End)
+		for _, ag := range w.aggs {
+			row = append(row, r.Aggs[ag.As])
+		}
+		rows = append(rows, row)
+	}
+	b.Rows = rows
+	return b
+}
+
+// eventMillis extracts the event time (epoch millis) for a row. With no eventTime
+// column it falls back to processing time (wall clock).
+func (w *windowTransform) eventMillis(row map[string]interface{}) (int64, error) {
+	if w.eventCol == "" {
+		return time.Now().UnixMilli(), nil
+	}
+	switch v := row[w.eventCol].(type) {
+	case nil:
+		return 0, fmt.Errorf("eventTime column %q is null", w.eventCol)
+	case time.Time:
+		return v.UnixMilli(), nil
+	case int:
+		return int64(v), nil
+	case int32:
+		return int64(v), nil
+	case int64:
+		return v, nil
+	case float64:
+		return int64(v), nil
+	case float32:
+		return int64(v), nil
+	case string:
+		t, err := time.Parse(w.layout, v)
+		if err != nil {
+			return 0, fmt.Errorf("parse eventTime %q with layout %q: %w", v, w.layout, err)
+		}
+		return t.UnixMilli(), nil
+	default:
+		return 0, fmt.Errorf("unsupported eventTime type %T for column %q", v, w.eventCol)
+	}
+}
+
+// aggColType maps an aggregate function to its output column type.
+func aggColType(fn string) record.ColumnType {
+	switch fn {
+	case "count":
+		return record.TypeInt
+	case "sum", "avg", "min", "max":
+		return record.TypeFloat
+	default: // first, last
+		return record.TypeAny
+	}
+}
+
+// goLayout maps a friendly format name to a Go reference-time layout. An unknown
+// value is returned as-is (assumed to already be a Go layout). Empty defaults to
+// RFC3339.
+func goLayout(format string) string {
+	switch format {
+	case "", "RFC3339":
+		return time.RFC3339
+	case "RFC3339Nano":
+		return time.RFC3339Nano
+	case "DateTime":
+		return time.DateTime // "2006-01-02 15:04:05"
+	case "DateOnly":
+		return time.DateOnly // "2006-01-02"
+	default:
+		return format
+	}
+}
