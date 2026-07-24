@@ -135,15 +135,19 @@ func newJoinTransform(cfg map[string]interface{}) (transform.Transform, error) {
 	defer rs.Close()
 
 	table := make(map[string][][]interface{})
+	// When rightColumns is configured, the output schema is fixed up front so it
+	// does not depend on whether the reference source has rows (an empty right
+	// table must still add the configured columns — as nulls for a left join).
 	var rightCols []string
+	if len(wantCols) > 0 {
+		rightCols = wantCols
+	}
 	var loaded int64
-	first := true
 	for {
 		b, rErr := rs.ReadBatch(1000)
 		if b != nil && b.Len() > 0 {
-			if first {
+			if rightCols == nil {
 				rightCols = resolveRightCols(b.Columns, wantCols, rightKey)
-				first = false
 			}
 			for i := 0; i < b.Len(); i++ {
 				m := b.RowMap(i)

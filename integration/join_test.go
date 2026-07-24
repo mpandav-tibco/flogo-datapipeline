@@ -194,3 +194,60 @@ func TestJoin_Then_Window(t *testing.T) {
 		t.Errorf("windowed keyed join = %v, want %v", got, want)
 	}
 }
+
+// TestJoin_EmptyRightKeepsSchema: with rightColumns configured, an empty right
+// reference table must still add those (null) columns — the output schema must
+// not depend on whether the reference has rows (important for a left join).
+func TestJoin_EmptyRightKeepsSchema(t *testing.T) {
+	rightPath, cleanupR := writeTempCSV(t, "id,name,tier\n") // header only, no rows
+	defer cleanupR()
+	leftPath, cleanupL := writeTempCSV(t, joinOrdersCSV)
+	defer cleanupL()
+
+	src, err := source.New("csv", map[string]interface{}{"path": leftPath, "hasHeader": true})
+	if err != nil {
+		t.Fatalf("source.New(csv): %v", err)
+	}
+	defer src.Close()
+
+	p, err := transform.Build([]map[string]interface{}{
+		{
+			"type": "join", "leftKey": "customerId", "rightKey": "id", "joinType": "left",
+			"right":        map[string]interface{}{"type": "csv", "path": rightPath, "hasHeader": true},
+			"rightColumns": []interface{}{"name", "tier"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("transform.Build(join): %v", err)
+	}
+	defer p.Close()
+
+	rows, withNameCol := 0, 0
+	for {
+		b, rErr := src.ReadBatch(1000)
+		if b != nil && b.Len() > 0 {
+			res, aErr := p.Apply(b)
+			if aErr != nil {
+				t.Fatalf("join Apply: %v", aErr)
+			}
+			for i := 0; i < res.Len(); i++ {
+				rows++
+				if _, ok := res.RowMap(i)["name"]; ok {
+					withNameCol++
+				}
+			}
+		}
+		if rErr == io.EOF {
+			break
+		}
+		if rErr != nil {
+			t.Fatalf("ReadBatch: %v", rErr)
+		}
+	}
+	if rows != 4 {
+		t.Errorf("left join with empty right: %d rows, want 4", rows)
+	}
+	if withNameCol != 4 {
+		t.Errorf("configured right column 'name' missing from %d/%d output rows", rows-withNameCol, rows)
+	}
+}
