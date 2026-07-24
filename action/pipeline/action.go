@@ -320,6 +320,22 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 		srcCfg["hwmValue"] = priorMark.Value
 		srcCfg["hwmValueType"] = priorMark.ValueType
 	}
+	// Checkpoint-mode Kafka resume: seek the source to the exact processed
+	// offsets recorded in the checkpoint token (captured atomically with the
+	// window-state snapshot) so the source position and the restored window
+	// state resume from the SAME token — independent of whether the last external
+	// offset commit succeeded. This closes the crash-between-token-and-commit
+	// double-count window. Single mode only: sharded/distributed disallow
+	// windowed Kafka (co-partition guard) and resume per-partition inside drain.
+	if def.Source.Type == "kafka" && (def.Scaling.Mode == "" || def.Scaling.Mode == "single") {
+		rk := runID
+		if def.Checkpoint.Key != "" {
+			rk = def.Checkpoint.Key
+		}
+		if tok, tErr := ckpt.Load(rk); tErr == nil && tok != nil && len(tok.Payload) > 0 {
+			srcCfg["resumeCursor"] = tok.Payload
+		}
+	}
 	src, err := source.New(def.Source.Type, srcCfg)
 	if err != nil {
 		return out, fmt.Errorf("source open: %w", err)

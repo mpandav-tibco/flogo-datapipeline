@@ -358,8 +358,14 @@ pipeline survives a restart. Mechanism:
   offset (double‑ or under‑counting on restart). Windowed Kafka pipelines must
   therefore run in `commitMode:"checkpoint"`, which co‑commits the offset with the
   token; non‑windowed pipelines keep today's sarama auto‑commit behaviour.
-  Bit‑exact once (seek to the token offset on resume, ignoring the consumer‑group
-  commit) is the remaining step — it needs a consumer‑group start‑offset override.
+  **On resume the source seeks to the exact per‑partition offsets recorded in the
+  token** — pre‑seeding the consumer group's committed offset (via a short‑lived
+  offset manager) *before* the group joins — so the restored window state and the
+  source position always advance from the same token, independent of whether the
+  last external offset commit succeeded. This closes the
+  crash‑between‑token‑and‑commit window: a commit that never landed is healed on
+  restart because the token offset (always ≥ the last committed offset) becomes
+  the authoritative resume position, giving **bit‑exact once** resume.
 
 **Verified live (2026‑07‑24, real Kafka):** a consumer buffered two events into an
 open 1‑minute window and checkpointed the state; the process was killed; a fresh
@@ -402,7 +408,12 @@ watermark and the restored window fired with the **exact pre‑crash aggregate**
   offset cursor in the token atomically with window state
   (`source.Committer(processedRows)` + `Cursor`). Default `auto` is unchanged; a
   load‑time check requires a durable checkpoint backend for `checkpoint` mode.
-- [ ] **Phase 3 (remaining)** — bit‑exact seek‑to‑token‑offset on resume.
+- [x] **Phase 3 bit‑exact resume** — on resume the Kafka source seeks to the exact
+  per‑partition offsets recorded in the checkpoint token (pre‑seeding the consumer
+  group's committed offset via a short‑lived offset manager before the group
+  joins), so window state and source position resume from the same token
+  regardless of whether the last external offset commit landed. Verified live: a
+  fresh group seeking to offset 3 of 5 delivers only the last two records.
 - [x] **Phase 4 keyed JOIN** — `join` transform: keyed stream‑table join against a
   source‑loaded reference table (inner/left, many‑to‑many, right‑column selection
   + prefix). Composes with `window` for a **windowed keyed join** (join to enrich →

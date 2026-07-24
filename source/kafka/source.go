@@ -279,6 +279,29 @@ func newKafkaSource(cfg map[string]interface{}) (source.Source, error) {
 		handler.endOffsets = endOffsets
 	}
 
+	// Resume seek: when the engine passes a resume cursor (the per-partition
+	// offsets recorded in the checkpoint token, captured atomically with the
+	// window-state snapshot), pre-seed the consumer group's committed offsets to
+	// exactly those positions BEFORE the group joins. This makes the resumed
+	// source position and the restored window state consistent from the same
+	// token — independent of whether the last external offset commit succeeded —
+	// closing the crash-between-token-and-commit double-count window. Only
+	// checkpoint mode injects a cursor, and the token offsets are always >= the
+	// last committed offset, so this advances the group without ever rewinding
+	// past acknowledged data.
+	if commitMode == "checkpoint" {
+		resumeOffsets, rerr := parseResumeCursor(cfg["resumeCursor"])
+		if rerr != nil {
+			return nil, fmt.Errorf("kafka source: %w", rerr)
+		}
+		if len(resumeOffsets) > 0 {
+			if serr := seekGroupOffsets(kc.brokers, kc.groupID, kc.topic, resumeOffsets, sc); serr != nil {
+				return nil, fmt.Errorf("kafka source: resume seek: %w", serr)
+			}
+			klog.Infof("kafka source: resumed group %q to checkpoint offsets %v", kc.groupID, resumeOffsets)
+		}
+	}
+
 	cg, err := sarama.NewConsumerGroup(kc.brokers, kc.groupID, sc)
 	if err != nil {
 		return nil, fmt.Errorf("kafka source: new consumer group: %w", err)
@@ -887,6 +910,83 @@ func (r *avroBinaryReader) readType(typeName string) (interface{}, error) {
 }
 
 // --- Config parser ---
+
+// parseResumeCursor decodes the checkpoint resume cursor (as produced by
+// kafkaSource.Cursor) into per-partition next-offsets. The cursor is a JSON
+// object mapping partition id (string) to the next offset to read. It accepts a
+// json.RawMessage, []byte, or string; a nil, empty, or "null" cursor yields a
+// nil map (no seek).
+func parseResumeCursor(v interface{}) (map[int32]int64, error) {
+	var raw []byte
+	switch t := v.(type) {
+	case nil:
+		return nil, nil
+	case json.RawMessage:
+		raw = t
+	case []byte:
+		raw = t
+	case string:
+		raw = []byte(t)
+	default:
+		return nil, fmt.Errorf("resumeCursor: unsupported type %T", v)
+	}
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	var m map[string]int64
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil, fmt.Errorf("resumeCursor: %w", err)
+	}
+	out := make(map[int32]int64, len(m))
+	for k, off := range m {
+		p, err := strconv.Atoi(k)
+		if err != nil {
+			return nil, fmt.Errorf("resumeCursor: bad partition key %q: %w", k, err)
+		}
+		out[int32(p)] = off
+	}
+	return out, nil
+}
+
+// seekGroupOffsets pre-seeds the consumer group's committed offset for each
+// partition to the given next-offset, using a short-lived offset manager, so a
+// consumer group created immediately afterward resumes from exactly these
+// positions. sarama's MarkOffset only advances the stored offset, and the
+// checkpoint-token offsets are always >= the last committed offset, so this
+// never rewinds past acknowledged data.
+func seekGroupOffsets(brokers []string, group, topic string, offsets map[int32]int64, sc *sarama.Config) error {
+	client, err := sarama.NewClient(brokers, sc)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+
+	om, err := sarama.NewOffsetManagerFromClient(group, client)
+	if err != nil {
+		return err
+	}
+	defer om.Close()
+
+	poms := make([]sarama.PartitionOffsetManager, 0, len(offsets))
+	for p, off := range offsets {
+		pom, perr := om.ManagePartition(topic, p)
+		if perr != nil {
+			for _, done := range poms {
+				done.AsyncClose()
+			}
+			return fmt.Errorf("manage partition %d: %w", p, perr)
+		}
+		pom.MarkOffset(off, "")
+		poms = append(poms, pom)
+	}
+	// Commit while all partitions are still managed so every marked offset is
+	// flushed, then release the per-partition managers.
+	om.Commit()
+	for _, pom := range poms {
+		pom.AsyncClose()
+	}
+	return nil
+}
 
 // snapshotEndOffsets returns the current end-of-log (high-water-mark) offset for
 // every partition of a topic, using a short-lived client. Called at source open

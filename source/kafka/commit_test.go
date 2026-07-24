@@ -76,3 +76,29 @@ func TestPollTimeoutMsAlias(t *testing.T) {
 		t.Errorf("default pollMs = %d, want 500", kc.pollMs)
 	}
 }
+
+// TestParseResumeCursor verifies the checkpoint resume cursor decodes to
+// per-partition next-offsets and that empty/absent cursors yield no seek.
+func TestParseResumeCursor(t *testing.T) {
+	m, err := parseResumeCursor(json.RawMessage(`{"0":100,"2":250}`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(m) != 2 || m[0] != 100 || m[2] != 250 {
+		t.Errorf("got %v, want {0:100, 2:250}", m)
+	}
+	// String form is also accepted.
+	if m, err := parseResumeCursor(`{"1":5}`); err != nil || m[1] != 5 {
+		t.Errorf("string form: got %v err %v", m, err)
+	}
+	// Nil, "null", empty, and empty-object cursors mean "no seek".
+	for _, v := range []interface{}{nil, json.RawMessage("null"), json.RawMessage(""), "", []byte("{}")} {
+		if mm, err := parseResumeCursor(v); err != nil || len(mm) != 0 {
+			t.Errorf("empty-ish %v: got %v err %v, want empty/no-error", v, mm, err)
+		}
+	}
+	// A non-numeric partition key is an error.
+	if _, err := parseResumeCursor(json.RawMessage(`{"x":1}`)); err == nil {
+		t.Error("expected error for non-numeric partition key")
+	}
+}
