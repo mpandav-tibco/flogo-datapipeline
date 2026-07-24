@@ -495,6 +495,28 @@ func (d *Definition) validate() error {
 			return fmt.Errorf("pipeline definition: source.commitMode \"checkpoint\" requires a durable checkpoint backend — set checkpoint.type to \"file\" or \"redis\"")
 		}
 	}
+	// Windowed state resume requires the source offset and the window-state
+	// snapshot to advance together. A Kafka source in the default "auto"
+	// commitMode auto-commits offsets on an independent 1s timer, uncoordinated
+	// with checkpoint saves, so a restored window would not align with the resumed
+	// offset (double- or under-counting on restart). Only "checkpoint" mode
+	// co-commits the offset with the token. Require it whenever a windowed
+	// pipeline over Kafka also persists state to a checkpoint backend (i.e. it
+	// will actually restore on resume); without a backend, windows start fresh
+	// each run and there is nothing to misalign, so that case is allowed.
+	hasWindow := false
+	for i := range d.Transforms {
+		if d.Transforms[i].Type == "window" {
+			hasWindow = true
+			break
+		}
+	}
+	if hasWindow && d.Source.Type == "kafka" &&
+		d.Checkpoint.Type != "" && d.Checkpoint.Type != "none" {
+		if cm, _ := d.Source.Options["commitMode"].(string); cm != "checkpoint" {
+			return fmt.Errorf("pipeline definition: a windowed Kafka pipeline with a checkpoint backend requires source.commitMode \"checkpoint\" — the default \"auto\" mode commits Kafka offsets on an independent timer, uncoordinated with the window-state snapshot, so restored windows would not align with the resumed offset (double- or under-counting on restart); set source.commitMode to \"checkpoint\"")
+		}
+	}
 	return nil
 }
 

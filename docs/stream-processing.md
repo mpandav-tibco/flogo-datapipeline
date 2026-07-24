@@ -349,9 +349,15 @@ pipeline survives a restart. Mechanism:
   crash re‑delivers everything after the last checkpoint (nothing lost). The token
   also carries that processed offset `Cursor` (`payload`) atomically with the
   window state. Pairing this with an **idempotent (upsert) sink** keyed by
-  `(key, windowStart)` yields **exactly‑once *results***. The default
-  `commitMode: "auto"` keeps today's sarama auto‑commit behaviour, and a load‑time
-  check rejects `commitMode:"checkpoint"` without a durable checkpoint backend.
+  `(key, windowStart)` yields **exactly‑once *results***. Two load‑time checks
+  enforce a sound configuration: `commitMode:"checkpoint"` is rejected without a
+  durable checkpoint backend, and a **windowed** Kafka pipeline that persists to a
+  checkpoint backend is rejected in the default `commitMode:"auto"` — auto‑commit
+  advances offsets on an independent 1 s timer, uncoordinated with the
+  window‑state snapshot, so a restored window would not align with the resumed
+  offset (double‑ or under‑counting on restart). Windowed Kafka pipelines must
+  therefore run in `commitMode:"checkpoint"`, which co‑commits the offset with the
+  token; non‑windowed pipelines keep today's sarama auto‑commit behaviour.
   Bit‑exact once (seek to the token offset on resume, ignoring the consumer‑group
   commit) is the remaining step — it needs a consumer‑group start‑offset override.
 

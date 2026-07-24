@@ -60,3 +60,43 @@ func TestValidateRejectsCheckpointCommitWithoutBackend(t *testing.T) {
 		t.Errorf("commitMode=auto should be valid without a checkpoint: %v", err)
 	}
 }
+
+func TestValidateRequiresCheckpointCommitForWindowedKafka(t *testing.T) {
+	base := func() *Definition {
+		return &Definition{
+			Source:     SourceDef{Type: "kafka"},
+			Sink:       SinkDef{Type: "jsonlines"},
+			Transforms: []TransformDef{{Type: "window"}},
+			Checkpoint: CheckpointDef{Type: "file"},
+		}
+	}
+	// windowed Kafka + checkpoint backend + auto commit → rejected (uncoordinated resume).
+	d := base()
+	d.Source.Options = map[string]interface{}{"commitMode": "auto"}
+	if err := d.Validate(); err == nil {
+		t.Error("expected error for windowed Kafka + checkpoint backend in auto commit mode")
+	}
+	// unset commitMode defaults to auto → also rejected.
+	d = base()
+	if err := d.Validate(); err == nil {
+		t.Error("expected error for windowed Kafka + checkpoint backend with unset (auto) commitMode")
+	}
+	// commitMode checkpoint → allowed (offset co-committed with window snapshot).
+	d = base()
+	d.Source.Options = map[string]interface{}{"commitMode": "checkpoint"}
+	if err := d.Validate(); err != nil {
+		t.Errorf("windowed Kafka with checkpoint commit + backend should be valid: %v", err)
+	}
+	// windowed Kafka WITHOUT a checkpoint backend → allowed (windows start fresh; nothing to misalign).
+	d = base()
+	d.Checkpoint = CheckpointDef{}
+	if err := d.Validate(); err != nil {
+		t.Errorf("windowed Kafka without a checkpoint backend should be valid: %v", err)
+	}
+	// windowed NON-Kafka (file) source in auto mode + backend → allowed (deterministic Skip replay).
+	d = base()
+	d.Source = SourceDef{Type: "csv"}
+	if err := d.Validate(); err != nil {
+		t.Errorf("windowed file source with checkpoint should be valid regardless of commitMode: %v", err)
+	}
+}
