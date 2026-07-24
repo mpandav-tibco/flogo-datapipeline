@@ -510,8 +510,10 @@ done:
 	ks.mu.RUnlock()
 
 	// Record an offset mark at this batch boundary so a later Commit can map the
-	// pipeline's processed-row count to the exact offset to acknowledge.
-	if len(batch.Rows) > 0 {
+	// pipeline's processed-row count to the exact offset to acknowledge. Only in
+	// "checkpoint" mode — otherwise Commit never prunes and marks would grow
+	// unbounded (auto mode lets sarama own offsets).
+	if ks.commitMode == "checkpoint" && len(batch.Rows) > 0 {
 		ks.pendingMu.Lock()
 		snap := make(map[int32]int64, len(ks.pending))
 		for p, o := range ks.pending {
