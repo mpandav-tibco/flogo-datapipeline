@@ -57,8 +57,36 @@ var shared struct {
 	// by metric name. The registry is the same isolated one the /metrics server
 	// gathers, so component metrics honour the configured backend.
 	dynMu       sync.Mutex
-	dynCounters map[string]*prom.CounterVec
-	dynGauges   map[string]*prom.GaugeVec
+	dynCounters map[string]*dynCounter
+	dynGauges   map[string]*dynGauge
+}
+
+// dynCounter/dynGauge cache a lazily-created vector alongside the label-key
+// schema it was created with. A Prometheus metric name is bound to a single
+// label schema, so if a later caller uses the same name with a different set of
+// label keys, the record is skipped rather than panicking on a cardinality
+// mismatch — a metrics call must never crash the pipeline.
+type dynCounter struct {
+	vec  *prom.CounterVec
+	keys []string
+}
+
+type dynGauge struct {
+	vec  *prom.GaugeVec
+	keys []string
+}
+
+// equalKeys reports whether two already-sorted label-key slices are identical.
+func equalKeys(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func initShared(listenAddr, path string) error {
@@ -234,11 +262,11 @@ func (r *promRecorder) Counter(name, help string, labels map[string]string, delt
 	keys := sortedLabelKeys(labels)
 	shared.dynMu.Lock()
 	if shared.dynCounters == nil {
-		shared.dynCounters = map[string]*prom.CounterVec{}
+		shared.dynCounters = map[string]*dynCounter{}
 	}
-	cv, ok := shared.dynCounters[name]
+	dc, ok := shared.dynCounters[name]
 	if !ok {
-		cv = prom.NewCounterVec(prom.CounterOpts{Name: name, Help: help}, keys)
+		cv := prom.NewCounterVec(prom.CounterOpts{Name: name, Help: help}, keys)
 		if err := shared.reg.Register(cv); err != nil {
 			// Already registered by a racing caller: reuse the existing collector.
 			if are, isARE := err.(prom.AlreadyRegisteredError); isARE {
@@ -247,25 +275,31 @@ func (r *promRecorder) Counter(name, help string, labels map[string]string, delt
 				}
 			}
 		}
-		shared.dynCounters[name] = cv
+		dc = &dynCounter{vec: cv, keys: keys}
+		shared.dynCounters[name] = dc
 	}
 	shared.dynMu.Unlock()
+	// The cached vector is bound to the label schema it was first created with;
+	// a mismatched later call is skipped rather than panicking on cardinality.
+	if !equalKeys(dc.keys, keys) {
+		return
+	}
 	vals := make([]string, len(keys))
 	for i, k := range keys {
 		vals[i] = labels[k]
 	}
-	cv.WithLabelValues(vals...).Add(delta)
+	dc.vec.WithLabelValues(vals...).Add(delta)
 }
 
 func (r *promRecorder) Gauge(name, help string, labels map[string]string, value float64) {
 	keys := sortedLabelKeys(labels)
 	shared.dynMu.Lock()
 	if shared.dynGauges == nil {
-		shared.dynGauges = map[string]*prom.GaugeVec{}
+		shared.dynGauges = map[string]*dynGauge{}
 	}
-	gv, ok := shared.dynGauges[name]
+	dg, ok := shared.dynGauges[name]
 	if !ok {
-		gv = prom.NewGaugeVec(prom.GaugeOpts{Name: name, Help: help}, keys)
+		gv := prom.NewGaugeVec(prom.GaugeOpts{Name: name, Help: help}, keys)
 		if err := shared.reg.Register(gv); err != nil {
 			if are, isARE := err.(prom.AlreadyRegisteredError); isARE {
 				if existing, castOK := are.ExistingCollector.(*prom.GaugeVec); castOK {
@@ -273,14 +307,18 @@ func (r *promRecorder) Gauge(name, help string, labels map[string]string, value 
 				}
 			}
 		}
-		shared.dynGauges[name] = gv
+		dg = &dynGauge{vec: gv, keys: keys}
+		shared.dynGauges[name] = dg
 	}
 	shared.dynMu.Unlock()
+	if !equalKeys(dg.keys, keys) {
+		return
+	}
 	vals := make([]string, len(keys))
 	for i, k := range keys {
 		vals[i] = labels[k]
 	}
-	gv.WithLabelValues(vals...).Set(value)
+	dg.vec.WithLabelValues(vals...).Set(value)
 }
 
 // Shutdown gracefully stops the shared HTTP server.
