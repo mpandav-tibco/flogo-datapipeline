@@ -280,11 +280,17 @@ func (t *tailer) drain(ctx context.Context, of *openLogFile) (int, error) {
 		if t.recon != nil {
 			t.recon.addRotation(t.node)
 		}
-		of.f.Close()
+		// Open the replacement handle BEFORE closing the current one: if the
+		// reopen fails, the existing handle is left intact so the caller
+		// (run/runBounded) closes it exactly once on the returned error — this
+		// avoids double-closing an already-closed handle (the old code closed
+		// first, then the caller closed again on the io.EOF). Two fds briefly
+		// coexist for the same path, which is harmless.
 		reopened := t.openFileAt(of.key, of.meta, 0)
 		if reopened == nil {
 			return 0, io.EOF
 		}
+		of.f.Close()
 		*of = *reopened
 	}
 
