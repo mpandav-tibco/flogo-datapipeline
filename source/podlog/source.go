@@ -150,6 +150,7 @@ func newPodlogSource(cfg map[string]interface{}) (source.Source, error) {
 		fromBeginning: c.fromBeginning,
 		pollMs:        c.pollMs,
 		startPattern:  startMatcher,
+		maxLines:      c.maxLines,
 		includeNS:     toSet(c.includeNS),
 		excludeNS:     toSet(c.excludeNS),
 		positions:     ps,
@@ -346,10 +347,13 @@ func parseConfig(cfg map[string]interface{}) podlogConfig {
 		includeNS:     strSliceFromCfg(cfg, "includeNamespaces"),
 		excludeNS:     strSliceFromCfg(cfg, "excludeNamespaces"),
 	}
+	c.maxLines = 500 // documented default safety cap; an explicit 0 means unlimited
 	if ml, ok := cfg["multiline"].(map[string]interface{}); ok {
 		c.startPattern = strFromCfg(ml, "startPattern")
 		c.flushIdleMs = intFromCfg(ml, "flushIdleMs")
-		c.maxLines = intFromCfg(ml, "maxLines")
+		if _, present := ml["maxLines"]; present {
+			c.maxLines = intFromCfg(ml, "maxLines")
+		}
 	}
 	return c
 }

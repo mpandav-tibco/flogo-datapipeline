@@ -72,6 +72,9 @@ type tailer struct {
 	includeNS     map[string]bool
 	excludeNS     map[string]bool
 	positions     *positionStore
+	// maxLines caps physical lines stitched into one multiline record (0 =
+	// unlimited); propagated to each file's stitcher.
+	maxLines int
 	// flushIdle is how long a file may be idle before a pending stitched
 	// (multiline) record is emitted so trailing records are not held forever.
 	flushIdle time.Duration
@@ -264,7 +267,7 @@ func (t *tailer) openFile(path string, meta podMeta) *openLogFile {
 		offset: start,
 		fp:     fp,
 		meta:   meta,
-		st:     &stitcher{startPattern: t.startPattern},
+		st:     &stitcher{startPattern: t.startPattern, maxLines: t.maxLines},
 	}
 }
 
@@ -355,7 +358,7 @@ func (t *tailer) openFileAt(path string, meta podMeta, start int64) *openLogFile
 		offset: start,
 		fp:     fp,
 		meta:   meta,
-		st:     &stitcher{startPattern: t.startPattern},
+		st:     &stitcher{startPattern: t.startPattern, maxLines: t.maxLines},
 	}
 }
 

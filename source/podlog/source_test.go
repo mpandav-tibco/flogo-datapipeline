@@ -87,6 +87,32 @@ func TestStitcherMultiline(t *testing.T) {
 	}
 }
 
+func TestStitcherMaxLinesCap(t *testing.T) {
+	// maxLines=3 caps a stitched record at three physical lines, so a stream
+	// whose lines never match startPattern cannot grow one record unbounded.
+	s := &stitcher{startPattern: mustMatch(t, `^\d{4}-\d{2}-\d{2}`), maxLines: 3}
+	if _, ok := s.push(criLine{stream: "stderr", message: "2026-07-14 ERROR boom", valid: true}, 100); ok {
+		t.Fatal("start line should not complete a record")
+	}
+	if _, ok := s.push(criLine{stream: "stderr", message: "line2", valid: true}, 110); ok {
+		t.Fatal("2nd line (under cap) should not complete a record")
+	}
+	rec, ok := s.push(criLine{stream: "stderr", message: "line3", valid: true}, 120)
+	if !ok {
+		t.Fatal("3rd line should force-emit the capped record")
+	}
+	if want := "2026-07-14 ERROR boom\nline2\nline3"; rec.message != want {
+		t.Errorf("capped record:\n got %q\nwant %q", rec.message, want)
+	}
+	// After the cap flush the next continuation line starts a fresh record.
+	if _, ok := s.push(criLine{stream: "stderr", message: "line4", valid: true}, 130); ok {
+		t.Fatal("post-cap line should start a fresh pending record, not complete one")
+	}
+	if last, ok := s.flush(); !ok || last.message != "line4" {
+		t.Errorf("flush after cap: ok=%v msg=%q want line4", ok, last.message)
+	}
+}
+
 // TestIntegrationBoundedDrain builds a synthetic /var/log/pods tree, runs the
 // source in bounded mode, and asserts every logical record is emitted with
 // correct enrichment and a stitched multiline stack trace.
