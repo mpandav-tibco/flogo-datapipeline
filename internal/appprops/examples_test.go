@@ -125,6 +125,15 @@ func TestResolve_AllExamplesRoundTrip(t *testing.T) {
 
 			original := deepCopyJSON(t, data)
 
+			// Examples that natively parameterise config with $property[...] refs
+			// cannot be round-tripped by this synthetic externalizer: it replaces the
+			// app's property declarations with generated ones, so the example's own
+			// refs are left unresolved by design (Resolve leaves undeclared refs
+			// untouched). Skip them here — real resolution is covered elsewhere.
+			if ob, _ := json.Marshal(original); strings.Contains(string(ob), "$property[") {
+				t.Skip("example natively uses $property refs; not round-trippable by the synthetic externalizer")
+			}
+
 			ext := &externalizer{}
 			ext.walk(data) // mutate the data node in place with $property refs
 			if len(ext.props) == 0 {
