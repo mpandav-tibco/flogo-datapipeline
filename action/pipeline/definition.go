@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strings"
 
 	"github.com/project-flogo/core/app/resource"
+	"github.com/project-flogo/core/data/property"
 )
 
 // ResType is the Flogo resource type for a pipeline definition.
@@ -528,15 +530,27 @@ type defLoader struct{}
 var _ resource.Loader = defLoader{}
 
 func (defLoader) LoadResource(config *resource.Config) (*resource.Resource, error) {
-	var def Definition
-	if err := json.Unmarshal(config.Data, &def); err != nil {
+	// Resolve placeholders across the ENTIRE pipeline config — every section
+	// (source, sink, dlq, transforms, checkpoint, scaling, performance, …) and
+	// every nested string value — before typed decoding:
+	//
+	//   ${ENV_VAR}      → value of the environment variable, so deployed pipelines
+	//                     can inject config/secrets (e.g. a container references
+	//                     "${DB_PASSWORD}" and Kubernetes supplies it from a Secret).
+	//   $property[name] → value of the Flogo app property "name" (honouring
+	//                     FLOGO_APP_PROPS_OVERRIDE and per-property env overrides).
+	//
+	// Flogo expression strings (those beginning with "=") keep their $property[…]
+	// references for the runtime expression engine. Unset references and reserved
+	// templates (${date}, ${hwm}, …) are left untouched for later substitution.
+	data, err := resolvePlaceholders(config.Data)
+	if err != nil {
 		return nil, err
 	}
-	// Expand ${ENV_VAR} placeholders in string config values so deployed
-	// pipelines can inject secrets (DSNs, keys, tokens) via environment
-	// variables — e.g. a container references "${DB_PASSWORD}" and Kubernetes
-	// supplies it from a Secret. Unset variables expand to "" (like a shell).
-	def.expandEnv()
+	var def Definition
+	if err := json.Unmarshal(data, &def); err != nil {
+		return nil, err
+	}
 	def.defaults()
 	if err := def.validate(); err != nil {
 		return nil, err
@@ -572,44 +586,56 @@ func expandEnvString(s string) string {
 	})
 }
 
-// expandEnvValue recursively expands ${ENV} placeholders in any string values
-// held in a config value (string, map, or slice).
-func expandEnvValue(v interface{}) interface{} {
+// propertyRe matches $property[name] placeholders resolved from Flogo app
+// properties (name may contain dots, e.g. $property[db.dsn]).
+var propertyRe = regexp.MustCompile(`\$property\[([^\]]+)\]`)
+
+// resolveProperties replaces $property[name] in s with the Flogo app-property
+// value. Unresolved references are left untouched (like an unset ${ENV}).
+func resolveProperties(s string) string {
+	return propertyRe.ReplaceAllStringFunc(s, func(m string) string {
+		name := propertyRe.FindStringSubmatch(m)[1]
+		if v, ok := property.DefaultManager().GetProperty(name); ok {
+			return fmt.Sprintf("%v", v)
+		}
+		return m
+	})
+}
+
+// resolvePlaceholders resolves ${ENV} and $property[name] placeholders in every
+// string value of the raw pipeline-config JSON — across all sections — and
+// returns the rewritten JSON for typed decoding. See LoadResource for the rules.
+func resolvePlaceholders(data []byte) ([]byte, error) {
+	var generic interface{}
+	if err := json.Unmarshal(data, &generic); err != nil {
+		return nil, err
+	}
+	return json.Marshal(resolveConfigValue(generic))
+}
+
+// resolveConfigValue recursively resolves placeholders in strings, maps and
+// slices. ${ENV} is expanded in every string; $property[name] is resolved only
+// in non-expression config values, leaving Flogo expressions ("=…") for the
+// runtime expression engine.
+func resolveConfigValue(v interface{}) interface{} {
 	switch t := v.(type) {
 	case string:
-		return expandEnvString(t)
+		s := expandEnvString(t)
+		if !strings.HasPrefix(t, "=") {
+			s = resolveProperties(s)
+		}
+		return s
 	case map[string]interface{}:
 		for k, val := range t {
-			t[k] = expandEnvValue(val)
+			t[k] = resolveConfigValue(val)
 		}
 		return t
 	case []interface{}:
 		for i, val := range t {
-			t[i] = expandEnvValue(val)
+			t[i] = resolveConfigValue(val)
 		}
 		return t
 	default:
 		return v
-	}
-}
-
-// expandEnv expands ${ENV} placeholders across the source, sink, dlq and
-// transform config maps (and the source path). Structural/numeric fields are
-// left untouched.
-func (d *Definition) expandEnv() {
-	d.Source.Path = expandEnvString(d.Source.Path)
-	if d.Source.Options != nil {
-		expandEnvValue(d.Source.Options)
-	}
-	if d.Sink.Options != nil {
-		expandEnvValue(d.Sink.Options)
-	}
-	if d.DLQ.Options != nil {
-		expandEnvValue(d.DLQ.Options)
-	}
-	for i := range d.Transforms {
-		if d.Transforms[i].Extra != nil {
-			expandEnvValue(d.Transforms[i].Extra)
-		}
 	}
 }
