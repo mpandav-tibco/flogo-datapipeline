@@ -179,9 +179,17 @@ func (c *Coordinator) ClaimLoop(
 			}
 		}()
 
-		// Process the partition.
-		processErr := processFunc(ctx, item.Partition)
-		cancelHB() // stop the heartbeat goroutine before marking the item done/failed
+		// Process the partition. cancelHB is invoked via defer inside a scoped
+		// closure so the heartbeat goroutine is stopped even if processFunc
+		// panics (the panic then continues unwinding ClaimLoop). A plain defer in
+		// the loop body is deliberately NOT used — it would keep every
+		// iteration's heartbeat goroutine alive until ClaimLoop returns (see the
+		// note above).
+		var processErr error
+		func() {
+			defer cancelHB()
+			processErr = processFunc(ctx, item.Partition)
+		}()
 
 		if processErr != nil {
 			_ = c.queue.Fail(ctx, item, processErr.Error())

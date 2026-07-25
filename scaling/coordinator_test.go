@@ -3,7 +3,9 @@ package scaling
 import (
 	"context"
 	"errors"
+	"runtime"
 	"testing"
+	"time"
 
 	"github.com/mpandav-tibco/flogo-datapipeline/partition/workqueue"
 	"github.com/mpandav-tibco/flogo-datapipeline/source"
@@ -144,6 +146,54 @@ func TestCoordinator_ClaimLoop_ProcessError_RoutesToFail(t *testing.T) {
 	}
 	if stats[workqueue.StatusFailed] != 1 {
 		t.Errorf("failed = %d, want 1", stats[workqueue.StatusFailed])
+	}
+}
+
+// TestCoordinator_ClaimLoop_PanicDoesNotLeakHeartbeat verifies that a panic in
+// processFunc still stops the per-item heartbeat goroutine (cancelHB runs via a
+// scoped defer) instead of leaking it for the life of the pipeline context.
+func TestCoordinator_ClaimLoop_PanicDoesNotLeakHeartbeat(t *testing.T) {
+	coord := newTestCoordinator()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := coord.Enqueue(ctx, makePartitions("boom")); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	// Baseline after letting startup goroutines settle.
+	settle := func() int {
+		var n int
+		for i := 0; i < 40; i++ {
+			runtime.GC()
+			n = runtime.NumGoroutine()
+			time.Sleep(5 * time.Millisecond)
+		}
+		return n
+	}
+	before := settle()
+
+	func() {
+		// The processFunc panic must propagate out of ClaimLoop.
+		defer func() {
+			if r := recover(); r == nil {
+				t.Error("expected the processFunc panic to propagate out of ClaimLoop")
+			}
+		}()
+		_ = coord.ClaimLoop(ctx, func(_ context.Context, _ source.Partition) error {
+			panic("boom in processFunc")
+		})
+	}()
+
+	// With the fix, cancelHB runs on the panic path, so the heartbeat goroutine
+	// exits and the count settles back to the baseline. Without it, the goroutine
+	// blocks on the heartbeat ticker / ctx until the pipeline context is
+	// cancelled, so the count stays elevated.
+	deadline := time.Now().Add(2 * time.Second)
+	for runtime.NumGoroutine() > before && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := runtime.NumGoroutine(); got > before {
+		t.Errorf("heartbeat goroutine leaked after processFunc panic: before=%d after=%d", before, got)
 	}
 }
 
