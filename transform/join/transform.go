@@ -146,6 +146,11 @@ func newJoinTransform(cfg map[string]interface{}) (transform.Transform, error) {
 	for {
 		b, rErr := rs.ReadBatch(1000)
 		if b != nil && b.Len() > 0 {
+			// Enforce the cap BEFORE growing the table so the in-memory footprint is
+			// bounded at maxRows exactly (never maxRows + one batch).
+			if loaded+int64(b.Len()) > maxRows {
+				return nil, fmt.Errorf("join transform: right source exceeded maxRows=%d — it must be a bounded reference dataset (raise 'maxRows' or use a bounded/batch source)", maxRows)
+			}
 			if rightCols == nil {
 				rightCols = resolveRightCols(b.Columns, wantCols, rightKey)
 			}
@@ -159,9 +164,6 @@ func newJoinTransform(cfg map[string]interface{}) (transform.Transform, error) {
 				table[key] = append(table[key], vals)
 			}
 			loaded += int64(b.Len())
-			if loaded > maxRows {
-				return nil, fmt.Errorf("join transform: right source exceeded maxRows=%d — it must be a bounded reference dataset (raise 'maxRows' or use a bounded/batch source)", maxRows)
-			}
 		}
 		if rErr == io.EOF {
 			break

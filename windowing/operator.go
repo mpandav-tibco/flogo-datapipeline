@@ -118,8 +118,10 @@ func (o *Operator) Close() error { return o.store.close() }
 
 // OpenWindows returns the number of windows currently held in state (not yet
 // closed). Useful for observability — an ever-growing count on a stream signals
-// key churn without a state TTL.
-func (o *Operator) OpenWindows() int { return o.openWindowCount }
+// key churn without a state TTL. Windows lost when a spillable store fails to
+// page a key to disk (see SpillFailures) are discounted so the gauge stays
+// accurate even on that error path.
+func (o *Operator) OpenWindows() int { return o.openWindowCount - int(o.store.droppedWindowCount()) }
 
 // SpillFailures returns the cumulative number of keys the spillable state store
 // failed to page to disk (e.g. disk full) and therefore dropped — a correctness

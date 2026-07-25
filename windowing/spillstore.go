@@ -36,6 +36,7 @@ type spillStore struct {
 	elem       map[string]*list.Element // key -> its lru element
 	disk       map[string]struct{}      // keys whose value currently lives on disk
 	spillFails int64                    // keys dropped because spill-to-disk failed
+	dropped    int64                    // windows lost with keys that failed to spill
 }
 
 // newSpillStore creates a spillable store rooted at a fresh unique subdirectory
@@ -141,6 +142,7 @@ func (s *spillStore) clear() {
 		_ = os.Remove(s.path(k))
 	}
 	s.disk = make(map[string]struct{})
+	s.dropped = 0
 }
 
 func (s *spillStore) close() error { return os.RemoveAll(s.dir) }
@@ -178,11 +180,14 @@ func (s *spillStore) evictIfNeeded() {
 			// Dropping a victim loses its partial aggregation — a correctness
 			// hazard (e.g. disk full). Count it so the operator can surface it.
 			s.spillFails++
+			s.dropped += int64(len(victim.windows))
 		}
 	}
 }
 
 func (s *spillStore) evictFailures() int64 { return s.spillFails }
+
+func (s *spillStore) droppedWindowCount() int64 { return s.dropped }
 
 // atomicWrite writes data to path via a temp file + rename so a crash never
 // leaves a partially written key file.

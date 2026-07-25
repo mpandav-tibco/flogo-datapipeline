@@ -38,6 +38,10 @@ type stateStore interface {
 	// evictFailures reports the cumulative count of keys the store failed to
 	// spill to disk (and therefore dropped). Always 0 for the in-memory store.
 	evictFailures() int64
+	// droppedWindowCount reports the cumulative number of windows lost with keys
+	// that failed to spill, letting the operator keep its open-window gauge
+	// accurate. Always 0 for the in-memory store; reset by clear.
+	droppedWindowCount() int64
 }
 
 // memStore is the default in-memory stateStore: a plain map with no spill. It is
@@ -72,3 +76,5 @@ func (s *memStore) clear() { s.m = make(map[string]*keyState) }
 func (s *memStore) close() error { return nil }
 
 func (s *memStore) evictFailures() int64 { return 0 }
+
+func (s *memStore) droppedWindowCount() int64 { return 0 }

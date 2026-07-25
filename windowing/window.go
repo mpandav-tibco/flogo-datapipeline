@@ -92,7 +92,10 @@ func (s Spec) assign(ts int64) []Window {
 			slide = size
 		}
 		// Windows whose start is a multiple of slide and that contain ts:
-		// start <= ts < start+size, i.e. start in (ts-size, ts].
+		// start <= ts < start+size, i.e. start in (ts-size, ts]. When slide > size
+		// the windows leave gaps in the timeline; a ts landing in a gap belongs to no
+		// window and the operator treats it as late (routed/dropped per onLate) — the
+		// intended "sampling" semantics for that (uncommon) configuration.
 		floorStart := floorDiv(ts, slide) * slide
 		var ws []Window
 		for start := floorStart; start > ts-size; start -= slide {
