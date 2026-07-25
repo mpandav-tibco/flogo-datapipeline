@@ -17,11 +17,14 @@ RUN go build -o /out/flogo-datapipeline ./cmd/flogo-datapipeline/
 FROM gcr.io/distroless/base-debian12
 WORKDIR /app
 COPY --from=build /out/flogo-datapipeline /app/flogo-datapipeline
-COPY ${pipelineFileName} /app/${pipelineFileName}
-ENV PIPELINE_FILE=/app/${pipelineFileName}
+# Copy the pipeline to a fixed in-container path so the source file name (which
+# may contain spaces or other special characters) can never break the COPY/ENV
+# directives or the ENTRYPOINT argument list. The source name is quoted.
+COPY "${pipelineFileName}" /app/pipeline.datapipeline
+ENV PIPELINE_FILE=/app/pipeline.datapipeline
 ENV PIPELINE_API_ADDR=:9080
 EXPOSE 9080
-ENTRYPOINT ["/app/flogo-datapipeline", "-f", "/app/${pipelineFileName}", "-port", "9080"]
+ENTRYPOINT ["/app/flogo-datapipeline", "-f", "/app/pipeline.datapipeline", "-port", "9080"]
 `;
 }
 
