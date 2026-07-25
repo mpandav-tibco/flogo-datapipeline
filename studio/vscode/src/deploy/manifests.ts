@@ -153,8 +153,9 @@ Required variables:
 
 ${envVars.map((e) => `- \`${e.name}\``).join('\n')}
 
-A filled-in \`*.deploy.datapipeline.env.example\` (with real values) was generated
-next to the pipeline — **do not commit it**. For Kubernetes, edit the
+A \`*.deploy.datapipeline.env.example\` template (placeholder values to fill in)
+was generated next to the pipeline — copy it to your own env file, set the real
+values there, and **do not commit that file**. For Kubernetes, edit the
 \`${name}-secrets\` Secret in \`k8s-statefulset.yaml\` (the pods read these via
 \`secretKeyRef\`). For local/Docker:
 
