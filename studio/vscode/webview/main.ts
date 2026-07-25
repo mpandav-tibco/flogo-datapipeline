@@ -1511,7 +1511,7 @@ function renderConflictKeyEditor(node: Node): HTMLElement {
         setCfgValue(node, 'conflictKey', cols.filter((x) => next.has(x.name)).map((x) => x.name));
       };
       row.appendChild(cb);
-      row.appendChild(el('span', 'cklbl', `${c.name} <span class="ty">${c.type}</span>`));
+      row.appendChild(el('span', 'cklbl', `${escapeHtml(c.name)} <span class="ty">${escapeHtml(c.type)}</span>`));
       box.appendChild(row);
     });
   }
@@ -2525,7 +2525,7 @@ function renderEditor() {
   if (t.type === 'canvas') {
     const sn = (S.selNode === 'dlq' && S.pipe.dlqNode) ? S.pipe.dlqNode : (S.pipe.nodes.find((n) => n.id === S.selNode) || S.pipe.nodes[0]);
     const snLabel = sn ? (sn.nm && sn.nm !== typeLabel(sn.type) && sn.nm !== sn.type ? `${typeLabel(sn.type)}: ${sn.nm}` : typeLabel(sn.type)) : '';
-    bc.innerHTML = `◈ ${S.pipe.name} <span class="sep">›</span> ${snLabel} <span class="sep">›</span> <span class="chip plain" style="padding:1px 7px">${S.pipe.mode}</span>`;
+    bc.innerHTML = `◈ ${escapeHtml(S.pipe.name)} <span class="sep">›</span> ${escapeHtml(snLabel)} <span class="sep">›</span> <span class="chip plain" style="padding:1px 7px">${escapeHtml(S.pipe.mode)}</span>`;
     renderCanvas(m);
   } else {
     bc.innerHTML = tabMeta(t).label;
@@ -2628,7 +2628,7 @@ function renderCanvas(m: HTMLElement) {
     const col = el('div', 'catchcol');
     col.innerHTML = '<span class="elbow-line"></span><span class="elbow-tag">⚠ on failure → catch</span>';
     const dnode = el('div', 'node catch' + (S.selNode === 'dlq' ? ' sel' : ''));
-    dnode.innerHTML = `<div class="kind">dead-letter (catch)</div><div class="nm">${dn.nm}</div><div class="meta">${dn.type} · ${dn.meta}</div>`;
+    dnode.innerHTML = `<div class="kind">dead-letter (catch)</div><div class="nm">${escapeHtml(dn.nm)}</div><div class="meta">${escapeHtml(dn.type)} · ${escapeHtml(dn.meta)}</div>`;
     dnode.tabIndex = 0;
     dnode.title = 'Rows rejected by the sink are captured here — the main pipeline keeps running.';
     dnode.onclick = () => { S.selNode = 'dlq'; S.inspTab = 'Config'; S.inspClosed = false; renderEditor(); };
@@ -3086,7 +3086,7 @@ function renderSchemaTab(ib: HTMLElement, sn: Node) {
     return;
   }
   const cols = schemaForNode(sn);
-  ib.appendChild(el('div', 'muted', `<div style="font-size:12px;padding:2px 0 8px">Columns visible <b style="color:var(--text)">after ${sn.nm}</b>:</div>`));
+  ib.appendChild(el('div', 'muted', `<div style="font-size:12px;padding:2px 0 8px">Columns visible <b style="color:var(--text)">after ${escapeHtml(sn.nm)}</b>:</div>`));
   if (!cols.length) {
     ib.appendChild(el('div', 'muted', '<div style="font-size:11.5px">No declared schema. For self-describing sources (Parquet, JSON), run <b style="color:var(--text)">Dry-run Preview</b> to see live columns; for CSV/fixed-width declare columns in the Config tab.</div>'));
     const b = el('button', 'btn sm', '⌕ Preview to infer schema');
@@ -4086,7 +4086,7 @@ function toast(kind: 'ok' | 'err' | 'warn' | 'info', msg: string, sticky = false
 }
 
 function escapeHtml(s: string) {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 // ── host message handling ─────────────────────────────────────────────────────
