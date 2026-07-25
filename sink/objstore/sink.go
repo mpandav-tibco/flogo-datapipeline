@@ -93,6 +93,7 @@ type objstoreSink struct {
 	uploadDone chan error     // receives the upload goroutine result (streaming path)
 	streaming  bool
 	records    int64 // rows written to this object (for the manifest record_count)
+	closed     bool  // guards a second Close() (which would deadlock waiting on uploadDone)
 }
 
 func newObjstoreSink(provider string, cfg map[string]interface{}) (sink.Sink, error) {
@@ -269,6 +270,14 @@ func (s *objstoreSink) currentBytes() int64 {
 }
 
 func (s *objstoreSink) Close() error {
+	// Close is idempotent. The streaming path receives from uploadDone, which the
+	// upload goroutine sends to exactly once; a second Close would block there
+	// forever. The rolling sink can try to close a child again on a failed-roll
+	// path, so guard against it.
+	if s.closed {
+		return nil
+	}
+	s.closed = true
 	// Flush and close the inner sink first.
 	innerErr := s.inner.Close()
 
@@ -588,15 +597,18 @@ func (r *rollingObjstoreSink) shouldRoll() bool {
 }
 
 func (r *rollingObjstoreSink) roll() error {
-	records := r.cur.records
-	bytes := r.cur.currentBytes()
+	// Detach the current object first so a Close error cannot leave a half-closed
+	// child that the deferred sink Close would then try to close again.
+	cur := r.cur
+	r.cur = nil // next write opens a fresh object lazily
+	records := cur.records
+	bytes := cur.currentBytes()
 	key := r.curKey
 	started := r.started
 	// Close (upload) the current object, then write its manifest sidecar.
-	if err := r.cur.Close(); err != nil {
+	if err := cur.Close(); err != nil {
 		return err
 	}
-	r.cur = nil // next write opens a fresh object lazily
 	if err := r.writeManifest(key, records, bytes, started); err != nil {
 		return err
 	}
@@ -676,7 +688,6 @@ func (r *rollingObjstoreSink) writeManifest(objectKey string, records, bytes int
 }
 
 var _ sink.Sink = (*rollingObjstoreSink)(nil)
-
 
 // newUUID returns a random RFC-4122 v4 UUID string. Used to make object keys
 // unique per run (e.g. "orders-{uuid}.parquet") so concurrent writers and
