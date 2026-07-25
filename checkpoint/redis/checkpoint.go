@@ -43,8 +43,17 @@ func newRedisCheckpoint(cfg map[string]interface{}) (checkpoint.Checkpoint, erro
 	}
 
 	ttlSeconds := 86400 * 7 // 7 days default
-	if ttl, ok := cfg["ttlSeconds"].(int); ok && ttl > 0 {
-		ttlSeconds = ttl
+	// Accept both int (typed config) and float64 (raw JSON decodes numbers to
+	// float64), matching how every other numeric option is read in this codebase.
+	switch v := cfg["ttlSeconds"].(type) {
+	case int:
+		if v > 0 {
+			ttlSeconds = v
+		}
+	case float64:
+		if v > 0 {
+			ttlSeconds = int(v)
+		}
 	}
 
 	client := goredis.NewClient(&goredis.Options{
