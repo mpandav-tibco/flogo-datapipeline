@@ -41,20 +41,20 @@ const (
 // Config holds scaling configuration, typically loaded from the pipeline
 // resource definition's "scaling" block.
 type Config struct {
-	Mode              Mode
-	InstanceIndex     int    // sharded: 0-based index of this instance
-	InstanceCount     int    // sharded: total replica count
-	PartitionStrategy string // rowgroup | file | byterange
+	Mode               Mode
+	InstanceIndex      int    // sharded: 0-based index of this instance
+	InstanceCount      int    // sharded: total replica count
+	PartitionStrategy  string // rowgroup | file | byterange
 	PartitionsPerClaim int
 	// Distributed-mode coordinator config.
-	CoordinatorType      string // postgres | redis | memory
-	CoordinatorDSN       string // postgres connection string
-	CoordinatorAddr      string // redis: host:port
-	CoordinatorKeyPrefix string // redis: key namespace (default flogo:pipeline:wq)
+	CoordinatorType        string // postgres | redis | memory
+	CoordinatorDSN         string // postgres connection string
+	CoordinatorAddr        string // redis: host:port
+	CoordinatorKeyPrefix   string // redis: key namespace (default flogo:pipeline:wq)
 	CoordinatorPasswordEnv string // redis: env var holding the password
-	LeaseSeconds         int
-	HeartbeatSeconds     int
-	MaxRetries           int
+	LeaseSeconds           int
+	HeartbeatSeconds       int
+	MaxRetries             int
 }
 
 // ResolveFromEnv fills in InstanceIndex and InstanceCount from environment

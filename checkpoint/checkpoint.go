@@ -135,7 +135,7 @@ func New(typ string, cfg map[string]interface{}) (Checkpoint, error) {
 // is disabled or for sources where restart is cheap (small files, idempotent).
 type NoopCheckpoint struct{}
 
-func (NoopCheckpoint) Save(string, *Token) error        { return nil }
-func (NoopCheckpoint) Load(string) (*Token, error)      { return nil, nil }
-func (NoopCheckpoint) Delete(string) error              { return nil }
-func (NoopCheckpoint) Close() error                     { return nil }
+func (NoopCheckpoint) Save(string, *Token) error   { return nil }
+func (NoopCheckpoint) Load(string) (*Token, error) { return nil, nil }
+func (NoopCheckpoint) Delete(string) error         { return nil }
+func (NoopCheckpoint) Close() error                { return nil }

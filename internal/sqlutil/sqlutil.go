@@ -37,8 +37,8 @@ func Placeholder(n int, driver string) string {
 // places that must embed a value in a reusable query string (e.g. the jdbc
 // source's high-water-mark predicate and keyset bound).
 //
-// All drivers double embedded single quotes ('→''). MySQL additionally treats a
-// backslash as an escape character inside string literals (unless the server has
+// All drivers escape an embedded single quote by doubling it. MySQL additionally
+// treats a backslash as an escape character inside string literals (unless the server has
 // NO_BACKSLASH_ESCAPES set), so backslashes are doubled for MySQL — without this
 // a trailing backslash would escape the closing quote (a SQL-injection / broken-
 // query vector) and interior "\x" sequences would silently drop the backslash

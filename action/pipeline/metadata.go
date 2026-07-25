@@ -36,9 +36,9 @@ func (i *Input) FromMap(m map[string]interface{}) error {
 
 // Output defines the action output schema.
 type Output struct {
-	RowsProcessed int64  `md:"rowsProcessed"`
-	RowsWritten   int64  `md:"rowsWritten"`
-	RowsFailed    int64  `md:"rowsFailed"`
+	RowsProcessed int64 `md:"rowsProcessed"`
+	RowsWritten   int64 `md:"rowsWritten"`
+	RowsFailed    int64 `md:"rowsFailed"`
 	// RowsDropped counts rows that were intentionally discarded by a transform
 	// (e.g. schemadrift policy=drop, or a filter that eliminated all rows in a
 	// batch). Dropped rows are distinct from RowsFailed: a failure indicates a
