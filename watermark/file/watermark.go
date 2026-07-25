@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/mpandav-tibco/flogo-datapipeline/internal/fileutil"
 	"github.com/mpandav-tibco/flogo-datapipeline/watermark"
 )
 
@@ -84,15 +85,11 @@ func (f *fileStore) Save(pipelineID string, m *watermark.Mark) error {
 	if err != nil {
 		return fmt.Errorf("file watermark: marshal %q: %w", pipelineID, err)
 	}
-	// Write to a temp file then rename for atomicity (crash-safe on POSIX).
-	dst := f.path(pipelineID)
-	tmp := dst + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
-		return fmt.Errorf("file watermark: write temp for %q: %w", pipelineID, err)
-	}
-	if err := os.Rename(tmp, dst); err != nil {
-		_ = os.Remove(tmp) // best-effort cleanup
-		return fmt.Errorf("file watermark: rename for %q: %w", pipelineID, err)
+	// Atomic + durable write (temp file, fsync, rename, best-effort dir fsync):
+	// atomic so a reader never sees a torn mark, durable so the mark survives a
+	// power loss — otherwise the next run would do a full-table load.
+	if err := fileutil.WriteFileAtomic(f.path(pipelineID), data, 0644); err != nil {
+		return fmt.Errorf("file watermark: write %q: %w", pipelineID, err)
 	}
 	return nil
 }
