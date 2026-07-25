@@ -2,441 +2,805 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://tibco.com/schemas/flogo-datapipeline/datapipeline.schema.json",
   "title": "Flogo Data Pipeline",
-  "description": "Schema for .datapipeline files — defines the source, transform, and sink stages of a Flogo ETL/ELT/EL pipeline.",
+  "description": "Schema for .datapipeline files — a Flogo application whose pipeline resource 'data' object defines the source, transform, and sink stages.",
   "type": "object",
-  "required": ["name", "version", "source", "sink"],
-  "additionalProperties": false,
+  "required": [
+    "name",
+    "type",
+    "resources"
+  ],
+  "additionalProperties": true,
   "properties": {
     "name": {
       "type": "string",
-      "description": "Unique pipeline name (used as the binary and process name).",
+      "description": "Application name (used as the binary and process name).",
       "minLength": 1
     },
-    "description": {
+    "type": {
       "type": "string",
-      "description": "Human-readable description of what this pipeline does."
+      "description": "Flogo resource type.",
+      "const": "flogo:app"
     },
     "version": {
       "type": "string",
-      "description": "Pipeline schema/config version, e.g. \"1.0.0\".",
+      "description": "Application version, e.g. \"1.0.0\".",
       "default": "1.0.0"
     },
-    "mode": {
+    "description": {
       "type": "string",
-      "description": "Pipeline processing mode: ETL (transform before load), ELT (load then transform in the sink), or EL (extract and load with no transform layer).",
-      "enum": ["etl", "elt", "el"],
-      "default": "etl"
+      "description": "Human-readable description of the pipeline."
     },
-
-    "source": {
-      "description": "Where the pipeline reads data from.",
-      "type": "object",
-      "required": ["type"],
-      "properties": {
-        "type": {
-          "type": "string",
-          "description": "Source connector type.",
-          "enum": ["csv", "jdbc", "parquet", "fixedwidth", "xml", "jsonlines", "kafka", "objstore"]
-        },
-        "path": {
-          "type": "string",
-          "description": "File system path or glob pattern (csv, parquet, fixedwidth, xml, jsonlines)."
-        },
-        "dsn": {
-          "type": "string",
-          "description": "JDBC data source name / connection string (jdbc)."
-        },
-        "query": {
-          "type": "string",
-          "description": "SQL SELECT query to execute against the JDBC source."
-        },
-        "table": {
-          "type": "string",
-          "description": "Table name — used when query is not set; generates SELECT * FROM <table>."
-        },
-        "delimiter": {
-          "type": "string",
-          "description": "Field delimiter character for CSV sources (default: \",\").",
-          "default": ","
-        },
-        "hasHeader": {
-          "type": "boolean",
-          "description": "Whether the CSV/fixed-width file has a header row (default: true).",
-          "default": true
-        },
-        "encoding": {
-          "type": "string",
-          "description": "Character encoding for text-based sources (default: \"utf-8\").",
-          "default": "utf-8"
-        },
-        "schema": {
-          "type": "object",
-          "description": "Explicit column/field schema (overrides auto-detection). Keys are field names, values are type strings (string, int, float, bool, timestamp).",
-          "additionalProperties": {
-            "type": "string",
-            "enum": ["string", "int", "float", "bool", "timestamp", "bytes"]
-          }
-        },
-        "brokers": {
-          "type": "array",
-          "description": "Kafka broker addresses, e.g. [\"localhost:9092\"] (kafka source).",
-          "items": { "type": "string" }
-        },
-        "topic": {
-          "type": "string",
-          "description": "Kafka topic name (kafka source)."
-        },
-        "groupId": {
-          "type": "string",
-          "description": "Kafka consumer group ID (kafka source)."
-        },
-        "startOffset": {
-          "type": "string",
-          "description": "Kafka start offset: \"earliest\", \"latest\", or a numeric offset string.",
-          "enum": ["earliest", "latest"],
-          "default": "earliest"
-        },
-        "bucket": {
-          "type": "string",
-          "description": "Object store bucket name (objstore source)."
-        },
-        "prefix": {
-          "type": "string",
-          "description": "Object store key prefix / folder path (objstore source)."
-        },
-        "region": {
-          "type": "string",
-          "description": "Cloud region for the object store (objstore source)."
-        },
-        "endpoint": {
-          "type": "string",
-          "description": "Custom endpoint URL for S3-compatible stores (objstore source)."
-        },
-        "pollIntervalSeconds": {
-          "type": "number",
-          "description": "For streaming/polling sources: how often (in seconds) to check for new data.",
-          "default": 30
-        },
-        "xmlRootElement": {
-          "type": "string",
-          "description": "XPath or element name that identifies each record root in the XML source."
-        }
-      },
-      "additionalProperties": true
+    "appModel": {
+      "type": "string",
+      "description": "Flogo app model version, e.g. \"1.1.1\"."
     },
-
-    "transforms": {
-      "description": "Ordered list of transform stages applied to each record batch.",
+    "imports": {
       "type": "array",
+      "description": "Go import paths for the actions/triggers/contributions this app uses.",
+      "items": {
+        "type": "string"
+      }
+    },
+    "triggers": {
+      "type": "array",
+      "description": "Flogo triggers that launch the pipeline action (e.g. a timer)."
+    },
+    "resources": {
+      "type": "array",
+      "description": "Flogo resources. The pipeline resource's 'data' object is the pipeline definition.",
       "items": {
         "type": "object",
-        "required": ["type"],
         "properties": {
-          "type": {
-            "type": "string",
-            "description": "Transform stage type.",
-            "enum": ["filter", "map", "mapper", "validate", "lookup", "hwm", "schemadrift", "dq"]
-          },
           "id": {
             "type": "string",
-            "description": "Optional stable identifier for this stage (used in metrics and logs)."
+            "description": "Resource id, e.g. \"pipeline:my-pipeline\"."
           },
-          "description": {
-            "type": "string",
-            "description": "Human-readable description of what this transform does."
-          },
-          "expression": {
-            "type": "string",
-            "description": "Filter/map expression in Flogo expression syntax (filter, map types)."
-          },
-          "fields": {
-            "type": "object",
-            "description": "Field mapping: output field name -> Flogo expression or source field name (mapper type).",
-            "additionalProperties": { "type": "string" }
-          },
-          "rules": {
-            "type": "array",
-            "description": "Validation or data-quality rules (validate, dq types).",
-            "items": {
-              "type": "object",
-              "required": ["field", "check"],
-              "properties": {
-                "field": { "type": "string" },
-                "check": { "type": "string" },
-                "onFail": {
-                  "type": "string",
-                  "enum": ["reject", "dlq", "warn", "nullify"],
-                  "default": "reject"
-                }
-              }
-            }
-          },
-          "lookupSource": {
-            "type": "string",
-            "description": "DSN or path for the lookup data set (lookup type)."
-          },
-          "lookupKey": {
-            "type": "string",
-            "description": "Field name in the stream used as the lookup join key."
-          },
-          "lookupFields": {
-            "type": "array",
-            "description": "Fields to copy from the lookup row into the stream record.",
-            "items": { "type": "string" }
-          },
-          "hwmField": {
-            "type": "string",
-            "description": "Field whose value is tracked as the high-water mark (hwm type)."
-          },
-          "hwmStore": {
-            "type": "string",
-            "description": "HWM persistence target: \"memory\", \"file:<path>\", or \"redis:<addr>\".",
-            "default": "memory"
-          },
-          "driftAction": {
-            "type": "string",
-            "description": "What to do when a schema drift is detected (schemadrift type).",
-            "enum": ["log", "reject", "dlq", "evolve"],
-            "default": "log"
+          "data": {
+            "$ref": "#/definitions/pipelineDefinition"
           }
-        },
-        "additionalProperties": true
-      }
-    },
-
-    "sink": {
-      "description": "Where the pipeline writes processed records to.",
-      "type": "object",
-      "required": ["type"],
-      "properties": {
-        "type": {
-          "type": "string",
-          "description": "Sink connector type.",
-          "enum": ["jdbc", "parquet", "objstore", "kafka", "dlq", "null"]
-        },
-        "dsn": {
-          "type": "string",
-          "description": "JDBC data source name / connection string (jdbc sink)."
-        },
-        "table": {
-          "type": "string",
-          "description": "Target table name (jdbc sink)."
-        },
-        "writeMode": {
-          "type": "string",
-          "description": "How to write rows to the target table (jdbc sink).",
-          "enum": ["insert", "upsert", "merge", "replace"],
-          "default": "insert"
-        },
-        "upsertKeys": {
-          "type": "array",
-          "description": "Field names that form the unique key for upsert/merge (jdbc sink).",
-          "items": { "type": "string" }
-        },
-        "path": {
-          "type": "string",
-          "description": "Output file or directory path (parquet, objstore sinks)."
-        },
-        "partitionBy": {
-          "type": "array",
-          "description": "Field names to partition the output by (parquet sink).",
-          "items": { "type": "string" }
-        },
-        "compression": {
-          "type": "string",
-          "description": "Compression codec for parquet output.",
-          "enum": ["none", "snappy", "gzip", "zstd"],
-          "default": "snappy"
-        },
-        "bucket": {
-          "type": "string",
-          "description": "Object store bucket name (objstore sink)."
-        },
-        "prefix": {
-          "type": "string",
-          "description": "Object store key prefix / folder path (objstore sink)."
-        },
-        "region": {
-          "type": "string",
-          "description": "Cloud region for the object store (objstore sink)."
-        },
-        "endpoint": {
-          "type": "string",
-          "description": "Custom endpoint URL for S3-compatible stores (objstore sink)."
-        },
-        "brokers": {
-          "type": "array",
-          "description": "Kafka broker addresses (kafka sink).",
-          "items": { "type": "string" }
-        },
-        "topic": {
-          "type": "string",
-          "description": "Kafka topic to produce to (kafka sink)."
-        },
-        "keyField": {
-          "type": "string",
-          "description": "Record field to use as the Kafka message key (kafka sink)."
-        },
-        "format": {
-          "type": "string",
-          "description": "Message serialisation format for Kafka sink.",
-          "enum": ["json", "avro", "protobuf"],
-          "default": "json"
-        }
-      },
-      "additionalProperties": true
-    },
-
-    "dlqSink": {
-      "description": "Optional dead-letter queue sink — receives records that fail validation or transforms when onFail is \"dlq\".",
-      "type": "object",
-      "properties": {
-        "type": {
-          "type": "string",
-          "enum": ["jdbc", "parquet", "objstore", "kafka", "file"],
-          "description": "DLQ sink connector type."
-        },
-        "path": { "type": "string", "description": "File path for file/parquet DLQ sink." },
-        "dsn": { "type": "string", "description": "JDBC DSN for jdbc DLQ sink." },
-        "table": { "type": "string", "description": "Table name for jdbc DLQ sink." },
-        "brokers": {
-          "type": "array",
-          "items": { "type": "string" },
-          "description": "Kafka brokers for kafka DLQ sink."
-        },
-        "topic": { "type": "string", "description": "Kafka topic for DLQ messages." }
-      },
-      "required": ["type"],
-      "additionalProperties": true
-    },
-
-    "performance": {
-      "description": "Throughput and resource tuning knobs.",
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "batchSize": {
-          "type": "integer",
-          "description": "Number of records per processing batch.",
-          "default": 1000,
-          "minimum": 1
-        },
-        "maxMemoryMB": {
-          "type": "integer",
-          "description": "Soft cap on heap memory used by the pipeline (MiB). 0 = unlimited.",
-          "default": 512,
-          "minimum": 0
-        },
-        "transformWorkers": {
-          "type": "integer",
-          "description": "Number of parallel goroutines in the transform layer.",
-          "default": 4,
-          "minimum": 1
-        },
-        "sourceBufferBatches": {
-          "type": "integer",
-          "description": "Depth of the channel between source and transform stages (in batches).",
-          "default": 8,
-          "minimum": 1
-        },
-        "sinkBufferBatches": {
-          "type": "integer",
-          "description": "Depth of the channel between transform and sink stages (in batches).",
-          "default": 8,
-          "minimum": 1
         }
       }
-    },
-
-    "scaling": {
-      "description": "Horizontal scaling / sharding configuration.",
+    }
+  },
+  "definitions": {
+    "pipelineDefinition": {
+      "description": "The data-pipeline definition — the 'data' object of the pipeline resource.",
       "type": "object",
-      "additionalProperties": false,
+      "required": [
+        "source",
+        "sink"
+      ],
+      "additionalProperties": true,
       "properties": {
+        "name": {
+          "type": "string",
+          "description": "Unique pipeline name (used as the binary and process name).",
+          "minLength": 1
+        },
+        "description": {
+          "type": "string",
+          "description": "Human-readable description of what this pipeline does."
+        },
+        "version": {
+          "type": "string",
+          "description": "Pipeline schema/config version, e.g. \"1.0.0\".",
+          "default": "1.0.0"
+        },
         "mode": {
           "type": "string",
-          "description": "Scaling strategy: single-instance, range-sharded, or fully distributed (requires a coordinator).",
-          "enum": ["single", "sharded", "distributed"],
-          "default": "single"
+          "description": "Pipeline processing mode: ETL (transform before load), ELT (load then transform in the sink), or EL (extract and load with no transform layer).",
+          "enum": [
+            "etl",
+            "elt",
+            "el"
+          ],
+          "default": "etl"
         },
-        "instanceIndex": {
-          "type": "integer",
-          "description": "Zero-based index of this instance (sharded mode).",
-          "minimum": 0,
-          "default": 0
-        },
-        "instanceCount": {
-          "type": "integer",
-          "description": "Total number of parallel instances (sharded mode).",
-          "minimum": 1,
-          "default": 1
-        },
-        "coordinator": {
+        "source": {
+          "description": "Where the pipeline reads data from.",
           "type": "object",
-          "description": "Distributed-mode coordinator configuration (distributed mode only).",
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "description": "Source connector type."
+            },
+            "path": {
+              "type": "string",
+              "description": "File system path or glob pattern (csv, parquet, fixedwidth, xml, jsonlines)."
+            },
+            "dsn": {
+              "type": "string",
+              "description": "JDBC data source name / connection string (jdbc)."
+            },
+            "query": {
+              "type": "string",
+              "description": "SQL SELECT query to execute against the JDBC source."
+            },
+            "table": {
+              "type": "string",
+              "description": "Table name — used when query is not set; generates SELECT * FROM <table>."
+            },
+            "delimiter": {
+              "type": "string",
+              "description": "Field delimiter character for CSV sources (default: \",\").",
+              "default": ","
+            },
+            "hasHeader": {
+              "type": "boolean",
+              "description": "Whether the CSV/fixed-width file has a header row (default: true).",
+              "default": true
+            },
+            "encoding": {
+              "type": "string",
+              "description": "Character encoding for text-based sources (default: \"utf-8\").",
+              "default": "utf-8"
+            },
+            "schema": {
+              "type": "object",
+              "description": "Explicit column/field schema (overrides auto-detection). Keys are field names, values are type strings (string, int, float, bool, timestamp).",
+              "additionalProperties": {
+                "type": "string",
+                "enum": [
+                  "string",
+                  "int",
+                  "float",
+                  "bool",
+                  "timestamp",
+                  "bytes"
+                ]
+              }
+            },
+            "brokers": {
+              "type": [
+                "string",
+                "array"
+              ],
+              "items": {
+                "type": "string"
+              },
+              "description": "Kafka bootstrap brokers — a comma-separated string or an array of host:port strings."
+            },
+            "topic": {
+              "type": "string",
+              "description": "Kafka topic name (kafka source)."
+            },
+            "groupId": {
+              "type": "string",
+              "description": "Kafka consumer group ID (kafka source)."
+            },
+            "startOffset": {
+              "type": "string",
+              "description": "Kafka start offset: \"earliest\", \"latest\", or a numeric offset string.",
+              "enum": [
+                "earliest",
+                "latest"
+              ],
+              "default": "earliest"
+            },
+            "commitMode": {
+              "type": "string",
+              "description": "Kafka offset commit mode (kafka source): \"auto\" (sarama auto-commit, default) or \"checkpoint\" (commit offsets only after the pipeline checkpoint token is durable — no lost messages on resume).",
+              "enum": [
+                "auto",
+                "checkpoint"
+              ],
+              "default": "auto"
+            },
+            "bucket": {
+              "type": "string",
+              "description": "Object store bucket name (objstore source)."
+            },
+            "prefix": {
+              "type": "string",
+              "description": "Object store key prefix / folder path (objstore source)."
+            },
+            "region": {
+              "type": "string",
+              "description": "Cloud region for the object store (objstore source)."
+            },
+            "endpoint": {
+              "type": "string",
+              "description": "Custom endpoint URL for S3-compatible stores (objstore source)."
+            },
+            "pollIntervalSeconds": {
+              "type": "number",
+              "description": "For streaming/polling sources: how often (in seconds) to check for new data.",
+              "default": 30
+            },
+            "xmlRootElement": {
+              "type": "string",
+              "description": "XPath or element name that identifies each record root in the XML source."
+            }
+          },
+          "additionalProperties": true
+        },
+        "transforms": {
+          "description": "Ordered list of transform stages applied to each record batch.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "description": "Transform stage type.",
+                "enum": [
+                  "filter",
+                  "map",
+                  "mapper",
+                  "validate",
+                  "lookup",
+                  "hwm",
+                  "schemadrift",
+                  "dq",
+                  "parse",
+                  "window",
+                  "join"
+                ]
+              },
+              "id": {
+                "type": "string",
+                "description": "Optional stable identifier for this stage (used in metrics and logs)."
+              },
+              "description": {
+                "type": "string",
+                "description": "Human-readable description of what this transform does."
+              },
+              "expression": {
+                "type": "string",
+                "description": "Filter/map expression in Flogo expression syntax (filter, map types)."
+              },
+              "fields": {
+                "type": "object",
+                "description": "Field mapping: output field name -> Flogo expression or source field name (mapper type).",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
+              "rules": {
+                "type": "array",
+                "description": "Validation or data-quality rules (validate, dq types).",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "field"
+                  ],
+                  "properties": {
+                    "field": {
+                      "type": "string"
+                    },
+                    "onFail": {
+                      "type": "string",
+                      "enum": [
+                        "reject",
+                        "dlq",
+                        "warn",
+                        "nullify"
+                      ],
+                      "default": "reject"
+                    },
+                    "notNull": {
+                      "type": "boolean",
+                      "description": "Reject rows where this field is null."
+                    },
+                    "notEmpty": {
+                      "type": "boolean",
+                      "description": "Reject rows where this field is empty."
+                    },
+                    "pattern": {
+                      "type": "string",
+                      "description": "Regular expression the value must match."
+                    },
+                    "min": {
+                      "type": "number",
+                      "description": "Minimum numeric value (inclusive)."
+                    },
+                    "max": {
+                      "type": "number",
+                      "description": "Maximum numeric value (inclusive)."
+                    },
+                    "in": {
+                      "type": "array",
+                      "description": "Allowed values.",
+                      "items": {}
+                    }
+                  },
+                  "additionalProperties": true
+                }
+              },
+              "lookupSource": {
+                "type": "string",
+                "description": "DSN or path for the lookup data set (lookup type)."
+              },
+              "lookupKey": {
+                "type": "string",
+                "description": "Field name in the stream used as the lookup join key."
+              },
+              "lookupFields": {
+                "type": "array",
+                "description": "Fields to copy from the lookup row into the stream record.",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "hwmField": {
+                "type": "string",
+                "description": "Field whose value is tracked as the high-water mark (hwm type)."
+              },
+              "hwmStore": {
+                "type": "string",
+                "description": "HWM persistence target: \"memory\", \"file:<path>\", or \"redis:<addr>\".",
+                "default": "memory"
+              },
+              "driftAction": {
+                "type": "string",
+                "description": "What to do when a schema drift is detected (schemadrift type).",
+                "enum": [
+                  "log",
+                  "reject",
+                  "dlq",
+                  "evolve"
+                ],
+                "default": "log"
+              }
+            },
+            "additionalProperties": true
+          }
+        },
+        "sink": {
+          "description": "Where the pipeline writes processed records to.",
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "description": "Sink connector type."
+            },
+            "dsn": {
+              "type": "string",
+              "description": "JDBC data source name / connection string (jdbc sink)."
+            },
+            "table": {
+              "type": "string",
+              "description": "Target table name (jdbc sink)."
+            },
+            "writeMode": {
+              "type": "string",
+              "description": "How to write rows to the target table (jdbc sink).",
+              "enum": [
+                "insert",
+                "upsert",
+                "merge",
+                "replace"
+              ],
+              "default": "insert"
+            },
+            "upsertKeys": {
+              "type": "array",
+              "description": "Field names that form the unique key for upsert/merge (jdbc sink).",
+              "items": {
+                "type": "string"
+              }
+            },
+            "path": {
+              "type": "string",
+              "description": "Output file or directory path (parquet, objstore sinks)."
+            },
+            "partitionBy": {
+              "type": "array",
+              "description": "Field names to partition the output by (parquet sink).",
+              "items": {
+                "type": "string"
+              }
+            },
+            "compression": {
+              "type": "string",
+              "description": "Compression codec for parquet output.",
+              "enum": [
+                "none",
+                "snappy",
+                "gzip",
+                "zstd"
+              ],
+              "default": "snappy"
+            },
+            "bucket": {
+              "type": "string",
+              "description": "Object store bucket name (objstore sink)."
+            },
+            "prefix": {
+              "type": "string",
+              "description": "Object store key prefix / folder path (objstore sink)."
+            },
+            "region": {
+              "type": "string",
+              "description": "Cloud region for the object store (objstore sink)."
+            },
+            "endpoint": {
+              "type": "string",
+              "description": "Custom endpoint URL for S3-compatible stores (objstore sink)."
+            },
+            "brokers": {
+              "type": [
+                "string",
+                "array"
+              ],
+              "items": {
+                "type": "string"
+              },
+              "description": "Kafka bootstrap brokers — a comma-separated string or an array of host:port strings."
+            },
+            "topic": {
+              "type": "string",
+              "description": "Kafka topic to produce to (kafka sink)."
+            },
+            "keyField": {
+              "type": "string",
+              "description": "Record field to use as the Kafka message key (kafka sink)."
+            },
+            "format": {
+              "type": "string",
+              "description": "Message serialisation format for Kafka sink.",
+              "default": "json"
+            }
+          },
+          "additionalProperties": true
+        },
+        "dlqSink": {
+          "description": "Optional dead-letter queue sink — receives records that fail validation or transforms when onFail is \"dlq\".",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "description": "DLQ sink connector type."
+            },
+            "path": {
+              "type": "string",
+              "description": "File path for file/parquet DLQ sink."
+            },
+            "dsn": {
+              "type": "string",
+              "description": "JDBC DSN for jdbc DLQ sink."
+            },
+            "table": {
+              "type": "string",
+              "description": "Table name for jdbc DLQ sink."
+            },
+            "brokers": {
+              "type": [
+                "string",
+                "array"
+              ],
+              "items": {
+                "type": "string"
+              },
+              "description": "Kafka bootstrap brokers — a comma-separated string or an array of host:port strings."
+            },
+            "topic": {
+              "type": "string",
+              "description": "Kafka topic for DLQ messages."
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "additionalProperties": true
+        },
+        "performance": {
+          "description": "Throughput and resource tuning knobs.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "batchSize": {
+              "type": "integer",
+              "description": "Number of records per processing batch.",
+              "default": 5000,
+              "minimum": 1
+            },
+            "maxMemoryMB": {
+              "type": "integer",
+              "description": "Soft cap on heap memory used by the pipeline (MiB). 0 = unlimited.",
+              "default": 512,
+              "minimum": 0
+            },
+            "transformWorkers": {
+              "type": "integer",
+              "description": "Number of parallel goroutines in the transform layer.",
+              "default": 1,
+              "minimum": 1
+            },
+            "sourceBufferBatches": {
+              "type": "integer",
+              "description": "Depth of the channel between source and transform stages (in batches).",
+              "default": 4,
+              "minimum": 1
+            },
+            "sinkBufferBatches": {
+              "type": "integer",
+              "description": "Depth of the channel between transform and sink stages (in batches).",
+              "default": 4,
+              "minimum": 1
+            },
+            "rowGroupParallelism": {
+              "type": "integer",
+              "description": "Parquet: number of concurrent row-group readers.",
+              "default": 4,
+              "minimum": 1
+            }
+          }
+        },
+        "scaling": {
+          "description": "Horizontal scaling / sharding configuration.",
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "mode": {
+              "type": "string",
+              "description": "Scaling strategy: single-instance, range-sharded, or fully distributed (requires a coordinator).",
+              "enum": [
+                "single",
+                "sharded",
+                "distributed"
+              ],
+              "default": "single"
+            },
+            "instanceIndex": {
+              "type": "integer",
+              "description": "Zero-based index of this instance (sharded mode).",
+              "minimum": 0,
+              "default": 0
+            },
+            "instanceCount": {
+              "type": "integer",
+              "description": "Total number of parallel instances (sharded mode).",
+              "minimum": 1,
+              "default": 1
+            },
+            "coordinator": {
+              "type": "object",
+              "description": "Distributed-mode coordinator configuration (distributed mode only).",
+              "additionalProperties": true,
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "description": "Coordinator backend.",
+                  "enum": [
+                    "redis",
+                    "postgres"
+                  ],
+                  "default": "redis"
+                },
+                "dsn": {
+                  "type": "string",
+                  "description": "Connection string for the postgres coordinator backend."
+                },
+                "leaseSeconds": {
+                  "type": "integer",
+                  "description": "TTL (in seconds) for distributed worker leases.",
+                  "default": 30,
+                  "minimum": 5
+                },
+                "addr": {
+                  "type": "string",
+                  "description": "Redis coordinator address, e.g. \"localhost:6379\"."
+                },
+                "passwordEnv": {
+                  "type": "string",
+                  "description": "Env var name holding the coordinator password."
+                },
+                "heartbeatSeconds": {
+                  "type": "integer",
+                  "description": "Lease renewal interval (seconds).",
+                  "default": 30,
+                  "minimum": 1
+                },
+                "maxRetries": {
+                  "type": "integer",
+                  "description": "Partition retry limit before a partition is marked failed.",
+                  "default": 3,
+                  "minimum": 0
+                }
+              }
+            },
+            "partitionStrategy": {
+              "type": "string",
+              "description": "How sharded/distributed instances split the input.",
+              "enum": [
+                "rowgroup",
+                "file",
+                "byterange"
+              ],
+              "default": "rowgroup"
+            },
+            "partitionsPerClaim": {
+              "type": "integer",
+              "description": "Distributed mode: partitions claimed per batch.",
+              "minimum": 1
+            }
+          }
+        },
+        "checkpoint": {
+          "description": "Progress checkpointing — allows the pipeline to resume after a restart without reprocessing already-committed records.",
+          "type": "object",
           "additionalProperties": false,
           "properties": {
             "type": {
               "type": "string",
-              "description": "Coordinator backend.",
-              "enum": ["memory", "postgres"],
-              "default": "memory"
+              "description": "Checkpoint storage backend.",
+              "enum": [
+                "none",
+                "file",
+                "redis"
+              ],
+              "default": "none"
             },
-            "dsn": {
+            "path": {
               "type": "string",
-              "description": "Connection string for the postgres coordinator backend."
+              "description": "File path for the checkpoint state file (file backend)."
             },
-            "leaseSeconds": {
+            "addr": {
+              "type": "string",
+              "description": "Redis server address, e.g. \"localhost:6379\" (redis backend)."
+            },
+            "keyPrefix": {
+              "type": "string",
+              "description": "Redis key prefix used to namespace checkpoint entries (redis backend).",
+              "default": "flogo:pipeline:ckpt"
+            },
+            "passwordEnv": {
+              "type": "string",
+              "description": "Name of the environment variable holding the Redis password (redis backend). Never put the secret itself here."
+            },
+            "ttlSeconds": {
               "type": "integer",
-              "description": "TTL (in seconds) for distributed worker leases.",
+              "description": "Redis checkpoint token expiry in seconds (redis backend). Omit or set high for long-lived streaming state.",
+              "default": 604800,
+              "minimum": 0
+            },
+            "intervalRows": {
+              "type": "integer",
+              "description": "Flush the checkpoint every N committed rows. Omit (or 0) to use the default.",
+              "default": 10000,
+              "minimum": 0
+            },
+            "intervalSeconds": {
+              "type": "integer",
+              "description": "Flush the checkpoint every N seconds. Omit (or 0) to use the default.",
               "default": 30,
-              "minimum": 5
+              "minimum": 0
+            },
+            "deleteOnSuccess": {
+              "type": "boolean",
+              "description": "Remove the checkpoint file/key when the pipeline exits cleanly.",
+              "default": false
+            },
+            "key": {
+              "type": "string",
+              "description": "Stable checkpoint key for single-instance streaming resume. Defaults to the per-run id; set a fixed value so a long-lived streaming job finds its state across restarts."
             }
           }
-        }
-      }
-    },
-
-    "checkpoint": {
-      "description": "Progress checkpointing — allows the pipeline to resume after a restart without reprocessing already-committed records.",
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "type": {
-          "type": "string",
-          "description": "Checkpoint storage backend.",
-          "enum": ["none", "file", "redis"],
-          "default": "none"
         },
-        "path": {
-          "type": "string",
-          "description": "File path for the checkpoint state file (file backend)."
+        "observability": {
+          "type": "object",
+          "description": "Metrics backend + stall detection.",
+          "additionalProperties": true,
+          "properties": {
+            "metrics": {
+              "type": "string",
+              "description": "Metrics backend.",
+              "enum": [
+                "none",
+                "prometheus",
+                "otel"
+              ],
+              "default": "none"
+            },
+            "stallSeconds": {
+              "type": "integer",
+              "description": "Warn when a batch stage exceeds this many seconds (0 = disabled).",
+              "minimum": 0
+            }
+          }
         },
-        "addr": {
-          "type": "string",
-          "description": "Redis server address, e.g. \"localhost:6379\" (redis backend)."
+        "incremental": {
+          "type": "object",
+          "description": "High-water-mark incremental loading.",
+          "additionalProperties": true,
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": [
+                "none",
+                "hwm"
+              ],
+              "default": "none"
+            },
+            "column": {
+              "type": "string",
+              "description": "Watermark column."
+            },
+            "valueType": {
+              "type": "string",
+              "enum": [
+                "datetime",
+                "int",
+                "string"
+              ]
+            },
+            "initialValue": {
+              "type": "string",
+              "description": "Start point when no mark is stored yet."
+            },
+            "storeType": {
+              "type": "string",
+              "enum": [
+                "file",
+                "redis",
+                "postgres"
+              ]
+            },
+            "storeOptions": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          }
         },
-        "keyPrefix": {
-          "type": "string",
-          "description": "Redis key prefix used to namespace checkpoint entries (redis backend).",
-          "default": "flogo:pipeline:"
+        "dlq": {
+          "type": "object",
+          "description": "Dead-letter queue for write-time row failures.",
+          "additionalProperties": true,
+          "properties": {
+            "type": {
+              "type": "string",
+              "description": "Inner sink type for failed rows."
+            },
+            "onFull": {
+              "type": "string",
+              "enum": [
+                "block",
+                "drop"
+              ]
+            },
+            "maxRowsPerBatch": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "options": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          }
         },
-        "intervalRows": {
-          "type": "integer",
-          "description": "Flush the checkpoint every N committed rows. 0 = only on clean shutdown.",
-          "default": 10000,
-          "minimum": 0
-        },
-        "intervalSeconds": {
-          "type": "integer",
-          "description": "Flush the checkpoint every N seconds. 0 = only on clean shutdown.",
-          "default": 60,
-          "minimum": 0
-        },
-        "deleteOnSuccess": {
-          "type": "boolean",
-          "description": "Remove the checkpoint file/key when the pipeline exits cleanly.",
-          "default": false
+        "schemaDrift": {
+          "type": "object",
+          "description": "Automatic schema-evolution handling.",
+          "additionalProperties": true,
+          "properties": {
+            "policy": {
+              "type": "string",
+              "enum": [
+                "project",
+                "additive",
+                "strict",
+                "drop"
+              ]
+            },
+            "onDrift": {
+              "type": "string",
+              "enum": [
+                "log",
+                "alert",
+                "silent"
+              ]
+            }
+          }
         }
       }
     }

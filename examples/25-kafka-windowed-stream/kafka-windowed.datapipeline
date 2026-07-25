@@ -1,0 +1,65 @@
+{
+  "name": "kafka-windowed-stream",
+  "type": "flogo:app",
+  "version": "1.0.0",
+  "appModel": "1.1.1",
+  "imports": [
+    "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+    "github.com/project-flogo/contrib/trigger/timer"
+  ],
+  "triggers": [
+    {
+      "id": "run",
+      "ref": "github.com/project-flogo/contrib/trigger/timer",
+      "settings": { "repeating": true, "startDelay": 0, "interval": 86400000 },
+      "handlers": [
+        {
+          "settings": {},
+          "action": {
+            "ref": "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+            "settings": { "pipelineRef": "res://pipeline:kafka-windowed-stream" }
+          }
+        }
+      ]
+    }
+  ],
+  "resources": [
+    {
+      "id": "pipeline:kafka-windowed-stream",
+      "data": {
+        "name": "kafka-windowed-stream",
+        "description": "Continuous stream: consume sensor JSON from Kafka, filter, then per-sensor 1-minute event-time windowed rollup (avg/max/count) to JSON-lines. Windows fire as the event-time watermark advances.",
+        "source": {
+          "type": "kafka",
+          "brokers": "localhost:9092",
+          "topic": "sensor-events",
+          "groupId": "window-demo",
+          "startOffset": "earliest",
+          "deserializer": "json",
+          "commitMode": "checkpoint",
+          "pollTimeoutMs": 1000
+        },
+        "transforms": [
+          {
+            "type": "filter",
+            "expr": "temperature > 0"
+          },
+          {
+            "type": "window",
+            "eventTime": { "column": "ts", "format": "RFC3339" },
+            "watermark": { "strategy": "boundedOutOfOrderness", "maxLatenessMs": 0 },
+            "window": { "kind": "tumbling", "sizeMs": 60000 },
+            "groupBy": ["sensor"],
+            "aggregations": [
+              { "as": "avg_temp", "fn": "avg", "column": "temperature" },
+              { "as": "max_temp", "fn": "max", "column": "temperature" },
+              { "as": "n", "fn": "count" }
+            ]
+          }
+        ],
+        "sink": { "type": "jsonlines", "path": "./out/windowed.jsonl" },
+        "checkpoint": { "type": "file", "path": "./checkpoints", "key": "kafka-windowed-stream", "intervalRows": 1, "intervalSeconds": 2 }
+      }
+    }
+  ]
+}

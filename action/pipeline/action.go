@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"math"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -26,6 +27,7 @@ import (
 	"github.com/mpandav-tibco/flogo-datapipeline/transform"
 	dqtransform "github.com/mpandav-tibco/flogo-datapipeline/transform/dq"
 	hwmtransform "github.com/mpandav-tibco/flogo-datapipeline/transform/hwm"
+	wintransform "github.com/mpandav-tibco/flogo-datapipeline/transform/window"
 	"github.com/mpandav-tibco/flogo-datapipeline/watermark"
 )
 
@@ -318,6 +320,22 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 		srcCfg["hwmValue"] = priorMark.Value
 		srcCfg["hwmValueType"] = priorMark.ValueType
 	}
+	// Checkpoint-mode Kafka resume: seek the source to the exact processed
+	// offsets recorded in the checkpoint token (captured atomically with the
+	// window-state snapshot) so the source position and the restored window
+	// state resume from the SAME token — independent of whether the last external
+	// offset commit succeeded. This closes the crash-between-token-and-commit
+	// double-count window. Single mode only: sharded/distributed disallow
+	// windowed Kafka (co-partition guard) and resume per-partition inside drain.
+	if def.Source.Type == "kafka" && (def.Scaling.Mode == "" || def.Scaling.Mode == "single") {
+		rk := runID
+		if def.Checkpoint.Key != "" {
+			rk = def.Checkpoint.Key
+		}
+		if tok, tErr := ckpt.Load(rk); tErr == nil && tok != nil && len(tok.Payload) > 0 {
+			srcCfg["resumeCursor"] = tok.Payload
+		}
+	}
 	src, err := source.New(def.Source.Type, srcCfg)
 	if err != nil {
 		return out, fmt.Errorf("source open: %w", err)
@@ -389,6 +407,11 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 	// A nil dqProvider means no dq transform was declared; metadata is skipped.
 	dqProvider := findDQGateProvider(txPipeline)
 
+	// Locate the window transform (if present). The engine flushes its remaining
+	// open windows after the source EOF, and excludes windowed pipelines from the
+	// parallel transform path (windowed aggregation is stateful and order-sensitive).
+	winOp := findWindowedOperator(txPipeline)
+
 	// --- sink ---
 	snk, err := sink.New(def.Sink.Type, def.Sink.Options)
 	if err != nil {
@@ -443,7 +466,7 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 		txWorkers = 1
 	}
 	parallelEligible := txWorkers > 1 &&
-		hwmProvider == nil && dqProvider == nil &&
+		hwmProvider == nil && dqProvider == nil && winOp == nil &&
 		def.SchemaDrift.Policy == "" &&
 		(def.Checkpoint.Type == "" || def.Checkpoint.Type == "none")
 	if txWorkers > 1 {
@@ -473,7 +496,20 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 			}
 			out.RowsProcessed += token.RowsProcessed
 		}
+		// Restore window operator state captured at the same offset as the token so
+		// open windows and their aggregations resume in sync with the source cursor.
+		if token != nil && len(token.WindowState) > 0 && winOp != nil {
+			if rErr := winOp.Restore(token.WindowState); rErr != nil {
+				runLog.Warnf("window state restore failed (starting fresh): %v", rErr)
+			} else {
+				runLog.Infof("resuming %q — restored window state (%d bytes)", ckptKey, len(token.WindowState))
+			}
+		}
 
+		// resumeBaseline is out.RowsProcessed after any resume skip; subtracting it
+		// yields this run's processed-row count, which aligns with a Committer
+		// source's run-local returned-row marks for read-ahead-safe offset commits.
+		resumeBaseline := out.RowsProcessed
 		var rowsSinceCkpt int64
 		lastCkpt := time.Now()
 
@@ -584,9 +620,10 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 					if err := snk.Flush(); err != nil {
 						return fmt.Errorf("sink flush (checkpoint): %w", err)
 					}
-					saveCheckpoint(runLog, ckpt, ckptKey, def.Source.Type, out.RowsProcessed, pSrc)
+					saveCheckpoint(runLog, ckpt, ckptKey, def.Source.Type, out.RowsProcessed, pSrc, winOp, out.RowsProcessed-resumeBaseline)
 					a.recorder.CheckpointSaved(a.ref)
 					saveWatermark(runLog, wmStore, hwmProvider, def, a.ref)
+					a.emitWindowMetrics(winOp)
 					// Surface the checkpoint so operators can see progress being
 					// persisted and which trigger fired (row count vs. time).
 					reason := "rows"
@@ -763,6 +800,14 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 		return writeErr
 	}
 
+	// resumeKey is the checkpoint key for single-instance runs. Streaming
+	// pipelines set checkpoint.key to a stable value so window state and source
+	// position resume across restarts; batch runs default to the per-run id.
+	resumeKey := runID
+	if def.Checkpoint.Key != "" {
+		resumeKey = def.Checkpoint.Key
+	}
+
 	switch {
 	case scMode == "sharded" || scMode == "distributed":
 		if err := a.runScaled(ctx, runLog, def, scMode, src, srcCfg, runID, drain); err != nil {
@@ -773,9 +818,47 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 			return out, err
 		}
 	default:
-		if err := drain(src, runID); err != nil {
+		if err := drain(src, resumeKey); err != nil {
 			return out, err
 		}
+	}
+
+	// Emit any windows still open once the source is exhausted (bounded-source EOF).
+	// The window transform fires closed windows incrementally during Apply; Flush
+	// drains whatever remains and writes it through the normal sink path.
+	if winOp != nil {
+		flushed, ferr := winOp.Flush()
+		if ferr != nil {
+			return out, fmt.Errorf("window flush: %w", ferr)
+		}
+		if flushed != nil && flushed.Len() > 0 {
+			written, werr := a.rowLevelWrite(runLog, snk, dlq, flushed, runID, out)
+			if werr != nil {
+				return out, werr
+			}
+			out.RowsWritten += int64(written)
+		}
+		if flushed != nil {
+			record.Put(flushed)
+		}
+		st := winOp.Stats()
+		runLog.Infof("window stats — emitted=%d openAtEnd=%d lateDropped=%d evicted=%d spillFailures=%d watermark=%dms",
+			st.WindowsEmitted, st.OpenWindows, st.LateDropped, st.StateEvicted, st.SpillFailures, st.WatermarkMillis)
+		if st.SpillFailures > 0 {
+			runLog.Warnf("window state: %d keys dropped because spill-to-disk failed — results may be incomplete (check disk space/permissions)", st.SpillFailures)
+		}
+		if out.Metadata == nil {
+			out.Metadata = make(map[string]interface{})
+		}
+		out.Metadata["windowStats"] = map[string]interface{}{
+			"windowsEmitted":  st.WindowsEmitted,
+			"lateDropped":     st.LateDropped,
+			"stateEvicted":    st.StateEvicted,
+			"openWindows":     st.OpenWindows,
+			"spillFailures":   st.SpillFailures,
+			"watermarkMillis": st.WatermarkMillis,
+		}
+		a.emitWindowMetrics(winOp)
 	}
 
 	// Final flush.
@@ -794,9 +877,9 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 	sinkClosed = true
 
 	if def.Checkpoint.DeleteOnSuccess {
-		_ = ckpt.Delete(runID)
+		_ = ckpt.Delete(resumeKey)
 	} else {
-		saveCheckpoint(runLog, ckpt, runID, def.Source.Type, out.RowsProcessed, src)
+		saveCheckpoint(runLog, ckpt, resumeKey, def.Source.Type, out.RowsProcessed, src, winOp, math.MaxInt64)
 		a.recorder.CheckpointSaved(a.ref)
 	}
 
@@ -889,18 +972,56 @@ func openCheckpoint(def *Definition) (checkpoint.Checkpoint, error) {
 		"addr":        cd.Addr,
 		"passwordEnv": cd.PasswordEnv,
 		"keyPrefix":   cd.KeyPrefix,
+		"ttlSeconds":  cd.TTLSeconds,
 	}
 	return checkpoint.New(cd.Type, cfg)
 }
 
-func saveCheckpoint(runLog corelog.Logger, ckpt checkpoint.Checkpoint, runID, format string, rowsProcessed int64, src source.Source) {
+// emitWindowMetrics publishes the window operator's counters through the active
+// metrics backend (prometheus/otel/none) via the generic Gauge escape hatch, so
+// streaming windowed pipelines are observable without any backend-specific code.
+// Called at each checkpoint (for continuous streams) and at end-of-run flush.
+func (a *DataPipelineAction) emitWindowMetrics(winOp wintransform.WindowedOperator) {
+	if winOp == nil {
+		return
+	}
+	st := winOp.Stats()
+	labels := map[string]string{"pipeline": a.ref}
+	a.recorder.Gauge("flogo_pipeline_window_open", "Currently open (unfired) windows held in operator state.", labels, float64(st.OpenWindows))
+	a.recorder.Gauge("flogo_pipeline_window_emitted_total", "Cumulative windows fired to the sink.", labels, float64(st.WindowsEmitted))
+	a.recorder.Gauge("flogo_pipeline_window_late_dropped_total", "Cumulative records dropped for arriving beyond the watermark + allowed lateness.", labels, float64(st.LateDropped))
+	a.recorder.Gauge("flogo_pipeline_window_state_evicted_total", "Cumulative window state entries evicted by TTL.", labels, float64(st.StateEvicted))
+	a.recorder.Gauge("flogo_pipeline_window_watermark_ms", "Current event-time watermark (epoch milliseconds).", labels, float64(st.WatermarkMillis))
+	a.recorder.Gauge("flogo_pipeline_window_spill_failures_total", "Cumulative keys dropped because spill-to-disk failed (should stay 0).", labels, float64(st.SpillFailures))
+}
+
+func saveCheckpoint(runLog corelog.Logger, ckpt checkpoint.Checkpoint, runID, format string, rowsProcessed int64, src source.Source, winOp wintransform.WindowedOperator, committerRows int64) {
 	var cp checkpoint.CursorProvider
 	if p, ok := src.(checkpoint.CursorProvider); ok {
 		cp = p
 	}
 	t := checkpoint.NewToken(format, rowsProcessed, cp)
+	// Attach a window-state snapshot (if this pipeline has a window transform) so
+	// it is persisted atomically with the source cursor and replayed on resume.
+	if winOp != nil {
+		if snap, err := winOp.Snapshot(); err != nil {
+			runLog.Warnf("window snapshot failed (checkpoint without window state): %v", err)
+		} else {
+			t.WindowState = snap
+		}
+	}
 	if err := ckpt.Save(runID, t); err != nil {
 		runLog.Warnf("checkpoint save failed (continuing): %v", err)
+		return
+	}
+	// Advance the source's external acknowledgement (e.g. Kafka offsets) only
+	// after the token is durable, so a crash re-delivers everything after this
+	// checkpoint. committerRows is the pipeline's processed-row boundary, so the
+	// commit never runs ahead of processed (read-ahead-safe) — no lost records.
+	if c, ok := src.(source.Committer); ok {
+		if err := c.Commit(committerRows); err != nil {
+			runLog.Warnf("source commit failed (continuing): %v", err)
+		}
 	}
 }
 
@@ -1003,6 +1124,19 @@ func saveWatermark(
 	} else {
 		runLog.Infof("watermark saved — %s = %s", m.Column, m.Value)
 	}
+}
+
+// findWindowedOperator walks the pipeline stages and returns the first stage that
+// implements wintransform.WindowedOperator (i.e. the "window" transform), or nil
+// when no windowed aggregation is declared. The engine calls Flush() on it after
+// the source is exhausted to emit windows still open.
+func findWindowedOperator(p *transform.Pipeline) wintransform.WindowedOperator {
+	for _, stage := range p.Stages() {
+		if w, ok := stage.(wintransform.WindowedOperator); ok {
+			return w
+		}
+	}
+	return nil
 }
 
 // findHWMTransform walks the pipeline stages and returns the first stage that

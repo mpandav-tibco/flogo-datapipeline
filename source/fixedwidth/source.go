@@ -288,6 +288,15 @@ func parseFixedWidthColumns(cfg map[string]interface{}) ([]fwColumn, error) {
 		if format, ok := m["format"].(string); ok {
 			col.format = format
 		}
+		// Positional fields are 1-based with a positive width. Validate here (a
+		// config boundary) so a typo surfaces as a clear error instead of a
+		// per-row slice-bounds panic (negative length) or silent nulls (start<1).
+		if col.start < 1 {
+			return nil, fmt.Errorf("fixedwidth source: column[%d] %q: 'start' must be >= 1 (1-based byte position), got %d", i, col.Name, col.start)
+		}
+		if col.length < 1 {
+			return nil, fmt.Errorf("fixedwidth source: column[%d] %q: 'length' must be >= 1, got %d", i, col.Name, col.length)
+		}
 		cols = append(cols, col)
 	}
 	return cols, nil

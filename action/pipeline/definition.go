@@ -152,9 +152,11 @@ type CheckpointDef struct {
 	Addr            string `json:"addr,omitempty"`            // redis: host:port
 	PasswordEnv     string `json:"passwordEnv,omitempty"`     // redis: env var holding password
 	KeyPrefix       string `json:"keyPrefix,omitempty"`       // redis: key namespace
+	TTLSeconds      int    `json:"ttlSeconds,omitempty"`      // redis: token expiry in seconds (default 604800 = 7 days; set high or omit for long-lived streaming state)
 	IntervalRows    int    `json:"intervalRows,omitempty"`    // checkpoint every N rows (default 10000)
 	IntervalSeconds int    `json:"intervalSeconds,omitempty"` // checkpoint every N seconds (default 30)
 	DeleteOnSuccess bool   `json:"deleteOnSuccess,omitempty"` // delete checkpoint on successful completion
+	Key             string `json:"key,omitempty"`             // stable checkpoint key for single-instance streaming resume (default: per-run id)
 }
 
 // PerformanceDef tunes the pipeline execution parameters.
@@ -464,6 +466,56 @@ func (d *Definition) validate() error {
 			// valid
 		default:
 			return fmt.Errorf("pipeline definition: dlq.onFull must be 'block' or 'drop', got %q", d.DLQ.OnFull)
+		}
+	}
+	// Keyed windowed aggregation requires co-partitioned input: every record for
+	// a given groupBy key must reach the same instance. The rowgroup/file/
+	// byterange partition strategies used by sharded/distributed scaling split
+	// data by position, not by key, so per-instance windows would compute split
+	// (incorrect) aggregates for keys that span partitions. Reject the
+	// combination at load; the windowed stage must run in scaling.mode "single"
+	// (a Kafka source partitioned by the groupBy key scales natively via its
+	// consumer group, which is orthogonal to scaling.mode).
+	if d.Scaling.Mode == "sharded" || d.Scaling.Mode == "distributed" {
+		for i := range d.Transforms {
+			if d.Transforms[i].Type != "window" {
+				continue
+			}
+			if gb, ok := d.Transforms[i].Extra["groupBy"].([]interface{}); ok && len(gb) > 0 {
+				return fmt.Errorf("pipeline definition: a keyed window (groupBy) cannot run in scaling.mode %q — the %q partition strategy splits data by position, not by key, so per-instance windows would produce split aggregates; run the windowed pipeline in scaling.mode \"single\" or partition a Kafka source by the groupBy key",
+					d.Scaling.Mode, orDefault(d.Scaling.PartitionStrategy, "rowgroup"))
+			}
+		}
+	}
+	// A source commitMode of "checkpoint" advances the source's acknowledged
+	// position (e.g. Kafka offsets) only after a durable checkpoint. Without a
+	// real checkpoint backend the offset would advance while window/pipeline state
+	// is never persisted, silently losing data on restart — reject the combination.
+	if cm, _ := d.Source.Options["commitMode"].(string); cm == "checkpoint" {
+		if d.Checkpoint.Type == "" || d.Checkpoint.Type == "none" {
+			return fmt.Errorf("pipeline definition: source.commitMode \"checkpoint\" requires a durable checkpoint backend — set checkpoint.type to \"file\" or \"redis\"")
+		}
+	}
+	// Windowed state resume requires the source offset and the window-state
+	// snapshot to advance together. A Kafka source in the default "auto"
+	// commitMode auto-commits offsets on an independent 1s timer, uncoordinated
+	// with checkpoint saves, so a restored window would not align with the resumed
+	// offset (double- or under-counting on restart). Only "checkpoint" mode
+	// co-commits the offset with the token. Require it whenever a windowed
+	// pipeline over Kafka also persists state to a checkpoint backend (i.e. it
+	// will actually restore on resume); without a backend, windows start fresh
+	// each run and there is nothing to misalign, so that case is allowed.
+	hasWindow := false
+	for i := range d.Transforms {
+		if d.Transforms[i].Type == "window" {
+			hasWindow = true
+			break
+		}
+	}
+	if hasWindow && d.Source.Type == "kafka" &&
+		d.Checkpoint.Type != "" && d.Checkpoint.Type != "none" {
+		if cm, _ := d.Source.Options["commitMode"].(string); cm != "checkpoint" {
+			return fmt.Errorf("pipeline definition: a windowed Kafka pipeline with a checkpoint backend requires source.commitMode \"checkpoint\" — the default \"auto\" mode commits Kafka offsets on an independent timer, uncoordinated with the window-state snapshot, so restored windows would not align with the resumed offset (double- or under-counting on restart); set source.commitMode to \"checkpoint\"")
 		}
 	}
 	return nil

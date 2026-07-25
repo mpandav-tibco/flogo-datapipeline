@@ -7,7 +7,7 @@
 //
 //	Sources:      csv, jdbc, parquet, fixedwidth, xml, jsonlines, s3, gcs, adls, kafka
 //	Sinks:        jdbc, null, parquet, s3-sink, gcs-sink, adls-sink, dlq, kafka
-//	Transforms:   filter, map, lookup, validate, schemadrift, hwm, dq
+//	Transforms:   filter, map, lookup, validate, schemadrift, hwm, dq, parse, window
 //	Checkpoints:  file, redis
 //	Watermarks:   file, redis, postgres
 //	Metrics:      prometheus, otel
@@ -107,10 +107,12 @@ import (
 	// Additional transforms (gap-08)
 	_ "github.com/mpandav-tibco/flogo-datapipeline/transform/dq"          // Data-quality expectations with pass-rate thresholds
 	_ "github.com/mpandav-tibco/flogo-datapipeline/transform/hwm"         // High-water-mark observer (pure passthrough)
+	_ "github.com/mpandav-tibco/flogo-datapipeline/transform/join"        // Keyed join against a source-loaded reference table (stream-table)
 	_ "github.com/mpandav-tibco/flogo-datapipeline/transform/lookup"      // Enrichment via LRU-cached flow/HTTP call
 	_ "github.com/mpandav-tibco/flogo-datapipeline/transform/parse"       // Structure a text field into columns (regex/JSON) — Fluent Bit parser equivalent
 	_ "github.com/mpandav-tibco/flogo-datapipeline/transform/schemadrift" // Schema-drift detection and remediation
 	_ "github.com/mpandav-tibco/flogo-datapipeline/transform/validate"    // Data-quality rules; violations routed to DLQ sink
+	_ "github.com/mpandav-tibco/flogo-datapipeline/transform/window"      // Event-time windowed aggregation (tumbling/sliding/session/global)
 
 	// --- Checkpoints ---
 	_ "github.com/mpandav-tibco/flogo-datapipeline/checkpoint/file"  // Local-file checkpoint (default)

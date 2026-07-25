@@ -41,20 +41,20 @@ const (
 // Config holds scaling configuration, typically loaded from the pipeline
 // resource definition's "scaling" block.
 type Config struct {
-	Mode              Mode
-	InstanceIndex     int    // sharded: 0-based index of this instance
-	InstanceCount     int    // sharded: total replica count
-	PartitionStrategy string // rowgroup | file | byterange
+	Mode               Mode
+	InstanceIndex      int    // sharded: 0-based index of this instance
+	InstanceCount      int    // sharded: total replica count
+	PartitionStrategy  string // rowgroup | file | byterange
 	PartitionsPerClaim int
 	// Distributed-mode coordinator config.
-	CoordinatorType      string // postgres | redis | memory
-	CoordinatorDSN       string // postgres connection string
-	CoordinatorAddr      string // redis: host:port
-	CoordinatorKeyPrefix string // redis: key namespace (default flogo:pipeline:wq)
+	CoordinatorType        string // postgres | redis | memory
+	CoordinatorDSN         string // postgres connection string
+	CoordinatorAddr        string // redis: host:port
+	CoordinatorKeyPrefix   string // redis: key namespace (default flogo:pipeline:wq)
 	CoordinatorPasswordEnv string // redis: env var holding the password
-	LeaseSeconds         int
-	HeartbeatSeconds     int
-	MaxRetries           int
+	LeaseSeconds           int
+	HeartbeatSeconds       int
+	MaxRetries             int
 }
 
 // ResolveFromEnv fills in InstanceIndex and InstanceCount from environment
@@ -179,9 +179,17 @@ func (c *Coordinator) ClaimLoop(
 			}
 		}()
 
-		// Process the partition.
-		processErr := processFunc(ctx, item.Partition)
-		cancelHB() // stop the heartbeat goroutine before marking the item done/failed
+		// Process the partition. cancelHB is invoked via defer inside a scoped
+		// closure so the heartbeat goroutine is stopped even if processFunc
+		// panics (the panic then continues unwinding ClaimLoop). A plain defer in
+		// the loop body is deliberately NOT used — it would keep every
+		// iteration's heartbeat goroutine alive until ClaimLoop returns (see the
+		// note above).
+		var processErr error
+		func() {
+			defer cancelHB()
+			processErr = processFunc(ctx, item.Partition)
+		}()
 
 		if processErr != nil {
 			_ = c.queue.Fail(ctx, item, processErr.Error())

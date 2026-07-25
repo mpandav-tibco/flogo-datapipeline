@@ -487,6 +487,7 @@ const TF_LABELS: Record<string, string> = {
   dq: 'Data Quality',
   schemadrift: 'Schema Drift',
   parse: 'Parse',
+  window: 'Window (aggregate)',
 };
 function transformLabel(t: string): string {
   return TF_LABELS[t] || t;
@@ -1727,7 +1728,7 @@ function renderConflictKeyEditor(node: Node): HTMLElement {
         setCfgValue(node, 'conflictKey', cols.filter((x) => next.has(x.name)).map((x) => x.name));
       };
       row.appendChild(cb);
-      row.appendChild(el('span', 'cklbl', `${c.name} <span class="ty">${c.type}</span>`));
+      row.appendChild(el('span', 'cklbl', `${escapeHtml(c.name)} <span class="ty">${escapeHtml(c.type)}</span>`));
       box.appendChild(row);
     });
   }
@@ -2470,6 +2471,189 @@ function renderFilterEditor(node: Node): HTMLElement {
 }
 
 // ── render root ───────────────────────────────────────────────────────────
+const WIN_KINDS = ['tumbling', 'sliding', 'session', 'global'];
+const AGG_FNS = ['sum', 'avg', 'min', 'max', 'count', 'first', 'last'];
+const TIME_FORMATS = ['RFC3339', 'RFC3339Nano', 'DateTime', 'DateOnly', 'epochMillis'];
+
+// Shared structured-editor field builders (used by the window and join editors).
+function fieldHint(h: string): HTMLElement {
+  return el('div', 'muted', `<div style="font-size:11px;padding:2px 0 6px">${h}</div>`);
+}
+function fieldInput(label: string, value: any, ph: string, onChange: (v: string) => void, hint?: string): HTMLElement {
+  const f = el('div', 'fld');
+  f.appendChild(el('div', 'k', label));
+  const i = el('input', 'v') as HTMLInputElement;
+  i.placeholder = ph;
+  i.value = value != null ? String(value) : '';
+  i.onchange = () => onChange(i.value.trim());
+  f.appendChild(i);
+  if (hint) f.appendChild(fieldHint(hint));
+  return f;
+}
+function fieldSelect(label: string, value: string, opts: string[], onChange: (v: string) => void, hint?: string, emptyLabel = '(select)'): HTMLElement {
+  const f = el('div', 'fld');
+  f.appendChild(el('div', 'k', label));
+  const s = el('select', 'v') as HTMLSelectElement;
+  const list = (opts.includes(value) || !value) ? opts : [value, ...opts];
+  list.forEach((o) => {
+    const op = document.createElement('option');
+    op.value = o;
+    op.textContent = o || emptyLabel;
+    if (o === value) op.selected = true;
+    s.appendChild(op);
+  });
+  s.onchange = () => onChange(s.value);
+  f.appendChild(s);
+  if (hint) f.appendChild(fieldHint(hint));
+  return f;
+}
+
+// Structured editor for the `window` transform: window kind + size, event-time
+// column/format, group-by keys, an aggregations builder, and watermark / lateness
+// / TTL controls. Reads and writes the transform object (nested config) directly.
+function renderWindowEditor(node: Node): HTMLElement {
+  const wrap = el('div');
+  const t: any = cfgTarget(node);
+  t.window = t.window || {};
+  t.eventTime = t.eventTime || {};
+  t.watermark = t.watermark || {};
+  if (!Array.isArray(t.groupBy)) t.groupBy = [];
+  if (!Array.isArray(t.aggregations)) t.aggregations = [];
+  const colNames = upstreamSchema(node).map((c) => c.name);
+  const persist = () => persistAndRebuild();
+  const selF = fieldSelect;
+  const inpF = fieldInput;
+
+  const kind = t.window.kind || 'tumbling';
+  wrap.appendChild(selF('Window type', kind, WIN_KINDS, (v) => { t.window.kind = v; persist(); renderEditor(); }));
+  if (kind === 'tumbling' || kind === 'sliding') wrap.appendChild(inpF('Window size (ms)', t.window.sizeMs, 'e.g. 60000', (v) => { t.window.sizeMs = Number(v) || 0; persist(); }, '60000 = 1 minute'));
+  if (kind === 'sliding') wrap.appendChild(inpF('Slide (ms)', t.window.slideMs, 'e.g. 30000', (v) => { t.window.slideMs = Number(v) || 0; persist(); }, 'How often a new window starts'));
+  if (kind === 'session') wrap.appendChild(inpF('Inactivity gap (ms)', t.window.gapMs, 'e.g. 300000', (v) => { t.window.gapMs = Number(v) || 0; persist(); }, 'Close a session after this idle gap'));
+
+  wrap.appendChild(fieldSelect('Event-time column', t.eventTime.column || '', colNames.length ? ['', ...colNames] : [''], (v) => { if (v) t.eventTime.column = v; else delete t.eventTime.column; persist(); renderEditor(); }, 'Blank = processing time (wall clock)', '(processing time)'));
+  if (t.eventTime.column) wrap.appendChild(selF('Time format', t.eventTime.format || 'RFC3339', TIME_FORMATS, (v) => { t.eventTime.format = v; persist(); }, 'Numeric columns are treated as epoch millis'));
+
+  wrap.appendChild(inpF('Allowed lateness (ms)', t.watermark.maxLatenessMs, '0', (v) => { t.watermark.strategy = 'boundedOutOfOrderness'; t.watermark.maxLatenessMs = Number(v) || 0; persist(); }, 'Out-of-order tolerance before a window fires'));
+  wrap.appendChild(inpF('State TTL (ms)', t.stateTtlMs, 'optional', (v) => { if (v === '') delete t.stateTtlMs; else t.stateTtlMs = Number(v) || 0; persist(); }, 'Drop abandoned window state older than this (bounds memory)'));
+
+  // Spillable state — bound memory for high-cardinality key spaces by paging
+  // colder keys to disk (state.maxResidentKeys / state.spillDir).
+  const stateCfg = t.state || {};
+  wrap.appendChild(inpF('Max resident keys (spill)', stateCfg.maxResidentKeys, 'optional', (v) => {
+    if (v === '') { if (t.state) { delete t.state.maxResidentKeys; if (!t.state.spillDir) delete t.state; } }
+    else { t.state = t.state || {}; t.state.maxResidentKeys = Number(v) || 0; }
+    persist(); renderEditor();
+  }, 'Keep at most N keys in memory; page the rest to disk. Blank = all in memory'));
+  if (stateCfg.maxResidentKeys) wrap.appendChild(inpF('Spill directory', stateCfg.spillDir, 'optional (OS temp)', (v) => {
+    if (v === '') { if (t.state) delete t.state.spillDir; }
+    else { t.state = t.state || {}; t.state.spillDir = v; }
+    persist();
+  }, 'Directory for paged-out state files'));
+
+  // Trigger (early firing) + accumulation mode.
+  const trig = t.trigger || {};
+  wrap.appendChild(inpF('Early firing every (ms)', trig.earlyEveryMs, 'optional', (v) => {
+    if (v === '') { if (t.trigger) { delete t.trigger.earlyEveryMs; if (!Object.keys(t.trigger).length) delete t.trigger; } }
+    else { t.trigger = t.trigger || {}; t.trigger.earlyEveryMs = Number(v) || 0; }
+    persist(); renderEditor();
+  }, 'Emit partial results before a window closes (blank = only on close)'));
+  if (trig.earlyEveryMs) wrap.appendChild(selF('Accumulation', t.accumulation || 'discarding', ['discarding', 'accumulating'], (v) => { t.accumulation = v; persist(); }, 'accumulating = running totals; discarding = deltas since last firing'));
+
+  // Group by
+  const gbF = el('div', 'fld');
+  gbF.appendChild(el('div', 'k', 'Group by (aggregation keys)'));
+  if (colNames.length) {
+    const box = el('div');
+    box.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px;padding:4px 0';
+    colNames.forEach((c) => {
+      const lab = document.createElement('label'); lab.style.cssText = 'display:inline-flex;align-items:center;gap:4px;font-size:12px';
+      const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = t.groupBy.includes(c);
+      cb.onchange = () => { if (cb.checked) { if (!t.groupBy.includes(c)) t.groupBy.push(c); } else t.groupBy = t.groupBy.filter((x: string) => x !== c); persist(); };
+      lab.appendChild(cb); lab.appendChild(document.createTextNode(c));
+      box.appendChild(lab);
+    });
+    gbF.appendChild(box);
+  } else {
+    const i = el('input', 'v') as HTMLInputElement; i.placeholder = 'comma-separated keys'; i.value = t.groupBy.join(', ');
+    i.onchange = () => { t.groupBy = i.value.split(',').map((s) => s.trim()).filter(Boolean); persist(); };
+    gbF.appendChild(i);
+  }
+  wrap.appendChild(gbF);
+
+  // Aggregations
+  const aggF = el('div', 'fld');
+  aggF.appendChild(el('div', 'k', 'Aggregations'));
+  const cards = el('div', 'rcards');
+  (t.aggregations as any[]).forEach((a, i) => {
+    const card = el('div', 'rcard');
+    const head = el('div', 'rhead');
+    const asI = el('input') as HTMLInputElement; asI.placeholder = 'output name'; asI.value = a.as || ''; asI.style.flex = '1'; asI.onchange = () => { a.as = asI.value.trim(); persist(); };
+    const fnS = el('select') as HTMLSelectElement; AGG_FNS.forEach((o) => { const op = document.createElement('option'); op.value = o; op.textContent = o; if (o === a.fn) op.selected = true; fnS.appendChild(op); }); fnS.onchange = () => { a.fn = fnS.value; persist(); renderEditor(); };
+    const del = el('span', 'del', '✕'); del.title = 'Remove'; del.onclick = () => { (t.aggregations as any[]).splice(i, 1); persist(); renderEditor(); };
+    head.appendChild(asI); head.appendChild(fnS); head.appendChild(del);
+    card.appendChild(head);
+    if (a.fn !== 'count') {
+      const row = el('div', 'rrow');
+      row.appendChild(el('label', undefined, 'Column'));
+      let col: HTMLSelectElement | HTMLInputElement;
+      if (colNames.length) {
+        const s = el('select') as HTMLSelectElement;
+        const opts = a.column && !colNames.includes(a.column) ? [a.column, ...colNames] : colNames;
+        opts.forEach((o) => { const op = document.createElement('option'); op.value = o; op.textContent = o; if (o === a.column) op.selected = true; s.appendChild(op); });
+        col = s;
+      } else {
+        const inp2 = el('input') as HTMLInputElement; inp2.placeholder = 'column'; inp2.value = a.column || '';
+        col = inp2;
+      }
+      col.onchange = () => { a.column = (col as HTMLInputElement).value; persist(); };
+      row.appendChild(col);
+      card.appendChild(row);
+    }
+    cards.appendChild(card);
+  });
+  const add = el('button', 'addcard', '＋ Add aggregation'); add.onclick = () => { (t.aggregations as any[]).push({ as: 'value', fn: 'count' }); persist(); renderEditor(); };
+  cards.appendChild(add);
+  aggF.appendChild(cards);
+  wrap.appendChild(aggF);
+
+  wrap.appendChild(selF('On late record', t.onLate || 'drop', ['drop', 'route'], (v) => { t.onLate = v; persist(); renderEditor(); }, 'route → error sink (drop discards late rows)'));
+  if (t.onLate === 'route') {
+    wrap.appendChild(selF('Late sink type', t.errorSinkType || 'jsonlines', ['jsonlines', 'csv', 'kafka', 'null'], (v) => { t.errorSinkType = v; persist(); }, 'Where late rows are routed'));
+    const esc = t.errorSinkConfig || {};
+    wrap.appendChild(inpF('Late sink path', esc.path, 'e.g. ./out/late.jsonl', (v) => { t.errorSinkConfig = t.errorSinkConfig || {}; if (v === '') delete t.errorSinkConfig.path; else t.errorSinkConfig.path = v; persist(); }, 'File path (file sinks) — or broker/topic for kafka'));
+  }
+
+  return wrap;
+}
+
+// Structured editor for the `join` transform: match keys, join type, and the
+// right-side reference source (loaded once into a keyed table).
+function renderJoinEditor(node: Node): HTMLElement {
+  const wrap = el('div');
+  const t: any = cfgTarget(node);
+  t.right = t.right || { type: 'csv' };
+  const colNames = upstreamSchema(node).map((c) => c.name);
+  const persist = () => persistAndRebuild();
+  const inpF = fieldInput;
+  const selF = fieldSelect;
+
+  if (colNames.length) {
+    wrap.appendChild(selF('Left key (stream column)', t.leftKey || '', ['', ...colNames], (v) => { if (v) t.leftKey = v; else delete t.leftKey; persist(); }, 'Column in the incoming stream to match on'));
+  } else {
+    wrap.appendChild(inpF('Left key (stream column)', t.leftKey, 'e.g. customerId', (v) => { if (v) t.leftKey = v; else delete t.leftKey; persist(); }, 'Column in the incoming stream to match on'));
+  }
+  wrap.appendChild(inpF('Right key (reference column)', t.rightKey, 'default: same as left key', (v) => { if (v === '') delete t.rightKey; else t.rightKey = v; persist(); }, 'Join column in the reference source'));
+  wrap.appendChild(selF('Join type', t.joinType || 'inner', ['inner', 'left'], (v) => { t.joinType = v; persist(); }, 'inner drops unmatched rows; left keeps them with null right columns'));
+  wrap.appendChild(inpF('Right column prefix', t.prefix, 'optional, e.g. cust_', (v) => { if (v === '') delete t.prefix; else t.prefix = v; persist(); }, 'Prefix added to imported right columns (avoid name clashes)'));
+  wrap.appendChild(inpF('Right columns', Array.isArray(t.rightColumns) ? t.rightColumns.join(', ') : '', 'default: all but the key', (v) => { const a = v.split(',').map((s) => s.trim()).filter(Boolean); if (a.length) t.rightColumns = a; else delete t.rightColumns; persist(); }, 'Comma-separated right columns to add'));
+
+  wrap.appendChild(el('div', 'k', 'Reference source (right side)'));
+  wrap.appendChild(selF('Type', t.right.type || 'csv', ['csv', 'tsv', 'jsonlines', 'parquet', 'jdbc'], (v) => { t.right.type = v; persist(); }, 'A bounded source loaded once into a keyed table'));
+  wrap.appendChild(inpF('Path / location', t.right.path, 'e.g. customers.csv', (v) => { if (v === '') delete t.right.path; else t.right.path = v; persist(); }, 'File path (file sources) — or use a connection for jdbc'));
+
+  return wrap;
+}
+
 function renderAll() {
   renderTabs();
   renderEditor();
@@ -2565,7 +2749,7 @@ function renderEditor() {
   if (t.type === 'canvas') {
     const sn = (S.selNode === 'dlq' && S.pipe.dlqNode) ? S.pipe.dlqNode : (S.pipe.nodes.find((n) => n.id === S.selNode) || S.pipe.nodes[0]);
     const snLabel = sn ? (sn.nm && sn.nm !== typeLabel(sn.type) && sn.nm !== sn.type ? `${typeLabel(sn.type)}: ${sn.nm}` : typeLabel(sn.type)) : '';
-    bc.innerHTML = `◈ ${S.pipe.name} <span class="sep">›</span> ${snLabel} <span class="sep">›</span> <span class="chip plain" style="padding:1px 7px">${S.pipe.mode}</span>`;
+    bc.innerHTML = `◈ ${escapeHtml(S.pipe.name)} <span class="sep">›</span> ${escapeHtml(snLabel)} <span class="sep">›</span> <span class="chip plain" style="padding:1px 7px">${escapeHtml(S.pipe.mode)}</span>`;
     renderCanvas(m);
   } else {
     bc.innerHTML = tabMeta(t).label;
@@ -2668,7 +2852,7 @@ function renderCanvas(m: HTMLElement) {
     const col = el('div', 'catchcol');
     col.innerHTML = '<span class="elbow-line"></span><span class="elbow-tag">⚠ on failure → catch</span>';
     const dnode = el('div', 'node catch' + (S.selNode === 'dlq' ? ' sel' : ''));
-    dnode.innerHTML = `<div class="kind">dead-letter (catch)</div><div class="nm">${dn.nm}</div><div class="meta">${dn.type} · ${dn.meta}</div>`;
+    dnode.innerHTML = `<div class="kind">dead-letter (catch)</div><div class="nm">${escapeHtml(dn.nm)}</div><div class="meta">${escapeHtml(dn.type)} · ${escapeHtml(dn.meta)}</div>`;
     dnode.tabIndex = 0;
     dnode.title = 'Rows rejected by the sink are captured here — the main pipeline keeps running.';
     dnode.onclick = () => { S.selNode = 'dlq'; S.inspTab = 'Config'; S.inspClosed = false; renderEditor(); };
@@ -2818,82 +3002,88 @@ function renderCanvas(m: HTMLElement) {
     // and functions), like the Flogo mapper — instead of a raw JSON textarea.
     // A "Connection" picker is shown first for stages whose type uses one, so
     // DSNs/secrets can be bound by name instead of typed into the file.
-    const connSel = renderConnectionSelector(sn);
-    if (connSel) ib.appendChild(connSel);
-    const fam = familyOfType(sn.type);
-    const boundConn = fam && typeof cfgTarget(sn).connection === 'string' && cfgTarget(sn).connection;
-    const hiddenKeys = new Set<string>(['connection']);
-    if (boundConn && fam) for (const k of CONN_MANAGED_KEYS[fam] || []) hiddenKeys.add(k);
-    Object.entries(sn.cfg).forEach(([k, v]) => {
-      if (hiddenKeys.has(k)) return;
-      // JDBC: the conflict key only applies to upsert — hide it otherwise, and
-      // render it as a column picker rather than a JSON blob.
-      const isJdbc = sn.type === 'jdbc';
-      if (isJdbc && k === 'conflictKey') {
-        const oc = String((cfgTarget(sn) as any).onConflict || 'insert');
-        if (oc === 'upsert') ib.appendChild(renderConflictKeyEditor(sn));
-        return;
-      }
-      // JDBC table: offer a live "pick from database" dropdown + refresh.
-      if (isJdbc && k === 'table') {
-        ib.appendChild(renderTableField(sn, v));
-        return;
-      }
-      // Object-store key/prefix: offer a "browse objects" picker.
-      const isObjStore = ['s3', 'gcs', 'adls', 's3-sink', 'gcs-sink', 'adls-sink'].includes(sn.type);
-      if (isObjStore && (k === 'key' || k === 'prefix')) {
-        ib.appendChild(renderObjectField(sn, k, v));
-        return;
-      }
-      // Kafka: topic picker + schema-registry schema reader.
-      if (sn.type === 'kafka' && k === 'topic') {
-        ib.appendChild(renderKafkaTopicField(sn, v));
-        return;
-      }
-      if (sn.type === 'kafka' && k === 'schemaRegistryURL') {
-        ib.appendChild(renderSchemaRegistryField(sn, v));
-        return;
-      }
-      // XML: recordElement gets a "detect structure from file" action.
-      if (sn.type === 'xml' && k === 'recordElement') {
-        ib.appendChild(renderXmlRecordField(sn, v));
-        return;
-      }
-      // Custom Text (template) sink: fold template + templatePath into one editor
-      // with an Inline/File toggle and a variable/helper reference strip.
-      if (sn.type === 'template' && k === 'template') {
-        ib.appendChild(renderTemplateEditor(sn));
-        return;
-      }
-      if (sn.type === 'template' && k === 'templatePath') {
-        return; // handled inside renderTemplateEditor
-      }
-      if (sn.type === 'podlog' && k === 'multiline') { ib.appendChild(renderPodlogMultiline(sn)); return; }
-      if (sn.type === 'podlog' && k === 'columns') return; // podlog: pin columns to the bottom (rendered after config, below)
-      if (k === 'columns') ib.appendChild(renderColumnsEditor(sn));
-      else if (k === 'fields' && (sn.type === 'map' || sn.type === 'mapper')) ib.appendChild(renderMapEditor(sn));
-      else if (k === 'rules' && sn.type === 'validate') ib.appendChild(renderRulesEditor(sn));
-      else if (k === 'expectations' && sn.type === 'dq') ib.appendChild(renderExpectationsEditor(sn));
-      else if (k === 'expr' && sn.type === 'filter') ib.appendChild(renderFilterEditor(sn));
-      else ib.appendChild(renderField(sn, k, v));
-    });
+    if (sn.type === 'window') {
+      ib.appendChild(renderWindowEditor(sn));
+    } else if (sn.type === 'join') {
+      ib.appendChild(renderJoinEditor(sn));
+    } else {
+      const connSel = renderConnectionSelector(sn);
+      if (connSel) ib.appendChild(connSel);
+      const fam = familyOfType(sn.type);
+      const boundConn = fam && typeof cfgTarget(sn).connection === 'string' && cfgTarget(sn).connection;
+      const hiddenKeys = new Set<string>(['connection']);
+      if (boundConn && fam) for (const k of CONN_MANAGED_KEYS[fam] || []) hiddenKeys.add(k);
+      Object.entries(sn.cfg).forEach(([k, v]) => {
+        if (hiddenKeys.has(k)) return;
+        // JDBC: the conflict key only applies to upsert — hide it otherwise, and
+        // render it as a column picker rather than a JSON blob.
+        const isJdbc = sn.type === 'jdbc';
+        if (isJdbc && k === 'conflictKey') {
+          const oc = String((cfgTarget(sn) as any).onConflict || 'insert');
+          if (oc === 'upsert') ib.appendChild(renderConflictKeyEditor(sn));
+          return;
+        }
+        // JDBC table: offer a live "pick from database" dropdown + refresh.
+        if (isJdbc && k === 'table') {
+          ib.appendChild(renderTableField(sn, v));
+          return;
+        }
+        // Object-store key/prefix: offer a "browse objects" picker.
+        const isObjStore = ['s3', 'gcs', 'adls', 's3-sink', 'gcs-sink', 'adls-sink'].includes(sn.type);
+        if (isObjStore && (k === 'key' || k === 'prefix')) {
+          ib.appendChild(renderObjectField(sn, k, v));
+          return;
+        }
+        // Kafka: topic picker + schema-registry schema reader.
+        if (sn.type === 'kafka' && k === 'topic') {
+          ib.appendChild(renderKafkaTopicField(sn, v));
+          return;
+        }
+        if (sn.type === 'kafka' && k === 'schemaRegistryURL') {
+          ib.appendChild(renderSchemaRegistryField(sn, v));
+          return;
+        }
+        // XML: recordElement gets a "detect structure from file" action.
+        if (sn.type === 'xml' && k === 'recordElement') {
+          ib.appendChild(renderXmlRecordField(sn, v));
+          return;
+        }
+        // Custom Text (template) sink: fold template + templatePath into one editor
+        // with an Inline/File toggle and a variable/helper reference strip.
+        if (sn.type === 'template' && k === 'template') {
+          ib.appendChild(renderTemplateEditor(sn));
+          return;
+        }
+        if (sn.type === 'template' && k === 'templatePath') {
+          return; // handled inside renderTemplateEditor
+        }
+        if (sn.type === 'podlog' && k === 'multiline') { ib.appendChild(renderPodlogMultiline(sn)); return; }
+        if (sn.type === 'podlog' && k === 'columns') return; // podlog: pin columns to the bottom (rendered after config, below)
+        if (k === 'columns') ib.appendChild(renderColumnsEditor(sn));
+        else if (k === 'fields' && (sn.type === 'map' || sn.type === 'mapper')) ib.appendChild(renderMapEditor(sn));
+        else if (k === 'rules' && sn.type === 'validate') ib.appendChild(renderRulesEditor(sn));
+        else if (k === 'expectations' && sn.type === 'dq') ib.appendChild(renderExpectationsEditor(sn));
+        else if (k === 'expr' && sn.type === 'filter') ib.appendChild(renderFilterEditor(sn));
+        else ib.appendChild(renderField(sn, k, v));
+      });
 
-    // JDBC upsert selected but no conflictKey field present yet — add the picker.
-    if (sn.type === 'jdbc' && String((cfgTarget(sn) as any).onConflict) === 'upsert' && !('conflictKey' in sn.cfg)) {
-      ib.appendChild(renderConflictKeyEditor(sn));
-    }
+      // JDBC upsert selected but no conflictKey field present yet — add the picker.
+      if (sn.type === 'jdbc' && String((cfgTarget(sn) as any).onConflict) === 'upsert' && !('conflictKey' in sn.cfg)) {
+        ib.appendChild(renderConflictKeyEditor(sn));
+      }
 
-    // A source with no explicit `columns` key (e.g. Parquet is self-describing)
-    // still gets a columns editor so users can view/declare columns and use the
-    // "Read schema from source" / "Infer" actions. podlog also renders it here
-    // (its `columns` key is skipped in the loop above) so its many config fields
-    // stay at the top and the columns/schema section is always last.
-    if (sn.kind === 'source' && (!('columns' in sn.cfg) || sn.type === 'podlog')) {
-      ib.appendChild(renderColumnsEditor(sn));
-    }
+      // A source with no explicit `columns` key (e.g. Parquet is self-describing)
+      // still gets a columns editor so users can view/declare columns and use the
+      // "Read schema from source" / "Infer" actions. podlog also renders it here
+      // (its `columns` key is skipped in the loop above) so its many config fields
+      // stay at the top and the columns/schema section is always last.
+      if (sn.kind === 'source' && (!('columns' in sn.cfg) || sn.type === 'podlog')) {
+        ib.appendChild(renderColumnsEditor(sn));
+      }
 
-    if (!Object.keys(sn.cfg).length && sn.kind !== 'source') {
-      ib.appendChild(el('div', 'muted', '<div style="font-size:11.5px;padding:4px 0">No configuration for this stage yet.</div>'));
+      if (!Object.keys(sn.cfg).length && sn.kind !== 'source') {
+        ib.appendChild(el('div', 'muted', '<div style="font-size:11.5px;padding:4px 0">No configuration for this stage yet.</div>'));
+      }
     }
 
     if (sn.kind === 'dlq') {
@@ -2933,6 +3123,18 @@ function schemaForNode(node: Node): Array<{ name: string; type: string; derived?
       // map replaces the projected set with its output fields
       cols = Object.keys(t.fields).map((k) => ({ name: k, type: 'derived', derived: true }));
     }
+    if (t.type === 'window') {
+      // window replaces the schema with groupBy keys + window bounds + aggregates
+      const gb = Array.isArray(t.groupBy) ? t.groupBy : [];
+      const aggs = Array.isArray(t.aggregations) ? t.aggregations : [];
+      const em = t.emit || {};
+      cols = [
+        ...gb.map((g: any) => ({ name: String(g), type: 'string' })),
+        { name: String(em.windowStartAs || 'window_start'), type: 'int' },
+        { name: String(em.windowEndAs || 'window_end'), type: 'int' },
+        ...aggs.map((a: any) => ({ name: String(a.as), type: 'derived', derived: true })),
+      ];
+    }
     // filter/validate/hwm/dq/schemadrift are passthrough for schema purposes.
     // lookup and parse APPEND columns to the existing set.
     if (t.type === 'lookup' && Array.isArray(t.outputFields)) {
@@ -2941,6 +3143,14 @@ function schemaForNode(node: Node): Array<{ name: string; type: string; derived?
     if (t.type === 'parse') {
       parseProducedColumns(t).forEach((n) => {
         if (!cols.some((c) => c.name === n)) cols.push({ name: n, type: 'derived', derived: true });
+      });
+    }
+    if (t.type === 'join' && Array.isArray(t.rightColumns)) {
+      // join APPENDS the selected right columns (optionally prefixed).
+      const pfx = typeof t.prefix === 'string' ? t.prefix : '';
+      t.rightColumns.forEach((f: any) => {
+        const name = pfx + String(f);
+        if (!cols.some((c) => c.name === name)) cols.push({ name, type: 'derived', derived: true });
       });
     }
   }
@@ -3104,7 +3314,7 @@ function renderSchemaTab(ib: HTMLElement, sn: Node) {
     return;
   }
   const cols = schemaForNode(sn);
-  ib.appendChild(el('div', 'muted', `<div style="font-size:12px;padding:2px 0 8px">Columns visible <b style="color:var(--text)">after ${sn.nm}</b>:</div>`));
+  ib.appendChild(el('div', 'muted', `<div style="font-size:12px;padding:2px 0 8px">Columns visible <b style="color:var(--text)">after ${escapeHtml(sn.nm)}</b>:</div>`));
   if (!cols.length) {
     ib.appendChild(el('div', 'muted', '<div style="font-size:11.5px">No declared schema. For self-describing sources (Parquet, JSON), run <b style="color:var(--text)">Dry-run Preview</b> to see live columns; for CSV/fixed-width declare columns in the Config tab.</div>'));
     const b = el('button', 'btn sm', '⌕ Preview to infer schema');
@@ -3515,6 +3725,14 @@ const TRANSFORMS: Array<{ type: string; label: string; cfg: Record<string, unkno
   {
     type: 'parse', label: 'Parse — structure a text field into columns (regex/JSON)',
     cfg: { source: 'text', mode: 'regex', pattern: '^(?P<key>\\w+)=(?P<value>.*)$', onError: 'keep', keepSource: true }
+  },
+  {
+    type: 'window', label: 'Window — event-time aggregation (tumbling/sliding/session)',
+    cfg: { window: { kind: 'tumbling', sizeMs: 60000 }, eventTime: { column: 'ts', format: 'RFC3339' }, groupBy: [], aggregations: [{ as: 'n', fn: 'count' }], watermark: { strategy: 'boundedOutOfOrderness', maxLatenessMs: 0 } }
+  },
+  {
+    type: 'join', label: 'Join — keyed join against a reference source (stream-table)',
+    cfg: { leftKey: 'id', rightKey: 'id', joinType: 'inner', right: { type: 'csv', path: 'reference.csv', hasHeader: true } }
   },
 ];
 
@@ -4096,7 +4314,7 @@ function toast(kind: 'ok' | 'err' | 'warn' | 'info', msg: string, sticky = false
 }
 
 function escapeHtml(s: string) {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 // ── host message handling ─────────────────────────────────────────────────────

@@ -150,12 +150,12 @@ func newPodlogSource(cfg map[string]interface{}) (source.Source, error) {
 		fromBeginning: c.fromBeginning,
 		pollMs:        c.pollMs,
 		startPattern:  startMatcher,
+		maxLines:      c.maxLines,
 		includeNS:     toSet(c.includeNS),
 		excludeNS:     toSet(c.excludeNS),
 		positions:     ps,
 		flushIdle:     time.Duration(c.flushIdleMs) * time.Millisecond,
 		bounded:       c.bounded,
-		maxLines:      c.maxLines,
 		out:           make(chan enrichedRecord, 1024),
 	}
 

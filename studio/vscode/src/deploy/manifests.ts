@@ -12,11 +12,14 @@ export function dockerfile(binaryFileName: string, pipelineFileName: string): st
 FROM gcr.io/distroless/static-debian12
 WORKDIR /app
 COPY ${binaryFileName} /app/${binaryFileName}
-COPY ${pipelineFileName} /app/${pipelineFileName}
-ENV PIPELINE_FILE=/app/${pipelineFileName}
+# Copy the pipeline to a fixed in-container path so the source file name (which
+# may contain spaces or other special characters) can never break the COPY/ENV
+# directives or the ENTRYPOINT argument list. The source name is quoted.
+COPY "${pipelineFileName}" /app/pipeline.datapipeline
+ENV PIPELINE_FILE=/app/pipeline.datapipeline
 ENV PIPELINE_API_ADDR=:9080
 EXPOSE 9080
-ENTRYPOINT ["/app/${binaryFileName}", "-f", "/app/${pipelineFileName}", "-port", "9080"]
+ENTRYPOINT ["/app/${binaryFileName}", "-f", "/app/pipeline.datapipeline", "-port", "9080"]
 `;
 }
 
@@ -145,8 +148,9 @@ Required variables:
 
 ${envVars.map((e) => `- \`${e.name}\``).join('\n')}
 
-A filled-in \`*.deploy.datapipeline.env.example\` (with real values) was generated
-next to the pipeline — **do not commit it**. For Kubernetes, edit the
+A \`*.deploy.datapipeline.env.example\` template (placeholder values to fill in)
+was generated next to the pipeline — copy it to your own env file, set the real
+values there, and **do not commit that file**. For Kubernetes, edit the
 \`${name}-secrets\` Secret in \`k8s-statefulset.yaml\` (the pods read these via
 \`secretKeyRef\`). For local/Docker:
 

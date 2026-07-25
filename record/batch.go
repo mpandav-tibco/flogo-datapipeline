@@ -64,8 +64,13 @@ func (b *RecordBatch) Value(row int, col string) interface{} {
 }
 
 // RowMap returns row i as a map[string]interface{} for expression evaluation.
+// Out-of-range i yields an empty map (never panics), matching the defensive
+// contract of Value.
 func (b *RecordBatch) RowMap(i int) map[string]interface{} {
 	m := make(map[string]interface{}, len(b.Columns))
+	if i < 0 || i >= len(b.Rows) {
+		return m
+	}
 	for j, col := range b.Columns {
 		if j < len(b.Rows[i]) {
 			m[col.Name] = b.Rows[i][j]

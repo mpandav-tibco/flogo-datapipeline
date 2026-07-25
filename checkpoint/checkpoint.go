@@ -41,6 +41,13 @@ type Token struct {
 	// Used as the fallback seek depth when Payload is nil, and always kept for
 	// metrics and progress reporting.
 	RowsProcessed int64 `json:"rowsProcessed"`
+	// WindowState is an optional, opaque snapshot of a stream-processing window
+	// operator's keyed state, captured at the same instant as Payload so that a
+	// streaming pipeline resumes with window aggregations and the source offset in
+	// sync. Backends persist it verbatim; the pipeline engine populates it from the
+	// window transform's Snapshot() and replays it via Restore() on resume. Empty
+	// for pipelines without a window transform.
+	WindowState json.RawMessage `json:"windowState,omitempty"`
 }
 
 // CursorProvider is an optional interface that pipeline sources implement to
@@ -128,7 +135,7 @@ func New(typ string, cfg map[string]interface{}) (Checkpoint, error) {
 // is disabled or for sources where restart is cheap (small files, idempotent).
 type NoopCheckpoint struct{}
 
-func (NoopCheckpoint) Save(string, *Token) error        { return nil }
-func (NoopCheckpoint) Load(string) (*Token, error)      { return nil, nil }
-func (NoopCheckpoint) Delete(string) error              { return nil }
-func (NoopCheckpoint) Close() error                     { return nil }
+func (NoopCheckpoint) Save(string, *Token) error   { return nil }
+func (NoopCheckpoint) Load(string) (*Token, error) { return nil, nil }
+func (NoopCheckpoint) Delete(string) error         { return nil }
+func (NoopCheckpoint) Close() error                { return nil }

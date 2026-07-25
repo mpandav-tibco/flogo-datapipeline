@@ -14,6 +14,7 @@ import (
 	"sync"
 
 	"github.com/mpandav-tibco/flogo-datapipeline/checkpoint"
+	"github.com/mpandav-tibco/flogo-datapipeline/internal/fileutil"
 )
 
 func init() {
@@ -64,14 +65,11 @@ func (f *fileCheckpoint) Save(partitionID string, t *checkpoint.Token) error {
 	if err != nil {
 		return fmt.Errorf("file checkpoint: marshal: %w", err)
 	}
-	// Write to temp file then rename for atomicity.
-	tmp := f.path(partitionID) + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
-		return fmt.Errorf("file checkpoint: write temp: %w", err)
-	}
-	if err := os.Rename(tmp, f.path(partitionID)); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("file checkpoint: rename: %w", err)
+	// Atomic + durable write (temp file, fsync, rename, best-effort dir fsync) so
+	// a resumed pipeline never reads a torn checkpoint and the token survives a
+	// power loss — a plain WriteFile+Rename is atomic but not durable.
+	if err := fileutil.WriteFileAtomic(f.path(partitionID), data, 0644); err != nil {
+		return fmt.Errorf("file checkpoint: write %q: %w", partitionID, err)
 	}
 	return nil
 }

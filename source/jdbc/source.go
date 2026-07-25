@@ -252,12 +252,12 @@ func hwmPredicate(cfg map[string]interface{}, driver string) string {
 		if _, err := strconv.ParseInt(strings.TrimSpace(val), 10, 64); err != nil {
 			// Not a clean integer — fall back to a quoted literal so the query
 			// stays valid rather than embedding an unquoted bad token.
-			lit = "'" + strings.ReplaceAll(val, "'", "''") + "'"
+			lit = sqlutil.QuoteLiteral(val, driver)
 		} else {
 			lit = strings.TrimSpace(val)
 		}
 	default: // "datetime", "string", or unset — quote as a string literal.
-		lit = "'" + strings.ReplaceAll(val, "'", "''") + "'"
+		lit = sqlutil.QuoteLiteral(val, driver)
 	}
 	return sqlutil.QuoteIdent(col, driver) + " > " + lit
 }
@@ -802,10 +802,10 @@ func formatLiteral(v interface{}, driver string) string {
 		return "'" + n.Format("2006-01-02 15:04:05.999999-07:00") + "'"
 	case []byte:
 		// Treat raw bytes as a hex literal (Postgres, MySQL, SQLite all support this).
-		return fmt.Sprintf("'%s'", strings.ReplaceAll(string(n), "'", "''"))
+		return sqlutil.QuoteLiteral(string(n), driver)
 	default:
 		s := fmt.Sprintf("%v", v)
-		return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+		return sqlutil.QuoteLiteral(s, driver)
 	}
 }
 

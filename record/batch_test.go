@@ -119,6 +119,19 @@ func TestRowMap_LastRow(t *testing.T) {
 	}
 }
 
+func TestRowMap_OutOfBoundsReturnsEmptyMap(t *testing.T) {
+	b := makeTestBatch() // 3 rows
+	for _, i := range []int{-1, 3, 99} {
+		m := b.RowMap(i)
+		if m == nil {
+			t.Errorf("RowMap(%d) = nil, want empty (non-nil) map", i)
+		}
+		if len(m) != 0 {
+			t.Errorf("RowMap(%d) = %v, want empty map", i, m)
+		}
+	}
+}
+
 // ─── Clone ────────────────────────────────────────────────────────────────────
 
 func TestClone_SharesColumns(t *testing.T) {
