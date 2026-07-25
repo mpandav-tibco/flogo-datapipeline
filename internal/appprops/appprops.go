@@ -258,11 +258,12 @@ func isRawInjectable(typ, value string) bool {
 	v := strings.TrimSpace(value)
 	switch strings.ToLower(strings.TrimSpace(typ)) {
 	case "number", "integer", "int", "float", "long", "double":
-		if _, err := strconv.ParseFloat(v, 64); err != nil {
-			return false
-		}
-		lv := strings.ToLower(v) // reject Inf/NaN (valid ParseFloat, invalid JSON)
-		return !strings.Contains(lv, "inf") && !strings.Contains(lv, "nan")
+		// Validate as a genuine JSON number, not merely strconv.ParseFloat-parseable:
+		// ParseFloat also accepts ".5", "1.", "+5", "5_0" and hex floats ("0x1p4"),
+		// none of which are valid JSON — raw-splicing them would corrupt the app
+		// JSON at load. json.Unmarshal into a float rejects those (and Inf/NaN).
+		var n float64
+		return json.Unmarshal([]byte(v), &n) == nil
 	case "boolean", "bool":
 		return v == "true" || v == "false"
 	case "json", "object", "array":

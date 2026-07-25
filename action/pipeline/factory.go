@@ -67,9 +67,8 @@ func (f *Factory) New(cfg *action.Config) (action.Action, error) {
 	// two concurrent New() calls for the same ref from both creating a metrics
 	// backend (which would try to bind the same port twice) and leaking the first.
 	f.mu.Lock()
-	existing, ok := f.actions[s.PipelineRef]
-	if ok {
-		f.mu.Unlock()
+	defer f.mu.Unlock()
+	if existing, ok := f.actions[s.PipelineRef]; ok {
 		return existing, nil
 	}
 
@@ -101,7 +100,6 @@ func (f *Factory) New(cfg *action.Config) (action.Action, error) {
 	}
 
 	f.actions[s.PipelineRef] = act
-	f.mu.Unlock()
 
 	flog.Infof("created DataPipelineAction for %s (source: %s → sink: %s, metrics: %s)",
 		s.PipelineRef, def.Source.Type, def.Sink.Type,
