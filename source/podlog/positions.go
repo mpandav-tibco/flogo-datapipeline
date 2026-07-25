@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"github.com/mpandav-tibco/flogo-datapipeline/internal/fileutil"
 )
 
 // position records how far a single log file has been durably delivered.
@@ -77,8 +79,9 @@ func (ps *positionStore) snapshot() json.RawMessage {
 	return json.RawMessage(b)
 }
 
-// persist writes the position map atomically (temp file + rename) so a crash
-// mid-write can never corrupt the registry.
+// persist writes the position map atomically AND durably (fsync temp + rename +
+// fsync dir, via fileutil.WriteFileAtomic) so a crash or power loss mid-write
+// cannot corrupt or leave a stale registry — the crash-safe contract above.
 func (ps *positionStore) persist() error {
 	if ps.path == "" {
 		return nil
@@ -89,9 +92,5 @@ func (ps *positionStore) persist() error {
 	if err != nil {
 		return err
 	}
-	tmp := ps.path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, ps.path)
+	return fileutil.WriteFileAtomic(ps.path, b, 0o644)
 }
