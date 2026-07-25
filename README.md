@@ -1,10 +1,16 @@
-﻿# Flogo Data Pipeline
+# Flogo Data Pipeline
 
 A lightweight, embeddable data pipeline engine built on the [Project Flogo](https://github.com/project-flogo/core) runtime, with a visual authoring experience inside VS Code.
 
-> **Full feature reference:** see [`docs/FEATURES.md`](docs/FEATURES.md) for a
-> code-level catalog of every registered source, sink, transform, backend, and
-> config key.
+> **Documentation:** the [`docs/`](docs/README.md) folder is the full product guide —
+> [Getting started](docs/getting-started.md), [Architecture](docs/ARCHITECTURE.md), the
+> [Pipeline file](docs/pipeline-file.md), and per-topic references for
+> [sources](docs/sources.md), [sinks](docs/sinks.md), [transforms](docs/transforms.md),
+> [reliability](docs/reliability.md), [scaling](docs/scaling.md),
+> [observability](docs/observability.md), the [REST API](docs/rest-api.md), and
+> [deployment](docs/deployment.md). Each source, transform, and sink also has its own
+> **per-activity page** under [docs/sources/](docs/sources/), [docs/transforms/](docs/transforms/),
+> and [docs/sinks/](docs/sinks/); the [Feature matrix](docs/FEATURES.md) links them all.
 
 ---
 
@@ -14,10 +20,10 @@ Enterprise integration teams spend a disproportionate amount of time on data mov
 
 We are building Flogo Data Pipeline to fill the gap for teams that need:
 
-- **A single deployable binary** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â no JVM, no Docker required to get started, no cluster to manage for small-to-medium workloads.
-- **A Flogo-native programming model** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â pipelines are Flogo app JSON, so they compose naturally with existing Flogo triggers, activities, and the broader Flogo ecosystem.
-- **A visual editor that lives in the developer's IDE** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the VS Code extension brings a canvas directly into the tool engineers already have open, with no browser, no SaaS account, no account required.
-- **Honest operational primitives** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â checkpointing, watermarking, schema drift detection, data quality scoring, and Prometheus metrics are first-class concepts, not add-ons.
+- **A single deployable binary** — no JVM, no Docker required to get started, no cluster to manage for small-to-medium workloads.
+- **A Flogo-native programming model** — pipelines are Flogo app JSON, so they compose naturally with existing Flogo triggers, activities, and the broader Flogo ecosystem.
+- **A visual editor that lives in the developer's IDE** — the VS Code extension brings a canvas directly into the tool engineers already have open, with no browser, no SaaS account, no account required.
+- **Honest operational primitives** — checkpointing, watermarking, schema drift detection, data quality scoring, and Prometheus metrics are first-class concepts, not add-ons.
 
 This is an active project at an early stage. The sections below document what is **working today** and what is **planned next**.
 
@@ -30,25 +36,25 @@ This is an active project at an early stage. The sections below document what is
 A single Go binary (`flogo-datapipeline`) that reads a `.datapipeline` file, instantiates a pipeline from the Flogo resource descriptor, and runs it. The pipeline executes as:
 
 ```
-Source  ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢  [TransformÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ TransformÃƒÂ¢Ã¢â‚¬Å¡Ã¢â‚¬Å¡ ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ ]  ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢  Sink
-                                               ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬Å“ (bad rows)
-                                              DLQ Sink
+Source  →  [ Transform₁ → Transform₂ → … ]  →  Sink
+                                            ↓ (bad rows)
+                                           DLQ Sink
 ```
 
-The binary exposes an optional REST API (`/v1/ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦`) for health checks, triggering runs, and reading run history. It can be embedded in a larger Flogo application or run standalone.
+The binary exposes an optional REST API (`/v1/…`) for health checks, triggering runs, and reading run history. It can be embedded in a larger Flogo application or run standalone.
 
 ### The VS Code extension
 
 A custom editor for `.datapipeline` files that gives you:
 
-- A visual canvas to compose source ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ transform chain ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ sink (plus a DLQ branch)
-- A properties panel to configure each stage ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â no raw JSON editing required
+- A visual canvas to compose source → transform chain → sink (plus a DLQ branch)
+- A properties panel to configure each stage — no raw JSON editing required
 - Plain-language structured editors for columns, field mappings, validation
   rules, data-quality expectations, filters and the JDBC conflict key
-- **Reusable connections** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â define a database / stream / object-store / HTTP
+- **Reusable connections** — define a database / stream / object-store / HTTP
   endpoint once as a `*.fgconn` file and bind it by name on any source or sink.
   Secrets are kept in VS Code Secret Storage, never written to a file
-- **Schema inference** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â one click samples a CSV/TSV/JSON-lines file to fill in
+- **Schema inference** — one click samples a CSV/TSV/JSON-lines file to fill in
   column names and types
 - File/folder browse buttons for path inputs
 - One-click run and stop with streamed status, plus a side-effect-free dry-run
@@ -58,6 +64,130 @@ A custom editor for `.datapipeline` files that gives you:
   sidebar views for pipelines and connections
 
 See [`studio/vscode/README.md`](studio/vscode/README.md) for full details.
+
+---
+
+## Where we fit: one platform, not a second stack
+
+Flogo is already an **integration platform** — connectivity, triggers, API and event
+flows. Flogo Data Pipeline adds **data integration** (ETL / ELT, bulk and incremental
+movement) as a first-class Flogo paradigm, so a customer runs **both on one platform,
+one runtime, one skill set**. This is not a bid to out-feature Informatica, Talend, or
+Redpanda Connect — it removes the need to buy, run, and staff a *separate* ETL stack
+alongside the integration one. The competition we care about is the **redundant second
+stack**, not another tool in a feature grid.
+
+### The challenge
+
+Consolidation. Organisations — acutely in DACH — are collapsing tech stacks to cut
+infrastructure, operations, and skills cost. Running application integration and data
+integration on **separate** stacks doubles licences, runtimes, and people, and splits
+governance across two vendors.
+
+### The solution
+
+A new Flogo `action` that turns Flogo into a first-class data-pipeline engine: a single
+static Go binary (no JVM, no cluster) authored visually in VS Code — the **same**
+runtime, tooling, and skills your integration flows already use.
+
+### What consolidation buys you
+
+| Key value | Payoff |
+|---|---|
+| **One solution for integration + pipelines** | Retire the redundant ETL stack — one runtime, one skill set, one governance surface |
+| **Lowest possible TCO** | A deployed pipeline is a single ~8–14 MB binary; no per-connector SaaS metering; scales down to a job and up to sharded / distributed |
+| **Author in VS Code** | No design SaaS, no extra account; near-zero onboarding, reuses existing Flogo skills |
+| **Composability = expansion** | Pipelines compose with existing Flogo triggers and activities — every existing Flogo footprint becomes a data-integration expansion, not a new procurement |
+
+### An honest scope
+
+We cover the **common** integration and data-movement patterns — file / mainframe → lake
+or database, database → database incremental sync, and Kafka → lake — with operational
+primitives built in (checkpoint/resume, incremental high-water marks, schema-drift
+policies, data-quality scoring, and a dead-letter queue), including enterprise formats
+like EBCDIC / fixed-width mainframe, Parquet, and XML. We deliberately do **not** chase
+the deepest specialist features — log-based CDC, MDM, data governance / catalog, or a
+500+ SaaS-connector catalog. The aim is not to replace a specialist suite for every edge
+case; it is to let **one platform** handle the bulk of a customer's integration *and*
+data work, so the second stack — with its own vendor, licences, and headcount — is no
+longer needed.
+
+---
+
+## Architecture overview
+
+```mermaid
+flowchart TB
+    subgraph Studio["VS Code Extension (WebView)"]
+        editor["Visual editor<br/>serialises to .datapipeline JSON"]
+    end
+
+    editor -->|file on disk| binary
+
+    subgraph binary["flogo-datapipeline binary (Go, single static binary)"]
+        direction TB
+        engine["Flogo engine to action/pipeline"]
+        engine --> source["Source"]
+        source --> transforms["Transform chain"]
+        transforms --> sink["Sink"]
+        transforms -.->|rejected records| dlq["DLQ Sink"]
+
+        subgraph state["State and observability"]
+            direction LR
+            checkpoint["Checkpoint<br/>file / Redis"]
+            watermark["Watermark<br/>file / Redis / PG"]
+            metrics["Metrics<br/>Prometheus / OTLP"]
+        end
+
+        engine -.-> checkpoint
+        engine -.-> watermark
+        engine -.-> metrics
+    end
+
+    binary -->|REST API optional| api["/v1/health<br/>/v1/pipelines<br/>/v1/pipelines/{ref}/run"]
+```
+
+---
+
+## Enterprise use cases we are targeting
+
+These are the specific enterprise problems we are designing for:
+
+### 1. Mainframe / legacy data offload
+
+Large enterprises run critical record systems on mainframes producing EBCDIC-encoded fixed-width files. Getting that data into modern stores (PostgreSQL, S3, Parquet) typically requires specialised ETL tooling. The fixed-width source with EBCDIC/037/500 encoding and implied-decimal support is designed specifically for this pattern.
+
+**Target:** On-prem to cloud migration; batch offload from mainframe batch jobs.
+
+### 2. Incremental database synchronisation
+
+Extracting full tables on a schedule is expensive and slow at scale. The HWM (high-water mark) pattern paired with the JDBC source and a watermark backend allows pipelines to resume from the last processed row across restarts.
+
+**Target:** Database-to-database sync, operational data store refresh, CDC-light patterns.
+
+### 3. Streaming Kafka ingestion into JDBC / data lake
+
+Teams building event-driven architectures need a lightweight path from Kafka topics to relational databases or cloud data lakes without a full Kafka Streams or Flink deployment. The Kafka source + JDBC/Parquet/S3 sink path covers this.
+
+**Target:** Event log archiving, operational reporting from event streams, streaming ETL into Snowflake-ready Parquet.
+
+### 4. Data quality enforcement at ingestion time
+
+Enterprises often discover data quality problems after they have propagated through multiple systems. The validate transform enforces per-field rules at ingestion time; violations are routed to a DLQ sink so bad records are captured, not silently dropped.
+
+**Target:** Financial data ingestion, regulatory reporting, MDM feed processing.
+
+### 5. Cloud data lake ingestion (Parquet / object store)
+
+Teams loading data into data lakes need to land files in Parquet format on S3, GCS, or Azure Blob with correct row-group sizing for downstream query performance. The Parquet sink with row-group configuration and the object store sinks cover this.
+
+**Target:** Data lake / lakehouse ingestion layer, Spark / Athena / BigQuery pre-processing.
+
+### 6. Schema drift monitoring in live feeds
+
+Production data feeds change over time without notice. The schema drift transform detects column additions, removals, and type changes at runtime and applies a configurable policy so pipelines do not silently break or silently ingest structurally invalid data.
+
+**Target:** Third-party data feed ingestion, API-to-database pipelines, partner data exchange.
 
 ---
 
@@ -119,51 +249,16 @@ See [`studio/vscode/README.md`](studio/vscode/README.md) for full details.
 
 Ready-to-run templates in the VS Code extension:
 
-- CSV ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ PostgreSQL (ETL with filter + map)
-- Parquet on S3 ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ JDBC (ETL with validate + map, Redis checkpoint, scaling config)
-- Database ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ Database incremental sync (HWM-driven)
-- Kafka ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ JDBC streaming ETL
-- Mainframe EBCDIC ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ PostgreSQL
+- CSV → PostgreSQL (ETL with filter + map)
+- Parquet on S3 → JDBC (ETL with validate + map, Redis checkpoint, scaling config)
+- Database → Database incremental sync (HWM-driven)
+- Kafka → JDBC streaming ETL
+- Mainframe EBCDIC → PostgreSQL
 - Extract & Load only (EL mode, no transforms)
 
 ### Examples (21)
 
 Working examples covering every source type, every transform type, incremental loading (with file / Redis / PostgreSQL watermark backends), schema drift, data quality, Prometheus and OpenTelemetry metrics, checkpoint/resume, horizontal scaling (sharded and distributed), Kafka streaming, and a full production pipeline composition.
-
----
-
-## Architecture overview
-
-```mermaid
-flowchart TB
-    subgraph Studio["VS Code Extension (WebView)"]
-        editor["Visual editor<br/>serialises to .datapipeline JSON"]
-    end
-
-    editor -->|file on disk| binary
-
-    subgraph binary["flogo-datapipeline binary (Go, single static binary)"]
-        direction TB
-        engine["Flogo engine to action/pipeline"]
-        engine --> source["Source"]
-        source --> transforms["Transform chain"]
-        transforms --> sink["Sink"]
-        transforms -.->|rejected records| dlq["DLQ Sink"]
-
-        subgraph state["State and observability"]
-            direction LR
-            checkpoint["Checkpoint<br/>file / Redis"]
-            watermark["Watermark<br/>file / Redis / PG"]
-            metrics["Metrics<br/>Prometheus / OTLP"]
-        end
-
-        engine -.-> checkpoint
-        engine -.-> watermark
-        engine -.-> metrics
-    end
-
-    binary -->|REST API optional| api["/v1/health<br/>/v1/pipelines<br/>/v1/pipelines/{ref}/run"]
-```
 
 ---
 
@@ -185,7 +280,7 @@ go build -o flogo-datapipeline ./cmd/flogo-datapipeline/
 ### Install the VS Code extension
 
 1. Open VS Code
-2. Go to Extensions ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ `ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦` ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ **Install from VSIXÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦**
+2. Go to Extensions → `…` → **Install from VSIX…**
 3. Select the packaged `studio/vscode/flogo-datapipeline-studio-*.vsix`
    (build it with `cd studio/vscode && npm install && npm run package && npx vsce package`)
 4. Set the binary path in settings: `flogoDataPipelineStudio.binaryPath`
@@ -200,72 +295,30 @@ Or open the file in VS Code and click **Run** in the canvas toolbar.
 
 ---
 
-## Enterprise use cases we are targeting
-
-These are the specific enterprise problems we are designing for:
-
-### 1. Mainframe / legacy data offload
-
-Large enterprises run critical record systems on mainframes producing EBCDIC-encoded fixed-width files. Getting that data into modern stores (PostgreSQL, S3, Parquet) typically requires specialised ETL tooling. The fixed-width source with EBCDIC/037/500 encoding and implied-decimal support is designed specifically for this pattern.
-
-**Target:** On-prem to cloud migration; batch offload from mainframe batch jobs.
-
-### 2. Incremental database synchronisation
-
-Extracting full tables on a schedule is expensive and slow at scale. The HWM (high-water mark) pattern paired with the JDBC source and a watermark backend allows pipelines to resume from the last processed row across restarts.
-
-**Target:** Database-to-database sync, operational data store refresh, CDC-light patterns.
-
-### 3. Streaming Kafka ingestion into JDBC / data lake
-
-Teams building event-driven architectures need a lightweight path from Kafka topics to relational databases or cloud data lakes without a full Kafka Streams or Flink deployment. The Kafka source + JDBC/Parquet/S3 sink path covers this.
-
-**Target:** Event log archiving, operational reporting from event streams, streaming ETL into Snowflake-ready Parquet.
-
-### 4. Data quality enforcement at ingestion time
-
-Enterprises often discover data quality problems after they have propagated through multiple systems. The validate transform enforces per-field rules at ingestion time; violations are routed to a DLQ sink so bad records are captured, not silently dropped.
-
-**Target:** Financial data ingestion, regulatory reporting, MDM feed processing.
-
-### 5. Cloud data lake ingestion (Parquet / object store)
-
-Teams loading data into data lakes need to land files in Parquet format on S3, GCS, or Azure Blob with correct row-group sizing for downstream query performance. The Parquet sink with row-group configuration and the object store sinks cover this.
-
-**Target:** Data lake / lakehouse ingestion layer, Spark / Athena / BigQuery pre-processing.
-
-### 6. Schema drift monitoring in live feeds
-
-Production data feeds change over time without notice. The schema drift transform detects column additions, removals, and type changes at runtime and applies a configurable policy so pipelines do not silently break or silently ingest structurally invalid data.
-
-**Target:** Third-party data feed ingestion, API-to-database pipelines, partner data exchange.
-
----
-
 ## What is planned next
 
-These are honest work items ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â not committed roadmap, but the next things we intend to build:
+These are honest work items — not committed roadmap, but the next things we intend to build:
 
 ### Engine
 
-- [ ] **Parquet source column pushdown to remote stores** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â currently reads all columns when source is S3/GCS-backed Parquet; predicate and column pruning before download
-- [ ] **REST-API `/v1/pipelines/{ref}` PUT (runtime update)** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â currently stubbed as 501; needed for runtime pipeline update without restart
-- [ ] **MSSQL and Oracle JDBC drivers** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â PostgreSQL, MySQL, SQLite are current; these are the next priority enterprise databases
-- [ ] **SFTP and local directory watch sources** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â file-arrival triggered ingestion without cron
-- [ ] **Avro source and sink** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Avro is common in Kafka-based enterprise architectures
+- [ ] **Parquet source column pushdown to remote stores** — currently reads all columns when source is S3/GCS-backed Parquet; predicate and column pruning before download
+- [ ] **REST-API `/v1/pipelines/{ref}` PUT (runtime update)** — currently stubbed as 501; needed for runtime pipeline update without restart
+- [ ] **MSSQL and Oracle JDBC drivers** — PostgreSQL, MySQL, SQLite are current; these are the next priority enterprise databases
+- [ ] **SFTP and local directory watch sources** — file-arrival triggered ingestion without cron
+- [ ] **Avro source and sink** — Avro is common in Kafka-based enterprise architectures
 
 ### VS Code extension
 
-- [ ] **Pipeline run history view** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â visualise past runs, row counts, durations, and error rates in the sidebar
-- [ ] **Inline validation error highlighting** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â surface validate-transform failures as canvas annotations during test runs
-- [ ] **Multi-pipeline workspace support** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â run and monitor multiple pipelines from a single VS Code window
-- [ ] **Export to Kubernetes Job manifest** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â generate a ready-to-apply K8s Job spec from the current pipeline
+- [ ] **Pipeline run history view** — visualise past runs, row counts, durations, and error rates in the sidebar
+- [ ] **Inline validation error highlighting** — surface validate-transform failures as canvas annotations during test runs
+- [ ] **Multi-pipeline workspace support** — run and monitor multiple pipelines from a single VS Code window
+- [ ] **Export to Kubernetes Job manifest** — generate a ready-to-apply K8s Job spec from the current pipeline
 
 ### Longer-term (not yet scheduled)
 
-- A **lightweight pipeline server** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â a small daemon that manages pipeline lifecycle (schedule, retry, run history) without needing a full Flogo server
-- **Visual DQ report viewer** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â a canvas panel showing per-field quality scores from the DQ transform output
-- **Pipeline lineage metadata** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â expose column-level lineage (what came from where) as a queryable artifact
+- A **lightweight pipeline server** — a small daemon that manages pipeline lifecycle (schedule, retry, run history) without needing a full Flogo server
+- **Visual DQ report viewer** — a canvas panel showing per-field quality scores from the DQ transform output
+- **Pipeline lineage metadata** — expose column-level lineage (what came from where) as a queryable artifact
 
 ---
 
@@ -277,4 +330,4 @@ This is an internal prototype at the moment. If you are on the team, open a PR a
 
 ## License
 
-Private ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â not open source at this time.
+Private — not open source at this time.

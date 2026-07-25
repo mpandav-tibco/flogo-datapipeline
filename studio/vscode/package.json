@@ -2,7 +2,7 @@
   "name": "flogo-datapipeline-studio",
   "displayName": "Flogo Data Pipeline Studio",
   "description": "Visual ETL/ELT/EL pipeline designer for flogo-datapipeline — drag-and-drop source, transform and sink stages with live run metrics, DLQ triage, schema-drift review and streaming tail.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "publisher": "tibco",
   "icon": "resources/icon-128.png",
   "repository": {

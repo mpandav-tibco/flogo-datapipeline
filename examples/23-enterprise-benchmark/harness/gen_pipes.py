@@ -38,6 +38,63 @@ def cols():
     return [{"name": n, "type": t} for n, t in COLS]
 
 
+# ---------- import-driven build metadata ----------
+# Each app declares every Go package it uses (the standard Flogo model), so
+# `dp-build` can compile a lean binary that links ONLY these — no unused sources,
+# sinks, drivers or cloud SDKs. Component type -> module-relative package path.
+MOD = "github.com/mpandav-tibco/flogo-datapipeline/"
+_SRC = {"csv": "source/csv", "jsonlines": "source/jsonlines", "parquet": "source/parquet",
+        "jdbc": "source/jdbc", "kafka": "source/kafka", "fixedwidth": "source/fixedwidth",
+        "xml": "source/xml", "sectioned": "source/sectioned",
+        "s3": "source/objstore", "gcs": "source/objstore", "adls": "source/objstore"}
+_SNK = {"null": "sink/null", "parquet": "sink/parquet", "jdbc": "sink/jdbc", "kafka": "sink/kafka",
+        "csv": "sink/csv", "jsonlines": "sink/jsonlines", "template": "sink/template", "dlq": "sink/dlq",
+        "s3-sink": "sink/objstore", "gcs-sink": "sink/objstore", "adls-sink": "sink/objstore"}
+_TF = {"filter": "transform/filter", "map": "transform/mapper", "validate": "transform/validate",
+       "schemadrift": "transform/schemadrift", "dq": "transform/dq", "hwm": "transform/hwm",
+       "lookup": "transform/lookup"}
+_PROV = {"s3": "objstore/s3", "gcs": "objstore/gcs", "adls": "objstore/adls"}
+_DRV = {"postgres": "github.com/lib/pq", "mysql": "github.com/go-sql-driver/mysql",
+        "sqlite": "github.com/mattn/go-sqlite3"}
+_CKPT = {"file": "checkpoint/file", "redis": "checkpoint/redis"}
+
+
+def imports_for(data):
+    """Return the full sorted import list a pipeline needs (action + trigger +
+    every source/sink/transform/driver/checkpoint package it references)."""
+    imp = {MOD + "action/pipeline", "github.com/project-flogo/contrib/trigger/timer"}
+
+    def add(rel):
+        if rel:
+            imp.add(rel if "." in rel else MOD + rel)
+
+    src = data.get("source", {})
+    st = src.get("type")
+    add(_SRC.get(st))
+    if st in _PROV:
+        add(_PROV[st])
+        add(_SRC.get(src.get("options", {}).get("format")))
+    if st == "jdbc":
+        add(_DRV.get(src.get("driver")))
+
+    snk = data.get("sink", {})
+    kt = snk.get("type")
+    add(_SNK.get(kt))
+    if kt in ("s3-sink", "gcs-sink", "adls-sink"):
+        add(_PROV[kt.split("-")[0]])
+        add(_SNK.get(snk.get("format")))
+    if kt == "jdbc":
+        add(_DRV.get(snk.get("driver")))
+
+    for t in data.get("transforms", []):
+        add(_TF.get(t.get("type")))
+
+    cp = data.get("checkpoint", {})
+    if cp.get("type") and cp.get("type") != "none":
+        add(_CKPT.get(cp["type"]))
+    return sorted(imp)
+
+
 # ---------- sources ----------
 def src_csv(path="./data/orders.csv"):
     return {"type": "csv", "path": path, "delimiter": ",", "hasHeader": True, "columns": cols()}
@@ -146,10 +203,7 @@ LOOKUP = {"type": "lookup", "url": "http://localhost:9099/enrich/{region}", "met
 def app(name, data):
     return {
         "name": name, "type": "flogo:app", "version": "1.0.0", "appModel": "1.1.1",
-        "imports": [
-            "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
-            "github.com/project-flogo/contrib/trigger/timer",
-        ],
+        "imports": imports_for(data),
         "triggers": [{
             "id": "bench-timer",
             "ref": "github.com/project-flogo/contrib/trigger/timer",

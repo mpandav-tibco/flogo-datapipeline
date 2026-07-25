@@ -86,8 +86,21 @@ export class DataPreviewView implements vscode.WebviewViewProvider {
 <meta http-equiv="Content-Security-Policy" content="${csp}" />
 <link rel="stylesheet" href="${styleUri}" />
 <style>
-  body { padding: 8px 10px; }
+  html, body { height: 100%; }
+  body { padding: 8px 10px; box-sizing: border-box; }
+  #root { height: 100%; }
   .empty { color: var(--dim); font-size: 12.5px; padding: 10px 2px; }
+  /* Fill the panel and let the table area scroll, so all sampled rows are
+     reachable without maximizing the panel. The header row stays pinned. */
+  .pv { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+  .pv .pvtop { flex: 0 0 auto; }
+  .pvscroll { flex: 1 1 auto; overflow: auto; min-height: 0; }
+  .pvscroll thead th { position: sticky; top: 0; z-index: 3; }
+  /* Left-hand row-number gutter; stays visible while scrolling both axes. */
+  .pv th.idx, .pv td.idx { position: sticky; left: 0; width: 1%; text-align: right;
+    color: var(--dim); font-variant-numeric: tabular-nums; user-select: none; }
+  .pv td.idx { background: var(--editor); z-index: 2; }
+  .pvscroll thead th.idx { z-index: 4; }
 </style>
 </head>
 <body>
@@ -105,12 +118,12 @@ export class DataPreviewView implements vscode.WebviewViewProvider {
     if (m.kind === 'result') {
       const pr = m.payload;
       const cols = (pr.columns && pr.columns.length) ? pr.columns : Object.keys(pr.rows[0] || {});
-      const ths = cols.map((c) => '<th>' + esc(c) + '</th>').join('');
-      const trs = pr.rows.map((row) => '<tr>' + cols.map((c) => '<td>' + esc(cell(row[c])) + '</td>').join('') + '</tr>').join('');
+      const ths = '<th class="idx">#</th>' + cols.map((c) => '<th>' + esc(c) + '</th>').join('');
+      const trs = pr.rows.map((row, i) => '<tr><td class="idx">' + (i + 1) + '</td>' + cols.map((c) => '<td>' + esc(cell(row[c])) + '</td>').join('') + '</tr>').join('');
       root.innerHTML =
         '<div class="pv"><div class="pvtop"><span><b style="color:var(--text)">Live preview</b> · ' + pr.rows.length +
         ' sampled' + (pr.truncated ? ' (truncated)' : '') + ' · read ' + fmt(pr.rowsRead) + '</span><span class="muted">after transforms</span></div>' +
-        '<table><thead><tr>' + ths + '</tr></thead><tbody>' + trs + '</tbody></table></div>';
+        '<div class="pvscroll"><table><thead><tr>' + ths + '</tr></thead><tbody>' + trs + '</tbody></table></div></div>';
     }
   });
 </script>

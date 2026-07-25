@@ -5,6 +5,8 @@
  "appModel": "1.1.1",
  "imports": [
   "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+  "github.com/mpandav-tibco/flogo-datapipeline/sink/kafka",
+  "github.com/mpandav-tibco/flogo-datapipeline/source/csv",
   "github.com/project-flogo/contrib/trigger/timer"
  ],
  "triggers": [

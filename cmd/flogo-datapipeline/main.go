@@ -45,6 +45,7 @@ import (
 	// --- Flogo action (must be first) ---
 	"github.com/mpandav-tibco/flogo-datapipeline/action/pipeline"
 	"github.com/mpandav-tibco/flogo-datapipeline/api"
+	"github.com/mpandav-tibco/flogo-datapipeline/internal/appprops"
 
 	// --- ObjStore provider backends ---
 	// These three packages register the concrete S3, GCS, and ADLS Gen2 clients
@@ -176,6 +177,13 @@ func main() {
 	}
 	appJSON := string(raw)
 
+	// Resolve Flogo app-property references ($property[name]) against the app's
+	// declared properties[] with env-override precedence (env var >
+	// FLOGO_APP_PROPS_OVERRIDE > FLOGO_APP_PROPS_ENV > FLOGO_APP_PROPS_JSON >
+	// default value). Lets one .datapipeline run per-environment via env vars /
+	// ConfigMaps, matching the flogo-agents / Flogo app-property model.
+	appJSON = appprops.Resolve(appJSON)
+
 	// -port wins over -api-addr and env var
 	if *apiPort > 0 {
 		*apiAddr = fmt.Sprintf(":%d", *apiPort)
@@ -234,8 +242,23 @@ func main() {
 		}
 	}
 
-	if err := e.Stop(); err != nil {
-		mlog.Errorf("engine stop error: %v", err)
+	// e.Stop() shuts down the registered connection managers. The project-flogo
+	// kafka contrib registers (in init) a placeholder shared-connection manager
+	// with a nil connection whose Stop() dereferences it
+	// (messaging-contrib/kafka/connection/connection.go:57), so core's App.Stop()
+	// panics on EVERY shutdown once the kafka trigger is imported. The pipeline has
+	// already finished by this point, so recover from that known third-party panic
+	// and exit cleanly instead of crashing the process (SIGSEGV).
+	stopErr := func() (err error) {
+		defer func() {
+			if r := recover(); r != nil {
+				mlog.Warnf("recovered during engine shutdown (known kafka contrib nil-connection Stop bug): %v", r)
+			}
+		}()
+		return e.Stop()
+	}()
+	if stopErr != nil {
+		mlog.Errorf("engine stop error: %v", stopErr)
 		os.Exit(1)
 	}
 	os.Exit(0)

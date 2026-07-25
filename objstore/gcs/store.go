@@ -150,6 +150,7 @@ func (s *gcsStore) GetReader(ctx context.Context, key string) (io.ReadCloser, er
 // We wrap it in gcsWriter so that Close returns the underlying error.
 func (s *gcsStore) PutWriter(ctx context.Context, key string) (io.WriteCloser, error) {
 	wc := s.client.Bucket(s.bucket).Object(key).NewWriter(ctx)
+	wc.ContentType = objstore.ContentTypeForKey(key)
 	// ChunkSize = 0 disables chunking and sends a single non-resumable upload for
 	// small objects (< 5 MB).  For larger objects GCS automatically uses resumable
 	// uploads when ChunkSize > 0.  Set a sensible default.

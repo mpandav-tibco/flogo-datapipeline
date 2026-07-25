@@ -4,19 +4,14 @@
 
 import { slug } from '../model/pipeline';
 
-export function dockerfile(pipelineFileName: string): string {
+export function dockerfile(binaryFileName: string, pipelineFileName: string): string {
   return `# syntax=docker/dockerfile:1
-# Build stage — compile the flogo-datapipeline engine from source.
-FROM golang:1.23 AS build
-WORKDIR /src
-COPY . .
-ENV CGO_ENABLED=1
-RUN go build -o /out/flogo-datapipeline ./cmd/flogo-datapipeline/
-
-# Runtime stage.
-FROM gcr.io/distroless/base-debian12
+# Single-stage image over the prebuilt LEAN binary the Studio built for
+# linux/amd64 (the OOTB Flogo model): no source, Go toolchain, or build step in
+# the image — just the static binary and the pipeline file.
+FROM gcr.io/distroless/static-debian12
 WORKDIR /app
-COPY --from=build /out/flogo-datapipeline /app/flogo-datapipeline
+COPY ${binaryFileName} /app/${binaryFileName}
 # Copy the pipeline to a fixed in-container path so the source file name (which
 # may contain spaces or other special characters) can never break the COPY/ENV
 # directives or the ENTRYPOINT argument list. The source name is quoted.
@@ -24,7 +19,7 @@ COPY "${pipelineFileName}" /app/pipeline.datapipeline
 ENV PIPELINE_FILE=/app/pipeline.datapipeline
 ENV PIPELINE_API_ADDR=:9080
 EXPOSE 9080
-ENTRYPOINT ["/app/flogo-datapipeline", "-f", "/app/pipeline.datapipeline", "-port", "9080"]
+ENTRYPOINT ["/app/${binaryFileName}", "-f", "/app/pipeline.datapipeline", "-port", "9080"]
 `;
 }
 

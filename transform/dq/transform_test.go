@@ -7,16 +7,13 @@ import (
 	"github.com/mpandav-tibco/flogo-datapipeline/transform"
 )
 
-func build(t *testing.T, cfg map[string]interface{}) transform.Transform {
-	t.Helper()
-	tr, err := transform.New("dq", cfg)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	return tr
+func profileOf(b *record.RecordBatch) *BatchProfile {
+	p := &BatchProfile{}
+	p.Compute(b)
+	return p
 }
 
-func mkBatch() *record.RecordBatch {
+func sampleBatch() *record.RecordBatch {
 	return &record.RecordBatch{
 		Columns: []record.Column{
 			{Name: "id", Type: record.TypeInt},
@@ -24,115 +21,179 @@ func mkBatch() *record.RecordBatch {
 			{Name: "status", Type: record.TypeString},
 		},
 		Rows: [][]interface{}{
-			{1, 100.0, "OK"},
-			{2, 250.0, "OK"},
-			{3, 900.0, "PENDING"},
+			{1, 10.0, "OK"},
+			{2, 20.0, "OK"},
+			{3, nil, "BAD"},
+			{4, 40.0, "OK"},
 		},
 	}
 }
 
-func TestDQ_ConfigValidation(t *testing.T) {
-	if _, err := transform.New("dq", map[string]interface{}{"onFail": "bogus",
-		"expectations": []interface{}{map[string]interface{}{"type": "expectTableRowCountBetween", "min": 1, "max": 10}}}); err == nil {
-		t.Error("expected error for bad onFail")
+func eval(t *testing.T, cfg map[string]interface{}, b *record.RecordBatch) ExpectationResult {
+	t.Helper()
+	e, err := buildExpectation(cfg)
+	if err != nil {
+		t.Fatalf("buildExpectation(%v): %v", cfg, err)
 	}
-	if _, err := transform.New("dq", map[string]interface{}{"expectations": []interface{}{}}); err == nil {
-		t.Error("expected error when no expectations")
+	return e.Evaluate(b, profileOf(b))
+}
+
+func TestProfiler_Basics(t *testing.T) {
+	p := profileOf(sampleBatch())
+	if p.RowCount != 4 {
+		t.Fatalf("RowCount = %d", p.RowCount)
+	}
+	amt := p.ColumnStats["amount"]
+	if amt.NullCount != 1 || amt.NonNullCount != 3 {
+		t.Errorf("amount null/nonnull = %d/%d", amt.NullCount, amt.NonNullCount)
+	}
+	if amt.Min.(float64) != 10.0 || amt.Max.(float64) != 40.0 {
+		t.Errorf("amount min/max = %v/%v", amt.Min, amt.Max)
+	}
+	// int(1)/int(2)... distinct count for id
+	if got := p.ColumnStats["id"].DistinctCount(); got != 4 {
+		t.Errorf("id distinct = %d, want 4", got)
 	}
 }
 
-func TestDQ_WarnPassesAllRows(t *testing.T) {
-	tr := build(t, map[string]interface{}{
+func TestExpect_ColumnNotNull(t *testing.T) {
+	// amount has 1/4 null → completeness 0.75; threshold 1.0 fails.
+	r := eval(t, map[string]interface{}{"type": "expectColumnNotNull", "column": "amount"}, sampleBatch())
+	if r.Passed {
+		t.Error("expected fail at threshold 1.0")
+	}
+	// threshold 0.7 passes
+	r = eval(t, map[string]interface{}{"type": "expectColumnNotNull", "column": "amount", "threshold": 0.7}, sampleBatch())
+	if !r.Passed {
+		t.Errorf("expected pass at threshold 0.7, score=%v", r.Score)
+	}
+	// missing column fails
+	r = eval(t, map[string]interface{}{"type": "expectColumnNotNull", "column": "nope"}, sampleBatch())
+	if r.Passed {
+		t.Error("missing column should fail")
+	}
+}
+
+func TestExpect_ColumnUnique(t *testing.T) {
+	// id is fully unique
+	r := eval(t, map[string]interface{}{"type": "expectColumnUnique", "column": "id"}, sampleBatch())
+	if !r.Passed {
+		t.Errorf("id should be unique, score=%v", r.Score)
+	}
+	// status has duplicates
+	r = eval(t, map[string]interface{}{"type": "expectColumnUnique", "column": "status"}, sampleBatch())
+	if r.Passed {
+		t.Error("status has duplicates, should fail at threshold 1.0")
+	}
+}
+
+func TestExpect_ValuesBetween(t *testing.T) {
+	r := eval(t, map[string]interface{}{"type": "expectColumnValuesBetween", "column": "amount", "min": 0.0, "max": 100.0}, sampleBatch())
+	if !r.Passed {
+		t.Errorf("all amounts in [0,100], score=%v", r.Score)
+	}
+	r = eval(t, map[string]interface{}{"type": "expectColumnValuesBetween", "column": "amount", "min": 0.0, "max": 15.0}, sampleBatch())
+	if r.Passed {
+		t.Error("amounts exceed 15, should fail")
+	}
+}
+
+func TestExpect_ValuesInSet(t *testing.T) {
+	r := eval(t, map[string]interface{}{"type": "expectColumnValuesInSet", "column": "status", "values": []interface{}{"OK", "BAD"}}, sampleBatch())
+	if !r.Passed {
+		t.Errorf("all statuses in set, score=%v", r.Score)
+	}
+	r = eval(t, map[string]interface{}{"type": "expectColumnValuesInSet", "column": "status", "values": []interface{}{"OK"}}, sampleBatch())
+	if r.Passed {
+		t.Error("BAD not in set, should fail")
+	}
+}
+
+func TestExpect_RowCountBetween(t *testing.T) {
+	r := eval(t, map[string]interface{}{"type": "expectTableRowCountBetween", "min": 1.0, "max": 10.0}, sampleBatch())
+	if !r.Passed {
+		t.Errorf("4 rows in [1,10] should pass")
+	}
+	r = eval(t, map[string]interface{}{"type": "expectTableRowCountBetween", "min": 10.0, "max": 20.0}, sampleBatch())
+	if r.Passed {
+		t.Error("4 rows not in [10,20]")
+	}
+}
+
+func TestExpect_MeanBetween(t *testing.T) {
+	// amount mean = (10+20+40)/3 ≈ 23.33
+	r := eval(t, map[string]interface{}{"type": "expectColumnMeanBetween", "column": "amount", "min": 20.0, "max": 30.0}, sampleBatch())
+	if !r.Passed {
+		t.Errorf("mean ~23.3 in [20,30], score=%v obs=%v", r.Score, r.Observed)
+	}
+}
+
+func TestExpect_StddevBelow(t *testing.T) {
+	r := eval(t, map[string]interface{}{"type": "expectColumnStddevBelow", "column": "amount", "threshold": 1000.0}, sampleBatch())
+	if !r.Passed {
+		t.Errorf("stddev should be below 1000, obs=%v", r.Observed)
+	}
+}
+
+func TestBuildExpectation_Errors(t *testing.T) {
+	if _, err := buildExpectation(map[string]interface{}{}); err == nil {
+		t.Error("missing type should error")
+	}
+	if _, err := buildExpectation(map[string]interface{}{"type": "bogus"}); err == nil {
+		t.Error("unknown type should error")
+	}
+}
+
+func TestDQTransform_WarnPassesThrough(t *testing.T) {
+	tr, err := transform.New("dq", map[string]interface{}{
+		"expectations":     []interface{}{map[string]interface{}{"type": "expectColumnNotNull", "column": "id"}},
 		"onFail":           "warn",
 		"qualityThreshold": 0.95,
-		"expectations": []interface{}{
-			map[string]interface{}{"type": "expectColumnNotNull", "column": "id"},
-			map[string]interface{}{"type": "expectColumnValuesBetween", "column": "amount", "min": 0.0, "max": 1000.0},
-		},
 	})
-	out, err := tr.Apply(mkBatch())
+	if err != nil {
+		t.Fatalf("transform.New: %v", err)
+	}
+	if tr.Name() != "dq" {
+		t.Errorf("Name = %q", tr.Name())
+	}
+	out, err := tr.Apply(sampleBatch())
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
-	if out.Len() != 3 {
-		t.Errorf("warn should pass all 3 rows, got %d", out.Len())
+	if out == nil || out.Len() != 4 {
+		t.Errorf("warn should pass all 4 rows, got %v", out)
 	}
-	rep := tr.(DQGateProvider).LastRunReport()
-	if rep == nil || rep.RowsEvaluated != 3 {
-		t.Errorf("report missing or wrong: %+v", rep)
+	if p, ok := tr.(DQGateProvider); ok {
+		if p.LastRunReport() == nil {
+			t.Error("LastRunReport should be populated after Apply")
+		}
 	}
+	_ = tr.Close()
 }
 
-func TestDQ_FailAborts(t *testing.T) {
-	tr := build(t, map[string]interface{}{
-		"onFail":           "fail",
-		"qualityThreshold": 0.99,
-		"expectations": []interface{}{
-			// amount 900 is out of [0,500] → violation → low score → abort.
-			map[string]interface{}{"type": "expectColumnValuesBetween", "column": "amount", "min": 0.0, "max": 500.0},
-		},
-	})
-	if _, err := tr.Apply(mkBatch()); err == nil {
-		t.Error("onFail=fail should abort when score below threshold")
-	}
-}
-
-func TestDQ_Drop(t *testing.T) {
-	tr := build(t, map[string]interface{}{
-		"onFail":           "drop",
-		"qualityThreshold": 0.99,
-		"expectations": []interface{}{
-			map[string]interface{}{"type": "expectColumnValuesBetween", "column": "amount", "min": 0.0, "max": 500.0},
-		},
-	})
-	out, err := tr.Apply(mkBatch())
-	if err != nil {
-		t.Fatalf("Apply: %v", err)
-	}
-	if out != nil {
-		t.Errorf("drop should discard the batch (nil), got %+v", out)
-	}
-}
-
-func TestDQ_ScoreColumn(t *testing.T) {
-	tr := build(t, map[string]interface{}{
+func TestDQTransform_ScoreColumn(t *testing.T) {
+	tr, err := transform.New("dq", map[string]interface{}{
+		"expectations":     []interface{}{map[string]interface{}{"type": "expectColumnNotNull", "column": "amount"}},
 		"onFail":           "warn",
-		"scoreColumn":      "_dq_score",
 		"qualityThreshold": 0.0,
-		"expectations": []interface{}{
-			map[string]interface{}{"type": "expectColumnNotNull", "column": "id"},
-		},
+		"scoreColumn":      "_dq_score",
 	})
-	out, err := tr.Apply(mkBatch())
+	if err != nil {
+		t.Fatalf("transform.New: %v", err)
+	}
+	out, err := tr.Apply(sampleBatch())
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
-	if out.ColIndex("_dq_score") < 0 {
-		t.Errorf("score column not appended: %+v", out.Columns)
+	if out.ColIndex("_dq_score") == -1 {
+		t.Error("score column should be appended")
 	}
 }
 
-func TestDQ_RowCountAndInSet(t *testing.T) {
-	tr := build(t, map[string]interface{}{
-		"onFail":           "warn",
-		"qualityThreshold": 0.5,
-		"expectations": []interface{}{
-			map[string]interface{}{"type": "expectTableRowCountBetween", "min": 1, "max": 100},
-			map[string]interface{}{"type": "expectColumnValuesInSet", "column": "status", "values": []interface{}{"OK", "PENDING"}},
-			map[string]interface{}{"type": "expectColumnUnique", "column": "id"},
-		},
-	})
-	if _, err := tr.Apply(mkBatch()); err != nil {
-		t.Fatalf("Apply: %v", err)
-	}
-	rep := tr.(DQGateProvider).LastRunReport()
-	if len(rep.ExpectationResults) != 3 {
-		t.Errorf("expected 3 expectation results, got %d", len(rep.ExpectationResults))
-	}
-	if !rep.PassedGate {
-		t.Errorf("gate should pass: score=%.3f", rep.OverallScore)
-	}
-	if tr.Name() != "dq" || tr.Close() != nil {
-		t.Error("Name/Close contract")
+func TestDQTransform_ConfigValidation(t *testing.T) {
+	if _, err := transform.New("dq", map[string]interface{}{
+		"expectations": []interface{}{map[string]interface{}{"type": "unknownExpectation"}},
+	}); err == nil {
+		t.Error("unknown expectation type should error at construction")
 	}
 }

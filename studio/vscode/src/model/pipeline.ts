@@ -20,7 +20,18 @@ export interface PipelineDoc {
   // Selected invocation trigger (timer/rest/kafka/filepoller). Stored inline in
   // the pipeline resource data; materialised into app triggers[] at deploy.
   trigger?: { kind?: string; settings?: Record<string, unknown> };
+  // App-level Flogo properties, surfaced from the app JSON so the Studio can edit
+  // them. Split back out to app.properties on save (NEVER stored in the pipeline
+  // resource data). Referenced from config fields as `$property[name]`.
+  __appProperties?: AppProperty[];
   [key: string]: unknown;
+}
+
+export interface AppProperty {
+  name: string;
+  type?: string;
+  value?: unknown;
+  description?: string;
 }
 
 export interface ValidationIssue {
@@ -43,11 +54,13 @@ export function slug(name: string): string {
 // Extract the pipeline data from a flogo:app JSON; fall back to the whole object
 // for flat-format files (auto-migration on next save).
 export function extractPipelineData(appDoc: any): PipelineDoc {
+  const props: AppProperty[] = appDoc && Array.isArray(appDoc.properties) ? appDoc.properties : [];
   if (appDoc && appDoc.type === 'flogo:app') {
     const res = Array.isArray(appDoc.resources) ? appDoc.resources[0] : null;
-    return (res && res.data) || {};
+    const data = (res && res.data) || {};
+    return { ...data, __appProperties: props };
   }
-  return appDoc || {};
+  return { ...(appDoc || {}), __appProperties: props };
 }
 
 // Wrap a pipeline data object into a complete flogo:app JSON.
@@ -62,10 +75,10 @@ export function wrapInAppJson(pd: PipelineDoc): any {
   const timerSettings =
     t && t.kind === 'timer' && t.settings
       ? {
-          repeating: t.settings.repeating != null ? t.settings.repeating : true,
-          startDelay: t.settings.startDelay != null ? Number(t.settings.startDelay) : 0,
-          interval: t.settings.interval != null ? Number(t.settings.interval) : 86400000,
-        }
+        repeating: t.settings.repeating != null ? t.settings.repeating : true,
+        startDelay: t.settings.startDelay != null ? Number(t.settings.startDelay) : 0,
+        interval: t.settings.interval != null ? Number(t.settings.interval) : 86400000,
+      }
       : { repeating: true, startDelay: 0, interval: 86400000 };
   return {
     name,
@@ -103,11 +116,21 @@ export function mergePipelineIntoDoc(currentText: string, pd: PipelineDoc): stri
   } catch {
     appDoc = {};
   }
+  // App-level properties travel on the pipeline doc as __appProperties; split
+  // them back into app.properties (never stored inside the pipeline resource).
+  const appProps = Array.isArray((pd as any).__appProperties) ? ((pd as any).__appProperties as AppProperty[]) : null;
+  const pdData: PipelineDoc = { ...pd };
+  delete (pdData as any).__appProperties;
+  const applyProps = (target: any) => {
+    if (appProps && appProps.length) target.properties = appProps;
+    else delete target.properties;
+  };
   if (appDoc.type === 'flogo:app' && Array.isArray(appDoc.resources) && appDoc.resources[0]) {
-    appDoc.resources[0].data = pd;
-    if (pd.name) {
-      appDoc.name = pd.name;
-      const newId = 'pipeline:' + slug(pd.name);
+    appDoc.resources[0].data = pdData;
+    applyProps(appDoc);
+    if (pdData.name) {
+      appDoc.name = pdData.name;
+      const newId = 'pipeline:' + slug(pdData.name);
       if (appDoc.resources[0].id !== newId) {
         appDoc.resources[0].id = newId;
         const h =
@@ -123,11 +146,13 @@ export function mergePipelineIntoDoc(currentText: string, pd: PipelineDoc): stri
     // Mirror the description to the top-level app metadata too (kept in sync
     // with the resource data so both the app JSON and the pipeline resource
     // document the pipeline).
-    if (pd.description) appDoc.description = pd.description;
+    if (pdData.description) appDoc.description = pdData.description;
     else delete appDoc.description;
     return JSON.stringify(appDoc, null, 2);
   }
-  return JSON.stringify(wrapInAppJson(pd), null, 2);
+  const wrapped = wrapInAppJson(pdData);
+  applyProps(wrapped);
+  return JSON.stringify(wrapped, null, 2);
 }
 
 // Validate a pipeline document. Returns a list of issues (mirrored to Problems).

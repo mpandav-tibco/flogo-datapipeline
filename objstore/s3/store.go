@@ -220,9 +220,10 @@ func (s *s3Store) PutWriter(ctx context.Context, key string) (io.WriteCloser, er
 
 	go func() {
 		_, err := s.uploader.Upload(ctx, &s3.PutObjectInput{
-			Bucket: aws.String(s.bucket),
-			Key:    aws.String(key),
-			Body:   pr,
+			Bucket:      aws.String(s.bucket),
+			Key:         aws.String(key),
+			Body:        pr,
+			ContentType: aws.String(objstore.ContentTypeForKey(key)),
 		})
 		// Signal the read end so it unblocks even on error.
 		pr.CloseWithError(err)

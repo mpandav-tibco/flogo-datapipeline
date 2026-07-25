@@ -347,12 +347,16 @@ func parseConfig(cfg map[string]interface{}) podlogConfig {
 		includeNS:     strSliceFromCfg(cfg, "includeNamespaces"),
 		excludeNS:     strSliceFromCfg(cfg, "excludeNamespaces"),
 	}
-	c.maxLines = 500 // documented default safety cap; an explicit 0 means unlimited
 	if ml, ok := cfg["multiline"].(map[string]interface{}); ok {
 		c.startPattern = strFromCfg(ml, "startPattern")
 		c.flushIdleMs = intFromCfg(ml, "flushIdleMs")
-		if _, present := ml["maxLines"]; present {
+		// Honor an explicit maxLines (including 0 = unlimited); default to 500 when
+		// the key is omitted so a runaway stack trace can't grow a record without
+		// bound.
+		if _, has := ml["maxLines"]; has {
 			c.maxLines = intFromCfg(ml, "maxLines")
+		} else {
+			c.maxLines = 500
 		}
 	}
 	return c
