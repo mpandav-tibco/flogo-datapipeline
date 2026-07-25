@@ -1,0 +1,37 @@
+# Per-environment configuration for the collector.
+#
+# The pipeline (adidas-log-collector.datapipeline) declares these as app
+# properties with defaults and references them as `$property[NAME]`. Each key
+# here is an env var named exactly after a property. The DaemonSet sets
+# FLOGO_APP_PROPS_ENV=auto, which turns on Flogo's opt-in env resolution so each
+# key OVERRIDES the pipeline default at startup (precedence: FLOGO_APP_PROPS_OVERRIDE
+# > FLOGO_APP_PROPS_ENV=auto > FLOGO_APP_PROPS_JSON > default). Without that flag
+# the pipeline defaults are used and these keys are ignored.
+#
+# ==> To deploy in a customer environment, edit ONLY this file. The pipeline
+#     definition never changes.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: adidas-log-collector-config
+  namespace: logging
+data:
+  # ── S3 / object store ──────────────────────────────────────────────
+  S3_BUCKET: "adidas-logs"                            # target bucket
+  S3_REGION: "us-east-1"                              # AWS region
+  S3_ENDPOINT: "http://host.minikube.internal:9000"  # customer S3/MinIO endpoint (regional S3 URL for AWS)
+  S3_FORCE_PATH_STYLE: "true"                         # true for MinIO / path-style; false for AWS S3
+  S3_ACCESS_KEY_ENV: "MINIO_ACCESS_KEY"              # NAME of the env var holding the access key
+  S3_SECRET_KEY_ENV: "MINIO_SECRET_KEY"             # NAME of the env var holding the secret key
+  # ── identity / indexing (stamped on every record) ──────────────────
+  CLUSTER_NAME: "adidas-logs-demo"
+  ENVIRONMENT: "production"
+  LOG_INDEX_PREFIX: "bwce-logs"                       # OpenSearch index prefix → index_hint = <prefix>-YYYY-MM-DD
+  # ── collection behaviour / tuning ──────────────────────────────────
+  EXCLUDE_NAMESPACES: '["kube-system","kube-public","kube-node-lease","logging"]'
+  POD_LOGS_ROOT: "/var/log/pods"
+  FROM_BEGINNING: "true"
+  POLL_MS: "250"
+  ROLL_MAX_BYTES: "4194304"                           # 4 MiB
+  ROLL_MAX_SECONDS: "60"
+  BATCH_SIZE: "1000"

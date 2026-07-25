@@ -1,0 +1,10 @@
+# Built collector engine binary (≈60MB, produced by collector/build-image.sh)
+collector/flogo-dp-linux-arm64
+collector/.gocache/
+
+# EAR copied into the BWCE app build context (source of truth lives under the
+# user's tibco_home / bwce-ears folder, not this repo)
+workload/bwce-app/*.ear
+
+# Local runtime scratch
+*.tmp

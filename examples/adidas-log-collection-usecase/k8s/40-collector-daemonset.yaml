@@ -1,0 +1,112 @@
+# The flogo-datapipeline log collector — one pod per node (like the Fluentd
+# DaemonSet it replaces). Each pod tails this node's /var/log/pods, stitches
+# multiline BW6/BWCE stack traces, enriches + parses each line, and streams
+# NDJSON to the adidas-logs S3 (MinIO) bucket.
+#
+# The pipeline definition is supplied by the ConfigMap "adidas-log-collector-pipeline"
+# (created by scripts/deploy.sh from ../adidas-log-collector.datapipeline).
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: adidas-log-collector
+  namespace: logging
+  labels:
+    app.kubernetes.io/name: adidas-log-collector
+    app.kubernetes.io/part-of: flogo-datapipeline
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: adidas-log-collector
+  updateStrategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: adidas-log-collector
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9095"
+        prometheus.io/path: "/metrics"
+    spec:
+      # Run on EVERY node, including the control-plane — a log collector must be
+      # everywhere workloads can land (mirrors a Fluentd DaemonSet).
+      tolerations:
+        - operator: Exists
+      # Read node-local CRI logs, which are root-owned.
+      securityContext:
+        runAsUser: 0
+        runAsGroup: 0
+      terminationGracePeriodSeconds: 20
+      containers:
+        - name: collector
+          image: flogo-datapipeline:arm64-local
+          imagePullPolicy: IfNotPresent
+          args: ["-f", "/pipeline/adidas-log-collector.datapipeline"]
+          # FLOGO_APP_PROPS_ENV=auto turns on Flogo's opt-in env resolution, then
+          # the ConfigMap supplies the per-environment overrides: each $property[NAME]
+          # in the pipeline is resolved from the env var of the same NAME (injected
+          # by envFrom below). Without the flag the pipeline defaults are used.
+          # Edit the ConfigMap, never the pipeline definition.
+          envFrom:
+            - configMapRef:
+                name: adidas-log-collector-config
+          env:
+            # Enable env → app-property resolution (project-flogo/core opt-in model).
+            - name: FLOGO_APP_PROPS_ENV
+              value: "auto"
+            # Stamped onto every record + used in the S3 object key.
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: MINIO_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: adidas-minio-creds
+                  key: MINIO_ACCESS_KEY
+            - name: MINIO_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: adidas-minio-creds
+                  key: MINIO_SECRET_KEY
+          ports:
+            - name: metrics
+              containerPort: 9095
+          livenessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: "150m"
+              memory: "192Mi"
+            limits:
+              cpu: "1"
+              memory: "512Mi"
+          volumeMounts:
+            - name: pod-logs
+              mountPath: /var/log/pods
+              readOnly: true
+            - name: collector-state
+              mountPath: /var/lib/flogo-datapipeline
+            - name: pipeline
+              mountPath: /pipeline
+              readOnly: true
+      volumes:
+        # Node-local CRI container logs written by the kubelet/containerd.
+        - name: pod-logs
+          hostPath:
+            path: /var/log/pods
+            type: Directory
+        # Crash-safe per-node state: byte-offset positions, checkpoints, DLQ.
+        - name: collector-state
+          hostPath:
+            path: /var/lib/flogo-datapipeline
+            type: DirectoryOrCreate
+        - name: pipeline
+          configMap:
+            name: adidas-log-collector-pipeline

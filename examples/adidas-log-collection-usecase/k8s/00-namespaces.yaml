@@ -1,0 +1,44 @@
+# Namespaces for the adidas log-collection use case.
+#   logging     — the flogo-datapipeline collector DaemonSet
+#   team-*      — six "BW app" namespaces producing console logs (2 replicas each)
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: logging
+  labels: { purpose: log-collection }
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: team-alpha
+  labels: { tier: apps }
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: team-beta
+  labels: { tier: apps }
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: team-gamma
+  labels: { tier: apps }
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: team-delta
+  labels: { tier: apps }
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: team-epsilon
+  labels: { tier: apps }
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: team-zeta
+  labels: { tier: apps }
