@@ -37,6 +37,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	_ "time/tzdata" // embed the IANA tz database so datetime.*Zone functions resolve zones even in scratch/distroless images without OS tzdata
 
 	"github.com/mpandav-tibco/flogo-datapipeline/record"
 	"github.com/mpandav-tibco/flogo-datapipeline/transform"
@@ -597,6 +598,40 @@ func parseTimeLoose(s string) (time.Time, bool) {
 		}
 	}
 	return time.Time{}, false
+}
+
+// parseTimeInLocation parses a timestamp like parseTimeLoose but interprets naive
+// (offset-less) layouts as wall-clock time in loc rather than UTC. Layouts that
+// carry an explicit offset (e.g. RFC3339) keep that offset.
+func parseTimeInLocation(s string, loc *time.Location) (time.Time, bool) {
+	if s == "" {
+		return time.Time{}, false
+	}
+	layouts := []string{
+		time.RFC3339,
+		"2006-01-02T15:04:05",
+		"2006-01-02 15:04:05",
+		"2006-01-02",
+		"01/02/2006",
+		"2006/01/02",
+	}
+	for _, l := range layouts {
+		if t, err := time.ParseInLocation(l, s, loc); err == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
+}
+
+// argTimeLoose returns arg i as a time.Time, accepting either an existing
+// time.Time (e.g. a date column value) or a string parsed via parseTimeLoose.
+func argTimeLoose(a []interface{}, i int) (time.Time, bool) {
+	if i < len(a) {
+		if t, ok := a[i].(time.Time); ok {
+			return t, true
+		}
+	}
+	return parseTimeLoose(argStr(a, i))
 }
 
 func registerExtendedBuiltins() {
@@ -1176,6 +1211,49 @@ func registerEtlBuiltins() {
 			return t.UTC().Format(time.RFC3339)
 		}
 		return nil
+	})
+	reg([]string{"datetime.toZone", "datetime.inZone"}, func(a []interface{}) interface{} {
+		// toZone(ts, zone) → the same instant rendered in `zone` as RFC3339 (with
+		// that zone's offset). A naive input timestamp is treated as UTC.
+		t, ok := argTimeLoose(a, 0)
+		if !ok {
+			return nil
+		}
+		loc, err := time.LoadLocation(argStr(a, 1))
+		if err != nil {
+			return nil
+		}
+		return t.In(loc).Format(time.RFC3339)
+	})
+	reg([]string{"datetime.formatInZone"}, func(a []interface{}) interface{} {
+		// formatInZone(ts, zone [, layout]) → format the instant in `zone`.
+		t, ok := argTimeLoose(a, 0)
+		if !ok {
+			return nil
+		}
+		loc, err := time.LoadLocation(argStr(a, 1))
+		if err != nil {
+			return nil
+		}
+		layout := argStr(a, 2)
+		if layout == "" {
+			layout = time.RFC3339
+		}
+		return t.In(loc).Format(layout)
+	})
+	reg([]string{"datetime.fromZone"}, func(a []interface{}) interface{} {
+		// fromZone(naiveTs, zone) → interpret a naive wall-clock timestamp as being
+		// in `zone` and return the corresponding UTC instant (RFC3339). Fixes the
+		// "naive timestamp assumed UTC" case for local-time source data.
+		loc, err := time.LoadLocation(argStr(a, 1))
+		if err != nil {
+			return nil
+		}
+		t, ok := parseTimeInLocation(argStr(a, 0), loc)
+		if !ok {
+			return nil
+		}
+		return t.UTC().Format(time.RFC3339)
 	})
 
 	// ── hash.* / encoding.* — surrogate keys, masking, dedup fingerprints ──
