@@ -34,6 +34,17 @@ type Transform interface {
 	Close() error
 }
 
+// SinkOwner marks a transform that writes rows to its own external sink(s) and
+// therefore must run on the single-threaded transform path. The parallel path
+// builds one private transform pipeline per worker (see the engine's
+// drainParallel), which would open duplicate writers to the same destination —
+// corrupting files or racing connections. Transforms that route rows to sinks
+// (e.g. router) implement this so the engine forces ordered execution.
+type SinkOwner interface {
+	// OwnsExternalSink reports whether this transform owns external sink(s).
+	OwnsExternalSink() bool
+}
+
 // Pipeline chains multiple transforms in sequence.
 // The output of transform N is the input of transform N+1.
 type Pipeline struct {

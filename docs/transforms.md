@@ -25,6 +25,7 @@ registered with `transform.Register(name, …)`
 | [`cast`](transforms/cast.md) | convert column types (string ↔ int / float / decimal / bool / date) |
 | [`explode`](transforms/explode.md) | expand an array column into one row per element |
 | [`flatten`](transforms/flatten.md) | flatten nested-object columns into dotted columns |
+| [`router`, `split`](transforms/router.md) | N-way route rows to different sinks by predicate (conditional split) |
 
 ## Filter — `filter`
 
