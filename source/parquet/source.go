@@ -48,6 +48,7 @@ type parquetSource struct {
 	// is stateless — creating a new one for the same row group always starts from
 	// row 0, which causes duplicate rows whenever a row group is larger than the
 	// requested batch size.
+	//lint:ignore SA1019 parquet-go Reader still works; migrating to GenericReader is a separate, carefully-tested change.
 	seqReader *parquetgo.Reader
 	rowBuf    []parquetgo.Row
 	rowBufIdx int
