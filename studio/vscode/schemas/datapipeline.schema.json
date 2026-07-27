@@ -706,6 +706,22 @@
               "type": "integer",
               "description": "Warn when a batch stage exceeds this many seconds (0 = disabled).",
               "minimum": 0
+            },
+            "audit": {
+              "type": "object",
+              "description": "Optional append-only governance audit log (off by default; also enabled by the DP_AUDIT env var).",
+              "additionalProperties": true,
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "description": "Enable the audit trail.",
+                  "default": false
+                },
+                "file": {
+                  "type": "string",
+                  "description": "Append-only file path for audit records; empty = stdout (or the DP_AUDIT_FILE env var)."
+                }
+              }
             }
           }
         },

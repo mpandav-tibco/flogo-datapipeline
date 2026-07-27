@@ -19,6 +19,7 @@ import (
 	"github.com/project-flogo/core/engine"
 	corelog "github.com/project-flogo/core/support/log"
 
+	"github.com/mpandav-tibco/flogo-datapipeline/audit"
 	"github.com/mpandav-tibco/flogo-datapipeline/checkpoint"
 	"github.com/mpandav-tibco/flogo-datapipeline/metrics"
 	"github.com/mpandav-tibco/flogo-datapipeline/record"
@@ -52,6 +53,7 @@ type DataPipelineAction struct {
 	ref      string
 	ioMd     *metadata.IOMetadata
 	recorder metrics.Recorder // never nil; NoopRecorder when unconfigured
+	auditor  audit.Auditor    // never nil; audit.Noop when unconfigured
 }
 
 // dlqWriteSink is the interface subset of dlqsink.dlqSink used by the action.
@@ -126,6 +128,7 @@ func (a *DataPipelineAction) RunDirect(ctx context.Context, in *Input) (*Output,
 
 	runLog := newRunLog(a.ref, runID)
 	runLog.Infof("pipeline run started — source=%s sink=%s", a.def.Source.Type, a.def.Sink.Type)
+	a.auditRunStart(runID)
 
 	start := time.Now()
 	out, runErr := a.executePipeline(ctx, in, runLog, runID)
@@ -142,6 +145,7 @@ func (a *DataPipelineAction) RunDirect(ctx context.Context, in *Input) (*Output,
 	}
 	runLog.Infof("pipeline run %s — processed=%d written=%d failed=%d dropped=%d duration=%dms",
 		out.Status, out.RowsProcessed, out.RowsWritten, out.RowsFailed, out.RowsDropped, out.DurationMs)
+	a.auditRunFinish(runID, out)
 
 	return out, runErr
 }
@@ -168,6 +172,7 @@ func (a *DataPipelineAction) Run(
 	go func() {
 		runLog := newRunLog(a.ref, runID)
 		runLog.Infof("pipeline run started — source=%s sink=%s", a.def.Source.Type, a.def.Sink.Type)
+		a.auditRunStart(runID)
 
 		start := time.Now()
 		out, runErr := a.executePipeline(ctx, in, runLog, runID)
@@ -185,6 +190,7 @@ func (a *DataPipelineAction) Run(
 		}
 		runLog.Infof("pipeline run %s — processed=%d written=%d failed=%d dropped=%d duration=%dms",
 			out.Status, out.RowsProcessed, out.RowsWritten, out.RowsFailed, out.RowsDropped, out.DurationMs)
+		a.auditRunFinish(runID, out)
 
 		// Emit end-of-run metric. Called regardless of success/failure so the
 		// "failed" status label is captured in the pipeline_runs counter.
@@ -228,7 +234,48 @@ func (a *DataPipelineAction) checkStall(runLog corelog.Logger, stage string, dur
 // process exit to ensure the final OTEL metric batch is flushed to the
 // collector. For the Prometheus backend, this gracefully stops the HTTP server.
 func (a *DataPipelineAction) Shutdown(ctx context.Context) error {
+	_ = a.auditor.Close()
 	return a.recorder.Shutdown(ctx)
+}
+
+// transformTypes returns the ordered transform type names for auditing.
+func (a *DataPipelineAction) transformTypes() []string {
+	types := make([]string, 0, len(a.def.Transforms))
+	for _, t := range a.def.Transforms {
+		types = append(types, t.Type)
+	}
+	return types
+}
+
+// auditRunStart records a governance audit record at the start of a run. It
+// emits only component TYPES and run identity — never option values or secrets.
+func (a *DataPipelineAction) auditRunStart(runID string) {
+	a.auditor.Log("pipeline.run.started", map[string]interface{}{
+		"runId":       runID,
+		"pipeline":    a.ref,
+		"source":      a.def.Source.Type,
+		"sink":        a.def.Sink.Type,
+		"transforms":  a.transformTypes(),
+		"scaling":     a.def.Scaling.Mode,
+		"checkpoint":  a.def.Checkpoint.Type,
+		"incremental": a.def.Incremental.Mode,
+	})
+}
+
+// auditRunFinish records a governance audit record at the end of a run with the
+// final status and row counters.
+func (a *DataPipelineAction) auditRunFinish(runID string, out *Output) {
+	a.auditor.Log("pipeline.run.finished", map[string]interface{}{
+		"runId":         runID,
+		"pipeline":      a.ref,
+		"status":        out.Status,
+		"rowsProcessed": out.RowsProcessed,
+		"rowsWritten":   out.RowsWritten,
+		"rowsFailed":    out.RowsFailed,
+		"rowsDropped":   out.RowsDropped,
+		"durationMs":    out.DurationMs,
+		"error":         out.Error,
+	})
 }
 
 // executePipeline runs the full source → transform → sink loop.
