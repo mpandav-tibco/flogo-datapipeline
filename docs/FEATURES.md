@@ -215,7 +215,7 @@ Work-queue implementations: **MemoryQueue** (in-process dev/test), **RedisQueue*
 | `incremental` | `mode` (`hwm`/`none`), `column`, `valueType`, `initialValue`, `storeType`, `storeOptions` |
 | `performance` | `batchSize` (`5000`), `transformWorkers` (`1`), `sourceBufferBatches` (`4`), `sinkBufferBatches` (`4`), `maxMemoryMB` (`512`), `rowGroupParallelism` (`4`) |
 | `scaling` | see [Scaling](#scaling--coordination) |
-| `observability` | `metrics` (`prometheus`/`otel`), `options`, `stallSeconds` |
+| `observability` | `metrics` (`prometheus`/`otel`), `options`, `stallSeconds`, `audit` (append-only governance log) |
 
 **Run output** (`action/pipeline/action.go`): `status` (`completed` | `partial` |
 `failed`), `rowsProcessed`, `rowsWritten`, `rowsFailed`, `rowsDropped`,

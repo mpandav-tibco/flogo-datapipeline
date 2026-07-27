@@ -12,6 +12,8 @@ import (
 
 	"github.com/project-flogo/core/app/resource"
 	"github.com/project-flogo/core/data/property"
+
+	"github.com/mpandav-tibco/flogo-datapipeline/audit"
 )
 
 // ResType is the Flogo resource type for a pipeline definition.
@@ -330,6 +332,9 @@ type ObservabilityDef struct {
 	// StallSeconds is the per-batch wall-clock threshold (seconds) after which a
 	// Stall event is emitted. Zero means use the default (30 s). Negative disables.
 	StallSeconds int `json:"stallSeconds,omitempty"`
+	// Audit configures the optional append-only governance audit log. It is
+	// disabled unless Enabled is true or the DP_AUDIT environment variable is set.
+	Audit audit.Config `json:"audit,omitempty"`
 }
 
 // Definition is the declarative pipeline spec carried by a "pipeline:" resource.
