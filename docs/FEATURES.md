@@ -37,6 +37,7 @@
 | [`dq`](transforms/dq.md) | data-quality expectations + score |
 | [`schemadrift`](transforms/schemadrift.md) | detect add/remove/retype columns |
 | [`hwm`](transforms/hwm.md) | track a column max for incremental loads |
+| [`cast`](transforms/cast.md) | convert column types (string ↔ int / float / decimal / bool / date) |
 
 Plus the shared [expression-language reference](transforms/expression-language.md).
 
