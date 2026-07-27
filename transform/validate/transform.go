@@ -16,8 +16,9 @@
 //	}
 //
 // onViolation: "route" sends bad rows to errorSink and passes good rows downstream.
-//              "fail"  aborts the pipeline on the first violation.
-//              "drop"  silently drops bad rows without routing them.
+//
+//	"fail"  aborts the pipeline on the first violation.
+//	"drop"  silently drops bad rows without routing them.
 package validate
 
 import (
@@ -117,7 +118,7 @@ func (v *validateTransform) Apply(in *record.RecordBatch) (*record.RecordBatch, 
 				return nil, fmt.Errorf("validate: row %d failed: %v", i, violations)
 			case "route":
 				badRows = append(badRows, in.Rows[i])
-			// "drop": silently discard
+				// "drop": silently discard
 			}
 		}
 	}
@@ -250,6 +251,8 @@ func toFloat64(v interface{}) (float64, bool) {
 		return float64(n), true
 	case float64:
 		return n, true
+	case record.Decimal:
+		return n.Float64(), true
 	case string:
 		if f, err := strconv.ParseFloat(n, 64); err == nil {
 			return f, true

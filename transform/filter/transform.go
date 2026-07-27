@@ -173,6 +173,8 @@ func toFloat(v interface{}) (float64, bool) {
 		return float64(n), true
 	case float64:
 		return n, true
+	case record.Decimal:
+		return n.Float64(), true
 	case string:
 		if f, err := strconv.ParseFloat(n, 64); err == nil {
 			return f, true
@@ -316,7 +318,7 @@ func tokenize(expr string) []string {
 		case r == '\'' && inQuote:
 			inQuote = false
 			cur.WriteRune(r)
-		case (unicode.IsSpace(r) || r == ',' ) && !inQuote:
+		case (unicode.IsSpace(r) || r == ',') && !inQuote:
 			if cur.Len() > 0 {
 				tokens = append(tokens, cur.String())
 				cur.Reset()
