@@ -3,6 +3,8 @@ package mapper
 import (
 	"strings"
 	"testing"
+
+	"github.com/mpandav-tibco/flogo-datapipeline/record"
 )
 
 // callFn invokes a registered builtin by name with the given args. It fails the
@@ -70,6 +72,28 @@ func TestEtl_Math(t *testing.T) {
 	}
 	if got := callFn(t, "math.trunc", 3.9); got != 3.0 {
 		t.Errorf("trunc = %v", got)
+	}
+}
+
+func TestEtl_DecimalArithmetic(t *testing.T) {
+	// Regression: numeric builtins must accept record.Decimal operands. Before
+	// toFloat64 handled Decimal, arithmetic on a NUMERIC column silently produced
+	// nil (the operand was treated as missing).
+	dec := func(s string) record.Decimal {
+		d, ok := record.ParseDecimal(s)
+		if !ok {
+			t.Fatalf("ParseDecimal(%q) failed", s)
+		}
+		return d
+	}
+	if got := callFn(t, "multiply", dec("1.5"), dec("2")); got != 3.0 {
+		t.Errorf("multiply(decimal) = %v, want 3", got)
+	}
+	if got := callFn(t, "divide", dec("100.00"), dec("4")); got != 25.0 {
+		t.Errorf("divide(decimal) = %v, want 25", got)
+	}
+	if got := callFn(t, "clamp", dec("5.5"), dec("0"), dec("10")); got != 5.5 {
+		t.Errorf("clamp(decimal) = %v, want 5.5", got)
 	}
 }
 
