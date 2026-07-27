@@ -180,9 +180,15 @@ func parquetNodeFor(t record.ColumnType) parquetgo.Node {
 
 // decimalToParquetBytes encodes an exact decimal as its DECIMAL(38,10) unscaled
 // coefficient in 16-byte big-endian two's-complement form (the physical layout of
-// a FIXED_LEN_BYTE_ARRAY parquet decimal).
+// a FIXED_LEN_BYTE_ARRAY parquet decimal). It returns nil when the value does not
+// fit a signed 128-bit coefficient (beyond DECIMAL(38,10) range) so the caller
+// writes null rather than a silently corrupted (sign-flipped or truncated) value.
 func decimalToParquetBytes(d record.Decimal) []byte {
-	return bigIntToTwosComplement(d.Coef(parquetDecimalScale), parquetDecimalBytes)
+	coef := d.Coef(parquetDecimalScale)
+	if coef.BitLen() > parquetDecimalBytes*8-1 {
+		return nil
+	}
+	return bigIntToTwosComplement(coef, parquetDecimalBytes)
 }
 
 // bigIntToTwosComplement renders bi as a fixed-size big-endian two's-complement
@@ -240,7 +246,10 @@ func coerceForParquet(t record.ColumnType, v interface{}) interface{} {
 		if !ok {
 			return nil
 		}
-		return decimalToParquetBytes(d)
+		if b := decimalToParquetBytes(d); b != nil {
+			return b
+		}
+		return nil // out-of-range → null (never a corrupt value)
 	case record.TypeFloat:
 		switch n := v.(type) {
 		case float64:
