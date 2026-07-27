@@ -67,40 +67,40 @@ We will **not** build these. Writing them down is the point.
 
 | Horizon | Theme | Highlights |
 |---|---|---|
-| **Delivered** | Foundation + top transforms + streaming | ✅ typed-schema / decimal fidelity · ✅ bounded-state backend (windowing spill store) · ✅ **dataset / broadcast join** · ✅ **explode / flatten** · ✅ **cast** · ✅ event-time **windowing** (tumbling/session/global, checkpoint-resume) · ✅ schema-registry **read** (Avro consume) · ✅ dry-run preview · ✅ OOTB packaging (lean `dp-build`, distroless) |
-| **Now** | Governance + routing + lineage | 🚧 **audit log** · 🚧 **conditional router / split** · 🚧 **lineage (OpenLineage)** · ⬜ **mask / PII policy** · ⬜ Transform-SDK parity + conformance kit + golden-pipeline CI |
+| **Delivered** | Foundation + top transforms + streaming + governance | ✅ typed-schema / decimal fidelity · ✅ bounded-state backend (windowing spill store) · ✅ **dataset / broadcast join** · ✅ **explode / flatten** · ✅ **cast** · ✅ event-time **windowing** (tumbling/session/global, checkpoint-resume) · ✅ **conditional router / split** · ✅ **audit log** · ✅ **lineage (OpenLineage)** · ✅ schema-registry **read** (Avro consume) · ✅ dry-run preview · ✅ OOTB packaging (lean `dp-build`, distroless) |
+| **Now** | Governance + adoption | ⬜ **mask / PII policy** · ⬜ field **encryption** · ⬜ Transform-SDK parity + conformance kit + golden-pipeline CI |
 | **Next** | Enterprise transforms + adoption | ⬜ **keyed dedup** · ⬜ **partial aggregate (combiner)** · ⬜ field **encryption** · ⬜ Avro **produce** · ⬜ `--dry-run` / validate CI mode · ⬜ first connector expansions (REST/API source, MongoDB) |
 | **Later** | Differentiation + platform | ⬜ surrogate-key / sequence · ⬜ partition window fns · ⬜ warehouse & lakehouse connectors (Snowflake / BigQuery / Redshift, Iceberg / Delta) · ⬜ Helm / K8s operator + published images · ⬜ CDC-as-source + delete-capable sink |
 
 ---
 
-## Current cycle — active build (2026-07-27)
+## Current cycle — shipped (2026-07-27)
 
-Three enterprise-governance gaps are being built **now**. Each must obey the
-doctrine (§2): map-side, per-batch, plugin-shaped, zero core forks.
+Three enterprise-governance gaps shipped this cycle. Each obeys the doctrine
+(§2): map-side, per-batch, plugin-shaped, zero core forks.
 
-| # | Item | What "done" means |
+| # | Item | Delivered |
 |---|---|---|
-| 1 | 🚧 **Audit log** | Structured, append-only JSON audit trail of pipeline lifecycle + governance events (run start/stop/outcome, checkpoint saves, DLQ / router routes, effective config with **secrets redacted**). Off by default; enabled by config/env; emits to stdout or a durable append-only file. No secret value is ever written. |
-| 2 | 🚧 **Conditional router / split** | A `router` transform that N-way routes rows to named sinks by ordered predicates (first-match, with an optional default route) — generalizes the 2-way DLQ branch. Map-side, no shuffle; typed-schema preserving. |
-| 3 | 🚧 **Lineage (OpenLineage)** | Emit OpenLineage run/job/dataset events (START / COMPLETE / FAIL / ABORT) naming the source & sink datasets plus schema facets, wired through the existing `observability` config. Answers "where did this data come from." |
+| 1 | ✅ **Audit log** | Structured, append-only JSON audit trail of pipeline lifecycle events (run start/finish with status + counters, component **types** only). Off by default; enabled by `observability.audit` or `DP_AUDIT`; emits to stdout or a durable append-only file. No secret value is ever written. |
+| 2 | ✅ **Conditional router / split** | A `router` transform that N-way routes rows to named sinks by ordered predicates (first-match, with an optional default route) — generalizes the 2-way DLQ branch. Map-side, no shuffle; typed-schema preserving. |
+| 3 | ✅ **Lineage (OpenLineage)** | Emits OpenLineage run/job/dataset events (START / COMPLETE / FAIL) naming the source & sink datasets plus schema facets, wired through the `observability` config. Answers "where did this data come from." |
 
 ---
 
 ## 5. Track A — Transforms
 
-Current set (13): `filter`, `map`, `validate`, `lookup/enrich` (HTTP), `parse`,
-`hwm`, `schemadrift`, `dq`, `cast`, `explode`, `flatten`, `join`, `window`.
+Current set (14): `filter`, `map`, `validate`, `lookup/enrich` (HTTP), `parse`,
+`hwm`, `schemadrift`, `dq`, `cast`, `explode`, `flatten`, `join`, `window`,
+`router/split`.
 
 ### Tier 1 — highest value, pure map
 
-✅ **Shipped:** dataset / broadcast **`join`**, **`explode`**, **`flatten`**, **`cast`**.
+✅ **Shipped:** dataset / broadcast **`join`**, **`explode`**, **`flatten`**, **`cast`**, conditional **`router` / `split`**.
 
 Remaining:
 
 | Transform | Problem it solves | Fit | Status |
 |---|---|---|---|
-| **Conditional router / split** | N-way route rows to different sinks by predicate (generalizes the DLQ branch). "Conditional split" is table-stakes ETL. | per-row | 🚧 building |
 | **Mask / tokenize / PII** | Field-level policy (mask / hash / tokenize / encrypt / drop by classification). Enterprise + data-residency / compliance. (A `util.mask()` expression exists today; this is the policy-driven transform.) | per-row | ⬜ next |
 
 ### Tier 2 — build carefully, **only on the bounded-state backend** (§6.3)
@@ -155,8 +155,8 @@ More transforms is *not* the main gap between us and "credible ETL tool." These 
    MongoDB. Reuse Flogo connectors where possible.
 2. **Schema & lineage.** ✅ Schema-registry **read** (Avro/Confluent consume +
    `/v1/introspect/schema-registry`); ✅ evolution policy (`schemadrift`); ⬜ Avro
-   **produce** is still a JSON stub. 🚧 **lineage emission** (OpenLineage) is
-   building now — enterprises need "where did this data come from."
+   **produce** is still a JSON stub. ✅ **lineage emission** (OpenLineage) —
+   enterprises can now answer "where did this data come from."
 3. **Incremental as the default story.** HWM exists — make delta-not-full-reload the
    headline; make the CDC-as-source bet consciously (see §8).
 4. **Pipeline testability in CI.** ✅ dry-run preview + `dq`; ⬜ add a
@@ -165,7 +165,7 @@ More transforms is *not* the main gap between us and "credible ETL tool." These 
 5. **Deployment & packaging.** ✅ OOTB bundled VSIX + lean per-app binary +
    distroless Dockerfile + K8s Job/CronJob/StatefulSet guidance + Studio manifest
    generation. ⬜ Helm chart · K8s operator/CRD · published images.
-6. **Security & governance.** ✅ Secret references; 🚧 **audit log** (building now);
+6. **Security & governance.** ✅ Secret references; ✅ **audit log**;
    ⬜ field **masking/PII** policy transform; ⬜ field **encryption**.
 
 ---

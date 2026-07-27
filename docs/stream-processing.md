@@ -1,9 +1,10 @@
-# Stream Processing for Flogo Data Pipeline — Approach & Design (DRAFT)
+# Stream Processing for Flogo Data Pipeline — Approach & Design
 
-> **Status:** Draft for discussion · **Branch:** `feat/stream-processing` · **Owner:** TBD
-> This document proposes how to add **continuous, event‑time, windowed stream
-> processing** to Flogo Data Pipeline as a natural extension of the existing
-> batch engine — not as a separate product, and not as a clone of Flink/Beam.
+> **Status:** Implemented — this design shipped as the [`window`](transforms/window.md)
+> and [`join`](transforms/join.md) transforms; this page is kept as the design
+> reference. It describes how **continuous, event‑time, windowed stream
+> processing** was added to Flogo Data Pipeline as a natural extension of the
+> existing batch engine — not as a separate product, and not as a clone of Flink/Beam.
 
 ---
 

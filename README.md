@@ -222,7 +222,7 @@ Production data feeds change over time without notice. The schema drift transfor
 | Null | Discards all rows (benchmarking and dry-run) |
 | **Dead Letter Queue (DLQ)** | Wraps any sink type; captures rejected rows with an error envelope |
 
-### Transforms (8)
+### Transforms (14)
 
 | Transform | What it does |
 |---|---|
@@ -234,6 +234,12 @@ Production data feeds change over time without notice. The schema drift transfor
 | High-Water Mark (HWM) | Tracks the maximum value of a column per batch for incremental load patterns |
 | Schema Drift | Detects column additions, removals, and type changes at runtime; policies: `additive`, `project`, `strict`, `drop` |
 | Data Quality (DQ) | Evaluates per-column expectations; produces a DQ report with pass/fail scores |
+| Cast | Converts one or more columns to a target type (string / int / float / decimal / bool / date), updating the batch schema |
+| Explode | Expands an array column into one row per element |
+| Flatten | Flattens nested-object columns into dotted top-level columns |
+| Router / Split | N-way routes rows to different sinks by ordered predicates (conditional split) |
+| Join | Keyed stream-table join enriching the stream from a source-loaded reference dataset |
+| Window | Event-time windowed aggregation (tumbling / sliding / session / global) with watermarks and checkpointed state |
 
 ### Operational primitives
 
@@ -243,6 +249,7 @@ Production data feeds change over time without notice. The schema drift transfor
 | Checkpointing (resume after interruption) | Local file, Redis |
 | Watermarking (incremental high-water marks) | Local file, Redis, PostgreSQL |
 | Metrics | Prometheus endpoint (`/metrics`) + OpenTelemetry OTLP gRPC export |
+| Governance | Optional append-only audit log (JSONL) + OpenLineage run events (console / file / http) |
 | Distributed scaling | Sharded (static partition assignment) or distributed (PostgreSQL or Redis work-queue coordinator with lease-based claim, heartbeat, and retry) |
 
 ### Pipeline templates (6)
