@@ -488,6 +488,12 @@ const TF_LABELS: Record<string, string> = {
   schemadrift: 'Schema Drift',
   parse: 'Parse',
   window: 'Window (aggregate)',
+  join: 'Join',
+  cast: 'Cast',
+  explode: 'Explode',
+  flatten: 'Flatten',
+  router: 'Router / Split',
+  split: 'Router / Split',
 };
 function transformLabel(t: string): string {
   return TF_LABELS[t] || t;
@@ -1355,6 +1361,8 @@ function pruneEmptySettings(): void {
   // Nested empties first.
   if (doc.scaling && isEmpty(doc.scaling.coordinator)) delete doc.scaling.coordinator;
   if (doc.observability && isEmpty(doc.observability.options)) delete doc.observability.options;
+  if (doc.observability && isEmpty(doc.observability.audit)) delete doc.observability.audit;
+  if (doc.observability && isEmpty(doc.observability.lineage)) delete doc.observability.lineage;
   if (doc.incremental && isEmpty(doc.incremental.storeOptions)) delete doc.incremental.storeOptions;
   for (const k of ['checkpoint', 'incremental', 'performance', 'scaling', 'observability']) {
     if (isEmpty(doc[k])) delete doc[k];
@@ -1414,7 +1422,7 @@ function stText(obj: any, key: string, label: string, placeholder: string, hint:
   if (hint) f.appendChild(el('div', 'hint', hint));
   return f;
 }
-function stBool(obj: any, key: string, label: string, hint: string): HTMLElement {
+function stBool(obj: any, key: string, label: string, hint: string, reRender = false): HTMLElement {
   const f = el('div', 'fld');
   f.appendChild(el('div', 'k', label));
   const on = obj[key] === true;
@@ -1426,6 +1434,7 @@ function stBool(obj: any, key: string, label: string, hint: string): HTMLElement
     (t.querySelector('.lbl') as HTMLElement).textContent = String(next);
     obj[key] = next;
     saveSettings();
+    if (reRender) renderEditor();
   };
   f.appendChild(t);
   if (hint) f.appendChild(el('div', 'hint', hint));
@@ -1692,6 +1701,24 @@ function renderPipelineSettings(): HTMLElement {
     obsFields.push(stNum(obs, 'stallSeconds', 'Stall threshold (s)', '30', 'Emit a stall event when a batch takes longer than this (−1 disables).'));
   }
   ib.appendChild(stGroup('Observability · Metrics', 'Monitor the pipeline', ...obsFields));
+
+  // ── Observability / governance (audit log + OpenLineage) ────────────────────
+  const auditObj = settingsSection(obs, 'audit');
+  const lineageObj = settingsSection(obs, 'lineage');
+  const govFields: HTMLElement[] = [];
+  govFields.push(stBool(auditObj, 'enabled', 'Audit log', 'Append-only JSONL trail of run start/finish — component types + counters only, never secrets.', true));
+  if (auditObj.enabled) {
+    govFields.push(stText(auditObj, 'file', 'Audit file', 'blank = stdout', 'Append-only file path (or set the DP_AUDIT_FILE env var).'));
+  }
+  govFields.push(stBool(lineageObj, 'enabled', 'Lineage (OpenLineage)', 'Emit OpenLineage run events naming the source & sink datasets.', true));
+  if (lineageObj.enabled) {
+    govFields.push(stSelect(lineageObj, 'transport', 'Lineage transport', [['console', 'Console — JSON to stdout'], ['file', 'File — append JSONL'], ['http', 'HTTP — POST to a collector']], 'Where run events are sent.', true));
+    const lt = String(lineageObj.transport || 'console');
+    if (lt === 'http') govFields.push(stText(lineageObj, 'url', 'Collector URL', 'http://marquez:5000/api/v1/lineage', 'OpenLineage endpoint (or set OPENLINEAGE_URL).'));
+    if (lt === 'file') govFields.push(stText(lineageObj, 'file', 'Lineage file', 'e.g. ./out/lineage.jsonl', 'Append-only JSONL file path.'));
+    govFields.push(stText(lineageObj, 'namespace', 'Namespace', 'flogo-datapipeline', 'Default job / dataset namespace.'));
+  }
+  ib.appendChild(stGroup('Observability · Governance', 'Audit log & lineage', ...govFields));
 
   insp.appendChild(ib);
   attachResize(insp);
@@ -2654,6 +2681,67 @@ function renderJoinEditor(node: Node): HTMLElement {
   return wrap;
 }
 
+// Structured editor for the `router` (split) transform: an ordered list of
+// routes (predicate → sink, first match wins), an optional default sink, and the
+// policy for rows that match no route.
+function renderRouterEditor(node: Node): HTMLElement {
+  const wrap = el('div');
+  const t: any = cfgTarget(node);
+  if (!Array.isArray(t.routes)) t.routes = [];
+  const persist = () => persistAndRebuild();
+  const inpF = fieldInput;
+  const selF = fieldSelect;
+  const SINK_TYPES = ['jsonlines', 'csv', 'parquet', 'jdbc', 'kafka', 'null'];
+
+  // Routes — ordered, first match wins.
+  const routesF = el('div', 'fld');
+  routesF.appendChild(el('div', 'k', 'Routes (first match wins)'));
+  const cards = el('div', 'rcards');
+  (t.routes as any[]).forEach((r, i) => {
+    r.sinkConfig = r.sinkConfig || {};
+    const card = el('div', 'rcard');
+    const head = el('div', 'rhead');
+    const nameI = el('input') as HTMLInputElement; nameI.placeholder = 'route name'; nameI.value = r.name || ''; nameI.style.flex = '1';
+    nameI.onchange = () => { if (nameI.value.trim()) r.name = nameI.value.trim(); else delete r.name; persist(); };
+    const del = el('span', 'del', '✕'); del.title = 'Remove route'; del.onclick = () => { (t.routes as any[]).splice(i, 1); persist(); renderEditor(); };
+    head.appendChild(nameI); head.appendChild(del);
+    card.appendChild(head);
+
+    const wRow = el('div', 'rrow'); wRow.appendChild(el('label', undefined, 'When'));
+    const wi = el('input') as HTMLInputElement; wi.placeholder = "e.g. amount > 1000 AND region = 'EU'"; wi.value = r.when || '';
+    wi.onchange = () => { r.when = wi.value; persist(); };
+    wRow.appendChild(wi); card.appendChild(wRow);
+
+    const sRow = el('div', 'rrow'); sRow.appendChild(el('label', undefined, 'Sink'));
+    const ss = el('select') as HTMLSelectElement;
+    (SINK_TYPES.includes(r.sinkType) ? SINK_TYPES : [r.sinkType || '', ...SINK_TYPES]).forEach((o) => { const op = document.createElement('option'); op.value = o; op.textContent = o || '(select)'; if (o === r.sinkType) op.selected = true; ss.appendChild(op); });
+    ss.onchange = () => { r.sinkType = ss.value; persist(); };
+    sRow.appendChild(ss); card.appendChild(sRow);
+
+    const pRow = el('div', 'rrow'); pRow.appendChild(el('label', undefined, 'Path'));
+    const pi = el('input') as HTMLInputElement; pi.placeholder = 'e.g. ./out/high.jsonl'; pi.value = r.sinkConfig.path || '';
+    pi.onchange = () => { if (pi.value.trim()) r.sinkConfig.path = pi.value.trim(); else delete r.sinkConfig.path; persist(); };
+    pRow.appendChild(pi); card.appendChild(pRow);
+
+    cards.appendChild(card);
+  });
+  const add = el('button', 'addcard', '＋ Add route'); add.onclick = () => { (t.routes as any[]).push({ when: '', sinkType: 'jsonlines', sinkConfig: {} }); persist(); renderEditor(); };
+  cards.appendChild(add);
+  routesF.appendChild(cards);
+  wrap.appendChild(routesF);
+
+  // Optional default sink for unmatched rows.
+  wrap.appendChild(selF('Default sink (unmatched rows)', t.defaultSinkType || '', ['', 'jsonlines', 'csv', 'parquet', 'jdbc', 'kafka', 'null'], (v) => { if (v) { t.defaultSinkType = v; } else { delete t.defaultSinkType; delete t.defaultSinkConfig; } persist(); renderEditor(); }, 'Where rows matching no route go — blank uses the policy below', '(none)'));
+  if (t.defaultSinkType) {
+    const dsc = t.defaultSinkConfig || {};
+    wrap.appendChild(inpF('Default sink path', dsc.path, 'e.g. ./out/other.jsonl', (v) => { t.defaultSinkConfig = t.defaultSinkConfig || {}; if (v === '') delete t.defaultSinkConfig.path; else t.defaultSinkConfig.path = v; persist(); }, 'File path (file sinks) — or broker/topic for kafka'));
+  } else {
+    wrap.appendChild(selF('Unmatched rows', t.onUnmatched || 'pass', ['pass', 'drop'], (v) => { t.onUnmatched = v; persist(); }, 'pass → continue downstream to the main sink; drop → discard'));
+  }
+
+  return wrap;
+}
+
 function renderAll() {
   renderTabs();
   renderEditor();
@@ -3006,6 +3094,8 @@ function renderCanvas(m: HTMLElement) {
       ib.appendChild(renderWindowEditor(sn));
     } else if (sn.type === 'join') {
       ib.appendChild(renderJoinEditor(sn));
+    } else if (sn.type === 'router' || sn.type === 'split') {
+      ib.appendChild(renderRouterEditor(sn));
     } else {
       const connSel = renderConnectionSelector(sn);
       if (connSel) ib.appendChild(connSel);
@@ -3733,6 +3823,22 @@ const TRANSFORMS: Array<{ type: string; label: string; cfg: Record<string, unkno
   {
     type: 'join', label: 'Join — keyed join against a reference source (stream-table)',
     cfg: { leftKey: 'id', rightKey: 'id', joinType: 'inner', right: { type: 'csv', path: 'reference.csv', hasHeader: true } }
+  },
+  {
+    type: 'cast', label: 'Cast — convert column types (int / float / decimal / date / …)',
+    cfg: { columns: [{ name: 'amount', type: 'decimal' }], onError: 'null' }
+  },
+  {
+    type: 'explode', label: 'Explode — expand an array column into one row per element',
+    cfg: { column: 'items' }
+  },
+  {
+    type: 'flatten', label: 'Flatten — nested-object columns into dotted columns',
+    cfg: { separator: '.' }
+  },
+  {
+    type: 'router', label: 'Router / Split — route rows to sinks by predicate',
+    cfg: { routes: [{ name: 'high', when: 'amount > 1000', sinkType: 'jsonlines', sinkConfig: { path: './out/high.jsonl' } }], onUnmatched: 'pass' }
   },
 ];
 
