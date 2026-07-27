@@ -21,6 +21,7 @@ import (
 
 	"github.com/mpandav-tibco/flogo-datapipeline/audit"
 	"github.com/mpandav-tibco/flogo-datapipeline/checkpoint"
+	"github.com/mpandav-tibco/flogo-datapipeline/lineage"
 	"github.com/mpandav-tibco/flogo-datapipeline/metrics"
 	"github.com/mpandav-tibco/flogo-datapipeline/record"
 	"github.com/mpandav-tibco/flogo-datapipeline/sink"
@@ -54,6 +55,7 @@ type DataPipelineAction struct {
 	ioMd     *metadata.IOMetadata
 	recorder metrics.Recorder // never nil; NoopRecorder when unconfigured
 	auditor  audit.Auditor    // never nil; audit.Noop when unconfigured
+	lineage  lineage.Emitter  // never nil; lineage.Noop when unconfigured
 }
 
 // dlqWriteSink is the interface subset of dlqsink.dlqSink used by the action.
@@ -129,6 +131,7 @@ func (a *DataPipelineAction) RunDirect(ctx context.Context, in *Input) (*Output,
 	runLog := newRunLog(a.ref, runID)
 	runLog.Infof("pipeline run started — source=%s sink=%s", a.def.Source.Type, a.def.Sink.Type)
 	a.auditRunStart(runID)
+	a.lineageStart(runID)
 
 	start := time.Now()
 	out, runErr := a.executePipeline(ctx, in, runLog, runID)
@@ -146,6 +149,7 @@ func (a *DataPipelineAction) RunDirect(ctx context.Context, in *Input) (*Output,
 	runLog.Infof("pipeline run %s — processed=%d written=%d failed=%d dropped=%d duration=%dms",
 		out.Status, out.RowsProcessed, out.RowsWritten, out.RowsFailed, out.RowsDropped, out.DurationMs)
 	a.auditRunFinish(runID, out)
+	a.lineageFinish(runID, out)
 
 	return out, runErr
 }
@@ -173,6 +177,7 @@ func (a *DataPipelineAction) Run(
 		runLog := newRunLog(a.ref, runID)
 		runLog.Infof("pipeline run started — source=%s sink=%s", a.def.Source.Type, a.def.Sink.Type)
 		a.auditRunStart(runID)
+		a.lineageStart(runID)
 
 		start := time.Now()
 		out, runErr := a.executePipeline(ctx, in, runLog, runID)
@@ -191,6 +196,7 @@ func (a *DataPipelineAction) Run(
 		runLog.Infof("pipeline run %s — processed=%d written=%d failed=%d dropped=%d duration=%dms",
 			out.Status, out.RowsProcessed, out.RowsWritten, out.RowsFailed, out.RowsDropped, out.DurationMs)
 		a.auditRunFinish(runID, out)
+		a.lineageFinish(runID, out)
 
 		// Emit end-of-run metric. Called regardless of success/failure so the
 		// "failed" status label is captured in the pipeline_runs counter.
@@ -235,6 +241,7 @@ func (a *DataPipelineAction) checkStall(runLog corelog.Logger, stage string, dur
 // collector. For the Prometheus backend, this gracefully stops the HTTP server.
 func (a *DataPipelineAction) Shutdown(ctx context.Context) error {
 	_ = a.auditor.Close()
+	_ = a.lineage.Close()
 	return a.recorder.Shutdown(ctx)
 }
 
@@ -275,6 +282,74 @@ func (a *DataPipelineAction) auditRunFinish(runID string, out *Output) {
 		"rowsDropped":   out.RowsDropped,
 		"durationMs":    out.DurationMs,
 		"error":         out.Error,
+	})
+}
+
+// lineageDatasetName picks a non-secret dataset identifier from a component's
+// path/options (path, table, topic, bucket, index), falling back to the type.
+func lineageDatasetName(typ, path string, opts map[string]interface{}) string {
+	if path != "" {
+		return path
+	}
+	for _, k := range []string{"path", "table", "topic", "bucket", "index"} {
+		if v, ok := opts[k].(string); ok && v != "" {
+			return v
+		}
+	}
+	return typ
+}
+
+func colDefsToFields(cols []ColumnDef) []lineage.Field {
+	if len(cols) == 0 {
+		return nil
+	}
+	fs := make([]lineage.Field, len(cols))
+	for i, c := range cols {
+		fs[i] = lineage.Field{Name: c.Name, Type: c.Type}
+	}
+	return fs
+}
+
+func (a *DataPipelineAction) sourceDataset() lineage.Dataset {
+	return lineage.Dataset{
+		Namespace: a.def.Source.Type,
+		Name:      lineageDatasetName(a.def.Source.Type, a.def.Source.Path, a.def.Source.Options),
+		Fields:    colDefsToFields(a.def.Source.Columns),
+	}
+}
+
+func (a *DataPipelineAction) sinkDataset() lineage.Dataset {
+	return lineage.Dataset{
+		Namespace: a.def.Sink.Type,
+		Name:      lineageDatasetName(a.def.Sink.Type, "", a.def.Sink.Options),
+	}
+}
+
+// lineageStart emits an OpenLineage START event naming the source and sink datasets.
+func (a *DataPipelineAction) lineageStart(runID string) {
+	a.lineage.Emit(lineage.Event{
+		Type:     lineage.Start,
+		RunID:    runID,
+		Job:      a.ref,
+		Inputs:   []lineage.Dataset{a.sourceDataset()},
+		Outputs:  []lineage.Dataset{a.sinkDataset()},
+		RowCount: -1,
+	})
+}
+
+// lineageFinish emits a COMPLETE (or FAIL) event with the output row count.
+func (a *DataPipelineAction) lineageFinish(runID string, out *Output) {
+	evType := lineage.Complete
+	if out.Status == "failed" {
+		evType = lineage.Fail
+	}
+	a.lineage.Emit(lineage.Event{
+		Type:     evType,
+		RunID:    runID,
+		Job:      a.ref,
+		Inputs:   []lineage.Dataset{a.sourceDataset()},
+		Outputs:  []lineage.Dataset{a.sinkDataset()},
+		RowCount: out.RowsWritten,
 	})
 }
 

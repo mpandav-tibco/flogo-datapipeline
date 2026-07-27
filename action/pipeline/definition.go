@@ -14,6 +14,7 @@ import (
 	"github.com/project-flogo/core/data/property"
 
 	"github.com/mpandav-tibco/flogo-datapipeline/audit"
+	"github.com/mpandav-tibco/flogo-datapipeline/lineage"
 )
 
 // ResType is the Flogo resource type for a pipeline definition.
@@ -335,6 +336,9 @@ type ObservabilityDef struct {
 	// Audit configures the optional append-only governance audit log. It is
 	// disabled unless Enabled is true or the DP_AUDIT environment variable is set.
 	Audit audit.Config `json:"audit,omitempty"`
+	// Lineage configures optional OpenLineage run-event emission. It is disabled
+	// unless Enabled is true or the DP_LINEAGE / OPENLINEAGE_URL env vars are set.
+	Lineage lineage.Config `json:"lineage,omitempty"`
 }
 
 // Definition is the declarative pipeline spec carried by a "pipeline:" resource.

@@ -10,6 +10,7 @@ import (
 	corelog "github.com/project-flogo/core/support/log"
 
 	"github.com/mpandav-tibco/flogo-datapipeline/audit"
+	"github.com/mpandav-tibco/flogo-datapipeline/lineage"
 	"github.com/mpandav-tibco/flogo-datapipeline/metrics"
 )
 
@@ -97,6 +98,10 @@ func (f *Factory) New(cfg *action.Config) (action.Action, error) {
 	if err != nil {
 		return nil, fmt.Errorf("pipeline factory: audit log: %w", err)
 	}
+	lin, err := lineage.New(def.Observability.Lineage)
+	if err != nil {
+		return nil, fmt.Errorf("pipeline factory: lineage: %w", err)
+	}
 
 	act := &DataPipelineAction{
 		def:      def,
@@ -104,6 +109,7 @@ func (f *Factory) New(cfg *action.Config) (action.Action, error) {
 		ioMd:     buildIOMetadata(),
 		recorder: rec,
 		auditor:  aud,
+		lineage:  lin,
 	}
 
 	f.actions[s.PipelineRef] = act
@@ -142,12 +148,17 @@ func NewInline(def *Definition, ref string) (*DataPipelineAction, error) {
 	if err != nil {
 		return nil, fmt.Errorf("pipeline inline: audit log: %w", err)
 	}
+	lin, err := lineage.New(def.Observability.Lineage)
+	if err != nil {
+		return nil, fmt.Errorf("pipeline inline: lineage: %w", err)
+	}
 	return &DataPipelineAction{
 		def:      def,
 		ref:      ref,
 		ioMd:     buildIOMetadata(),
 		recorder: rec,
 		auditor:  aud,
+		lineage:  lin,
 	}, nil
 }
 
