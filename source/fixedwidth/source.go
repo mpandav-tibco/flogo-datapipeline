@@ -87,7 +87,6 @@ type fixedWidthSource struct {
 	scanner      *bufio.Scanner
 	schema       []record.Column
 	columns      []fwColumn
-	encoding     string
 	cmap         *charmap.Charmap // resolved decoder for non-UTF-8 encodings; nil = UTF-8/ASCII passthrough
 	recordLength int
 	rowsRead     int64
@@ -149,7 +148,6 @@ func newFixedWidthSource(cfg map[string]interface{}) (source.Source, error) {
 		scanner:      scanner,
 		schema:       schema,
 		columns:      cols,
-		encoding:     encoding,
 		cmap:         cmap,
 		recordLength: recordLength,
 	}, nil
