@@ -71,11 +71,11 @@ type ErrorEnvelope struct {
 // with zero bad rows pay no connection overhead.
 type dlqSink struct {
 	// configuration
-	innerType      string
-	innerOptions   map[string]interface{}
-	envelopeColumn string
-	maxRowsPerBatch int  // 0 = unlimited
-	onFull         string // "block" | "drop"
+	innerType       string
+	innerOptions    map[string]interface{}
+	envelopeColumn  string
+	maxRowsPerBatch int    // 0 = unlimited
+	onFull          string // "block" | "drop"
 
 	// runtime state — guarded by mu for concurrent safety
 	mu       sync.Mutex

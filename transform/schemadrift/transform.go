@@ -199,7 +199,7 @@ func (s *schemaDriftTransform) mergeBaseline(changes []schema.ColumnChange) {
 					break
 				}
 			}
-		// "dropped": intentionally not removed from baseline — Project will emit nil.
+			// "dropped": intentionally not removed from baseline — Project will emit nil.
 		}
 	}
 }

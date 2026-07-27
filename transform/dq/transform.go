@@ -333,7 +333,7 @@ func (d *dqTransform) Apply(in *record.RecordBatch) (*record.RecordBatch, error)
 				} else {
 					goodBatch.Rows = append(goodBatch.Rows, row)
 				}
-			// default ("fail"): rows are dropped; gate failure already handled above.
+				// default ("fail"): rows are dropped; gate failure already handled above.
 			}
 		}
 	}
