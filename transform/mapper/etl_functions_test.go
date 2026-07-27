@@ -146,6 +146,11 @@ func TestEtl_DatetimeTimezone(t *testing.T) {
 	if got := callFn(t, "datetime.fromZone", "2024-06-01 08:00:00", "America/New_York"); got != "2024-06-01T12:00:00Z" {
 		t.Errorf("fromZone = %v; want 2024-06-01T12:00:00Z", got)
 	}
+	// fromZone also reinterprets a date-column time.Time by its wall-clock components.
+	naive := time.Date(2024, 6, 1, 8, 0, 0, 0, time.UTC) // a naive 08:00 parsed as UTC
+	if got := callFn(t, "datetime.fromZone", naive, "America/New_York"); got != "2024-06-01T12:00:00Z" {
+		t.Errorf("fromZone(time.Time) = %v; want 2024-06-01T12:00:00Z", got)
+	}
 	// Unknown zone → nil (graceful).
 	if got := callFn(t, "datetime.toZone", "2024-06-01T12:00:00Z", "Not/AZone"); got != nil {
 		t.Errorf("toZone(bad zone) = %v; want nil", got)

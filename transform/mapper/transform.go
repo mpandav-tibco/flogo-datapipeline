@@ -1249,6 +1249,14 @@ func registerEtlBuiltins() {
 		if err != nil {
 			return nil
 		}
+		// A time.Time (e.g. a date column parsed as naive-UTC) is reinterpreted by
+		// its wall-clock components; a string is parsed as naive wall-clock in loc.
+		if len(a) > 0 {
+			if t, ok := a[0].(time.Time); ok {
+				w := time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), loc)
+				return w.UTC().Format(time.RFC3339)
+			}
+		}
 		t, ok := parseTimeInLocation(argStr(a, 0), loc)
 		if !ok {
 			return nil
