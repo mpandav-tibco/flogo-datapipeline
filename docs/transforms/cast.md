@@ -25,9 +25,11 @@ Target `type` is one of `string`, `int`, `float`, `decimal`, `bool`, `date`, `an
   normalised to exactly that many fractional digits (padded or rounded
   half-away-from-zero). Casting an out-of-range value is governed by `onError`.
 - Conversions: `int`/`float`/`decimal`/`bool` accept numeric, string and each
-  other; `string` renders decimals with their exact scale and dates with `format`
-  (or RFC3339); `date` accepts `time.Time` or a string parsed with `format` (with
-  RFC3339 / `2006-01-02 15:04:05` / `2006-01-02` fallbacks), normalised to UTC.
+  other; casting a fractional value to `int` rounds half-away-from-zero (SQL
+  `CAST` semantics); `string` renders decimals with their exact scale and dates
+  with `format` (or RFC3339); `date` accepts `time.Time` or a string parsed with
+  `format` (with RFC3339 / `2006-01-02 15:04:05` / `2006-01-02` fallbacks),
+  normalised to UTC.
 
 ## Example
 

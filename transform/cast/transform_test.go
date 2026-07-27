@@ -158,6 +158,44 @@ func TestCast_DateAndDecimalToString(t *testing.T) {
 	}
 }
 
+func TestCast_NumericToIntRounds(t *testing.T) {
+	// All numeric → int casts round half-away-from-zero (SQL CAST), consistently
+	// across float, decimal and numeric strings.
+	amt, _ := record.ParseDecimal("3.9")
+	nd, _ := record.ParseDecimal("-2.5")
+	tr := newCast(t, map[string]interface{}{"columns": []interface{}{
+		map[string]interface{}{"name": "f", "type": "int"},
+		map[string]interface{}{"name": "d", "type": "int"},
+		map[string]interface{}{"name": "s", "type": "int"},
+		map[string]interface{}{"name": "neg", "type": "int"},
+	}})
+	in := &record.RecordBatch{
+		Columns: []record.Column{
+			{Name: "f", Type: record.TypeFloat},
+			{Name: "d", Type: record.TypeDecimal},
+			{Name: "s", Type: record.TypeString},
+			{Name: "neg", Type: record.TypeDecimal},
+		},
+		Rows: [][]interface{}{{3.9, amt, "3.9", nd}},
+	}
+	out, err := tr.Apply(in)
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if out.Rows[0][0] != int64(4) {
+		t.Errorf("float 3.9 → int = %v; want 4", out.Rows[0][0])
+	}
+	if out.Rows[0][1] != int64(4) {
+		t.Errorf("decimal 3.9 → int = %v; want 4", out.Rows[0][1])
+	}
+	if out.Rows[0][2] != int64(4) {
+		t.Errorf("string 3.9 → int = %v; want 4", out.Rows[0][2])
+	}
+	if out.Rows[0][3] != int64(-3) {
+		t.Errorf("decimal -2.5 → int = %v; want -3 (half away from zero)", out.Rows[0][3])
+	}
+}
+
 func TestCast_Name(t *testing.T) {
 	if newCast(t, map[string]interface{}{"columns": []interface{}{
 		map[string]interface{}{"name": "n", "type": "int"},

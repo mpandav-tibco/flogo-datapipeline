@@ -24,6 +24,7 @@ package cast
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -223,6 +224,9 @@ func castToString(v interface{}, format string) interface{} {
 	}
 }
 
+// castToInt converts numeric/bool/string input to int64. Fractional values round
+// half-away-from-zero (SQL CAST semantics), consistent across float, decimal and
+// numeric strings.
 func castToInt(v interface{}) (interface{}, bool) {
 	switch n := v.(type) {
 	case int64:
@@ -232,9 +236,9 @@ func castToInt(v interface{}) (interface{}, bool) {
 	case int32:
 		return int64(n), true
 	case float64:
-		return int64(n), true
+		return int64(math.Round(n)), true
 	case float32:
-		return int64(n), true
+		return int64(math.Round(float64(n))), true
 	case bool:
 		if n {
 			return int64(1), true
@@ -250,7 +254,7 @@ func castToInt(v interface{}) (interface{}, bool) {
 			return i, true
 		}
 		if f, err := strconv.ParseFloat(s, 64); err == nil {
-			return int64(f), true
+			return int64(math.Round(f)), true
 		}
 	}
 	return nil, false
