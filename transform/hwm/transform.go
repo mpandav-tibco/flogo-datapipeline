@@ -7,7 +7,7 @@
 // Config keys:
 //
 //	column    string  Column name to track (required)
-//	valueType string  "datetime" | "int" | "string" (default "string")
+//	valueType string  "datetime" | "int" | "string" | "decimal" (default "string")
 //
 // Import: import _ "github.com/mpandav-tibco/flogo-datapipeline/transform/hwm"
 package hwm
@@ -33,7 +33,8 @@ type HWMProvider interface {
 	// MaxSeen returns the maximum watermark value observed since the transform
 	// was created (or since the last call to Reset), or nil if no rows have
 	// been scanned. The returned value has the concrete type dictated by
-	// valueType: time.Time for "datetime", int64 for "int", string for "string".
+	// valueType: time.Time for "datetime", int64 for "int", string for "string",
+	// record.Decimal for "decimal".
 	MaxSeen() interface{}
 	// WatermarkColumn returns the column name this transform is tracking.
 	WatermarkColumn() string
@@ -43,7 +44,7 @@ type HWMProvider interface {
 
 type hwmTransform struct {
 	column    string
-	valueType string // "datetime" | "int" | "string"
+	valueType string // "datetime" | "int" | "string" | "decimal"
 	mu        sync.Mutex
 	maxSeen   interface{} // current in-memory maximum; nil until first non-null row
 }
@@ -58,10 +59,10 @@ func newHWMTransform(cfg map[string]interface{}) (transform.Transform, error) {
 		valueType = "string"
 	}
 	switch valueType {
-	case "datetime", "int", "string":
+	case "datetime", "int", "string", "decimal":
 		// valid
 	default:
-		return nil, fmt.Errorf("hwm transform: valueType must be 'datetime', 'int', or 'string', got %q", valueType)
+		return nil, fmt.Errorf("hwm transform: valueType must be 'datetime', 'int', 'string', or 'decimal', got %q", valueType)
 	}
 	return &hwmTransform{
 		column:    column,
@@ -130,6 +131,8 @@ func (h *hwmTransform) coerce(v interface{}) interface{} {
 		return coerceDatetime(v)
 	case "int":
 		return coerceInt(v)
+	case "decimal":
+		return coerceDecimalHWM(v)
 	default: // "string"
 		return coerceString(v)
 	}
@@ -151,6 +154,12 @@ func (h *hwmTransform) greater(a, b interface{}) bool {
 		if aOk && bOk {
 			return ai > bi
 		}
+	case "decimal":
+		ad, aOk := a.(record.Decimal)
+		bd, bOk := b.(record.Decimal)
+		if aOk && bOk {
+			return ad.Cmp(bd) > 0
+		}
 	default: // "string"
 		as, aOk := a.(string)
 		bs, bOk := b.(string)
@@ -159,6 +168,16 @@ func (h *hwmTransform) greater(a, b interface{}) bool {
 		}
 	}
 	return false
+}
+
+// coerceDecimalHWM normalises a raw value to an exact record.Decimal for decimal
+// watermark columns (NUMERIC/DECIMAL cursors). Non-numeric values yield nil so
+// they are skipped rather than corrupting the tracked maximum.
+func coerceDecimalHWM(v interface{}) interface{} {
+	if d, ok := record.ToDecimal(v); ok {
+		return d
+	}
+	return nil
 }
 
 // --- type coercions ---

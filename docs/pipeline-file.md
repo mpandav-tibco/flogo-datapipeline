@@ -100,7 +100,7 @@ Read only rows newer than the last run (high-water mark).
 |---|---|
 | `mode` | `hwm` \| `none` |
 | `column` | the monotonic column (e.g. `updated_at`) |
-| `valueType` | `datetime` \| `int` \| `string` |
+| `valueType` | `datetime` \| `int` \| `string` \| `decimal` |
 | `initialValue` | starting mark for the first run |
 | `storeType` | `file` \| `redis` \| `postgres` |
 | `storeOptions` | backend connection config |

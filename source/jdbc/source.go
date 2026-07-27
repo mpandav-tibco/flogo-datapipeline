@@ -256,6 +256,15 @@ func hwmPredicate(cfg map[string]interface{}, driver string) string {
 		} else {
 			lit = strings.TrimSpace(val)
 		}
+	case "decimal":
+		if _, ok := record.ParseDecimal(strings.TrimSpace(val)); !ok {
+			// Not a clean decimal — quote defensively so the SQL stays valid.
+			lit = sqlutil.QuoteLiteral(val, driver)
+		} else {
+			// Emit as an unquoted numeric literal so NUMERIC/DECIMAL columns compare
+			// numerically (not lexically) against the watermark.
+			lit = strings.TrimSpace(val)
+		}
 	default: // "datetime", "string", or unset — quote as a string literal.
 		lit = sqlutil.QuoteLiteral(val, driver)
 	}

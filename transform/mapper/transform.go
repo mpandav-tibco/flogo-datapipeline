@@ -351,6 +351,13 @@ var builtins = map[string]func([]interface{}) interface{}{
 		if len(args) < 2 {
 			return nil
 		}
+		if x, y, ok := exactDecimalPair(args[0], args[1]); ok {
+			q, dok := x.DivRound(y, quotientScale(x, y))
+			if !dok {
+				return nil
+			}
+			return q
+		}
 		a, aOk := toFloat64(args[0])
 		b, bOk := toFloat64(args[1])
 		if !aOk || !bOk || b == 0 {
@@ -361,6 +368,9 @@ var builtins = map[string]func([]interface{}) interface{}{
 	"multiply": func(args []interface{}) interface{} {
 		if len(args) < 2 {
 			return nil
+		}
+		if x, y, ok := exactDecimalPair(args[0], args[1]); ok {
+			return x.Mul(y)
 		}
 		a, aOk := toFloat64(args[0])
 		b, bOk := toFloat64(args[1])
@@ -466,6 +476,37 @@ func toFloat64(v interface{}) (float64, bool) {
 		}
 	}
 	return 0, false
+}
+
+// exactDecimalPair returns both operands as exact record.Decimals, but only when
+// at least one operand is genuinely a record.Decimal. This keeps int+int /
+// float+float / string+string math on the existing float64 path (no behaviour
+// change), while making arithmetic exact as soon as a decimal column is involved.
+// The non-decimal partner (e.g. a numeric literal, which the parser delivers as a
+// float64) is converted via its shortest exact decimal string.
+func exactDecimalPair(a, b interface{}) (record.Decimal, record.Decimal, bool) {
+	_, aDec := a.(record.Decimal)
+	_, bDec := b.(record.Decimal)
+	if !aDec && !bDec {
+		return record.Decimal{}, record.Decimal{}, false
+	}
+	da, ok1 := record.ToDecimal(a)
+	db, ok2 := record.ToDecimal(b)
+	return da, db, ok1 && ok2
+}
+
+// quotientScale chooses the fractional-digit count for a decimal division: at
+// least 10 digits (division is generally non-terminating), more if an operand
+// already carries more. Callers can Round() the result down further.
+func quotientScale(a, b record.Decimal) int32 {
+	s := a.Scale()
+	if b.Scale() > s {
+		s = b.Scale()
+	}
+	if s < 10 {
+		s = 10
+	}
+	return s
 }
 
 // --- extended (namespaced) function library ---
@@ -629,11 +670,16 @@ func registerExtendedBuiltins() {
 		return f
 	})
 	reg([]string{"number.round", "math.round"}, func(a []interface{}) interface{} {
+		dec, _ := argInt(a, 1)
+		if len(a) >= 1 {
+			if d, ok := a[0].(record.Decimal); ok {
+				return d.Round(int32(dec))
+			}
+		}
 		f, ok := argFloat(a, 0)
 		if !ok {
 			return nil
 		}
-		dec, _ := argInt(a, 1)
 		p := math.Pow(10, float64(dec))
 		return math.Round(f*p) / p
 	})
@@ -683,6 +729,11 @@ func registerExtendedBuiltins() {
 		return math.Mod(x, y)
 	})
 	reg([]string{"number.add"}, func(a []interface{}) interface{} {
+		if len(a) >= 2 {
+			if x, y, ok := exactDecimalPair(a[0], a[1]); ok {
+				return x.Add(y)
+			}
+		}
 		x, ok1 := argFloat(a, 0)
 		y, ok2 := argFloat(a, 1)
 		if !ok1 || !ok2 {
@@ -691,6 +742,11 @@ func registerExtendedBuiltins() {
 		return x + y
 	})
 	reg([]string{"number.subtract"}, func(a []interface{}) interface{} {
+		if len(a) >= 2 {
+			if x, y, ok := exactDecimalPair(a[0], a[1]); ok {
+				return x.Sub(y)
+			}
+		}
 		x, ok1 := argFloat(a, 0)
 		y, ok2 := argFloat(a, 1)
 		if !ok1 || !ok2 {

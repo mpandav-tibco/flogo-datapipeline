@@ -16,6 +16,7 @@ package parquet
 import (
 	"errors"
 	"fmt"
+	"math/big"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -150,18 +151,67 @@ func (s *parquetSink) WriteBatch(batch *record.RecordBatch) error {
 	return nil
 }
 
+// Parquet DECIMAL columns carry a single precision/scale for the whole column.
+// We use DECIMAL(38,10) backed by a 16-byte FIXED_LEN_BYTE_ARRAY (128-bit, holds
+// 38 digits) — matching the JDBC DDL — so values keep full precision. Each value's
+// scale is normalised to 10 fractional digits; values with more fractional digits
+// are rounded (half-away-from-zero) and values beyond 38 digits overflow.
+const (
+	parquetDecimalPrecision = 38
+	parquetDecimalScale     = 10
+	parquetDecimalBytes     = 16
+)
+
 // parquetNodeFor maps a record column type to the appropriate parquet leaf node.
 func parquetNodeFor(t record.ColumnType) parquetgo.Node {
 	switch t {
 	case record.TypeInt:
 		return parquetgo.Int(64)
-	case record.TypeFloat, record.TypeDecimal:
+	case record.TypeDecimal:
+		return parquetgo.Decimal(parquetDecimalScale, parquetDecimalPrecision, parquetgo.FixedLenByteArrayType(parquetDecimalBytes))
+	case record.TypeFloat:
 		return parquetgo.Leaf(parquetgo.DoubleType)
 	case record.TypeBool:
 		return parquetgo.Leaf(parquetgo.BooleanType)
 	default: // string, date, any, and unknowns
 		return parquetgo.String()
 	}
+}
+
+// decimalToParquetBytes encodes an exact decimal as its DECIMAL(38,10) unscaled
+// coefficient in 16-byte big-endian two's-complement form (the physical layout of
+// a FIXED_LEN_BYTE_ARRAY parquet decimal). It returns nil when the value does not
+// fit a signed 128-bit coefficient (beyond DECIMAL(38,10) range) so the caller
+// writes null rather than a silently corrupted (sign-flipped or truncated) value.
+func decimalToParquetBytes(d record.Decimal) []byte {
+	coef := d.Coef(parquetDecimalScale)
+	if coef.BitLen() > parquetDecimalBytes*8-1 {
+		return nil
+	}
+	return bigIntToTwosComplement(coef, parquetDecimalBytes)
+}
+
+// bigIntToTwosComplement renders bi as a fixed-size big-endian two's-complement
+// byte slice. Values that do not fit are truncated to the low `size` bytes.
+func bigIntToTwosComplement(bi *big.Int, size int) []byte {
+	out := make([]byte, size)
+	if bi.Sign() >= 0 {
+		b := bi.Bytes()
+		if len(b) > size {
+			b = b[len(b)-size:]
+		}
+		copy(out[size-len(b):], b)
+		return out
+	}
+	// Negative: 2^(8·size) + bi yields the two's-complement magnitude.
+	mod := new(big.Int).Lsh(big.NewInt(1), uint(8*size))
+	tc := new(big.Int).Add(mod, bi)
+	b := tc.Bytes()
+	if len(b) > size {
+		b = b[len(b)-size:]
+	}
+	copy(out[size-len(b):], b)
+	return out
 }
 
 // coerceForParquet converts a value to the Go type the parquet schema node
@@ -191,7 +241,16 @@ func coerceForParquet(t record.ColumnType, v interface{}) interface{} {
 			}
 			return int64(0)
 		}
-	case record.TypeFloat, record.TypeDecimal:
+	case record.TypeDecimal:
+		d, ok := record.ToDecimal(v)
+		if !ok {
+			return nil
+		}
+		if b := decimalToParquetBytes(d); b != nil {
+			return b
+		}
+		return nil // out-of-range → null (never a corrupt value)
+	case record.TypeFloat:
 		switch n := v.(type) {
 		case float64:
 			return n

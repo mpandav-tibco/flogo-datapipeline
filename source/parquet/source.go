@@ -22,6 +22,7 @@ package parquet
 import (
 	"fmt"
 	"io"
+	"math/big"
 	"os"
 	"sync"
 
@@ -38,7 +39,8 @@ type parquetSource struct {
 	file       *os.File
 	pqFile     *parquetgo.File
 	schema     []record.Column
-	colIndices []int // mapping from output column position to parquet leaf column index
+	colIndices []int   // mapping from output column position to parquet leaf column index
+	decScales  []int32 // per output column: DECIMAL scale, or -1 when not a decimal
 	rowGroups  []parquetgo.RowGroup
 	rgIdx      int // current row group index (single-instance mode)
 	// seqReader is the persistent reader for the current row group in sequential
@@ -93,7 +95,7 @@ func newParquetSource(cfg map[string]interface{}) (source.Source, error) {
 		}
 	}
 
-	schema, colIndices, err := resolveSchema(pf, wantCols)
+	schema, colIndices, decScales, err := resolveSchema(pf, wantCols)
 	if err != nil {
 		f.Close()
 		return nil, err
@@ -114,6 +116,7 @@ func newParquetSource(cfg map[string]interface{}) (source.Source, error) {
 		pqFile:      pf,
 		schema:      schema,
 		colIndices:  colIndices,
+		decScales:   decScales,
 		rowGroups:   rowGroups,
 		parallelism: parallelism,
 	}, nil
@@ -200,7 +203,7 @@ func (s *parquetSource) readSequential(size int) (*record.RecordBatch, error) {
 		// Drain any buffered tail rows saved by a prior partial-skip before
 		// opening the next row group.
 		for s.rowBufIdx < len(s.rowBuf) && len(batch.Rows) < size {
-			batch.Rows = append(batch.Rows, extractRow(s.rowBuf[s.rowBufIdx], s.colIndices, s.schema))
+			batch.Rows = append(batch.Rows, s.extractRow(s.rowBuf[s.rowBufIdx]))
 			s.rowBufIdx++
 			s.rowsRead++
 		}
@@ -220,7 +223,7 @@ func (s *parquetSource) readSequential(size int) (*record.RecordBatch, error) {
 		buf := make([]parquetgo.Row, size-len(batch.Rows))
 		n, err := s.seqReader.ReadRows(buf)
 		for i := 0; i < n; i++ {
-			batch.Rows = append(batch.Rows, extractRow(buf[i], s.colIndices, s.schema))
+			batch.Rows = append(batch.Rows, s.extractRow(buf[i]))
 		}
 		s.rowsRead += int64(n)
 
@@ -290,7 +293,7 @@ func (s *parquetSource) readParallel(size int) (*record.RecordBatch, error) {
 				for {
 					n, err := reader.ReadRows(buf)
 					for r := 0; r < n; r++ {
-						rows = append(rows, extractRow(buf[r], s.colIndices, s.schema))
+						rows = append(rows, s.extractRow(buf[r]))
 					}
 					if err == io.EOF || (err == nil && n == 0) {
 						break
@@ -369,7 +372,7 @@ func (s *parquetSource) Close() error {
 // output column position → parquet leaf column index.
 // Bug 2 fix: use pfSchema.Lookup() to get the correct leaf column index
 // instead of the Fields() positional index, which diverges for nested schemas.
-func resolveSchema(pf *parquetgo.File, wantCols []string) ([]record.Column, []int, error) {
+func resolveSchema(pf *parquetgo.File, wantCols []string) ([]record.Column, []int, []int32, error) {
 	pfSchema := pf.Schema()
 	allFields := pfSchema.Fields()
 
@@ -377,15 +380,17 @@ func resolveSchema(pf *parquetgo.File, wantCols []string) ([]record.Column, []in
 		// Use all columns — look up each field by name to get its leaf column index.
 		cols := make([]record.Column, len(allFields))
 		indices := make([]int, len(allFields))
+		decScales := make([]int32, len(allFields))
 		for i, f := range allFields {
 			lc, ok := pfSchema.Lookup(f.Name())
 			if !ok {
-				return nil, nil, fmt.Errorf("parquet source: schema field %q not found via Lookup", f.Name())
+				return nil, nil, nil, fmt.Errorf("parquet source: schema field %q not found via Lookup", f.Name())
 			}
 			cols[i] = record.Column{Name: f.Name(), Type: parquetTypeToRecord(f)}
 			indices[i] = lc.ColumnIndex
+			decScales[i] = parquetDecimalScaleOf(f)
 		}
-		return cols, indices, nil
+		return cols, indices, decScales, nil
 	}
 
 	// Build a name → Field map for type resolution.
@@ -396,19 +401,21 @@ func resolveSchema(pf *parquetgo.File, wantCols []string) ([]record.Column, []in
 
 	cols := make([]record.Column, 0, len(wantCols))
 	indices := make([]int, 0, len(wantCols))
+	decScales := make([]int32, 0, len(wantCols))
 	for _, name := range wantCols {
 		lc, ok := pfSchema.Lookup(name)
 		if !ok {
-			return nil, nil, fmt.Errorf("parquet source: column %q not found in schema", name)
+			return nil, nil, nil, fmt.Errorf("parquet source: column %q not found in schema", name)
 		}
 		f, fok := fieldByName[name]
 		if !fok {
-			return nil, nil, fmt.Errorf("parquet source: column %q not found in fields", name)
+			return nil, nil, nil, fmt.Errorf("parquet source: column %q not found in fields", name)
 		}
 		cols = append(cols, record.Column{Name: name, Type: parquetTypeToRecord(f)})
 		indices = append(indices, lc.ColumnIndex)
+		decScales = append(decScales, parquetDecimalScaleOf(f))
 	}
-	return cols, indices, nil
+	return cols, indices, decScales, nil
 }
 
 // parquetTypeToRecord maps a parquet field's physical Kind to a record.ColumnType.
@@ -416,6 +423,9 @@ func resolveSchema(pf *parquetgo.File, wantCols []string) ([]record.Column, []in
 // f.Type().String() (logical type description such as "INT(64,true)" or
 // "TIMESTAMP(MICROS,true)") which does not match the bare type name strings.
 func parquetTypeToRecord(f parquetgo.Field) record.ColumnType {
+	if lt := f.Type().LogicalType(); lt != nil && lt.Decimal != nil {
+		return record.TypeDecimal
+	}
 	switch f.Type().Kind() {
 	case parquetgo.Int32, parquetgo.Int64:
 		return record.TypeInt
@@ -434,13 +444,18 @@ func parquetTypeToRecord(f parquetgo.Field) record.ColumnType {
 // extractRow converts a parquet Row (leaf-column-ordered values) into an
 // interface{} slice using the declared leaf column index mapping.
 // colIndices[i] is the leaf column index obtained from pfSchema.Lookup(),
-// which correctly indexes into the flat []Value that ReadRows returns.
-func extractRow(row parquetgo.Row, colIndices []int, schema []record.Column) []interface{} {
-	out := make([]interface{}, len(colIndices))
-	for i, colIdx := range colIndices {
+// which correctly indexes into the flat []Value that ReadRows returns. Decimal
+// columns (decScales[i] >= 0) decode into an exact record.Decimal.
+func (s *parquetSource) extractRow(row parquetgo.Row) []interface{} {
+	out := make([]interface{}, len(s.colIndices))
+	for i, colIdx := range s.colIndices {
 		if colIdx < len(row) {
 			v := row[colIdx]
-			out[i] = parquetValueToGo(v)
+			if i < len(s.decScales) && s.decScales[i] >= 0 {
+				out[i] = parquetDecimalToGo(v, s.decScales[i])
+			} else {
+				out[i] = parquetValueToGo(v)
+			}
 		}
 	}
 	return out
@@ -475,4 +490,42 @@ func parquetValueToGo(v parquetgo.Value) interface{} {
 	default:
 		return string(v.ByteArray())
 	}
+}
+
+// parquetDecimalScaleOf returns the DECIMAL logical-type scale of a field, or -1
+// when the field is not a decimal.
+func parquetDecimalScaleOf(f parquetgo.Field) int32 {
+	if lt := f.Type().LogicalType(); lt != nil && lt.Decimal != nil {
+		return lt.Decimal.Scale
+	}
+	return -1
+}
+
+// parquetDecimalToGo decodes a parquet DECIMAL value (stored as int32/int64 or a
+// big-endian two's-complement byte array) into an exact record.Decimal at the
+// column's scale.
+func parquetDecimalToGo(v parquetgo.Value, scale int32) interface{} {
+	if v.IsNull() {
+		return nil
+	}
+	switch v.Kind() {
+	case parquetgo.Int32:
+		return record.NewDecimal(int64(v.Int32()), scale)
+	case parquetgo.Int64:
+		return record.NewDecimal(v.Int64(), scale)
+	case parquetgo.ByteArray, parquetgo.FixedLenByteArray:
+		return record.NewDecimalFromBig(twosComplementToBigInt(v.ByteArray()), scale)
+	default:
+		return parquetValueToGo(v)
+	}
+}
+
+// twosComplementToBigInt decodes a big-endian two's-complement byte slice (the
+// physical layout of a fixed-len parquet decimal) into a signed big.Int.
+func twosComplementToBigInt(b []byte) *big.Int {
+	bi := new(big.Int).SetBytes(b)
+	if len(b) > 0 && b[0]&0x80 != 0 {
+		bi.Sub(bi, new(big.Int).Lsh(big.NewInt(1), uint(8*len(b))))
+	}
+	return bi
 }

@@ -216,4 +216,133 @@ func (d Decimal) Value() (driver.Value, error) { return d.String(), nil }
 // (JDBC NUMERIC / a typed decimal column) rather than round-tripping via JSON.
 func (d Decimal) MarshalJSON() ([]byte, error) { return []byte(d.String()), nil }
 
+// Scale returns the number of fractional digits the decimal carries.
+func (d Decimal) Scale() int32 { return d.scale }
+
+// NewDecimalFromBig builds the exact value coef × 10^-scale from a big.Int
+// coefficient (copied so the caller may reuse its own). Useful for decoders that
+// assemble an unscaled integer wider than int64 (e.g. a 128-bit Parquet DECIMAL).
+func NewDecimalFromBig(coef *big.Int, scale int32) Decimal {
+	if coef == nil {
+		return Decimal{scale: scale}
+	}
+	return Decimal{coef: new(big.Int).Set(coef), scale: scale}
+}
+
+// bigCoef returns the coefficient as a non-nil big.Int (a fresh zero when nil).
+func (d Decimal) bigCoef() *big.Int {
+	if d.coef == nil {
+		return new(big.Int)
+	}
+	return d.coef
+}
+
+// alignedCoefs scales the two coefficients up to a common scale (the larger of
+// the two) and returns them together with that scale.
+func alignedCoefs(a, b Decimal) (*big.Int, *big.Int, int32) {
+	ac, bc := a.bigCoef(), b.bigCoef()
+	switch {
+	case a.scale == b.scale:
+		return ac, bc, a.scale
+	case a.scale < b.scale:
+		return new(big.Int).Mul(ac, pow10(b.scale-a.scale)), bc, b.scale
+	default:
+		return ac, new(big.Int).Mul(bc, pow10(a.scale-b.scale)), a.scale
+	}
+}
+
+// Add returns the exact sum d + o (no rounding); the result scale is the larger
+// of the two operand scales.
+func (d Decimal) Add(o Decimal) Decimal {
+	ac, bc, s := alignedCoefs(d, o)
+	return Decimal{coef: new(big.Int).Add(ac, bc), scale: s}
+}
+
+// Sub returns the exact difference d - o (no rounding).
+func (d Decimal) Sub(o Decimal) Decimal {
+	ac, bc, s := alignedCoefs(d, o)
+	return Decimal{coef: new(big.Int).Sub(ac, bc), scale: s}
+}
+
+// Mul returns the exact product d × o (no rounding); the result scale is the sum
+// of the operand scales.
+func (d Decimal) Mul(o Decimal) Decimal {
+	return Decimal{coef: new(big.Int).Mul(d.bigCoef(), o.bigCoef()), scale: d.scale + o.scale}
+}
+
+// Neg returns -d.
+func (d Decimal) Neg() Decimal {
+	return Decimal{coef: new(big.Int).Neg(d.bigCoef()), scale: d.scale}
+}
+
+// Abs returns |d|.
+func (d Decimal) Abs() Decimal {
+	return Decimal{coef: new(big.Int).Abs(d.bigCoef()), scale: d.scale}
+}
+
+// Round returns d rounded to `places` fractional digits using round-half-away-
+// from-zero. Rounding to a scale >= the current scale leaves the value unchanged.
+func (d Decimal) Round(places int32) Decimal {
+	if places < 0 {
+		places = 0
+	}
+	if places >= d.scale {
+		return d
+	}
+	return Decimal{coef: roundedDiv(d.bigCoef(), pow10(d.scale-places)), scale: places}
+}
+
+// DivRound returns d / o rounded to `scale` fractional digits (round-half-away-
+// from-zero). ok is false when o is zero. Unlike Add/Sub/Mul it is not exact — a
+// quotient such as 1/3 has no finite decimal — so the caller chooses the scale.
+func (d Decimal) DivRound(o Decimal, scale int32) (Decimal, bool) {
+	if o.Sign() == 0 {
+		return Decimal{}, false
+	}
+	if scale < 0 {
+		scale = 0
+	}
+	// value = (d.coef / 10^d.scale) / (o.coef / 10^o.scale)
+	//       = (d.coef × 10^(o.scale+scale)) / (o.coef × 10^d.scale), then round.
+	num := new(big.Int).Mul(d.bigCoef(), pow10(o.scale+scale))
+	den := new(big.Int).Mul(o.bigCoef(), pow10(d.scale))
+	return Decimal{coef: roundedDiv(num, den), scale: scale}, true
+}
+
+// roundedDiv returns num/den rounded half-away-from-zero. den must be non-zero.
+func roundedDiv(num, den *big.Int) *big.Int {
+	q := new(big.Int)
+	r := new(big.Int)
+	q.QuoRem(num, den, r) // q truncates toward zero; r carries the sign of num
+	if r.Sign() == 0 {
+		return q
+	}
+	// Round away from zero when 2·|r| >= |den|.
+	r2 := new(big.Int).Abs(r)
+	r2.Lsh(r2, 1)
+	if r2.Cmp(new(big.Int).Abs(den)) >= 0 {
+		if (num.Sign() < 0) == (den.Sign() < 0) {
+			q.Add(q, big.NewInt(1))
+		} else {
+			q.Sub(q, big.NewInt(1))
+		}
+	}
+	return q
+}
+
+// Coef returns the unscaled coefficient of the value expressed at the given
+// scale (fractional-digit count): coef = round(value × 10^scale). Reducing the
+// scale rounds half-away-from-zero; increasing it pads with trailing zeros. Used
+// by fixed-scale encoders such as Parquet DECIMAL.
+func (d Decimal) Coef(scale int32) *big.Int {
+	switch {
+	case scale == d.scale:
+		return new(big.Int).Set(d.bigCoef())
+	case scale > d.scale:
+		return new(big.Int).Mul(d.bigCoef(), pow10(scale-d.scale))
+	default:
+		return roundedDiv(d.bigCoef(), pow10(d.scale-scale))
+	}
+}
+
 var _ driver.Valuer = Decimal{}

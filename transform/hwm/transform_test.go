@@ -58,6 +58,22 @@ func TestHWM_Int(t *testing.T) {
 	}
 }
 
+func TestHWM_Decimal(t *testing.T) {
+	h := build(t, map[string]interface{}{"column": "amount", "valueType": "decimal"})
+	// Numeric ordering, not lexical: 100.50 > 99.99 even though it sorts earlier as
+	// a string. Scale is preserved and equal values (100.50 == 100.5) don't replace.
+	if _, err := h.Apply(batch("amount", record.TypeDecimal, "99.99", "100.50", "9.9", nil, "100.5")); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	got, ok := h.MaxSeen().(record.Decimal)
+	if !ok {
+		t.Fatalf("MaxSeen = %v (%T), want record.Decimal", h.MaxSeen(), h.MaxSeen())
+	}
+	if got.String() != "100.50" {
+		t.Errorf("MaxSeen = %q, want 100.50", got.String())
+	}
+}
+
 func TestHWM_Datetime(t *testing.T) {
 	h := build(t, map[string]interface{}{"column": "ts", "valueType": "datetime"})
 	early := "2024-01-01T00:00:00Z"

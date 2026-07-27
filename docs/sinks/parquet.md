@@ -14,7 +14,10 @@ Writes Apache Parquet with typed columns and row-group-aligned flushing. Impleme
 ## Behavior
 
 - The schema is inferred from the first batch into typed Parquet nodes (Int64, Double,
-  Boolean, String) — values are **not** stringified.
+  `DECIMAL(38,10)` for decimal columns, Boolean, String) — values are **not** stringified.
+  Decimal columns use the native Parquet DECIMAL logical type (a 16-byte fixed-length
+  byte array) so NUMERIC values keep full precision; each value is normalised to the
+  column scale (10 fractional digits).
 - Each `Flush` closes the current row group, so the file stays valid and queryable even if
   the run is interrupted.
 

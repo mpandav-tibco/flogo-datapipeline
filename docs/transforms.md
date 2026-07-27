@@ -79,7 +79,7 @@ default / `additive` / `strict` / `drop`) when later batches differ, with `onDri
 ## High-Water Mark — `hwm`
 
 A pass-through observer that tracks the maximum value of `column` (`valueType`
-`datetime`/`int`/`string`) and exposes it to the [incremental](reliability.md)
+`datetime`/`int`/`string`/`decimal`) and exposes it to the [incremental](reliability.md)
 watermark store. Does not modify rows.
 
 ---
