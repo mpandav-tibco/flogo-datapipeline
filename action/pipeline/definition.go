@@ -38,7 +38,7 @@ type ColumnDef struct {
 type SourceDef struct {
 	Type     string                 `json:"type"`               // csv | parquet | fixedwidth | xml | jsonlines | jdbc
 	Path     string                 `json:"path,omitempty"`     // file path or glob pattern
-	Encoding string                 `json:"encoding,omitempty"` // utf-8 | ebcdic-037 | latin-1
+	Encoding string                 `json:"encoding,omitempty"` // utf-8 | ebcdic-037 | ebcdic-1047 | ebcdic-1140 | latin-1 | latin-9 | windows-1252
 	Columns  []ColumnDef            `json:"columns,omitempty"`  // explicit schema (optional for self-describing formats)
 	Options  map[string]interface{} `json:"options,omitempty"`  // format-specific options
 
