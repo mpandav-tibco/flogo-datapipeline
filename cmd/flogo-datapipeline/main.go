@@ -107,6 +107,8 @@ import (
 	// Additional transforms (gap-08)
 	_ "github.com/mpandav-tibco/flogo-datapipeline/transform/cast"        // Column type casting
 	_ "github.com/mpandav-tibco/flogo-datapipeline/transform/dq"          // Data-quality expectations with pass-rate thresholds
+	_ "github.com/mpandav-tibco/flogo-datapipeline/transform/explode"     // Expand an array column into one row per element
+	_ "github.com/mpandav-tibco/flogo-datapipeline/transform/flatten"     // Flatten nested-object columns into dotted columns
 	_ "github.com/mpandav-tibco/flogo-datapipeline/transform/hwm"         // High-water-mark observer (pure passthrough)
 	_ "github.com/mpandav-tibco/flogo-datapipeline/transform/join"        // Keyed join against a source-loaded reference table (stream-table)
 	_ "github.com/mpandav-tibco/flogo-datapipeline/transform/lookup"      // Enrichment via LRU-cached flow/HTTP call
