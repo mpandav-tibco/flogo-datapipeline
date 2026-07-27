@@ -7,7 +7,7 @@
 > metrics, scaling, pipeline definition). Everything is code-derived from the
 > `init()`/`Register(...)` calls and config structs.
 
-**At a glance:** 10 source families · 9 sink families (incl. DLQ) · 8 transforms ·
+**At a glance:** 10 source families · 9 sink families (incl. DLQ) · 14 transforms ·
 2 checkpoint backends · 3 watermark backends · 2 metrics backends · 3 scaling modes.
 
 ## Sources → [index](sources.md)
@@ -41,6 +41,8 @@
 | [`explode`](transforms/explode.md) | expand an array column into one row per element |
 | [`flatten`](transforms/flatten.md) | flatten nested-object columns into dotted columns |
 | [`router`, `split`](transforms/router.md) | N-way route rows to different sinks by predicate (conditional split) |
+| [`join`](transforms/join.md) | keyed stream-table join against a source-loaded reference dataset |
+| [`window`](transforms/window.md) | event-time windowed aggregation (tumbling / sliding / session / global) |
 
 Plus the shared [expression-language reference](transforms/expression-language.md).
 
@@ -238,10 +240,13 @@ result, err := sdk.NewPipeline("daily-load").
     Run(ctx)
 ```
 
-- **Sources:** `FromCSV`, `FromJDBC`, `FromKafka`, `FromParquet`, `FromXML`,
-  `FromJSONLines`, `FromFixedWidth`, `FromObjectStore`.
-- **Transforms:** `Filter`, `Map`, `Lookup`/`Enrich`, `Validate`, `DQ`,
-  `SchemaDrift`, `Parse`.
-- **Sinks:** `ToJDBC`, `ToKafka`, `ToParquet`, `ToCSV`, `ToJSONLines`,
-  `ToObjectStore`, `ToTemplate`, `ToNull`.
+- **Sources:** `FromCSV`, `FromJDBC`, `FromKafka`.
+- **Transforms:** `Filter`, `Map`, `Validate`, `WithHWM` (incremental), `WithDQ`.
+- **Sinks:** `ToJDBC`, `ToKafka`, `ToS3`.
+- **Also:** `WithDLQ`, `WithMetrics`.
 - **Terminal:** `Build()`, `MarshalJSON()`, `Run(ctx)`.
+
+The fluent builder covers the most common sources, transforms, and sinks; any
+pipeline (including transforms without a dedicated builder helper) can also be
+authored as a `pipeline.Definition` or a `.datapipeline` JSON file and executed by
+the same engine.

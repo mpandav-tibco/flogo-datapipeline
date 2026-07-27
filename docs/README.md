@@ -20,7 +20,7 @@ dead-letter branch) as one self-contained binary — no JVM, no cluster, no SaaS
 
 - [Sources](sources.md) — 10 source families (CSV, Parquet, JDBC, Kafka, XML, object store, …)
 - [Sinks](sinks.md) — 8 sink families plus the Dead-Letter Queue
-- [Transforms](transforms.md) — filter, map, validate, lookup, parse, DQ, schema drift, HWM — and the expression language
+- [Transforms](transforms.md) — filter, map, validate, lookup, parse, DQ, schema drift, HWM, cast, explode, flatten, router/split, join, and event-time windowing — plus the expression language
 - [Connections](connections.md) — reusable `*.fgconn` credentials with secrets in Secret Storage
 - [Go SDK](sdk.md) — pipeline-as-code with the fluent builder
 
@@ -33,7 +33,7 @@ dead-letter branch) as one self-contained binary — no JVM, no cluster, no SaaS
 ## Operate
 
 - [REST API](rest-api.md) — `/v1` management and introspection endpoints
-- [Observability](observability.md) — Prometheus and OpenTelemetry metrics
+- [Observability](observability.md) — Prometheus / OpenTelemetry metrics, the governance audit log, and OpenLineage lineage
 - [Security](security.md) — secrets, TLS, SSRF protection, and no-secrets-on-disk
 - [Deployment](deployment.md) — lean per-app binaries (`dp-build`), Docker, and Kubernetes
 - [Studio (VS Code)](studio.md) — the visual canvas, run/preview, and build & deploy
