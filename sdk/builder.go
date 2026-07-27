@@ -500,7 +500,7 @@ func (b *PipelineBuilder) WithDQ(expectations []DQExpectation, opts ...DQOption)
 }
 
 // WithHWM enables high-water-mark incremental loading.
-// column is the watermark column name; valueType is one of "datetime", "int", "string".
+// column is the watermark column name; valueType is one of "datetime", "int", "string", "decimal".
 // This method sets both the Incremental config (mode=hwm) and appends an hwm
 // transform stage that tracks the in-batch maximum.
 func (b *PipelineBuilder) WithHWM(column, valueType string) *PipelineBuilder {
@@ -512,10 +512,10 @@ func (b *PipelineBuilder) WithHWM(column, valueType string) *PipelineBuilder {
 		valueType = "string"
 	}
 	switch valueType {
-	case "datetime", "int", "string":
+	case "datetime", "int", "string", "decimal":
 		// valid
 	default:
-		b.addErr("WithHWM: valueType must be 'datetime', 'int', or 'string', got %q", valueType)
+		b.addErr("WithHWM: valueType must be 'datetime', 'int', 'string', or 'decimal', got %q", valueType)
 		return b
 	}
 
@@ -583,8 +583,8 @@ func (b *PipelineBuilder) WithDLQ(sinkType string, opts map[string]interface{}) 
 // (e.g. {"listenAddr": ":9090"} for prometheus, {"endpoint": "otel-collector:4317"} for otel).
 func (b *PipelineBuilder) WithMetrics(backend string, opts map[string]interface{}) *PipelineBuilder {
 	b.def.Observability = pipeline.ObservabilityDef{
-		Metrics:  backend,
-		Options:  opts,
+		Metrics:      backend,
+		Options:      opts,
 		StallSeconds: 30,
 	}
 	return b
@@ -596,7 +596,7 @@ func (b *PipelineBuilder) WithMetrics(backend string, opts map[string]interface{
 
 // flogoResource is the wire shape of a Flogo resource file.
 type flogoResource struct {
-	ID   string              `json:"id"`
+	ID   string               `json:"id"`
 	Data *pipeline.Definition `json:"data"`
 }
 

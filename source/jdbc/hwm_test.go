@@ -29,6 +29,16 @@ func TestHWMPredicate(t *testing.T) {
 			`"id" > 'abc'`,
 		},
 		{
+			"decimal",
+			map[string]interface{}{"hwmColumn": "amount", "hwmValue": "123.40", "hwmValueType": "decimal"},
+			`"amount" > 123.40`,
+		},
+		{
+			"decimal-invalid-falls-back-to-quoted",
+			map[string]interface{}{"hwmColumn": "amount", "hwmValue": "1.2.3", "hwmValueType": "decimal"},
+			`"amount" > '1.2.3'`,
+		},
+		{
 			"string-escapes-quote",
 			map[string]interface{}{"hwmColumn": "code", "hwmValue": "O'Brien", "hwmValueType": "string"},
 			`"code" > 'O''Brien'`,

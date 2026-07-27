@@ -456,10 +456,10 @@ func (d *Definition) validate() error {
 			return fmt.Errorf("pipeline definition: incremental.column is required when mode is 'hwm'")
 		}
 		switch d.Incremental.ValueType {
-		case "datetime", "int", "string", "":
+		case "datetime", "int", "string", "decimal", "":
 			// valid
 		default:
-			return fmt.Errorf("pipeline definition: incremental.valueType must be 'datetime', 'int', or 'string'")
+			return fmt.Errorf("pipeline definition: incremental.valueType must be 'datetime', 'int', 'string', or 'decimal'")
 		}
 	}
 	if d.DLQ.Type != "" {
