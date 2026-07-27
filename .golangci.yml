@@ -1,0 +1,42 @@
+# golangci-lint configuration (v2). Curated so `golangci-lint run` surfaces real
+# problems rather than idiomatic-Go noise or third-party code.
+version: "2"
+
+linters:
+  default: standard # errcheck, govet, ineffassign, staticcheck, unused
+  settings:
+    staticcheck:
+      # Mirror staticcheck's own default check set — it disables these pedantic
+      # ST/QF checks by default, so this keeps golangci-lint aligned with a plain
+      # `staticcheck ./...` run instead of enforcing opinionated style.
+      checks:
+        - all
+        - -ST1000 # package comment
+        - -ST1003 # identifier initialisms (Id/Ttl vs ID/TTL) — many mirror config keys
+        - -ST1016 # consistent receiver names
+        - -ST1020 # exported-function comment form
+        - -ST1021 # exported-type comment form
+        - -ST1022 # exported-var comment form
+        - -QF1008 # "could remove embedded field from selector" — subjective style
+        - -QF1012 # "use Fprintf instead of WriteString(Sprintf)" — micro-optimisation
+    errcheck:
+      exclude-functions:
+        - (*database/sql.Tx).Rollback # rollback-after-commit is a deferred no-op
+  exclusions:
+    generated: lax
+    presets:
+      - std-error-handling # unchecked errors on Close/Flush/fmt.Print* etc.
+      - common-false-positives
+    paths:
+      - node_modules # vendored third-party (e.g. studio/vscode/node_modules)
+      - examples # demo/benchmark harness scripts, not shipped code
+    rules:
+      # Deprecations intentionally deferred to dedicated, integration-tested
+      # migrations (go-redis ZRangeByScore → ZRangeArgs; parquet-go Reader →
+      # GenericReader). The deprecated APIs still function.
+      - path: (source/parquet/source\.go|partition/workqueue/redis\.go)
+        text: SA1019
+      # Tests may ignore setup/teardown errors.
+      - path: _test\.go
+        linters:
+          - errcheck

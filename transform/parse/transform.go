@@ -262,12 +262,10 @@ func (p *parseTransform) extractedNames(in *record.RecordBatch) []string {
 			for _, f := range p.jsonFields {
 				names = append(names, p.jsonPrefix+f)
 			}
-		} else {
-			// All keys — but we only know them at runtime. For a stable schema,
-			// json mode without an explicit 'fields' list is discouraged; we fall
-			// back to whatever keys the FIRST parsed row produced (captured in
-			// buildOutCols). Handled there.
 		}
+		// else: with no explicit 'fields' list, json-mode keys are only known at
+		// runtime — the schema falls back to the FIRST parsed row's keys, handled
+		// in buildOutCols.
 	}
 	if p.onError == "route" {
 		names = append(names, "_parse_error")
