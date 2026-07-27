@@ -3,6 +3,8 @@ package windowing
 import (
 	"fmt"
 	"strconv"
+
+	"github.com/mpandav-tibco/flogo-datapipeline/record"
 )
 
 // Accumulator incrementally aggregates values within a single window.
@@ -77,12 +79,36 @@ func toFloat(v interface{}) (float64, bool) {
 	return 0, false
 }
 
+// decAvgScale picks the fractional-digit count for a decimal average: at least
+// 10 (division rarely terminates), more if the running sum already carries more.
+func decAvgScale(sum record.Decimal) int32 {
+	if s := sum.Scale(); s > 10 {
+		return s
+	}
+	return 10
+}
+
 type sumAcc struct {
-	sum  float64
-	seen bool
+	sum   float64
+	dsum  record.Decimal
+	isDec bool
+	seen  bool
 }
 
 func (a *sumAcc) Add(v interface{}) {
+	if a.isDec {
+		if d, ok := record.ToDecimal(v); ok {
+			a.dsum = a.dsum.Add(d)
+			a.seen = true
+		}
+		return
+	}
+	if !a.seen {
+		if d, ok := v.(record.Decimal); ok {
+			a.dsum, a.isDec, a.seen = d, true, true
+			return
+		}
+	}
 	if f, ok := toFloat(v); ok {
 		a.sum += f
 		a.seen = true
@@ -92,15 +118,33 @@ func (a *sumAcc) Result() interface{} {
 	if !a.seen {
 		return nil
 	}
+	if a.isDec {
+		return a.dsum
+	}
 	return a.sum
 }
 
 type avgAcc struct {
-	sum float64
-	n   int64
+	sum   float64
+	dsum  record.Decimal
+	isDec bool
+	n     int64
 }
 
 func (a *avgAcc) Add(v interface{}) {
+	if a.isDec {
+		if d, ok := record.ToDecimal(v); ok {
+			a.dsum = a.dsum.Add(d)
+			a.n++
+		}
+		return
+	}
+	if a.n == 0 {
+		if d, ok := v.(record.Decimal); ok {
+			a.dsum, a.isDec, a.n = d, true, 1
+			return
+		}
+	}
 	if f, ok := toFloat(v); ok {
 		a.sum += f
 		a.n++
@@ -110,15 +154,33 @@ func (a *avgAcc) Result() interface{} {
 	if a.n == 0 {
 		return nil
 	}
+	if a.isDec {
+		q, _ := a.dsum.DivRound(record.NewDecimal(a.n, 0), decAvgScale(a.dsum))
+		return q
+	}
 	return a.sum / float64(a.n)
 }
 
 type minAcc struct {
-	min  float64
-	seen bool
+	min   float64
+	dmin  record.Decimal
+	isDec bool
+	seen  bool
 }
 
 func (a *minAcc) Add(v interface{}) {
+	if a.isDec {
+		if d, ok := record.ToDecimal(v); ok && a.dmin.Cmp(d) > 0 {
+			a.dmin = d
+		}
+		return
+	}
+	if !a.seen {
+		if d, ok := v.(record.Decimal); ok {
+			a.dmin, a.isDec, a.seen = d, true, true
+			return
+		}
+	}
 	if f, ok := toFloat(v); ok {
 		if !a.seen || f < a.min {
 			a.min = f
@@ -130,15 +192,32 @@ func (a *minAcc) Result() interface{} {
 	if !a.seen {
 		return nil
 	}
+	if a.isDec {
+		return a.dmin
+	}
 	return a.min
 }
 
 type maxAcc struct {
-	max  float64
-	seen bool
+	max   float64
+	dmax  record.Decimal
+	isDec bool
+	seen  bool
 }
 
 func (a *maxAcc) Add(v interface{}) {
+	if a.isDec {
+		if d, ok := record.ToDecimal(v); ok && a.dmax.Cmp(d) < 0 {
+			a.dmax = d
+		}
+		return
+	}
+	if !a.seen {
+		if d, ok := v.(record.Decimal); ok {
+			a.dmax, a.isDec, a.seen = d, true, true
+			return
+		}
+	}
 	if f, ok := toFloat(v); ok {
 		if !a.seen || f > a.max {
 			a.max = f
@@ -149,6 +228,9 @@ func (a *maxAcc) Add(v interface{}) {
 func (a *maxAcc) Result() interface{} {
 	if !a.seen {
 		return nil
+	}
+	if a.isDec {
+		return a.dmax
 	}
 	return a.max
 }

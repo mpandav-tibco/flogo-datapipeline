@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+
+	"github.com/mpandav-tibco/flogo-datapipeline/record"
 )
 
 // accState is the serialisable union of all accumulator internal fields. Each
@@ -17,16 +19,74 @@ type accState struct {
 	Seen bool        `json:"e,omitempty"`
 	Set  bool        `json:"t,omitempty"`
 	Val  interface{} `json:"v,omitempty"`
+	// Decimal-mode fields hold the exact value as a string so precision survives
+	// the JSON round-trip (a JSON number would re-round through float64).
+	IsDec bool   `json:"d,omitempty"`
+	DSum  string `json:"ds,omitempty"`
+	DMin  string `json:"dmn,omitempty"`
+	DMax  string `json:"dmx,omitempty"`
 }
 
-func (a *sumAcc) snap() accState    { return accState{Sum: a.sum, Seen: a.seen} }
-func (a *sumAcc) load(s accState)   { a.sum, a.seen = s.Sum, s.Seen }
-func (a *avgAcc) snap() accState    { return accState{Sum: a.sum, N: a.n} }
-func (a *avgAcc) load(s accState)   { a.sum, a.n = s.Sum, s.N }
-func (a *minAcc) snap() accState    { return accState{Min: a.min, Seen: a.seen} }
-func (a *minAcc) load(s accState)   { a.min, a.seen = s.Min, s.Seen }
-func (a *maxAcc) snap() accState    { return accState{Max: a.max, Seen: a.seen} }
-func (a *maxAcc) load(s accState)   { a.max, a.seen = s.Max, s.Seen }
+func (a *sumAcc) snap() accState {
+	if a.isDec {
+		return accState{IsDec: true, DSum: a.dsum.String(), Seen: a.seen}
+	}
+	return accState{Sum: a.sum, Seen: a.seen}
+}
+func (a *sumAcc) load(s accState) {
+	a.seen = s.Seen
+	if s.IsDec {
+		a.isDec = true
+		a.dsum, _ = record.ParseDecimal(s.DSum)
+	} else {
+		a.sum = s.Sum
+	}
+}
+func (a *avgAcc) snap() accState {
+	if a.isDec {
+		return accState{IsDec: true, DSum: a.dsum.String(), N: a.n}
+	}
+	return accState{Sum: a.sum, N: a.n}
+}
+func (a *avgAcc) load(s accState) {
+	a.n = s.N
+	if s.IsDec {
+		a.isDec = true
+		a.dsum, _ = record.ParseDecimal(s.DSum)
+	} else {
+		a.sum = s.Sum
+	}
+}
+func (a *minAcc) snap() accState {
+	if a.isDec {
+		return accState{IsDec: true, DMin: a.dmin.String(), Seen: a.seen}
+	}
+	return accState{Min: a.min, Seen: a.seen}
+}
+func (a *minAcc) load(s accState) {
+	a.seen = s.Seen
+	if s.IsDec {
+		a.isDec = true
+		a.dmin, _ = record.ParseDecimal(s.DMin)
+	} else {
+		a.min = s.Min
+	}
+}
+func (a *maxAcc) snap() accState {
+	if a.isDec {
+		return accState{IsDec: true, DMax: a.dmax.String(), Seen: a.seen}
+	}
+	return accState{Max: a.max, Seen: a.seen}
+}
+func (a *maxAcc) load(s accState) {
+	a.seen = s.Seen
+	if s.IsDec {
+		a.isDec = true
+		a.dmax, _ = record.ParseDecimal(s.DMax)
+	} else {
+		a.max = s.Max
+	}
+}
 func (a *countAcc) snap() accState  { return accState{N: a.n} }
 func (a *countAcc) load(s accState) { a.n = s.N }
 func (a *firstAcc) snap() accState  { return accState{Val: a.val, Set: a.set} }
