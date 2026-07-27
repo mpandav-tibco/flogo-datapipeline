@@ -42,6 +42,7 @@ var (
 		"validate": "transform/validate", "schemadrift": "transform/schemadrift",
 		"dq": "transform/dq", "hwm": "transform/hwm", "lookup": "transform/lookup",
 		"cast": "transform/cast", "explode": "transform/explode", "flatten": "transform/flatten",
+		"router": "transform/router", "split": "transform/router",
 	}
 	objstoreProvider = map[string]string{
 		"s3": "objstore/s3", "gcs": "objstore/gcs", "adls": "objstore/adls",
@@ -181,6 +182,21 @@ func DeriveImports(data map[string]interface{}) (imports []string, needsCGO bool
 				if est := str(tm, key); est != "" {
 					c.sinkOf(map[string]interface{}{
 						"type": est, "options": tm[strings.Replace(key, "Type", "Config", 1)]})
+				}
+			}
+			// The router transform routes rows to per-route sinks and an optional
+			// default sink; link each of those sink packages + driver/provider.
+			if str(tm, "type") == "router" || str(tm, "type") == "split" {
+				if routes, ok := tm["routes"].([]interface{}); ok {
+					for _, rr := range routes {
+						rm := obj(rr)
+						if st := str(rm, "sinkType"); st != "" {
+							c.sinkOf(map[string]interface{}{"type": st, "options": rm["sinkConfig"]})
+						}
+					}
+				}
+				if st := str(tm, "defaultSinkType"); st != "" {
+					c.sinkOf(map[string]interface{}{"type": st, "options": tm["defaultSinkConfig"]})
 				}
 			}
 		}

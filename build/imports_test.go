@@ -109,6 +109,35 @@ func TestDeriveImports_TransformErrorSink(t *testing.T) {
 	}
 }
 
+// A router transform routes rows to per-route sinks and an optional default
+// sink; every one of those sink packages + drivers must be linked.
+func TestDeriveImports_RouterRouteSinks(t *testing.T) {
+	data := map[string]interface{}{
+		"source": map[string]interface{}{"type": "csv"},
+		"sink":   map[string]interface{}{"type": "null"},
+		"transforms": []interface{}{
+			map[string]interface{}{"type": "router",
+				"routes": []interface{}{
+					map[string]interface{}{"when": "amount > 1000", "sinkType": "parquet",
+						"sinkConfig": map[string]interface{}{"path": "./hi.parquet"}},
+					map[string]interface{}{"when": "region = 'EU'", "sinkType": "jdbc",
+						"sinkConfig": map[string]interface{}{"driver": "postgres"}},
+				},
+				"defaultSinkType":   "jsonlines",
+				"defaultSinkConfig": map[string]interface{}{"path": "./other.jsonl"}},
+		},
+	}
+	imp, _ := DeriveImports(data)
+	for _, w := range []string{
+		module + "transform/router", module + "sink/parquet",
+		module + "sink/jdbc", "github.com/lib/pq", module + "sink/jsonlines",
+	} {
+		if !has(imp, w) {
+			t.Errorf("missing %s in %v", w, imp)
+		}
+	}
+}
+
 // ImportsForApp unions the app's declared imports with the derived component set.
 func TestImportsForApp(t *testing.T) {
 	app := []byte(`{

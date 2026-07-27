@@ -236,6 +236,40 @@ func TestValidate_OnViolation_Route(t *testing.T) {
 	}
 }
 
+// Compile-time check that validate satisfies the SinkOwner contract.
+var _ transform.SinkOwner = (*validateTransform)(nil)
+
+// TestValidate_OwnsExternalSink verifies validate advertises single-threaded
+// execution only when it actually routes to a configured error sink — so a
+// routing validate never opens duplicate writers on the parallel path, while
+// drop/fail and default-discard validates stay parallel-eligible.
+func TestValidate_OwnsExternalSink(t *testing.T) {
+	rules := []interface{}{map[string]interface{}{"field": "amount", "notNull": true}}
+	owns := func(cfg map[string]interface{}) bool {
+		v := buildValidate(t, cfg)
+		s, ok := v.(transform.SinkOwner)
+		if !ok {
+			t.Fatal("validate must implement transform.SinkOwner")
+		}
+		return s.OwnsExternalSink()
+	}
+
+	if !owns(map[string]interface{}{"rules": rules, "onViolation": "route",
+		"errorSinkType": "null", "errorSinkConfig": map[string]interface{}{}}) {
+		t.Error("route + explicit error sink should own the sink (single-threaded)")
+	}
+	if owns(map[string]interface{}{"rules": rules, "onViolation": "route"}) {
+		t.Error("route with the default discard sink should NOT own the sink")
+	}
+	if owns(map[string]interface{}{"rules": rules, "onViolation": "drop",
+		"errorSinkType": "null", "errorSinkConfig": map[string]interface{}{}}) {
+		t.Error("drop should NOT own the sink (error sink is never written)")
+	}
+	if owns(map[string]interface{}{"rules": rules, "onViolation": "fail"}) {
+		t.Error("fail should NOT own the sink")
+	}
+}
+
 // ─── onViolation=fail ─────────────────────────────────────────────────────────
 
 func TestValidate_OnViolation_Fail(t *testing.T) {

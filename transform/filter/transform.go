@@ -55,6 +55,28 @@ func (f *filterTransform) Apply(in *record.RecordBatch) (*record.RecordBatch, er
 
 func (f *filterTransform) Close() error { return nil }
 
+// Predicate is a compiled boolean row expression using the filter grammar.
+// It lets other transforms (e.g. router) reuse the exact same predicate language
+// as the filter transform's "expr" without duplicating the parser.
+type Predicate struct{ cond condition }
+
+// Compile parses a filter expression (same grammar as the filter transform's
+// "expr": field op literal joined by AND/OR, with IN / LIKE / IS [NOT] NULL)
+// into a reusable Predicate.
+func Compile(expr string) (Predicate, error) {
+	c, err := parseCondition(expr)
+	if err != nil {
+		return Predicate{}, err
+	}
+	return Predicate{cond: c}, nil
+}
+
+// Eval reports whether the row satisfies the predicate. A zero-value Predicate
+// (no compiled condition) evaluates to false.
+func (p Predicate) Eval(row map[string]interface{}) bool {
+	return p.cond != nil && p.cond.eval(row)
+}
+
 // --- expression parser ---
 // Supports: field op literal [AND|OR field op literal ...]
 // op: > >= < <= = != IS NULL IS NOT NULL

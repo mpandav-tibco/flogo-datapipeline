@@ -467,6 +467,7 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 	parallelEligible := txWorkers > 1 &&
 		hwmProvider == nil && dqProvider == nil && winOp == nil &&
 		def.SchemaDrift.Policy == "" &&
+		!pipelineHasSinkOwner(txPipeline) &&
 		(def.Checkpoint.Type == "" || def.Checkpoint.Type == "none")
 	if txWorkers > 1 {
 		if parallelEligible {
@@ -1161,6 +1162,19 @@ func findDQGateProvider(p *transform.Pipeline) dqtransform.DQGateProvider {
 		}
 	}
 	return nil
+}
+
+// pipelineHasSinkOwner reports whether any stage owns external sink(s) (see
+// transform.SinkOwner) — e.g. the router. Such pipelines must run
+// single-threaded: the parallel path builds one transform pipeline per worker,
+// which would open duplicate writers to the same destination.
+func pipelineHasSinkOwner(p *transform.Pipeline) bool {
+	for _, stage := range p.Stages() {
+		if so, ok := stage.(transform.SinkOwner); ok && so.OwnsExternalSink() {
+			return true
+		}
+	}
+	return false
 }
 
 // openDLQ constructs the DLQ sink wrapper when def.DLQ.Type is non-empty.
