@@ -44,11 +44,11 @@ func init() {
 
 func TestKeyFieldPlaceholders(t *testing.T) {
 	cases := map[string][]string{
-		"logs/{YYYY}/{MM}/part.ndjson":            nil,
-		"{namespace}/{YYYY}/part.ndjson":          {"namespace"},
-		"{namespace}/{node}/{DD}/x.ndjson":        {"namespace", "node"},
-		"${date}/part-${uuid}.parquet":            nil,
-		"{namespace}/{namespace}.ndjson":          {"namespace"}, // deduped
+		"logs/{YYYY}/{MM}/part.ndjson":     nil,
+		"{namespace}/{YYYY}/part.ndjson":   {"namespace"},
+		"{namespace}/{node}/{DD}/x.ndjson": {"namespace", "node"},
+		"${date}/part-${uuid}.parquet":     nil,
+		"{namespace}/{namespace}.ndjson":   {"namespace"}, // deduped
 	}
 	for tmpl, want := range cases {
 		got := keyFieldPlaceholders(tmpl)

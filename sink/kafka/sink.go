@@ -53,11 +53,11 @@ func init() {
 // ordering contract: after WriteBatch returns, the data is durably committed
 // before the engine writes the checkpoint token.
 type kafkaSink struct {
-	producer    sarama.SyncProducer
-	topic       string
+	producer     sarama.SyncProducer
+	topic        string
 	partitionKey string
-	serializer  string
-	rowsWritten int64
+	serializer   string
+	rowsWritten  int64
 }
 
 // kafkaSinkConfig holds parsed configuration.

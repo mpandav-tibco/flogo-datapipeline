@@ -64,8 +64,9 @@ type ExpectationResult struct {
 // non-null value in `column`. threshold defaults to 1.0 (all rows non-null).
 //
 // Config keys:
-//   column    string  Column name (required)
-//   threshold float64 Minimum completeness ratio [0.0, 1.0] (default 1.0)
+//
+//	column    string  Column name (required)
+//	threshold float64 Minimum completeness ratio [0.0, 1.0] (default 1.0)
 type expectColumnNotNull struct {
 	column    string
 	threshold float64
@@ -131,8 +132,9 @@ func (e *expectColumnNotNull) Evaluate(_ *record.RecordBatch, profile *BatchProf
 // in `column`. threshold defaults to 1.0 (all non-null values are unique).
 //
 // Config keys:
-//   column    string  Column name (required)
-//   threshold float64 Minimum uniqueness ratio [0.0, 1.0] (default 1.0)
+//
+//	column    string  Column name (required)
+//	threshold float64 Minimum uniqueness ratio [0.0, 1.0] (default 1.0)
 type expectColumnUnique struct {
 	column    string
 	threshold float64
@@ -191,9 +193,10 @@ func (e *expectColumnUnique) Evaluate(_ *record.RecordBatch, profile *BatchProfi
 // that satisfy the constraint.
 //
 // Config keys:
-//   column string  Column name (required)
-//   min    number  Lower bound (inclusive, required)
-//   max    number  Upper bound (inclusive, required)
+//
+//	column string  Column name (required)
+//	min    number  Lower bound (inclusive, required)
+//	max    number  Upper bound (inclusive, required)
 type expectColumnValuesBetween struct {
 	column string
 	lo     float64
@@ -277,9 +280,10 @@ func (e *expectColumnValuesBetween) Evaluate(batch *record.RecordBatch, _ *Batch
 // rows that are in-set.
 //
 // Config keys:
-//   column string   Column name (required)
-//   values []string Allowed values; comparison is case-insensitive by default
-//   caseSensitive bool If true, comparison is exact (default false)
+//
+//	column string   Column name (required)
+//	values []string Allowed values; comparison is case-insensitive by default
+//	caseSensitive bool If true, comparison is exact (default false)
 type expectColumnValuesInSet struct {
 	column        string
 	allowed       map[string]struct{}
@@ -367,8 +371,9 @@ func (e *expectColumnValuesInSet) Evaluate(batch *record.RecordBatch, _ *BatchPr
 // expectTableRowCountBetween asserts that the batch row count falls within [min, max].
 //
 // Config keys:
-//   min int Lower bound (inclusive, required)
-//   max int Upper bound (inclusive, required)
+//
+//	min int Lower bound (inclusive, required)
+//	max int Upper bound (inclusive, required)
 type expectTableRowCountBetween struct {
 	lo int
 	hi int
@@ -429,9 +434,10 @@ func (e *expectTableRowCountBetween) Evaluate(_ *record.RecordBatch, profile *Ba
 // `column` falls within [lo, hi].
 //
 // Config keys:
-//   column string Column name (required)
-//   min    number Lower bound (inclusive, required)
-//   max    number Upper bound (inclusive, required)
+//
+//	column string Column name (required)
+//	min    number Lower bound (inclusive, required)
+//	max    number Upper bound (inclusive, required)
 type expectColumnMeanBetween struct {
 	column string
 	lo     float64
@@ -511,8 +517,9 @@ func (e *expectColumnMeanBetween) Evaluate(_ *record.RecordBatch, profile *Batch
 // numeric values in `column` is strictly less than `threshold`.
 //
 // Config keys:
-//   column    string Column name (required)
-//   threshold number Upper bound on stddev (exclusive, required)
+//
+//	column    string Column name (required)
+//	threshold number Upper bound on stddev (exclusive, required)
 type expectColumnStddevBelow struct {
 	column    string
 	threshold float64

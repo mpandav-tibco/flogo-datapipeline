@@ -59,8 +59,9 @@ func init() {
 
 // objstoreSource implements source.PartitionableSource.
 // It lists matching objects at Open time, then for each object either:
-//   (a) downloads to a temp file and opens the inner source on that path, or
-//   (b) streams the content through an io.Pipe into the inner source (csv, jsonlines).
+//
+//	(a) downloads to a temp file and opens the inner source on that path, or
+//	(b) streams the content through an io.Pipe into the inner source (csv, jsonlines).
 //
 // In single-instance mode objects are consumed sequentially.
 // In partitioned mode each OpenPartition call returns a child source scoped
@@ -68,13 +69,13 @@ func init() {
 type objstoreSource struct {
 	provider    string
 	store       objstore.Store
-	objects     []objstore.Object  // enumerated at open time
+	objects     []objstore.Object // enumerated at open time
 	innerFormat string
 	innerCfg    map[string]interface{} // base config for the inner source factory
 	download    bool                   // spool to tmp before opening inner source
 
 	// state for sequential (non-partitioned) reading
-	objIdx   int          // index of the currently-open object
+	objIdx   int // index of the currently-open object
 	inner    source.Source
 	tmpFiles []string // temp files to delete on Close
 	schema   []record.Column

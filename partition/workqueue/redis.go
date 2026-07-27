@@ -33,8 +33,8 @@ import (
 
 // RedisQueue implements WorkQueue over a single Redis server.
 type RedisQueue struct {
-	client    *goredis.Client
-	ns        string // key namespace: {keyPrefix}:{pipelineID}
+	client     *goredis.Client
+	ns         string // key namespace: {keyPrefix}:{pipelineID}
 	pipelineID string
 }
 
@@ -67,8 +67,8 @@ func NewRedisQueue(addr, keyPrefix, passwordEnv, pipelineID string) (*RedisQueue
 }
 
 func (q *RedisQueue) kItems() string      { return q.ns + ":items" }
-func (q *RedisQueue) kPending() string     { return q.ns + ":pending" }
-func (q *RedisQueue) kInProgress() string  { return q.ns + ":inprogress" }
+func (q *RedisQueue) kPending() string    { return q.ns + ":pending" }
+func (q *RedisQueue) kInProgress() string { return q.ns + ":inprogress" }
 
 // Enqueue seeds the queue with partitions. Terminal (DONE/FAILED) items from a
 // previous completed run are cleared first so a re-run reprocesses cleanly —
