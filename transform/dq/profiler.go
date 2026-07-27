@@ -171,6 +171,8 @@ func toFloat64(v interface{}) (float64, bool) {
 	switch n := v.(type) {
 	case int:
 		return float64(n), true
+	case record.Decimal:
+		return n.Float64(), true
 	case int8:
 		return float64(n), true
 	case int16:

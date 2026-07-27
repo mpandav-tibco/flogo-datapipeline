@@ -65,6 +65,10 @@ func toFloat(v interface{}) (float64, bool) {
 		return float64(n), true
 	case float64:
 		return n, true
+	case interface{ Float64() float64 }:
+		// Exact-numeric values (e.g. record.Decimal) aggregate via their float
+		// value here; the windowing core stays engine-agnostic (no record import).
+		return n.Float64(), true
 	case string:
 		if f, err := strconv.ParseFloat(n, 64); err == nil {
 			return f, true

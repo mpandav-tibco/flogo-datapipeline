@@ -458,6 +458,8 @@ func toFloat64(v interface{}) (float64, bool) {
 		return float64(n), true
 	case float64:
 		return n, true
+	case record.Decimal:
+		return n.Float64(), true
 	case string:
 		if f, err := strconv.ParseFloat(n, 64); err == nil {
 			return f, true

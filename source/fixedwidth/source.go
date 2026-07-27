@@ -210,7 +210,18 @@ func coerceFixed(raw string, col fwColumn) interface{} {
 		if v, err := strconv.ParseInt(raw, 10, 64); err == nil {
 			return v
 		}
-	case record.TypeDecimal, record.TypeFloat:
+	case record.TypeDecimal:
+		// Exact fixed-point. Implied-decimal (COBOL-style) columns scale an integer
+		// field by 10^-impliedDecimal with no float rounding.
+		if col.impliedDecimal > 0 {
+			if v, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64); err == nil {
+				return record.NewDecimal(v, int32(col.impliedDecimal))
+			}
+		}
+		if d, ok := record.ParseDecimal(raw); ok {
+			return d
+		}
+	case record.TypeFloat:
 		if col.impliedDecimal > 0 {
 			// Implied decimal: treat as integer, divide by 10^scale.
 			if v, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64); err == nil {

@@ -843,7 +843,14 @@ func coerceScanned(v interface{}, col record.Column) interface{} {
 				return int64(fv)
 			}
 		}
-	case record.TypeFloat, record.TypeDecimal:
+	case record.TypeDecimal:
+		// Preserve exactness: drivers hand NUMERIC back as a string/[]byte (already
+		// reduced to string above) or a number — convert to an exact Decimal rather
+		// than truncating through float64.
+		if d, ok := record.ToDecimal(v); ok {
+			return d
+		}
+	case record.TypeFloat:
 		switch n := v.(type) {
 		case float64:
 			return n
