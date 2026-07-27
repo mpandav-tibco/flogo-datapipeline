@@ -35,9 +35,39 @@ func TestParseDecimalRoundTrip(t *testing.T) {
 }
 
 func TestParseDecimalRejects(t *testing.T) {
-	for _, in := range []string{"", "  ", "1.5e3", "abc", "1.2.3", "1,000", "0x10", "+", "-", "."} {
+	for _, in := range []string{"", "  ", "abc", "1.2.3", "1,000", "0x10", "+", "-", ".", "1.5e", "e5", "1e", "1.5e3.5"} {
 		if d, ok := ParseDecimal(in); ok {
 			t.Errorf("ParseDecimal(%q) should fail, got %q", in, d.String())
+		}
+	}
+	// Pathologically large exponents are rejected rather than allocating a huge
+	// coefficient.
+	if d, ok := ParseDecimal("1e2000000000"); ok {
+		t.Errorf("ParseDecimal(oversized exponent) should fail, got %q", d.String())
+	}
+}
+
+func TestParseDecimalScientific(t *testing.T) {
+	// Scientific notation is folded into the exact coefficient/scale so it still
+	// round-trips losslessly (databases and CSVs sometimes emit NUMERIC this way).
+	cases := []struct{ in, want string }{
+		{"1.5e3", "1500"},
+		{"1.5E3", "1500"},
+		{"1.5e+3", "1500"},
+		{"1.5e-2", "0.015"},
+		{"1e10", "10000000000"},
+		{"-2.5e2", "-250"},
+		{"2.5e0", "2.5"},
+		{"10e-1", "1.0"},
+	}
+	for _, c := range cases {
+		d, ok := ParseDecimal(c.in)
+		if !ok {
+			t.Errorf("ParseDecimal(%q) failed", c.in)
+			continue
+		}
+		if got := d.String(); got != c.want {
+			t.Errorf("ParseDecimal(%q).String() = %q; want %q", c.in, got, c.want)
 		}
 	}
 }

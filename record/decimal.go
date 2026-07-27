@@ -31,6 +31,26 @@ func ParseDecimal(s string) (Decimal, bool) {
 	if s == "" {
 		return Decimal{}, false
 	}
+	// Optional scientific exponent: mantissa[eE][+-]?digits. The exponent shifts
+	// the scale; a resulting negative scale is folded into the coefficient.
+	exp := 0
+	if i := strings.IndexAny(s, "eE"); i >= 0 {
+		mant, expStr := s[:i], s[i+1:]
+		if mant == "" || expStr == "" {
+			return Decimal{}, false
+		}
+		e, err := strconv.Atoi(expStr)
+		if err != nil {
+			return Decimal{}, false
+		}
+		// Bound the exponent so pathological input (e.g. "1e2000000000") cannot
+		// allocate a giant coefficient.
+		if e < -1000 || e > 1000 {
+			return Decimal{}, false
+		}
+		exp = e
+		s = mant
+	}
 	neg := false
 	switch s[0] {
 	case '+':
@@ -57,7 +77,13 @@ func ParseDecimal(s string) (Decimal, bool) {
 	if neg && coef.Sign() != 0 {
 		coef.Neg(coef)
 	}
-	return Decimal{coef: coef, scale: int32(len(fracPart))}, true
+	scale := int32(len(fracPart)) - int32(exp)
+	if scale < 0 {
+		// A negative scale is an integer with trailing zeros: fold it into coef.
+		coef.Mul(coef, pow10(-scale))
+		scale = 0
+	}
+	return Decimal{coef: coef, scale: scale}, true
 }
 
 // ToDecimal converts a batch value to an exact Decimal. Decimal, string and
@@ -183,7 +209,11 @@ func pow10(n int32) *big.Int {
 func (d Decimal) Value() (driver.Value, error) { return d.String(), nil }
 
 // MarshalJSON emits the exact value as a JSON number (unquoted), so JSON/NDJSON
-// sinks preserve precision in the serialized text.
+// sinks preserve precision in the serialized text. Note: JSON has no exact
+// decimal type, so a downstream consumer that re-parses that number into a
+// float64 — including this pipeline's own jsonlines source when the column is
+// untyped — will re-round it. For lossless interchange, target a typed sink
+// (JDBC NUMERIC / a typed decimal column) rather than round-tripping via JSON.
 func (d Decimal) MarshalJSON() ([]byte, error) { return []byte(d.String()), nil }
 
 var _ driver.Valuer = Decimal{}

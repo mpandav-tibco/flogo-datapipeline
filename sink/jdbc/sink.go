@@ -313,7 +313,16 @@ func recordTypeToSQL(ct record.ColumnType, driver string) string {
 	case record.TypeFloat:
 		return "DOUBLE PRECISION"
 	case record.TypeDecimal:
-		return "NUMERIC"
+		// MySQL DECIMAL/NUMERIC without an explicit precision default to (10,0) —
+		// zero fractional digits — which silently truncates. Give it a precision and
+		// scale that cover money and most NUMERIC data. Postgres/SQLite NUMERIC is
+		// arbitrary-precision, so leave it unbounded there.
+		switch driver {
+		case "mysql":
+			return "DECIMAL(38,10)"
+		default:
+			return "NUMERIC"
+		}
 	case record.TypeBool:
 		switch driver {
 		case "mysql":
