@@ -10,12 +10,13 @@ registered as `hwm`.
 | Key | Type | Default | Required | Description |
 |---|---|---|:--:|---|
 | `column` | string | — | ✅ | Column to track. |
-| `valueType` | string | `string` | — | `datetime`, `int`, or `string` — selects the comparison. |
+| `valueType` | string | `string` | — | `datetime`, `int`, `string`, or `decimal` — selects the comparison. |
 
 ## Behavior
 
 - Scans every non-null value of `column` per batch and keeps the running maximum
-  (`datetime` = latest time, `int` = numeric max, `string` = lexicographic max).
+  (`datetime` = latest time, `int` = numeric max, `string` = lexicographic max,
+  `decimal` = exact NUMERIC/DECIMAL max).
 - After each checkpoint interval the engine reads the max and persists it via the
   configured watermark backend, so the next run only reads newer rows.
 - Use it with non-JDBC sources (JDBC injects the watermark predicate directly). Column

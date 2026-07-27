@@ -63,7 +63,7 @@ this run.
 |---|---|
 | `mode` | `hwm` \| `none` |
 | `column` | monotonic column tracked as the mark |
-| `valueType` | `datetime` \| `int` \| `string` |
+| `valueType` | `datetime` \| `int` \| `string` \| `decimal` |
 | `initialValue` | mark used on the very first run |
 | `storeType` | `file` \| `redis` \| `postgres` |
 | `storeOptions` | backend connection config |
