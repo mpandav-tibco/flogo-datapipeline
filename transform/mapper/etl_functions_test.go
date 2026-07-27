@@ -3,6 +3,7 @@ package mapper
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mpandav-tibco/flogo-datapipeline/record"
 )
@@ -130,6 +131,34 @@ func TestEtl_Datetime(t *testing.T) {
 	}
 	if got := callFn(t, "datetime.fromEpoch", 0.0); got != "1970-01-01T00:00:00Z" {
 		t.Errorf("fromEpoch = %v", got)
+	}
+}
+
+func TestEtl_DatetimeTimezone(t *testing.T) {
+	// June 1 2024 is DST in America/New_York (EDT = UTC-4).
+	if got := callFn(t, "datetime.toZone", "2024-06-01T12:00:00Z", "America/New_York"); got != "2024-06-01T08:00:00-04:00" {
+		t.Errorf("toZone = %v; want 2024-06-01T08:00:00-04:00", got)
+	}
+	if got := callFn(t, "datetime.formatInZone", "2024-06-01T12:00:00Z", "America/New_York", "2006-01-02 15:04:05"); got != "2024-06-01 08:00:00" {
+		t.Errorf("formatInZone = %v; want 2024-06-01 08:00:00", got)
+	}
+	// fromZone interprets a naive wall-clock time as being in the zone → UTC instant.
+	if got := callFn(t, "datetime.fromZone", "2024-06-01 08:00:00", "America/New_York"); got != "2024-06-01T12:00:00Z" {
+		t.Errorf("fromZone = %v; want 2024-06-01T12:00:00Z", got)
+	}
+	// fromZone also reinterprets a date-column time.Time by its wall-clock components.
+	naive := time.Date(2024, 6, 1, 8, 0, 0, 0, time.UTC) // a naive 08:00 parsed as UTC
+	if got := callFn(t, "datetime.fromZone", naive, "America/New_York"); got != "2024-06-01T12:00:00Z" {
+		t.Errorf("fromZone(time.Time) = %v; want 2024-06-01T12:00:00Z", got)
+	}
+	// Unknown zone → nil (graceful).
+	if got := callFn(t, "datetime.toZone", "2024-06-01T12:00:00Z", "Not/AZone"); got != nil {
+		t.Errorf("toZone(bad zone) = %v; want nil", got)
+	}
+	// A time.Time input (e.g. a date column value) is accepted directly.
+	ts := time.Date(2024, 6, 1, 12, 0, 0, 0, time.UTC)
+	if got := callFn(t, "datetime.toZone", ts, "UTC"); got != "2024-06-01T12:00:00Z" {
+		t.Errorf("toZone(time.Time, UTC) = %v; want 2024-06-01T12:00:00Z", got)
 	}
 }
 

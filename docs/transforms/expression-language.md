@@ -84,6 +84,15 @@ Legacy: `concat(…)`, `upper(s)`, `lower(s)`, `trim(s)`, `lpad(s, w [, ch])`,
 `datetime.fromEpoch(sec)`. Inputs accept RFC3339, ISO-8601 variants, and common date
 formats.
 
+**Timezones** (IANA names, e.g. `America/New_York`; the tz database is embedded so
+zones resolve even in scratch/distroless images):
+`datetime.toZone(ts, zone)` / `datetime.inZone(ts, zone)` — render an instant in
+`zone` (RFC3339 with that offset); `datetime.formatInZone(ts, zone [, layout])` —
+format an instant in `zone`; `datetime.fromZone(naiveTs, zone)` — interpret a naive
+wall-clock timestamp as being in `zone` and return the corresponding UTC instant
+(fixes local-time source data that would otherwise be assumed UTC). A naive input to
+`toZone`/`formatInZone` is treated as UTC; an unknown zone yields null.
+
 ### Hash / Encoding — `hash.*`, `encoding.*`
 
 `hash.md5(…)`, `hash.sha1(…)`, `hash.sha256(…)` (hex digest of concatenated args) ·
