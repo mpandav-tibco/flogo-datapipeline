@@ -47,6 +47,14 @@ binaries to production.
   PII, the DLQ destination inherits that sensitivity; secure it like the main sink.
 - **Metrics** are counts and durations only — no row contents are exported.
 
+## Audit log
+
+Enable an append-only [governance audit trail](observability.md#audit-log)
+(`observability.audit` or the `DP_AUDIT` env var) to record who ran which pipeline,
+when, and with what outcome. Records carry only component **types** and run
+counters — never secret values, option contents, or row data — so they are safe to
+centralize.
+
 ## The REST API
 
 The management [REST API](rest-api.md) is off unless you set a port, and has no

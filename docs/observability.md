@@ -50,6 +50,40 @@ Both backends emit the same series:
 flagged (incrementing `flogo_pipeline_stalls_total`). Useful for catching a wedged
 source or a blocked sink in a long streaming run.
 
+## Audit log
+
+An optional, append-only **governance audit trail**. When enabled, each pipeline
+run emits structured JSON records (one object per line — JSONL) for its lifecycle:
+
+| Event | Emitted | Key fields |
+|---|---|---|
+| `pipeline.run.started` | at run start | `runId`, `pipeline`, `source`, `sink`, `transforms[]`, `scaling`, `checkpoint`, `incremental` |
+| `pipeline.run.finished` | at run end | `runId`, `pipeline`, `status`, `rowsProcessed`, `rowsWritten`, `rowsFailed`, `rowsDropped`, `durationMs`, `error` |
+
+Every record also carries an `event` name and a UTC `ts` timestamp.
+
+Auditing is **off by default**. Enable it per pipeline:
+
+```json
+"observability": {
+  "audit": { "enabled": true, "file": "/var/log/flogo/audit.jsonl" }
+}
+```
+
+or globally with environment variables (which override the config):
+
+| Variable | Effect |
+|---|---|
+| `DP_AUDIT=on` \| `1` \| `true` | enable auditing |
+| `DP_AUDIT_FILE=/path` | write to this append-only file (else stdout) |
+
+With no `file` set, records go to **stdout**. The file is opened in append mode,
+so re-runs accumulate one durable trail.
+
+**No secrets are ever written.** Records carry only component *types* and run
+counters — never option values, DSNs, credentials, paths, or row data — so the
+trail can be shipped to a central log store safely.
+
 ## Lineage (OpenLineage)
 
 Optional **data lineage** emission in the [OpenLineage](https://openlineage.io)

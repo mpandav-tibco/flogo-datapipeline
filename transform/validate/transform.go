@@ -55,6 +55,11 @@ type validateTransform struct {
 	rules       []validationRule
 	onViolation string // "route" | "fail" | "drop"
 	errorSink   sink.Sink
+	// routesToRealSink is true only when an explicit (non-default) errorSink is
+	// configured. It gates OwnsExternalSink so the engine forces single-threaded
+	// execution for a routing validate but leaves drop/fail and default-discard
+	// validates eligible for the parallel transform path.
+	routesToRealSink bool
 }
 
 func newValidateTransform(cfg map[string]interface{}) (transform.Transform, error) {
@@ -74,6 +79,7 @@ func newValidateTransform(cfg map[string]interface{}) (transform.Transform, erro
 	}
 
 	var errSink sink.Sink
+	routesToRealSink := false
 	if sinkType, ok := cfg["errorSinkType"].(string); ok && sinkType != "" {
 		sinkCfg, _ := cfg["errorSinkConfig"].(map[string]interface{})
 		if sinkCfg == nil {
@@ -83,6 +89,7 @@ func newValidateTransform(cfg map[string]interface{}) (transform.Transform, erro
 		if err != nil {
 			return nil, fmt.Errorf("validate transform: error sink: %w", err)
 		}
+		routesToRealSink = true
 	} else {
 		// Default error sink: null (discard). Replace with a real DLQ sink in production.
 		// If the null sink package is not blank-imported, fall back to the built-in
@@ -94,13 +101,23 @@ func newValidateTransform(cfg map[string]interface{}) (transform.Transform, erro
 	}
 
 	return &validateTransform{
-		rules:       rules,
-		onViolation: onViolation,
-		errorSink:   errSink,
+		rules:            rules,
+		onViolation:      onViolation,
+		errorSink:        errSink,
+		routesToRealSink: routesToRealSink,
 	}, nil
 }
 
 func (v *validateTransform) Name() string { return "validate" }
+
+// OwnsExternalSink reports that a routing validate writes rows to its own
+// configured error sink, so the engine must keep it single-threaded: the
+// parallel transform path builds one pipeline per worker, which would open
+// duplicate writers to the same destination. It returns false for drop/fail
+// modes and for the default discard sink, where parallelism remains safe.
+func (v *validateTransform) OwnsExternalSink() bool {
+	return v.onViolation == "route" && v.routesToRealSink
+}
 
 func (v *validateTransform) Apply(in *record.RecordBatch) (*record.RecordBatch, error) {
 	good := in.Clone(in.Len())

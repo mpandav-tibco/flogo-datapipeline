@@ -113,6 +113,7 @@ import (
 	_ "github.com/mpandav-tibco/flogo-datapipeline/transform/join"        // Keyed join against a source-loaded reference table (stream-table)
 	_ "github.com/mpandav-tibco/flogo-datapipeline/transform/lookup"      // Enrichment via LRU-cached flow/HTTP call
 	_ "github.com/mpandav-tibco/flogo-datapipeline/transform/parse"       // Structure a text field into columns (regex/JSON) — Fluent Bit parser equivalent
+	_ "github.com/mpandav-tibco/flogo-datapipeline/transform/router"      // Conditional router / split — N-way route rows to named sinks by predicate
 	_ "github.com/mpandav-tibco/flogo-datapipeline/transform/schemadrift" // Schema-drift detection and remediation
 	_ "github.com/mpandav-tibco/flogo-datapipeline/transform/validate"    // Data-quality rules; violations routed to DLQ sink
 	_ "github.com/mpandav-tibco/flogo-datapipeline/transform/window"      // Event-time windowed aggregation (tumbling/sliding/session/global)
