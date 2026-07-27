@@ -176,7 +176,12 @@ func coerce(raw string, col record.Column) interface{} {
 		if v, err := strconv.ParseInt(raw, 10, 64); err == nil {
 			return v
 		}
-	case record.TypeFloat, record.TypeDecimal:
+	case record.TypeDecimal:
+		// Exact fixed-point so monetary/NUMERIC values keep full precision.
+		if d, ok := record.ParseDecimal(raw); ok {
+			return d
+		}
+	case record.TypeFloat:
 		if v, err := strconv.ParseFloat(raw, 64); err == nil {
 			return v
 		}

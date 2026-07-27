@@ -61,11 +61,11 @@ func TestFixedWidth_ParseRows(t *testing.T) {
 	if b.Value(0, "name") != "Alice" {
 		t.Errorf("name = %q, want Alice", b.Value(0, "name"))
 	}
-	if b.Value(0, "amount") != 123.45 {
-		t.Errorf("amount = %v, want 123.45", b.Value(0, "amount"))
+	if d, ok := b.Value(0, "amount").(record.Decimal); !ok || d.String() != "123.45" {
+		t.Errorf("amount = %v (%T), want record.Decimal 123.45", b.Value(0, "amount"), b.Value(0, "amount"))
 	}
-	if b.Value(1, "amount") != 0.99 {
-		t.Errorf("amount1 = %v, want 0.99", b.Value(1, "amount"))
+	if d, ok := b.Value(1, "amount").(record.Decimal); !ok || d.String() != "0.99" {
+		t.Errorf("amount1 = %v (%T), want record.Decimal 0.99", b.Value(1, "amount"), b.Value(1, "amount"))
 	}
 }
 
