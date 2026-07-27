@@ -44,12 +44,11 @@ type parquetSource struct {
 	rowGroups  []parquetgo.RowGroup
 	rgIdx      int // current row group index (single-instance mode)
 	// seqReader is the persistent reader for the current row group in sequential
-	// mode. Keeping it open across ReadBatch calls is critical: NewRowGroupReader
-	// is stateless — creating a new one for the same row group always starts from
-	// row 0, which causes duplicate rows whenever a row group is larger than the
-	// requested batch size.
-	//lint:ignore SA1019 parquet-go Reader still works; migrating to GenericReader is a separate, carefully-tested change.
-	seqReader *parquetgo.Reader
+	// mode. Keeping it open across ReadBatch calls is critical:
+	// NewGenericRowGroupReader is stateless — creating a new one for the same row
+	// group always starts from row 0, which causes duplicate rows whenever a row
+	// group is larger than the requested batch size.
+	seqReader *parquetgo.GenericReader[any]
 	rowBuf    []parquetgo.Row
 	rowBufIdx int
 	rowsRead  int64
@@ -128,7 +127,7 @@ func (s *parquetSource) Schema() []record.Column { return s.schema }
 // Skip advances past n rows by scanning row groups without emitting.
 // Bug 5 fix: tail rows of a partial row group are saved into s.rowBuf so
 // readSequential can drain them rather than silently dropping them.
-// Bug 1 fix: use NewRowGroupReader (accepts RowGroup) not NewReader (io.ReaderAt).
+// Bug 1 fix: use NewGenericRowGroupReader (accepts RowGroup) not NewGenericReader (io.ReaderAt).
 // Bug 6 fix: close reader after use to release page iterators/goroutines.
 func (s *parquetSource) Skip(n int64) error {
 	var skipped int64
@@ -142,7 +141,7 @@ func (s *parquetSource) Skip(n int64) error {
 			// Partial row group: read all rows, skip the first `remaining`,
 			// and save the tail into s.rowBuf for the next ReadBatch call.
 			remaining := n - skipped
-			reader := parquetgo.NewRowGroupReader(rg) // Bug 1 fix
+			reader := parquetgo.NewGenericRowGroupReader[any](rg) // Bug 1 fix
 			fullBuf := make([]parquetgo.Row, rgRows)
 			n2, err2 := reader.ReadRows(fullBuf)
 			reader.Close() // Bug 6 fix
@@ -187,12 +186,12 @@ func (s *parquetSource) ReadBatch(size int) (*record.RecordBatch, error) {
 //
 // Key correctness invariant: s.seqReader is kept open across calls so that
 // successive ReadBatch invocations continue from where the previous one stopped
-// within the same row group. NewRowGroupReader is stateless — creating a new
-// reader for the same row group always restarts from row 0, causing duplicate
+// within the same row group. NewGenericRowGroupReader is stateless — creating a
+// new reader for the same row group always restarts from row 0, causing duplicate
 // rows whenever a row group is larger than the requested batch size.
 //
 // Bug 5 fix: drains s.rowBuf (tail rows saved by Skip) before opening new readers.
-// Bug 1 fix: use NewRowGroupReader not NewReader.
+// Bug 1 fix: use NewGenericRowGroupReader not NewGenericReader.
 // Bug 6/7 fix: close reader only when the row group is exhausted (not after
 // every ReadRows call) to preserve reader position across batch boundaries.
 func (s *parquetSource) readSequential(size int) (*record.RecordBatch, error) {
@@ -218,7 +217,7 @@ func (s *parquetSource) readSequential(size int) (*record.RecordBatch, error) {
 
 		// Open a persistent reader for the current row group if none is active.
 		if s.seqReader == nil {
-			s.seqReader = parquetgo.NewRowGroupReader(s.rowGroups[s.rgIdx])
+			s.seqReader = parquetgo.NewGenericRowGroupReader[any](s.rowGroups[s.rgIdx])
 		}
 
 		buf := make([]parquetgo.Row, size-len(batch.Rows))
@@ -253,7 +252,7 @@ func (s *parquetSource) readSequential(size int) (*record.RecordBatch, error) {
 }
 
 // readParallel reads up to `parallelism` row groups concurrently and merges.
-// Bug 1 fix: use NewRowGroupReader not NewReader.
+// Bug 1 fix: use NewGenericRowGroupReader not NewGenericReader.
 // Bug 6/7 fix: defer reader.Close() inside goroutine to release resources on all paths.
 func (s *parquetSource) readParallel(size int) (*record.RecordBatch, error) {
 	type rgResult struct {
@@ -284,8 +283,8 @@ func (s *parquetSource) readParallel(size int) (*record.RecordBatch, error) {
 			go func(idx, slot int) {
 				defer wg.Done()
 				rg := s.rowGroups[idx]
-				reader := parquetgo.NewRowGroupReader(rg) // Bug 1 fix
-				defer reader.Close()                      // Bug 6/7 fix: release on all exit paths
+				reader := parquetgo.NewGenericRowGroupReader[any](rg) // Bug 1 fix
+				defer reader.Close()                                  // Bug 6/7 fix: release on all exit paths
 				// Drain the whole row group: ReadRows may return a partial page
 				// (n < len(buf)) with err==nil, so loop until io.EOF instead of reading
 				// once, or rows past the first page of each group are silently dropped.
