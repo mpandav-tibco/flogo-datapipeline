@@ -145,3 +145,92 @@ func TestDecimalMarshalJSONAndValue(t *testing.T) {
 		t.Errorf("driver.Value = %v,%v; want \"123.40\"", v, err)
 	}
 }
+
+func TestDecimalArithmetic(t *testing.T) {
+	mk := func(s string) Decimal { d, _ := ParseDecimal(s); return d }
+	// Add/Sub/Mul are exact: result scale follows fixed-point rules and no binary
+	// rounding creeps in (0.1+0.2 == 0.3 exactly, unlike float64).
+	cases := []struct {
+		op   string
+		a, b string
+		want string
+	}{
+		{"add", "0.1", "0.2", "0.3"},
+		{"add", "123.40", "0.005", "123.405"}, // scale = max(2,3)
+		{"add", "-1.5", "1.5", "0.0"},
+		{"sub", "1.00", "0.99", "0.01"},
+		{"sub", "0", "5.25", "-5.25"},
+		{"mul", "1.5", "1.5", "2.25"},  // scale = 1+1
+		{"mul", "123.40", "0", "0.00"}, // scale = 2+0
+		{"mul", "-2", "3.5", "-7.0"},
+	}
+	for _, c := range cases {
+		var got Decimal
+		switch c.op {
+		case "add":
+			got = mk(c.a).Add(mk(c.b))
+		case "sub":
+			got = mk(c.a).Sub(mk(c.b))
+		case "mul":
+			got = mk(c.a).Mul(mk(c.b))
+		}
+		if got.String() != c.want {
+			t.Errorf("%s(%s,%s) = %q; want %q", c.op, c.a, c.b, got.String(), c.want)
+		}
+	}
+	if got := mk("-5.25").Neg().String(); got != "5.25" {
+		t.Errorf("Neg = %q", got)
+	}
+	if got := mk("-5.25").Abs().String(); got != "5.25" {
+		t.Errorf("Abs = %q", got)
+	}
+	if got := mk("5.25").Scale(); got != 2 {
+		t.Errorf("Scale = %d; want 2", got)
+	}
+}
+
+func TestDecimalRound(t *testing.T) {
+	mk := func(s string) Decimal { d, _ := ParseDecimal(s); return d }
+	cases := []struct {
+		in     string
+		places int32
+		want   string
+	}{
+		{"123.456", 2, "123.46"}, // half away from zero (6 → up)
+		{"123.454", 2, "123.45"},
+		{"123.455", 2, "123.46"}, // exactly half → away from zero
+		{"-1.005", 2, "-1.01"},   // negatives round away from zero
+		{"1.5", 0, "2"},
+		{"2.5", 0, "3"},
+		{"123.4", 5, "123.4"}, // places >= scale is a no-op
+	}
+	for _, c := range cases {
+		if got := mk(c.in).Round(c.places).String(); got != c.want {
+			t.Errorf("Round(%s,%d) = %q; want %q", c.in, c.places, got, c.want)
+		}
+	}
+}
+
+func TestDecimalDivRound(t *testing.T) {
+	mk := func(s string) Decimal { d, _ := ParseDecimal(s); return d }
+	cases := []struct {
+		a, b  string
+		scale int32
+		want  string
+	}{
+		{"100.00", "3", 10, "33.3333333333"},
+		{"1.00", "8", 3, "0.125"},
+		{"2.00", "3", 2, "0.67"},   // 0.666… rounds up
+		{"-2.00", "3", 2, "-0.67"}, // away from zero
+		{"7", "2", 2, "3.50"},
+	}
+	for _, c := range cases {
+		got, ok := mk(c.a).DivRound(mk(c.b), c.scale)
+		if !ok || got.String() != c.want {
+			t.Errorf("DivRound(%s,%s,%d) = %q,%v; want %q", c.a, c.b, c.scale, got.String(), ok, c.want)
+		}
+	}
+	if _, ok := mk("1").DivRound(mk("0"), 2); ok {
+		t.Error("DivRound by zero should return ok=false")
+	}
+}
