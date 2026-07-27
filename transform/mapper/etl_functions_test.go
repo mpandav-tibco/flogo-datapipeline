@@ -76,9 +76,8 @@ func TestEtl_Math(t *testing.T) {
 }
 
 func TestEtl_DecimalArithmetic(t *testing.T) {
-	// Regression: numeric builtins must accept record.Decimal operands. Before
-	// toFloat64 handled Decimal, arithmetic on a NUMERIC column silently produced
-	// nil (the operand was treated as missing).
+	// Numeric builtins stay EXACT when a decimal operand is present: the result is
+	// a record.Decimal with no float rounding (0.1+0.2 == 0.3 exactly), not float64.
 	dec := func(s string) record.Decimal {
 		d, ok := record.ParseDecimal(s)
 		if !ok {
@@ -86,12 +85,28 @@ func TestEtl_DecimalArithmetic(t *testing.T) {
 		}
 		return d
 	}
-	if got := callFn(t, "multiply", dec("1.5"), dec("2")); got != 3.0 {
-		t.Errorf("multiply(decimal) = %v, want 3", got)
+	wantDec := func(name string, got interface{}, want string) {
+		t.Helper()
+		d, ok := got.(record.Decimal)
+		if !ok {
+			t.Fatalf("%s = %T (%v); want record.Decimal", name, got, got)
+		}
+		if d.String() != want {
+			t.Errorf("%s = %q; want %q", name, d.String(), want)
+		}
 	}
-	if got := callFn(t, "divide", dec("100.00"), dec("4")); got != 25.0 {
-		t.Errorf("divide(decimal) = %v, want 25", got)
+	wantDec("multiply", callFn(t, "multiply", dec("1.5"), dec("2")), "3.0")
+	wantDec("number.add", callFn(t, "number.add", dec("0.1"), dec("0.2")), "0.3")
+	wantDec("number.subtract", callFn(t, "number.subtract", dec("1.00"), dec("0.99")), "0.01")
+	wantDec("divide", callFn(t, "divide", dec("100.00"), dec("4")), "25.0000000000")
+	wantDec("number.round", callFn(t, "number.round", dec("123.456"), 2), "123.46")
+	// Decimal + numeric literal (the parser delivers literals as float64) stays exact.
+	wantDec("add-literal", callFn(t, "number.add", dec("100.00"), 5.0), "105.00")
+	// Non-decimal operands keep the float64 path unchanged (no silent promotion).
+	if got := callFn(t, "number.add", 2.0, 3.0); got != 5.0 {
+		t.Errorf("number.add(float,float) = %v (%T); want 5.0 float64", got, got)
 	}
+	// clamp is a range gate (float comparison), still returns the float value.
 	if got := callFn(t, "clamp", dec("5.5"), dec("0"), dec("10")); got != 5.5 {
 		t.Errorf("clamp(decimal) = %v, want 5.5", got)
 	}
