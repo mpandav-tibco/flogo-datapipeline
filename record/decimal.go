@@ -330,4 +330,19 @@ func roundedDiv(num, den *big.Int) *big.Int {
 	return q
 }
 
+// Coef returns the unscaled coefficient of the value expressed at the given
+// scale (fractional-digit count): coef = round(value × 10^scale). Reducing the
+// scale rounds half-away-from-zero; increasing it pads with trailing zeros. Used
+// by fixed-scale encoders such as Parquet DECIMAL.
+func (d Decimal) Coef(scale int32) *big.Int {
+	switch {
+	case scale == d.scale:
+		return new(big.Int).Set(d.bigCoef())
+	case scale > d.scale:
+		return new(big.Int).Mul(d.bigCoef(), pow10(scale-d.scale))
+	default:
+		return roundedDiv(d.bigCoef(), pow10(d.scale-scale))
+	}
+}
+
 var _ driver.Valuer = Decimal{}
