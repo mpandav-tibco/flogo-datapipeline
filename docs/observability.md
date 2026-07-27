@@ -50,6 +50,48 @@ Both backends emit the same series:
 flagged (incrementing `flogo_pipeline_stalls_total`). Useful for catching a wedged
 source or a blocked sink in a long streaming run.
 
+## Lineage (OpenLineage)
+
+Optional **data lineage** emission in the [OpenLineage](https://openlineage.io)
+standard, so a run's source and sink datasets — and their schemas — show up in a
+lineage backend (Marquez or any OpenLineage collector) to answer "where did this
+data come from."
+
+Each run emits two standard `RunEvent`s:
+
+| Event | Emitted | Carries |
+|---|---|---|
+| `START` | at run start | `run.runId`, `job`, input (source) + output (sink) datasets with schema facets |
+| `COMPLETE` / `FAIL` | at run end | the same datasets; `COMPLETE` adds an `outputStatistics` facet with the written `rowCount` |
+
+The engine's run id is mapped to a stable UUID so `START` and `COMPLETE` share one
+run. Lineage is **off by default**. Enable it per pipeline:
+
+```json
+"observability": {
+  "lineage": {
+    "enabled": true,
+    "transport": "http",
+    "url": "http://marquez:5000/api/v1/lineage",
+    "namespace": "analytics"
+  }
+}
+```
+
+Transports: `console` (default — JSON to stdout), `file` (append-only JSONL), and
+`http` (POST to an OpenLineage collector). Or enable globally with the standard
+OpenLineage environment variables:
+
+| Variable | Effect |
+|---|---|
+| `DP_LINEAGE=on` \| `1` \| `true` | enable emission (console transport) |
+| `OPENLINEAGE_URL=<endpoint>` | enable + POST events to this collector |
+| `OPENLINEAGE_NAMESPACE=<ns>` | default job / dataset namespace |
+
+Emission is **best-effort** — a transport error is logged and swallowed, never
+blocking or failing the pipeline. Dataset names are non-secret identifiers
+(path / table / topic), never DSNs or credentials.
+
 ## Run summary vs metrics
 
 Metrics are the *time-series* view. Each run also returns a one-shot **summary**

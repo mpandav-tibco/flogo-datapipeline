@@ -706,6 +706,42 @@
               "type": "integer",
               "description": "Warn when a batch stage exceeds this many seconds (0 = disabled).",
               "minimum": 0
+            },
+            "lineage": {
+              "type": "object",
+              "description": "Optional OpenLineage run-event emission (off by default; also enabled by DP_LINEAGE / OPENLINEAGE_URL).",
+              "additionalProperties": true,
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "default": false
+                },
+                "transport": {
+                  "type": "string",
+                  "enum": [
+                    "console",
+                    "file",
+                    "http"
+                  ],
+                  "default": "console"
+                },
+                "url": {
+                  "type": "string",
+                  "description": "OpenLineage collector endpoint (http transport)."
+                },
+                "file": {
+                  "type": "string",
+                  "description": "Append-only file path (file transport)."
+                },
+                "namespace": {
+                  "type": "string",
+                  "description": "Default job / dataset namespace."
+                },
+                "job": {
+                  "type": "string",
+                  "description": "Job-name override (defaults to the pipeline ref)."
+                }
+              }
             }
           }
         },

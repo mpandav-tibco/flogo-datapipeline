@@ -9,6 +9,7 @@ import (
 	"github.com/project-flogo/core/data/metadata"
 	corelog "github.com/project-flogo/core/support/log"
 
+	"github.com/mpandav-tibco/flogo-datapipeline/lineage"
 	"github.com/mpandav-tibco/flogo-datapipeline/metrics"
 )
 
@@ -92,11 +93,17 @@ func (f *Factory) New(cfg *action.Config) (action.Action, error) {
 		return nil, fmt.Errorf("pipeline factory: metrics backend %q: %w", def.Observability.Metrics, err)
 	}
 
+	lin, err := lineage.New(def.Observability.Lineage)
+	if err != nil {
+		return nil, fmt.Errorf("pipeline factory: lineage: %w", err)
+	}
+
 	act := &DataPipelineAction{
 		def:      def,
 		ref:      s.PipelineRef,
 		ioMd:     buildIOMetadata(),
 		recorder: rec,
+		lineage:  lin,
 	}
 
 	f.actions[s.PipelineRef] = act
@@ -131,11 +138,16 @@ func NewInline(def *Definition, ref string) (*DataPipelineAction, error) {
 		return nil, fmt.Errorf("pipeline inline: metrics backend %q: %w",
 			def.Observability.Metrics, err)
 	}
+	lin, err := lineage.New(def.Observability.Lineage)
+	if err != nil {
+		return nil, fmt.Errorf("pipeline inline: lineage: %w", err)
+	}
 	return &DataPipelineAction{
 		def:      def,
 		ref:      ref,
 		ioMd:     buildIOMetadata(),
 		recorder: rec,
+		lineage:  lin,
 	}, nil
 }
 
