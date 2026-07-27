@@ -41,7 +41,7 @@ var (
 		"filter": "transform/filter", "map": "transform/mapper", "mapper": "transform/mapper",
 		"validate": "transform/validate", "schemadrift": "transform/schemadrift",
 		"dq": "transform/dq", "hwm": "transform/hwm", "lookup": "transform/lookup",
-		"cast": "transform/cast",
+		"cast": "transform/cast", "explode": "transform/explode", "flatten": "transform/flatten",
 	}
 	objstoreProvider = map[string]string{
 		"s3": "objstore/s3", "gcs": "objstore/gcs", "adls": "objstore/adls",

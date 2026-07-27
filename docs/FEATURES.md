@@ -38,6 +38,8 @@
 | [`schemadrift`](transforms/schemadrift.md) | detect add/remove/retype columns |
 | [`hwm`](transforms/hwm.md) | track a column max for incremental loads |
 | [`cast`](transforms/cast.md) | convert column types (string ↔ int / float / decimal / bool / date) |
+| [`explode`](transforms/explode.md) | expand an array column into one row per element |
+| [`flatten`](transforms/flatten.md) | flatten nested-object columns into dotted columns |
 
 Plus the shared [expression-language reference](transforms/expression-language.md).
 

@@ -23,6 +23,8 @@ registered with `transform.Register(name, …)`
 | [`schemadrift`](transforms/schemadrift.md) | detect column add/remove/type changes at runtime |
 | [`hwm`](transforms/hwm.md) | observe the max of a column for incremental loads |
 | [`cast`](transforms/cast.md) | convert column types (string ↔ int / float / decimal / bool / date) |
+| [`explode`](transforms/explode.md) | expand an array column into one row per element |
+| [`flatten`](transforms/flatten.md) | flatten nested-object columns into dotted columns |
 
 ## Filter — `filter`
 
@@ -89,6 +91,20 @@ Converts the listed `columns` to a target `type` (`string`, `int`, `float`,
 `decimal` with optional `scale`, `bool`, `date` with optional `format`) in every
 row and updates the batch schema. `onError` is `null` (default — unconvertible
 values become null) or `fail`. Decimal casts stay exact. See [cast](transforms/cast.md).
+
+## Explode — `explode`
+
+Expands an array-valued `column` into one output row per element (other columns
+duplicated); `into` names the element column. Empty/null arrays drop the row
+(unless `keepEmpty`), a scalar yields one row. The map-side way to normalise
+arrays-of-objects from JSON/XML. See [explode](transforms/explode.md).
+
+## Flatten — `flatten`
+
+Replaces nested-object columns with one dotted column per leaf
+(`address` → `address.city`, `address.zip`). `columns` selects which to flatten
+(default all map-valued), `separator` and `depth` tune the output. Arrays are left
+as values (use `explode`). See [flatten](transforms/flatten.md).
 
 ---
 
