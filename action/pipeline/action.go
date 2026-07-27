@@ -51,7 +51,6 @@ type DataPipelineAction struct {
 	def      *Definition
 	ref      string
 	ioMd     *metadata.IOMetadata
-	wmStore  watermark.Store  // never nil; NoopStore when incremental is disabled
 	recorder metrics.Recorder // never nil; NoopRecorder when unconfigured
 }
 

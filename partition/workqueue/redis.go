@@ -136,6 +136,7 @@ return enc
 // reclaimExpired moves any in-progress items whose lease expired back onto the
 // pending list, so a crashed worker's partition is retried.
 func (q *RedisQueue) reclaimExpired(ctx context.Context, nowMillis int64) error {
+	//lint:ignore SA1019 ZRangeByScore still works; migrating to ZRangeArgs(ByScore) is a separate, Redis-integration-tested change.
 	expired, err := q.client.ZRangeByScore(ctx, q.kInProgress(), &goredis.ZRangeBy{
 		Min: "-inf", Max: fmt.Sprintf("%d", nowMillis),
 	}).Result()

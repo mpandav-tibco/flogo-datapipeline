@@ -36,9 +36,7 @@ type csvSource struct {
 	reader    *csv.Reader
 	schema    []record.Column
 	hasHeader bool
-	skipLines int
 	rowsRead  int64
-	bytePos   int64 // approximate byte position for checkpoint token
 	closed    bool
 }
 

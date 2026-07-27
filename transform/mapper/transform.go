@@ -39,6 +39,9 @@ import (
 	"time"
 	_ "time/tzdata" // embed the IANA tz database so datetime.*Zone functions resolve zones even in scratch/distroless images without OS tzdata
 
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
+
 	"github.com/mpandav-tibco/flogo-datapipeline/record"
 	"github.com/mpandav-tibco/flogo-datapipeline/transform"
 )
@@ -962,7 +965,9 @@ func registerEtlBuiltins() {
 		return strings.Join(parts, sep)
 	})
 	reg([]string{"string.title", "string.capitalize"}, func(a []interface{}) interface{} {
-		return strings.Title(strings.ToLower(argStr(a, 0)))
+		// cases.Title replaces the deprecated strings.Title. A fresh Caser is created
+		// per call because a Caser is not safe for concurrent use across goroutines.
+		return cases.Title(language.Und).String(strings.ToLower(argStr(a, 0)))
 	})
 	reg([]string{"string.reverse"}, func(a []interface{}) interface{} {
 		r := []rune(argStr(a, 0))
