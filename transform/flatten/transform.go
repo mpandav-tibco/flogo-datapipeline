@@ -115,6 +115,18 @@ func (f *flattenTransform) Apply(in *record.RecordBatch) (*record.RecordBatch, e
 		}
 	}
 
+	// Nothing to flatten in this batch — pass it through untouched.
+	anyFlat := false
+	for _, ok := range flatten {
+		if ok {
+			anyFlat = true
+			break
+		}
+	}
+	if !anyFlat {
+		return in, nil
+	}
+
 	// Deterministic sorted leaf key order per flattened column.
 	keys := make([][]string, n)
 	for i := 0; i < n; i++ {
@@ -146,8 +158,7 @@ func (f *flattenTransform) Apply(in *record.RecordBatch) (*record.RecordBatch, e
 	out.Rows = make([][]interface{}, len(in.Rows))
 	for r, row := range in.Rows {
 		dst := make([]interface{}, 0, len(outCols))
-		for i, col := range in.Columns {
-			_ = col
+		for i := range in.Columns {
 			if flatten[i] {
 				var leaves map[string]interface{}
 				if rowLeaves[r] != nil {
