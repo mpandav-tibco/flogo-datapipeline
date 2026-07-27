@@ -22,6 +22,7 @@ registered with `transform.Register(name, …)`
 | [`dq`](transforms/dq.md) | evaluate data-quality expectations; emit a report |
 | [`schemadrift`](transforms/schemadrift.md) | detect column add/remove/type changes at runtime |
 | [`hwm`](transforms/hwm.md) | observe the max of a column for incremental loads |
+| [`cast`](transforms/cast.md) | convert column types (string ↔ int / float / decimal / bool / date) |
 
 ## Filter — `filter`
 
@@ -81,6 +82,13 @@ default / `additive` / `strict` / `drop`) when later batches differ, with `onDri
 A pass-through observer that tracks the maximum value of `column` (`valueType`
 `datetime`/`int`/`string`/`decimal`) and exposes it to the [incremental](reliability.md)
 watermark store. Does not modify rows.
+
+## Cast — `cast`
+
+Converts the listed `columns` to a target `type` (`string`, `int`, `float`,
+`decimal` with optional `scale`, `bool`, `date` with optional `format`) in every
+row and updates the batch schema. `onError` is `null` (default — unconvertible
+values become null) or `fail`. Decimal casts stay exact. See [cast](transforms/cast.md).
 
 ---
 

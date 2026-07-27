@@ -105,6 +105,7 @@ import (
 	_ "github.com/mpandav-tibco/flogo-datapipeline/transform/mapper" // Field projection / rename / derive
 
 	// Additional transforms (gap-08)
+	_ "github.com/mpandav-tibco/flogo-datapipeline/transform/cast"        // Column type casting
 	_ "github.com/mpandav-tibco/flogo-datapipeline/transform/dq"          // Data-quality expectations with pass-rate thresholds
 	_ "github.com/mpandav-tibco/flogo-datapipeline/transform/hwm"         // High-water-mark observer (pure passthrough)
 	_ "github.com/mpandav-tibco/flogo-datapipeline/transform/join"        // Keyed join against a source-loaded reference table (stream-table)
