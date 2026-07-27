@@ -15,7 +15,7 @@ EBCDIC-encoded data and implied-decimal numerics. Implemented in
 | Key | Type | Default | Required | Description |
 |---|---|---|:--:|---|
 | `path` | string | — | ✅ | File to read. |
-| `encoding` | string | `utf-8` | — | `ebcdic-037`, `ebcdic-500`, `latin-1`, … Automatic translation when set. |
+| `encoding` | string | `utf-8` | — | Character set for decoding: `utf-8`/`ascii`, `ebcdic-037`, `ebcdic-1047`, `ebcdic-1140`, `latin-1`/`iso-8859-1`, `latin-9`/`iso-8859-15`, `windows-1252`. Decoded per field so fixed byte positions are preserved. |
 | `skipLines` | int | `0` | — | Header/trailer lines to skip at the start. |
 | `recordLength` | int | `0` | — | Fixed byte length per record; `0` = newline-delimited. Short lines are space-padded. |
 | `columns` | `[]object` | — | ✅ | Positional column definitions (see below). |
