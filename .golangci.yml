@@ -31,11 +31,6 @@ linters:
       - node_modules # vendored third-party (e.g. studio/vscode/node_modules)
       - examples # demo/benchmark harness scripts, not shipped code
     rules:
-      # Deprecations intentionally deferred to dedicated, integration-tested
-      # migrations (go-redis ZRangeByScore → ZRangeArgs; parquet-go Reader →
-      # GenericReader). The deprecated APIs still function.
-      - path: (source/parquet/source\.go|partition/workqueue/redis\.go)
-        text: SA1019
       # Tests may ignore setup/teardown errors.
       - path: _test\.go
         linters:
