@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Flogo Data Pipeline Studio — Prototype</title>
+<style>
+  :root{
+    --bg:#1e1e1e; --chrome:#252526; --chrome2:#2d2d2d; --abar:#333333; --tibco:#0081cb; --tibco2:#106cc8;
+    --edit:#f7f8fa; --line:#3a3d41; --lineL:#d7dbe0; --ink:#23272b; --body:#5b6169; --mute:#8a9099;
+    --sel:#094771; --accent:#2f6db3; --accent-soft:#e7f0fe; --focus:#0081cb;
+    --src:#2e7d46; --src-bg:#e6f4ea; --tf:#2f6db3; --tf-bg:#e7f0fe; --snk:#7a4fb0; --snk-bg:#f0e9fa;
+    --ctrl:#b06f00; --ctrl-bg:#fbf1dd; --dlq:#c1362f; --dlq-bg:#fbe9e7;
+    --ok:#2e7d46; --ok-bg:#e6f4ea; --run:#1f6feb; --run-bg:#e7f0fe; --warn:#b06f00; --warn-bg:#fbf1dd; --err:#c1362f; --err-bg:#fbe9e7;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{font-family:var(--sans);font-size:13px;color:#cccccc;background:var(--bg);overflow:hidden}
+  .app{display:grid;grid-template-rows:32px 1fr 22px;height:100vh}
+
+  /* title bar */
+  .titlebar{background:#323233;display:flex;align-items:center;gap:10px;padding:0 12px;color:#cfd2d6;font-size:12px;-webkit-user-select:none}
+  .titlebar .lights{display:flex;gap:8px}
+  .titlebar .lights i{width:12px;height:12px;border-radius:50%;display:inline-block}
+  .titlebar .tt{flex:1;text-align:center;color:#b7bcc2}
+  .titlebar .cmd{background:#3c3c3c;border:1px solid #4a4a4a;border-radius:6px;padding:3px 26px;color:#a9adb3;font-size:11px;cursor:pointer;min-width:340px;text-align:center}
+  .titlebar .cmd:hover{background:#454545}
+
+  .body{display:grid;grid-template-columns:48px 250px 1fr;min-height:0}
+  /* activity bar */
+  .abar{background:var(--abar);display:flex;flex-direction:column;align-items:center;gap:4px;padding:8px 0}
+  .abar .ai{width:48px;height:44px;display:grid;place-items:center;font-size:19px;color:#8b8f94;position:relative;cursor:pointer}
+  .abar .ai:hover{color:#e6e6e6}
+  .abar .ai.on{color:#fff}
+  .abar .ai.on::before{content:"";position:absolute;left:0;top:6px;bottom:6px;width:2px;background:#fff}
+  .abar .ai.flogo.on{color:#fc7e1b}.abar .ai.flogo.on::before{background:#fc7e1b}
+  .abar .sp{flex:1}
+
+  /* sidebar */
+  .side{background:var(--chrome);color:#cccccc;overflow:auto;border-right:1px solid #1b1b1b;display:flex;flex-direction:column}
+  .side .sh{padding:10px 16px 6px;font-size:11px;letter-spacing:.1em;color:#9da2a8;display:flex;justify-content:space-between;text-transform:uppercase}
+  .side .grp{padding:6px 12px 3px;font-size:11px;font-weight:700;color:#c9cdd2;display:flex;align-items:center;gap:6px;cursor:pointer;text-transform:uppercase;letter-spacing:.03em}
+  .side .grp .tw{color:#8a8f94;font-size:9px;width:10px}
+  .ti{display:flex;align-items:center;gap:7px;padding:4px 12px 4px 26px;color:#d0d3d7;cursor:pointer;font-size:13px}
+  .ti:hover{background:#2a2d2e}
+  .ti.on{background:var(--sel);color:#fff}
+  .ti .tc{width:15px;text-align:center;color:#8a8f94;flex:none;font-size:12px}
+  .ti.on .tc{color:#cfe6ff}
+  .ti .sub{margin-left:auto;font-size:10px;color:#7d828a}
+  .ti .dot{width:8px;height:8px;border-radius:50%;flex:none}
+
+  /* editor area */
+  .editor{display:grid;grid-template-rows:35px 42px 1fr auto;min-width:0;background:var(--edit);color:var(--ink)}
+  .etabs{display:flex;background:#ececec;border-bottom:1px solid var(--lineL);align-items:stretch}
+  .etab{padding:0 14px;display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--body);background:#f3f3f3;border-right:1px solid var(--lineL);cursor:pointer}
+  .etab.on{background:var(--edit);color:var(--ink);box-shadow:inset 0 2px 0 var(--tibco)}
+  .etab .md{width:8px;height:8px;border-radius:50%;background:#c9ccd1}
+  .etab .x{color:var(--mute);margin-left:4px}
+  .etoolbar{display:flex;align-items:center;gap:10px;padding:0 12px;border-bottom:1px solid var(--lineL);background:#fafbfc}
+  .vtabs{display:inline-flex;border:1px solid var(--lineL);border-radius:8px;overflow:hidden;background:#fff}
+  .vtabs span{padding:5px 12px;font-size:12px;color:var(--body);border-right:1px solid var(--lineL);cursor:pointer}
+  .vtabs span:last-child{border-right:none}
+  .vtabs span.on{background:var(--accent);color:#fff}
+  .grow{flex:1}
+  .badge{font-size:11px;font-weight:600;border-radius:20px;padding:2px 10px;display:inline-flex;align-items:center;gap:6px}
+  .badge::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor}
+  .badge.bounded{color:var(--ok);background:var(--ok-bg)} .badge.unbounded{color:var(--run);background:var(--run-bg)}
+  .badge.no::before{display:none}
+  .btn{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--lineL);background:#fff;color:var(--body);border-radius:7px;padding:5px 11px;font-size:12px;font-weight:600;cursor:pointer}
+  .btn:hover{border-color:var(--accent);color:var(--ink)}
+  .btn.run{background:var(--ok);border-color:var(--ok);color:#fff}
+  .btn.pri{background:var(--accent);border-color:var(--accent);color:#fff}
+  .chip{font-size:11px;font-weight:600;border-radius:20px;padding:2px 9px;display:inline-flex;align-items:center;gap:5px}
+  .chip::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor}
+  .chip.no::before{display:none}
+  .chip.ok{color:var(--ok);background:var(--ok-bg)} .chip.run{color:var(--run);background:var(--run-bg)}
+  .chip.warn{color:var(--warn);background:var(--warn-bg)} .chip.err{color:var(--err);background:var(--err-bg)} .chip.idle{color:var(--mute);background:#e9ebee}
+
+  /* editor main (palette | canvas | inspector) */
+  .emain{display:grid;grid-template-columns:172px 1fr 290px;min-height:0;overflow:hidden}
+  .palette{background:#f3f4f6;border-right:1px solid var(--lineL);overflow:auto;padding:10px}
+  .palette .psearch{background:#fff;border:1px solid var(--lineL);border-radius:7px;padding:6px 9px;font-size:12px;color:var(--mute);margin-bottom:10px}
+  .palette .pg{font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--mute);margin:12px 2px 6px}
+  .pitem{display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px solid var(--lineL);border-radius:7px;background:#fff;margin-bottom:5px;font-size:12px;color:var(--body);cursor:grab}
+  .pitem:hover{border-color:var(--accent);color:var(--ink)}
+  .pico{width:19px;height:19px;border-radius:5px;flex:none;display:grid;place-items:center;color:#fff;font-size:10px;font-weight:700}
+  .pico.s{background:var(--src)}.pico.t{background:var(--tf)}.pico.c{background:var(--ctrl)}.pico.k{background:var(--snk)}.pico.d{background:var(--dlq)}
+
+  .canvaswrap{position:relative;overflow:auto;background:radial-gradient(circle at 1px 1px,#e2e5e9 1px,transparent 0) 0 0/20px 20px,#f7f8fa}
+  .ctool{position:absolute;top:10px;left:10px;right:10px;display:flex;gap:8px;z-index:6;pointer-events:none}
+  .ctool .mb{pointer-events:auto;background:#fff;border:1px solid var(--lineL);border-radius:7px;padding:4px 9px;font-size:11.5px;color:var(--body);font-weight:600;cursor:pointer}
+  .canvas{position:relative;margin:44px auto 20px}
+  svg.wires{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+  .node{position:absolute;width:152px;background:#fff;border:1px solid var(--lineL);border-radius:10px;box-shadow:0 1px 2px rgba(20,25,30,.06),0 6px 16px rgba(20,25,30,.08);cursor:pointer;z-index:3}
+  .node.sel{outline:2px solid var(--accent);outline-offset:1px}
+  .node .nh{display:flex;align-items:center;gap:7px;padding:6px 9px;border-bottom:1px solid var(--lineL);border-radius:10px 10px 0 0}
+  .node .nico{width:18px;height:18px;border-radius:5px;display:grid;place-items:center;color:#fff;font-size:10px;font-weight:700;flex:none}
+  .node .nk{font-size:9px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute)}
+  .node .nst{margin-left:auto;width:9px;height:9px;border-radius:50%;background:#c4c9cf}
+  .node .nst.ok{background:var(--ok)} .node .nst.run{background:var(--run);animation:pulse .5s infinite} .node .nst.warn{background:var(--warn)} .node .nst.err{background:var(--err)}
+  .node .nb{padding:6px 9px}
+  .node .nnm{font-size:12.5px;font-weight:600;color:var(--ink);line-height:1.2}
+  .node .nmeta{font-size:10px;color:var(--mute);font-family:var(--mono);margin-top:2px}
+  .node .ncount{position:absolute;top:-9px;right:-9px;background:#1c2126;color:#fff;border-radius:20px;font:600 10px var(--mono);padding:1px 7px}
+  .node.src .nh{background:var(--src-bg)}.node.src .nico{background:var(--src)}.node.src{border-color:#bfe0c9}
+  .node.transform .nh{background:var(--tf-bg)}.node.transform .nico{background:var(--tf)}
+  .node.control .nh{background:var(--ctrl-bg)}.node.control .nico{background:var(--ctrl)}.node.control{border-color:#ecd9a8}
+  .node.sink .nh{background:var(--snk-bg)}.node.sink .nico{background:var(--snk)}.node.sink{border-color:#dcc9f0}
+  .node.dlq .nh{background:var(--dlq-bg)}.node.dlq .nico{background:var(--dlq)}.node.dlq{border-color:#f0c9c6}
+  .port{position:absolute;width:11px;height:11px;border-radius:50%;background:#fff;border:2px solid #9aa4b0;z-index:4}
+  .port.err{border-color:var(--dlq)}
+  .port .pl{position:absolute;font:600 9px var(--sans);color:var(--body);white-space:nowrap;top:-3px;left:15px}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+
+  /* code view */
+  .codeview{grid-column:1 / -1;background:#fbfcfd;overflow:auto;padding:14px 18px;font-family:var(--mono);font-size:12px;line-height:1.6;color:#33415a;white-space:pre}
+
+  /* inspector */
+  .insp{background:#fff;border-left:1px solid var(--lineL);overflow:auto;display:flex;flex-direction:column}
+  .insp .ih{display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid var(--lineL)}
+  .insp .ik{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;border-radius:6px;padding:2px 7px}
+  .insp .inm{font-weight:600;font-size:13px}
+  .insp .itabs{display:flex;gap:2px;padding:8px 10px 0;border-bottom:1px solid var(--lineL)}
+  .insp .itabs span{font-size:12px;padding:5px 9px;color:var(--body);border-bottom:2px solid transparent;cursor:pointer}
+  .insp .itabs span.on{color:var(--accent);border-bottom-color:var(--accent);font-weight:600}
+  .insp .ib{padding:12px;overflow:auto}
+  .insp .empty{color:var(--mute);text-align:center;padding:40px 16px;font-size:12.5px}
+  .fld{margin-bottom:11px}
+  .fld .k{font-size:11px;color:var(--mute);text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px}
+  .fld .v{border:1px solid var(--lineL);border-radius:7px;padding:7px 9px;font-size:12.5px;color:var(--ink);background:#fff}
+  .fld .v.mono{font-family:var(--mono);font-size:11.5px}
+  .rcard{border:1px solid var(--lineL);border-radius:7px;padding:7px 9px;margin-bottom:6px;background:#fafbfc;font-size:12px}
+  .addrow{border:1px dashed var(--lineL);border-radius:7px;padding:6px;text-align:center;font-size:12px;color:var(--accent);font-weight:600;cursor:pointer}
+
+  /* panel */
+  .panel{height:210px;border-top:1px solid var(--lineL);background:#fff;display:flex;flex-direction:column;min-height:0}
+  .ptabs{display:flex;align-items:center;gap:0;border-bottom:1px solid var(--lineL);background:#fafbfc;padding:0 8px}
+  .ptab{padding:8px 12px;font-size:11.5px;text-transform:uppercase;letter-spacing:.03em;color:var(--body);border-bottom:2px solid transparent;cursor:pointer}
+  .ptab.on{color:var(--ink);border-bottom-color:var(--tibco);font-weight:700}
+  .ptab .cnt{color:var(--mute);font-weight:400;margin-left:4px}
+  .pbody{flex:1;overflow:auto;padding:10px 12px}
+  .grid{width:100%;border-collapse:collapse;font-size:12px}
+  .grid th{text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--mute);padding:5px 9px;border-bottom:1px solid var(--lineL);background:#fafbfc;position:sticky;top:0}
+  .grid td{padding:5px 9px;border-bottom:1px solid #eef0f2}
+  .grid td.mono,.grid td.num{font-family:var(--mono);font-size:11px;color:#33415a}
+  .grid td.num{text-align:right}
+  .grid .fld0{font-weight:600;color:var(--ink)}
+  .rlog{font-family:var(--mono);font-size:11.5px;line-height:1.6;color:#3a4048}
+  .rlog .t{color:var(--mute)} .rlog .ok{color:var(--ok)} .rlog .w{color:var(--warn)} .rlog .e{color:var(--err)} .rlog .i{color:var(--run)}
+  .reason{font-size:10.5px;font-weight:600;color:var(--err);background:var(--err-bg);border-radius:6px;padding:2px 7px}
+  .subtab{display:inline-flex;border:1px solid var(--lineL);border-radius:7px;overflow:hidden;margin-bottom:10px}
+  .subtab span{padding:4px 10px;font-size:11px;color:var(--body);border-right:1px solid var(--lineL);cursor:pointer}
+  .subtab span:last-child{border-right:none}.subtab span.on{background:var(--accent-soft);color:var(--accent);font-weight:600}
+  .trow{display:flex;align-items:center;gap:10px;padding:7px 4px;border-bottom:1px solid #eef0f2;font-family:var(--mono);font-size:11.5px}
+  .trow .td{width:10px;height:10px;border-radius:50%;background:#c4c9cf;flex:none}
+  .trow.run .td{background:var(--run);animation:pulse .5s infinite}.trow.pass .td{background:var(--ok)}.trow.fail .td{background:var(--err)}
+  .trow .ts{margin-left:auto;font-size:10.5px;font-weight:700;color:var(--mute)} .trow.pass .ts{color:var(--ok)}.trow.fail .ts{color:var(--err)}
+
+  /* status bar */
+  .statusbar{background:var(--tibco);color:#fff;display:flex;align-items:center;gap:16px;padding:0 12px;font-size:11.5px}
+  .statusbar .s{display:flex;align-items:center;gap:5px;cursor:default}
+  .statusbar .grow{flex:1}
+
+  /* command palette + modal */
+  .scrim{position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:100;display:none}
+  .scrim.on{display:block}
+  .cmdp{position:fixed;top:64px;left:50%;transform:translateX(-50%);width:620px;max-width:92vw;background:#252526;border:1px solid #454545;border-radius:8px;box-shadow:0 16px 50px rgba(0,0,0,.5);z-index:101;overflow:hidden;display:none}
+  .cmdp.on{display:block}
+  .cmdp input{width:100%;background:#3c3c3c;border:none;border-bottom:1px solid #4a4a4a;color:#e6e6e6;padding:11px 14px;font-size:13px;outline:none}
+  .cmdp .list{max-height:300px;overflow:auto}
+  .cmdp .ci{padding:8px 14px;color:#cccccc;font-size:13px;cursor:pointer;display:flex;gap:10px;align-items:center}
+  .cmdp .ci:hover,.cmdp .ci.on{background:#04395e}
+  .cmdp .ci .ico{color:#8a9099;width:16px;text-align:center}
+  .cmdp .ci .kb{margin-left:auto;font-size:10.5px;color:#8a9099;font-family:var(--mono)}
+  .modal{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:640px;max-width:94vw;max-height:82vh;overflow:auto;background:var(--edit);color:var(--ink);border-radius:10px;box-shadow:0 20px 60px rgba(0,0,0,.5);z-index:101;display:none}
+  .modal.on{display:block}
+  .modal .mh{display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid var(--lineL);font-weight:700;font-size:15px}
+  .modal .mh .x{margin-left:auto;color:var(--mute);cursor:pointer;font-size:16px}
+  .modal .mc{padding:16px 18px}
+  .tmpl{border:1px solid var(--lineL);border-radius:9px;padding:11px 13px;margin-bottom:9px;cursor:pointer;background:#fff}
+  .tmpl:hover{border-color:var(--accent)}
+  .tmpl b{font-size:13px} .tmpl .fl{font-size:10.5px;color:var(--mute);font-family:var(--mono);margin-top:4px}
+  .card{border:1px solid var(--lineL);border-radius:9px;padding:12px;background:#fff;margin-bottom:10px}
+  .card h4{margin:0 0 7px;font-size:13px}
+  .card p{margin:0;color:var(--body);font-size:12.5px}
+  .metric{border:1px solid var(--lineL);border-radius:9px;padding:10px 12px;background:#fff}
+  .metric .ml{font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--mute)}
+  .metric .mv{font:700 20px var(--sans);color:var(--ink);margin:2px 0}
+  .g3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+  .g2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .toast{position:fixed;bottom:34px;right:16px;background:#252526;color:#e6e6e6;border:1px solid #454545;border-radius:8px;padding:10px 14px;font-size:12.5px;z-index:120;box-shadow:0 8px 24px rgba(0,0,0,.4);display:none}
+  .toast.on{display:block;animation:tin .25s}
+  @keyframes tin{from{opacity:0;transform:translateY(8px)}to{opacity:1}}
+  .muted{color:var(--mute)}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="titlebar">
+    <span class="lights"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></span>
+    <span class="tt">Data Pipeline Studio — <b id="ttname">enrich-route-load.datapipeline</b></span>
+    <span class="cmd" id="cmdopen">⌘⇧P&nbsp;&nbsp;Data Pipeline: run a command…</span>
+    <span class="tt"></span>
+  </div>
+
+  <div class="body">
+    <div class="abar" id="abar">
+      <span class="ai" data-view="explorer" title="Explorer">☰</span>
+      <span class="ai" data-view="search" title="Search">⌕</span>
+      <span class="ai" data-view="scm" title="Source Control">⑂</span>
+      <span class="ai" data-view="run" title="Run">▷</span>
+      <span class="ai flogo on" data-view="pipeline" title="Data Pipeline">◈</span>
+      <span class="sp"></span>
+      <span class="ai" data-view="settings" title="Settings">⚙</span>
+    </div>
+    <div class="side" id="side"></div>
+    <div class="editor" id="editor">
+      <div class="etabs" id="etabs"></div>
+      <div class="etoolbar" id="etoolbar"></div>
+      <div class="emain" id="emain"></div>
+      <div class="panel" id="panel"></div>
+    </div>
+  </div>
+
+  <div class="statusbar" id="statusbar"></div>
+</div>
+
+<div class="scrim" id="scrim"></div>
+<div class="cmdp" id="cmdp"><input id="cmdinput" placeholder="Type a command…" /><div class="list" id="cmdlist"></div></div>
+<div class="modal" id="modal"></div>
+<div class="toast" id="toast"></div>
+
+<script>
+/* ============================ MOCK BACKEND ============================ */
+const DB = {
+  connections:[
+    {id:'pg-warehouse',type:'jdbc',icon:'▣',color:'#2f6db3',meta:'jdbc · postgres · warehouse.internal:5432',tested:true},
+    {id:'kafka-prod',type:'kafka',icon:'K',color:'#7a4fb0',meta:'kafka · SASL_SSL · 3 brokers',tested:true},
+    {id:'s3-lake',type:'s3',icon:'◇',color:'#2e7d46',meta:'s3 · eu-west-1 · curated/',tested:true},
+  ],
+  runs:[
+    {t:'10:42',pipe:'enrich-route-load',status:'completed',dur:'4m 12s',rows:'2.0M',dq:'99.2%'},
+    {t:'09:15',pipe:'daily-cdc-load',status:'partial',dur:'11m',rows:'480k',dq:'97.1%'},
+    {t:'08:00',pipe:'orders-quality',status:'completed',dur:'40s',rows:'120k',dq:'100%'},
+  ],
+  pipelines:{
+    'enrich-route-load':{
+      id:'enrich-route-load', shape:'bounded', mode:'etl',
+      nodes:[
+        {id:'src_orders',kind:'src',type:'csv',ico:'C',name:'orders.csv',x:16,y:60,meta:'csv · header · 12 cols',out:['rows'],count:'2.0M'},
+        {id:'src_cust',kind:'src',type:'jdbc',ico:'J',name:'customers',x:16,y:420,meta:'jdbc · pg · ref',out:['rows'],count:'48k'},
+        {id:'join',kind:'transform',type:'join',ico:'⨝',name:'enrich customer',x:210,y:210,meta:'left.cust_id = right.id',in:['left','right'],out:['rows'],count:'2.0M'},
+        {id:'validate',kind:'transform',type:'validate',ico:'✓',name:'Validate · DQ',x:410,y:250,meta:'route rejects → DLQ',in:['in'],out:['pass','reject'],count:'1.98M'},
+        {id:'router',kind:'control',type:'router',ico:'⋔',name:'Router · by region',x:610,y:180,meta:'3 routes · first-match',in:['in'],out:['eu','us','rest']},
+        {id:'snk_eu',kind:'sink',type:'s3',ico:'◇',name:'lake / EU',x:790,y:60,meta:'s3 · parquet',in:['in'],count:'610k'},
+        {id:'snk_us',kind:'sink',type:'jdbc',ico:'▣',name:'warehouse / US',x:790,y:190,meta:'jdbc · upsert',in:['in'],count:'1.1M'},
+        {id:'snk_kafka',kind:'sink',type:'kafka',ico:'K',name:'events / rest',x:790,y:320,meta:'kafka · enriched',in:['in'],count:'270k'},
+        {id:'dlq',kind:'dlq',type:'jdbc',ico:'⚠',name:'orders_dlq',x:610,y:440,meta:'jdbc · +reason',in:['in'],count:'18k',st:'warn'},
+      ],
+      edges:[
+        ['src_orders','rows','join','left'],['src_cust','rows','join','right'],
+        ['join','rows','validate','in'],['validate','pass','router','in'],['validate','reject','dlq','in','err'],
+        ['router','eu','snk_eu','in'],['router','us','snk_us','in'],['router','rest','snk_kafka','in'],
+      ],
+    },
+    'orders-quality':{
+      id:'orders-quality', shape:'bounded', mode:'etl',
+      nodes:[
+        {id:'src',kind:'src',type:'csv',ico:'C',name:'orders.csv',x:40,y:150,meta:'csv · 10 rows',out:['rows'],count:'10'},
+        {id:'cast',kind:'transform',type:'cast',ico:'ƒ',name:'cast',x:250,y:150,meta:'amount→decimal(2)',in:['in'],out:['rows'],count:'10'},
+        {id:'val',kind:'transform',type:'validate',ico:'✓',name:'Validate · 5 rules',x:460,y:170,meta:'onViolation: route',in:['in'],out:['pass','reject'],count:'4'},
+        {id:'snk',kind:'sink',type:'jsonl',ico:'▤',name:'curated.jsonl',x:680,y:110,meta:'jsonlines',in:['in'],count:'3'},
+        {id:'rej',kind:'dlq',type:'csv',ico:'⚠',name:'rejected.csv',x:680,y:280,meta:'csv · +reason',in:['in'],count:'6',st:'warn'},
+      ],
+      edges:[['src','rows','cast','in'],['cast','rows','val','in'],['val','pass','snk','in'],['val','reject','rej','in','err']],
+    },
+    'daily-cdc-load':{
+      id:'daily-cdc-load', shape:'unbounded', mode:'etl',
+      nodes:[
+        {id:'src',kind:'src',type:'kafka',ico:'K',name:'orders-topic',x:40,y:150,meta:'kafka · mode:streaming',out:['rows'],count:'∞'},
+        {id:'win',kind:'transform',type:'window',ico:'⧖',name:'window · 5min',x:250,y:150,meta:'tumbling · region',in:['in'],out:['rows'],count:'—'},
+        {id:'map',kind:'transform',type:'mapper',ico:'ƒ',name:'map · rollup',x:460,y:150,meta:'sum(amount)',in:['in'],out:['rows'],count:'—'},
+        {id:'snk',kind:'sink',type:'jdbc',ico:'▣',name:'metrics table',x:680,y:150,meta:'jdbc · upsert',in:['in'],count:'—'},
+      ],
+      edges:[['src','rows','win','in'],['win','rows','map','in'],['map','rows','snk','in']],
+    },
+  },
+};
+// node config (per-node inspector body)
+const CFG = {
+  src_orders:[['Type','CSV · header row'],['Path','data/orders.csv'],['Columns','12 · ✨ infer from file'],['Encoding','utf-8']],
+  src_cust:[['Connection','pg-warehouse ▾'],['Query','SELECT id,name,tier,segment FROM customers'],['Role','Join reference table']],
+  join:[['Type','inner join'],['Keys','orders.cust_id = customers.id'],['Emit right','name · tier · segment']],
+  validate:[['Rules','5 · amount not null, status in […]'],['On violation','route to reject port →'],['Reject target','⚠ orders_dlq (wired)']],
+  router:[['Routes','3 · EU / US / rest'],['EU','region == \'EU\''],['US','region == \'US\''],['Match','first-match · default → rest']],
+  snk_eu:[['Connection','s3-lake ▾'],['Format','Parquet · snappy'],['Object key','curated/eu/{date}/part-{n}.parquet']],
+  snk_us:[['Connection','pg-warehouse ▾'],['Mode','Upsert · conflict key = order_id'],['Table','warehouse.orders_us']],
+  snk_kafka:[['Connection','kafka-prod ▾'],['Topic','orders.enriched'],['Serialization','JSON · acks=all']],
+  dlq:[['Sink','jdbc · +error envelope'],['Table','pipeline_dlq'],['On full','block · maxRowsPerBatch 1000']],
+};
+// preview sample per pipeline
+const PREVIEW = {
+  'enrich-route-load':{
+    cols:['order_id','full_name','net_amount','region','loaded_at'],
+    output:[['ORD-000001','Ada Lovelace (gold)','299.98','EU','10:42:01Z'],['ORD-000002','Alan Turing (silver)','89.50','US','10:42:01Z'],['ORD-000006','Grace Hopper (gold)','1280.00','EU','10:42:01Z'],['ORD-000009','Katherine Johnson (gold)','2500.00','APAC','10:42:01Z']],
+    rejected:[['ORD-000004','amount ≤ 0','-12.00'],['ORD-000007','status unknown','"RETURND"'],['ORD-000011','not a number','"N/A"']],
+    dropped:[['ORD-000002','filter · amount ≥ 100','89.50']],
+    profile:[['order_id','0%','104','ORD-000001 … 118999'],['full_name','0%','96','text · avg 17 chars'],['net_amount','0%','98','12.00 – 2500.00'],['region','0%','4','EU 41% · US 33% …'],['notes','62%','18','mostly null ⚠']],
+  },
+};
+const CODE = {
+  'enrich-route-load':`{
+  "name": "enrich-route-load",
+  "mode": "etl",
+  "source": { "type": "csv", "path": "orders.csv" },
+  "transforms": [
+    { "type": "join", "with": "customers", "on": "cust_id = id" },
+    { "type": "validate", "rules": 5, "onViolation": "route" },
+    { "type": "router", "routes": ["EU","US","rest"] }
+  ],
+  "sinks": {
+    "eu":   { "type": "s3",    "format": "parquet" },
+    "us":   { "type": "jdbc",  "mode": "upsert", "key": "order_id" },
+    "rest": { "type": "kafka", "topic": "orders.enriched" }
+  },
+  "dlq": { "type": "jdbc", "table": "pipeline_dlq" }
+}`,
+};
+
+/* ============================ STATE ============================ */
+const S = { open:'enrich-route-load', tabs:['enrich-route-load'], sel:'validate', view:'design', panel:'preview', pv:'output', abar:'pipeline', running:false };
+const PIPE = ()=>DB.pipelines[S.open];
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function toast(m){const t=document.getElementById('toast');t.textContent=m;t.classList.add('on');clearTimeout(t._h);t._h=setTimeout(()=>t.classList.remove('on'),2200);}
+
+/* ============================ RENDER ============================ */
+function render(){ renderSide(); renderTabs(); renderToolbar(); renderMain(); renderPanel(); renderStatus(); }
+
+function renderSide(){
+  const el=document.getElementById('side');
+  const pipes=Object.values(DB.pipelines).map(p=>
+    `<div class="ti ${p.id===S.open?'on':''}" data-open="${p.id}"><span class="tc">◈</span>${p.id}<span class="sub">${p.shape==='unbounded'?'stream':'batch'}</span></div>`).join('');
+  const conns=DB.connections.map(c=>`<div class="ti" data-conn="${c.id}"><span class="tc" style="color:${c.color}">${c.icon}</span>${c.id}<span class="dot" style="background:var(--ok);margin-left:auto"></span></div>`).join('');
+  const runs=DB.runs.map(r=>`<div class="ti" data-run="${r.t}"><span class="tc"><span class="dot" style="background:${r.status==='completed'?'#4ec36b':'#e0a63a'}"></span></span>${r.t} · ${r.status}<span class="sub">${r.rows}</span></div>`).join('');
+  el.innerHTML=`<div class="sh">Data Pipeline <span>⋯</span></div>
+    <div class="grp" data-tw><span class="tw">▾</span>Pipelines <span style="margin-left:auto;color:var(--tibco);cursor:pointer" data-cmd="new">＋</span></div>${pipes}
+    <div class="grp"><span class="tw">▾</span>Connections</div>${conns}
+    <div class="grp"><span class="tw">▾</span>Runs</div>${runs}`;
+}
+function renderTabs(){
+  document.getElementById('etabs').innerHTML=S.tabs.map(t=>
+    `<div class="etab ${t===S.open?'on':''}" data-open="${t}"><span class="md"></span>${t}.datapipeline<span class="x" data-close="${t}">✕</span></div>`).join('');
+  document.getElementById('ttname').textContent=S.open+'.datapipeline';
+}
+function renderToolbar(){
+  const p=PIPE();
+  document.getElementById('etoolbar').innerHTML=`
+    <span class="vtabs" id="vtabs"><span class="${S.view==='design'?'on':''}" data-view2="design">Design</span><span class="${S.view==='code'?'on':''}" data-view2="code">Code</span></span>
+    <span class="badge ${p.shape} no" title="detected from the source">${p.shape==='unbounded'?'Unbounded · streaming':'Bounded · batch'}</span>
+    <span class="chip idle no">${p.mode.toUpperCase()}</span>
+    <span class="grow"></span>
+    <span class="chip ok" id="valchip">valid · 0 errors</span>
+    <span class="btn" data-cmd="autolayout">▦ Auto-layout</span>
+    <span class="btn run" data-cmd="run">▶ Run</span>`;
+}
+function portY(node,side,i){ const arr=(side==='in'?node.in:node.out)||['x']; const n=arr.length; const c=27; return c+(i-(n-1)/2)*18; }
+function renderMain(){
+  const el=document.getElementById('emain'), p=PIPE();
+  if(S.view==='code'){
+    el.style.gridTemplateColumns='1fr';
+    el.innerHTML=`<div class="codeview">${esc(CODE[S.open]||JSON.stringify({name:p.id,mode:p.mode,nodes:p.nodes.length},null,2))}</div>`;
+    return;
+  }
+  el.style.gridTemplateColumns='172px 1fr 290px';
+  // palette
+  const pal=`<div class="palette">
+    <div class="psearch">⌕ Search components… <span style="float:right;font-family:var(--mono)">⌘K</span></div>
+    <div class="pg">Sources</div>
+    <div class="pitem"><span class="pico s">C</span>CSV / TSV</div><div class="pitem"><span class="pico s">J</span>JDBC</div><div class="pitem"><span class="pico s">K</span>Kafka</div><div class="pitem"><span class="pico s">◇</span>Object store</div>
+    <div class="pg">Transforms</div>
+    <div class="pitem"><span class="pico t">⨝</span>Join</div><div class="pitem"><span class="pico c">⋔</span>Router</div><div class="pitem"><span class="pico t">✓</span>Validate</div><div class="pitem"><span class="pico t">ƒ</span>Map · Filter · Cast</div><div class="pitem"><span class="pico t">⧖</span>Window</div>
+    <div class="pg">Sinks</div>
+    <div class="pitem"><span class="pico k">▣</span>JDBC · Kafka</div><div class="pitem"><span class="pico k">◇</span>Object store</div><div class="pitem"><span class="pico d">⚠</span>Dead-letter</div>
+  </div>`;
+  // canvas dims
+  let maxX=0,maxY=0; p.nodes.forEach(n=>{maxX=Math.max(maxX,n.x+152);maxY=Math.max(maxY,n.y+70);});
+  const W=maxX+40,H=maxY+40;
+  const byId={}; p.nodes.forEach(n=>byId[n.id]=n);
+  const wires=p.edges.map(e=>{
+    const[sid,sp,tid,tp,err]=e; const s=byId[sid],t=byId[tid]; if(!s||!t)return'';
+    const oi=(s.out||['rows']).indexOf(sp), ii=(t.in||['in']).indexOf(tp);
+    const x1=s.x+152, y1=s.y+portY(s,'out',oi<0?0:oi), x2=t.x, y2=t.y+portY(t,'in',ii<0?0:ii);
+    const col=err?'var(--dlq)':'#9aa4b0', dash=err?'stroke-dasharray="6 4"':'';
+    return `<path d="M${x1},${y1} C${x1+42},${y1} ${x2-42},${y2} ${x2},${y2}" fill="none" stroke="${col}" stroke-width="2.4" ${dash} marker-end="url(#arw${err?'e':''})"/>`;
+  }).join('');
+  const nodes=p.nodes.map(n=>{
+    const st=n.st||'ok';
+    const ins=(n.in||[]).map((pl,i)=>`<span class="port" style="left:-6px;top:${portY(n,'in',i)-5}px"></span>`).join('');
+    const outs=(n.out||[]).map((pl,i)=>`<span class="port ${pl==='reject'?'err':''}" style="right:-6px;top:${portY(n,'out',i)-5}px"><span class="pl">${pl==='rows'?'':pl}</span></span>`).join('');
+    return `<div class="node ${n.kind} ${n.id===S.sel?'sel':''}" data-node="${n.id}" style="left:${n.x}px;top:${n.y}px">
+      ${n.count?`<span class="ncount">${n.count}</span>`:''}
+      <div class="nh"><span class="nico">${n.ico}</span><span class="nk">${n.kind==='src'?'Source':n.kind==='dlq'?'Dead-letter':n.kind}</span><span class="nst ${st}" data-st></span></div>
+      <div class="nb"><div class="nnm">${n.name}</div><div class="nmeta">${n.meta}</div></div>
+      ${ins}${outs}</div>`;
+  }).join('');
+  const canvas=`<div class="canvaswrap"><div class="ctool"><span class="mb" data-cmd="fit">⤢ Fit</span><span class="mb" data-cmd="autolayout">▦ Auto-layout</span><span class="mb" data-cmd="validate">✓ Validate</span></div>
+    <div class="canvas" style="width:${W}px;height:${H}px">
+      <svg class="wires" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><defs>
+        <marker id="arw" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#9aa4b0"/></marker>
+        <marker id="arwe" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="var(--dlq)"/></marker>
+      </defs>${wires}</svg>${nodes}</div></div>`;
+  el.innerHTML=pal+canvas+renderInspector();
+}
+function renderInspector(){
+  const n=PIPE().nodes.find(x=>x.id===S.sel);
+  if(!n) return `<div class="insp"><div class="empty">Select a node on the canvas to open its configuration.</div></div>`;
+  const kc={src:['Source','var(--src)','var(--src-bg)'],transform:['Transform','var(--tf)','var(--tf-bg)'],control:['Control','var(--ctrl)','var(--ctrl-bg)'],sink:['Sink','var(--snk)','var(--snk-bg)'],dlq:['Error','var(--dlq)','var(--dlq-bg)']}[n.kind];
+  const rows=(CFG[n.id]||[['Type',n.type]]).map(([k,v])=>`<div class="fld"><div class="k">${k}</div><div class="v ${/[=·{]/.test(v)?'mono':''}">${esc(v)}</div></div>`).join('');
+  return `<div class="insp"><div class="ih"><span class="ik" style="color:${kc[1]};background:${kc[2]}">${kc[0]}</span><span class="inm">${n.name}</span><span style="margin-left:auto;color:var(--mute);cursor:pointer" data-cmd="deselect">✕</span></div>
+    <div class="itabs"><span class="on">Config</span><span>Ports</span><span>Schema</span><span>Test</span></div>
+    <div class="ib">${rows}<div class="addrow">＋ Add field</div></div></div>`;
+}
+function renderPanel(){
+  const el=document.getElementById('panel');
+  const tabs=[['preview','Preview'],['problems','Problems'],['output','Output'],['tests','Tests']];
+  const th=tabs.map(([k,l])=>`<div class="ptab ${S.panel===k?'on':''}" data-panel="${k}">${l}</div>`).join('');
+  el.innerHTML=`<div class="ptabs">${th}<span style="margin-left:auto;color:var(--mute);font-size:11px;padding-right:6px">${S.open}</span></div><div class="pbody" id="pbody">${panelBody()}</div>`;
+}
+function panelBody(){
+  if(S.panel==='preview'){
+    const d=PREVIEW[S.open]; if(!d) return `<div class="muted">Run a preview on a node to see sampled rows.</div>`;
+    const sub=`<div class="subtab" id="pvsub">${[['output','Output · 100'],['rejected','Rejected · 3'],['dropped','Dropped · 1'],['profile','Profile']].map(([k,l])=>`<span class="${S.pv===k?'on':''}" data-pv="${k}">${l}</span>`).join('')}</div>`;
+    let body='';
+    if(S.pv==='output') body=`<table class="grid"><tr>${d.cols.map(c=>`<th>${c}</th>`).join('')}</tr>${d.output.map(r=>`<tr>${r.map((c,i)=>`<td class="${i===0?'fld0':i===2?'num':''}">${c}</td>`).join('')}</tr>`).join('')}</table>`;
+    else if(S.pv==='rejected') body=`<table class="grid"><tr><th>order_id</th><th>reason</th><th>value</th></tr>${d.rejected.map(r=>`<tr><td class="fld0">${r[0]}</td><td><span class="reason">${r[1]}</span></td><td class="num">${r[2]}</td></tr>`).join('')}</table>`;
+    else if(S.pv==='dropped') body=`<table class="grid"><tr><th>order_id</th><th>dropped by</th><th>amount</th></tr>${d.dropped.map(r=>`<tr><td class="fld0">${r[0]}</td><td class="mono">${r[1]}</td><td class="num">${r[2]}</td></tr>`).join('')}</table>`;
+    else body=`<table class="grid"><tr><th>Column</th><th>Null</th><th>Distinct</th><th>Range / top</th></tr>${d.profile.map(r=>`<tr><td class="fld0">${r[0]}</td><td class="mono">${r[1]}</td><td class="mono">${r[2]}</td><td class="mono">${r[3]}</td></tr>`).join('')}</table>`;
+    return `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><span class="chip run no">sample 104 rows · 38 ms</span></div>${sub}${body}`;
+  }
+  if(S.panel==='problems') return `<div class="rlog"><span class="ok">✓ 0 errors · 0 warnings</span> — pipeline valid. Mappings resolve, ports connected, no cycles.</div>`;
+  if(S.panel==='output') return `<div class="rlog" id="runlog"><span class="muted">Press ▶ Run to execute the pipeline (mock engine).</span></div>`;
+  if(S.panel==='tests') return testsBody();
+}
+function testsBody(){
+  const rows=[['rowCount · output==100 · rejected==3',9,0],['schema · 5 cols, types locked',14,0],['goldenSample · first 20 rows',22,1],['dqPassRate · amount ≥ 99.5%',6,0],['noDeadLetter · dlq==0',4,0]];
+  return `<div style="display:flex;gap:10px;align-items:center;margin-bottom:8px"><span class="btn run" data-cmd="runtests">▷ Run tests</span><span class="muted">enrich-route-load.datapipelinetest · 5 assertions</span></div>
+    <div id="trows">${rows.map((r,i)=>`<div class="trow" data-fail="${r[2]}" data-ms="${r[1]}"><span class="td"></span>${r[0]}<span class="ts">idle</span></div>`).join('')}</div>
+    <div id="tsum" style="margin-top:8px;font-weight:700"></div>`;
+}
+function renderStatus(){
+  const p=PIPE();
+  document.getElementById('statusbar').innerHTML=`<span class="s">⑂ prototype/studio-demo</span><span class="s">◈ Data Pipeline</span><span class="s">${p.shape==='unbounded'?'∞ streaming':'▦ batch'}</span><span class="grow"></span><span class="s" id="statusvalid">✓ valid</span><span class="s">${p.mode.toUpperCase()}</span><span class="s">UTF-8</span><span class="s">Flogo engine: ready</span>`;
+}
+
+/* ============================ INTERACTIONS ============================ */
+document.addEventListener('click',e=>{
+  const t=e.target;
+  const open=t.closest('[data-open]'); if(open){ openPipe(open.getAttribute('data-open')); return; }
+  const close=t.closest('[data-close]'); if(close){ e.stopPropagation(); closeTab(close.getAttribute('data-close')); return; }
+  const node=t.closest('[data-node]'); if(node){ S.sel=node.getAttribute('data-node'); document.querySelector('.emain').innerHTML=document.querySelector('.emain').innerHTML; renderMain(); return; }
+  const v2=t.closest('[data-view2]'); if(v2){ S.view=v2.getAttribute('data-view2'); renderToolbar(); renderMain(); return; }
+  const pn=t.closest('[data-panel]'); if(pn){ S.panel=pn.getAttribute('data-panel'); renderPanel(); return; }
+  const pv=t.closest('[data-pv]'); if(pv){ S.pv=pv.getAttribute('data-pv'); renderPanel(); return; }
+  const conn=t.closest('[data-conn]'); if(conn){ openConnection(conn.getAttribute('data-conn')); return; }
+  const av=t.closest('.abar .ai'); if(av && av.getAttribute('data-view')){ toast('View: '+av.getAttribute('data-view')+' (Data Pipeline view active in this prototype)'); return; }
+  const cmd=t.closest('[data-cmd]'); if(cmd){ runCmd(cmd.getAttribute('data-cmd')); return; }
+  if(t.closest('#cmdopen')){ openPalette(); return; }
+  if(t.id==='scrim'){ closeOverlays(); return; }
+});
+function openPipe(id){ if(!DB.pipelines[id])return; S.open=id; S.sel=null; if(!S.tabs.includes(id))S.tabs.push(id); render(); }
+function closeTab(id){ S.tabs=S.tabs.filter(x=>x!==id); if(S.open===id&&S.tabs.length)S.open=S.tabs[0]; render(); }
+function runCmd(c){
+  if(c==='run') return doRun();
+  if(c==='runtests') return doTests();
+  if(c==='deselect'){ S.sel=null; renderMain(); return; }
+  if(c==='validate'){ toast('✓ Validation passed — 0 errors, 0 warnings'); return; }
+  if(c==='autolayout'){ toast('Auto-layout applied'); return; }
+  if(c==='fit'){ toast('Fit to graph'); return; }
+  if(c==='new'){ openTemplates(); return; }
+  toast(c);
+}
+function doRun(){
+  if(S.running)return; S.running=true;
+  S.panel='output'; renderPanel();
+  const log=document.getElementById('runlog'); log.innerHTML='';
+  const p=PIPE(), nodes=p.nodes.filter(n=>n.kind!=='dlq');
+  const line=(cls,txt)=>{ log.innerHTML+=`<div><span class="t">[${new Date().toLocaleTimeString()}]</span> <span class="${cls}">${txt}</span></div>`; log.scrollTop=log.scrollHeight; };
+  line('i',`run started — ${p.id} · mode=${p.mode} · shape=${p.shape}`);
+  document.querySelectorAll('#emain .node .nst').forEach(d=>d.className='nst idle');
+  let i=0;
+  const step=()=>{
+    if(i>=nodes.length){
+      line('ok', p.shape==='unbounded'?'streaming · healthy — 48k events/sec · lag 12k':'pipeline run completed — processed 2,000,000 · written 1,980,000 · rejected→DLQ 18,000');
+      const vc=document.getElementById('valchip'); if(vc){vc.className='chip ok';vc.textContent=p.shape==='unbounded'?'streaming · healthy':'completed · 2.0M rows';}
+      S.running=false; return;
+    }
+    const n=nodes[i]; const dot=document.querySelector(`.node[data-node="${n.id}"] .nst`);
+    if(dot)dot.className='nst run';
+    line('', `▸ ${n.name} — running`);
+    setTimeout(()=>{ if(dot)dot.className='nst ok'; line('ok',`✓ ${n.name} — ${n.count||'ok'}`); i++; step(); }, 380);
+  };
+  const vc=document.getElementById('valchip'); if(vc){vc.className='chip run';vc.textContent='running…';}
+  step();
+}
+function doTests(){
+  S.panel='tests'; renderPanel();
+  setTimeout(()=>{
+    const rows=[...document.querySelectorAll('#trows .trow')], sum=document.getElementById('tsum');
+    let i=0,pass=0,fail=0,ms=0;
+    const step=()=>{
+      if(i>=rows.length){ sum.innerHTML=fail?`<span style="color:var(--err)">✗ ${fail} failed</span> · ${pass} passed · ${ms} ms &nbsp;<span class="btn" data-cmd="fixtests">↻ Fix &amp; re-run</span>`:`<span style="color:var(--ok)">✓ all ${pass} passed</span> · ${ms} ms`; return; }
+      const r=rows[i], s=r.querySelector('.ts'); r.className='trow run'; s.textContent='running…';
+      setTimeout(()=>{ r.classList.remove('run'); const f=r.getAttribute('data-fail')==='1'; const t=+r.getAttribute('data-ms'); ms+=t;
+        if(f){r.classList.add('fail');s.textContent='✗ fail';fail++;}else{r.classList.add('pass');s.textContent='✓ '+t+'ms';pass++;} i++;step(); },300);
+    }; step();
+  },30);
+}
+document.addEventListener('click',e=>{ if(e.target.closest('[data-cmd="fixtests"]')){ document.querySelectorAll('#trows .trow').forEach(r=>r.setAttribute('data-fail','0')); doTests(); }});
+
+/* command palette */
+const COMMANDS=[
+  {ico:'＋',label:'Data Pipeline: New Pipeline from Template…',cmd:'new',kb:''},
+  {ico:'▶',label:'Data Pipeline: Run Pipeline',cmd:'run',kb:'⌘R'},
+  {ico:'▷',label:'Data Pipeline: Run Tests',cmd:'runtests',kb:''},
+  {ico:'✓',label:'Data Pipeline: Validate',cmd:'validate',kb:''},
+  {ico:'◇',label:'Data Pipeline: Preview Data',cmd:'preview',kb:''},
+  {ico:'▲',label:'Data Pipeline: Build & Deploy…',cmd:'deploy',kb:''},
+  {ico:'⑂',label:'Data Pipeline: Show Git Diff',cmd:'git',kb:''},
+];
+function openPalette(){ document.getElementById('scrim').classList.add('on'); const cp=document.getElementById('cmdp'); cp.classList.add('on'); const inp=document.getElementById('cmdinput'); inp.value=''; renderCmdList(''); inp.focus(); }
+function renderCmdList(q){ const list=COMMANDS.filter(c=>c.label.toLowerCase().includes(q.toLowerCase())); document.getElementById('cmdlist').innerHTML=list.map((c,i)=>`<div class="ci ${i===0?'on':''}" data-run="__cmd_${c.cmd}"><span class="ico">${c.ico}</span>${c.label}<span class="kb">${c.kb}</span></div>`).join('')||`<div class="ci">No matching commands</div>`; }
+document.getElementById('cmdinput').addEventListener('input',e=>renderCmdList(e.target.value));
+document.getElementById('cmdinput').addEventListener('keydown',e=>{ if(e.key==='Enter'){ const on=document.querySelector('#cmdlist .ci.on')||document.querySelector('#cmdlist .ci[data-run]'); if(on){const c=on.getAttribute('data-run').replace('__cmd_','');closeOverlays();runCmd(c);} } if(e.key==='Escape')closeOverlays(); });
+document.getElementById('cmdlist').addEventListener('click',e=>{ const ci=e.target.closest('.ci[data-run]'); if(ci){const c=ci.getAttribute('data-run').replace('__cmd_','');closeOverlays();runCmd(c);} });
+document.addEventListener('keydown',e=>{ if((e.metaKey||e.ctrlKey)&&e.shiftKey&&e.key.toLowerCase()==='p'){e.preventDefault();openPalette();} if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='r'){e.preventDefault();doRun();} });
+function closeOverlays(){ document.getElementById('scrim').classList.remove('on'); document.getElementById('cmdp').classList.remove('on'); document.getElementById('modal').classList.remove('on'); }
+
+/* modals */
+function openTemplates(){
+  const tpls=[['Clean & standardise a file','CSV → cast → validate → JSONL'],['Enrich & load to warehouse','CSV → join → map → JDBC'],['Route by region','JDBC → router → S3 · Kafka'],['CDC → stream','Kafka·HWM → window → Kafka'],['Quality gate + DLQ','CSV → validate → JSONL + ⚠ dlq'],['Mainframe EBCDIC → PostgreSQL','fixed-width → cast → JDBC']];
+  showModal('＋ New Pipeline from Template', tpls.map((t,i)=>`<div class="tmpl" data-tmpl="${i}"><b>${t[0]}</b><div class="fl">${t[1]}</div></div>`).join('')+`<p class="muted" style="margin-top:6px">Scaffolds a working <code>.datapipeline</code> you can edit and run.</p>`);
+}
+function openConnection(id){
+  const c=DB.connections.find(x=>x.id===id);
+  showModal('🔌 Connection · '+c.id, `<div class="g2"><div class="fld"><div class="k">Type</div><div class="v mono">${c.type}</div></div><div class="fld"><div class="k">Status</div><div class="v"><span class="chip ok">tested</span></div></div></div>
+    <div class="fld"><div class="k">Endpoint</div><div class="v mono">${c.meta}</div></div>
+    <div class="fld"><div class="k">Password <span style="color:var(--err)">secret</span></div><div class="v mono">$env:${c.id.toUpperCase().replace(/-/g,'_')}_PASSWORD</div></div>
+    <div style="display:flex;gap:8px;margin-top:8px"><span class="btn pri" data-cmd="testconn">Test connection</span><span class="muted" style="align-self:center">used by 4 pipelines</span></div>`);
+}
+function showModal(title,html){ document.getElementById('scrim').classList.add('on'); const m=document.getElementById('modal'); m.classList.add('on'); m.innerHTML=`<div class="mh">${title}<span class="x" data-cmd="closemodal">✕</span></div><div class="mc">${html}</div>`; }
+document.addEventListener('click',e=>{
+  if(e.target.closest('[data-cmd="closemodal"]')){closeOverlays();return;}
+  if(e.target.closest('[data-cmd="testconn"]')){toast('✓ Connection succeeded');return;}
+  const tm=e.target.closest('[data-tmpl]'); if(tm){ closeOverlays(); toast('Scaffolded pipeline from template — opening…'); }
+});
+
+render();
+</script>
+</body>
+</html>
