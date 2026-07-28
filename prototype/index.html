@@ -193,6 +193,26 @@
   .toast.on{display:block;animation:tin .25s}
   @keyframes tin{from{opacity:0;transform:translateY(8px)}to{opacity:1}}
   .muted{color:var(--mute)}
+
+  /* doc views */
+  .panel.hidden{display:none}
+  .docview{grid-column:1 / -1;overflow:auto;padding:18px 22px 44px;background:var(--edit);color:var(--ink)}
+  .docview .dtitle{font-size:16px;font-weight:800;margin:0 0 3px}
+  .docview .dsub{color:var(--body);font-size:12.5px;margin:0 0 16px}
+  .docview .sec{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute);margin:18px 0 8px;font-weight:800}
+  .docview .card h4{display:flex;align-items:center;gap:6px}
+  .kbd{font:600 11px var(--mono);border:1px solid var(--lineL);border-bottom-width:2px;border-radius:5px;padding:2px 7px;background:#fff;min-width:34px;text-align:center;display:inline-block}
+  .diff{border:1px solid var(--lineL);border-radius:8px;overflow:hidden;margin:2px 0}
+  .diff .ln{padding:1px 12px;white-space:pre;font-family:var(--mono);font-size:12px;line-height:1.65}
+  .diff .add{background:var(--ok-bg);color:#1c6b39}.diff .del{background:var(--err-bg);color:#a3302a}.diff .ctx{color:var(--body)}
+  .chat{display:flex;flex-direction:column;gap:9px}
+  .chat .msg{max-width:82%;padding:9px 12px;border-radius:11px;font-size:12.5px;line-height:1.5}
+  .chat .msg.u{align-self:flex-end;background:var(--accent);color:#fff;border-bottom-right-radius:3px}
+  .chat .msg.a{align-self:flex-start;background:#fff;border:1px solid var(--lineL);border-bottom-left-radius:3px}
+  .tl{display:flex;gap:6px;align-items:flex-end}
+  .tl .win{flex:1;height:58px;background:var(--tf-bg);border:1px solid #bcd0ea;border-radius:8px;display:flex;flex-direction:column;justify-content:center;align-items:center;color:var(--tf);font-weight:700;font-size:12px}
+  .tl .win small{color:var(--body);font-weight:400;font-family:var(--mono);font-size:10px}
+  .tl .late{align-self:center;background:var(--warn-bg);color:var(--warn);border-radius:8px;padding:6px 9px;font-size:11px;font-weight:700;white-space:nowrap}
 </style>
 </head>
 <body>
@@ -211,6 +231,7 @@
       <span class="ai" data-view="scm" title="Source Control">⑂</span>
       <span class="ai" data-view="run" title="Run">▷</span>
       <span class="ai flogo on" data-view="pipeline" title="Data Pipeline">◈</span>
+      <span class="ai" data-view="ai" title="AI Copilot">✨</span>
       <span class="sp"></span>
       <span class="ai" data-view="settings" title="Settings">⚙</span>
     </div>
@@ -329,8 +350,11 @@ const CODE = {
 };
 
 /* ============================ STATE ============================ */
-const S = { open:'enrich-route-load', tabs:['enrich-route-load'], sel:'validate', view:'design', panel:'preview', pv:'output', abar:'pipeline', running:false };
-const PIPE = ()=>DB.pipelines[S.open];
+const S = { open:'enrich-route-load', tabs:['enrich-route-load'], sel:'validate', view:'design', panel:'preview', pv:'output', abar:'pipeline', running:false, itab:'Config' };
+const PIPE = ()=>DB.pipelines[S.open]||DB.pipelines['enrich-route-load'];
+const isDoc = ()=> typeof S.open==='string' && S.open[0]==='@';
+const DOCKEY = ()=> S.open.slice(1);
+const lastPipe = ()=> S.tabs.find(t=>t[0]!=='@')||'enrich-route-load';
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 function toast(m){const t=document.getElementById('toast');t.textContent=m;t.classList.add('on');clearTimeout(t._h);t._h=setTimeout(()=>t.classList.remove('on'),2200);}
 
@@ -346,14 +370,25 @@ function renderSide(){
   el.innerHTML=`<div class="sh">Data Pipeline <span>⋯</span></div>
     <div class="grp" data-tw><span class="tw">▾</span>Pipelines <span style="margin-left:auto;color:var(--tibco);cursor:pointer" data-cmd="new">＋</span></div>${pipes}
     <div class="grp"><span class="tw">▾</span>Connections</div>${conns}
-    <div class="grp"><span class="tw">▾</span>Runs</div>${runs}`;
+    <div class="grp"><span class="tw">▾</span>Runs</div>${runs}
+    <div class="grp"><span class="tw">▾</span>Operate &amp; Govern</div>
+    <div class="ti" data-doc="ops"><span class="tc">📊</span>Operations</div>
+    <div class="ti" data-doc="lineage"><span class="tc">⧉</span>Lineage &amp; impact</div>
+    <div class="ti" data-doc="security"><span class="tc">🛡</span>Security</div>
+    <div class="ti" data-doc="environments"><span class="tc">⚙</span>Environments</div>
+    <div class="ti" data-doc="schedule"><span class="tc">⏰</span>Schedule</div>
+    <div class="ti" data-doc="recover"><span class="tc">↩</span>Recovery &amp; DLQ</div>
+    <div class="ti" data-doc="deploy"><span class="tc">▲</span>Build &amp; deploy</div>`;
 }
 function renderTabs(){
-  document.getElementById('etabs').innerHTML=S.tabs.map(t=>
-    `<div class="etab ${t===S.open?'on':''}" data-open="${t}"><span class="md"></span>${t}.datapipeline<span class="x" data-close="${t}">✕</span></div>`).join('');
-  document.getElementById('ttname').textContent=S.open+'.datapipeline';
+  document.getElementById('etabs').innerHTML=S.tabs.map(t=>{
+    if(t[0]==='@'){ const d=DOCS[t.slice(1)]; return `<div class="etab ${t===S.open?'on':''}" data-open="${t}"><span style="opacity:.75">${d.icon}</span>${d.title}<span class="x" data-close="${t}">✕</span></div>`; }
+    return `<div class="etab ${t===S.open?'on':''}" data-open="${t}"><span class="md"></span>${t}.datapipeline<span class="x" data-close="${t}">✕</span></div>`;
+  }).join('');
+  document.getElementById('ttname').textContent=isDoc()?DOCS[DOCKEY()].title:S.open+'.datapipeline';
 }
 function renderToolbar(){
+  if(isDoc()){ const d=DOCS[DOCKEY()]; document.getElementById('etoolbar').innerHTML=`<span class="badge no" style="background:#eef0f2;color:var(--ink)">${d.icon} ${d.title}</span><span class="grow"></span><span class="muted" style="font-size:11.5px">mock data · read-only preview</span>`; return; }
   const p=PIPE();
   document.getElementById('etoolbar').innerHTML=`
     <span class="vtabs" id="vtabs"><span class="${S.view==='design'?'on':''}" data-view2="design">Design</span><span class="${S.view==='code'?'on':''}" data-view2="code">Code</span></span>
@@ -366,7 +401,9 @@ function renderToolbar(){
 }
 function portY(node,side,i){ const arr=(side==='in'?node.in:node.out)||['x']; const n=arr.length; const c=27; return c+(i-(n-1)/2)*18; }
 function renderMain(){
-  const el=document.getElementById('emain'), p=PIPE();
+  const el=document.getElementById('emain');
+  if(isDoc()){ el.style.gridTemplateColumns='1fr'; el.innerHTML=DOCS[DOCKEY()].render(); return; }
+  const p=PIPE();
   if(S.view==='code'){
     el.style.gridTemplateColumns='1fr';
     el.innerHTML=`<div class="codeview">${esc(CODE[S.open]||JSON.stringify({name:p.id,mode:p.mode,nodes:p.nodes.length},null,2))}</div>`;
@@ -416,13 +453,27 @@ function renderInspector(){
   const n=PIPE().nodes.find(x=>x.id===S.sel);
   if(!n) return `<div class="insp"><div class="empty">Select a node on the canvas to open its configuration.</div></div>`;
   const kc={src:['Source','var(--src)','var(--src-bg)'],transform:['Transform','var(--tf)','var(--tf-bg)'],control:['Control','var(--ctrl)','var(--ctrl-bg)'],sink:['Sink','var(--snk)','var(--snk-bg)'],dlq:['Error','var(--dlq)','var(--dlq-bg)']}[n.kind];
-  const rows=(CFG[n.id]||[['Type',n.type]]).map(([k,v])=>`<div class="fld"><div class="k">${k}</div><div class="v ${/[=·{]/.test(v)?'mono':''}">${esc(v)}</div></div>`).join('');
+  const tb=['Config','Ports','Schema','Test'].map(t=>`<span class="${S.itab===t?'on':''}" data-itab="${t}">${t}</span>`).join('');
+  let body;
+  if(S.itab==='Ports'){
+    const mk=(arr,dir)=>(arr||[]).map(p=>`<div class="rcard"><b>${p}</b> <span class="muted">· ${dir==='in'?'input':'output'} port${p==='reject'?' → DLQ':''}</span></div>`).join('')||`<div class="muted">none</div>`;
+    body=`<div class="k" style="margin-bottom:4px">Inputs</div>${mk(n.in,'in')}<div class="k" style="margin:10px 0 4px">Outputs</div>${mk(n.out,'out')}`;
+  } else if(S.itab==='Schema'){
+    body=`<table class="grid"><tr><th>Field</th><th>Type</th></tr><tr><td class="fld0">order_id</td><td class="mono">string</td></tr><tr><td class="fld0">net_amount</td><td class="mono">decimal(12,2)</td></tr><tr><td class="fld0">region</td><td class="mono">string</td></tr></table><div class="addrow" style="margin-top:8px" data-doc="schema">Open schema editor →</div>`;
+  } else if(S.itab==='Test'){
+    body=`<div class="rcard">assert · output rows &gt; 0</div><div class="rcard">assert · no nulls in order_id</div><span class="btn run" data-cmd="runtests" style="margin-top:6px">▷ Run node tests</span>`;
+  } else {
+    const rows=(CFG[n.id]||[['Type',n.type]]).map(([k,v])=>`<div class="fld"><div class="k">${k}</div><div class="v ${/[=·{]/.test(v)?'mono':''}">${esc(v)}</div></div>`).join('');
+    const ctx = n.type==='window'?`<div class="addrow" data-doc="windowing">⧖ Configure windowing →</div>`:n.kind==='dlq'?`<div class="addrow" data-doc="recover">↩ Open recovery / DLQ →</div>`:n.kind==='src'?`<div class="addrow" data-doc="incremental">⇧ Incremental load →</div>`:`<div class="addrow">＋ Add field</div>`;
+    body=rows+ctx;
+  }
   return `<div class="insp"><div class="ih"><span class="ik" style="color:${kc[1]};background:${kc[2]}">${kc[0]}</span><span class="inm">${n.name}</span><span style="margin-left:auto;color:var(--mute);cursor:pointer" data-cmd="deselect">✕</span></div>
-    <div class="itabs"><span class="on">Config</span><span>Ports</span><span>Schema</span><span>Test</span></div>
-    <div class="ib">${rows}<div class="addrow">＋ Add field</div></div></div>`;
+    <div class="itabs">${tb}</div>
+    <div class="ib">${body}</div></div>`;
 }
 function renderPanel(){
   const el=document.getElementById('panel');
+  if(isDoc()){ el.classList.add('hidden'); el.innerHTML=''; return; } el.classList.remove('hidden');
   const tabs=[['preview','Preview'],['problems','Problems'],['output','Output'],['tests','Tests']];
   const th=tabs.map(([k,l])=>`<div class="ptab ${S.panel===k?'on':''}" data-panel="${k}">${l}</div>`).join('');
   el.innerHTML=`<div class="ptabs">${th}<span style="margin-left:auto;color:var(--mute);font-size:11px;padding-right:6px">${S.open}</span></div><div class="pbody" id="pbody">${panelBody()}</div>`;
@@ -449,6 +500,7 @@ function testsBody(){
     <div id="tsum" style="margin-top:8px;font-weight:700"></div>`;
 }
 function renderStatus(){
+  if(isDoc()){ document.getElementById('statusbar').innerHTML=`<span class="s">⑂ prototype/studio-demo</span><span class="s">◈ ${DOCS[DOCKEY()].title}</span><span class="grow"></span><span class="s">mock data</span><span class="s">Flogo engine: ready</span>`; return; }
   const p=PIPE();
   document.getElementById('statusbar').innerHTML=`<span class="s">⑂ prototype/studio-demo</span><span class="s">◈ Data Pipeline</span><span class="s">${p.shape==='unbounded'?'∞ streaming':'▦ batch'}</span><span class="grow"></span><span class="s" id="statusvalid">✓ valid</span><span class="s">${p.mode.toUpperCase()}</span><span class="s">UTF-8</span><span class="s">Flogo engine: ready</span>`;
 }
@@ -463,21 +515,26 @@ document.addEventListener('click',e=>{
   const pn=t.closest('[data-panel]'); if(pn){ S.panel=pn.getAttribute('data-panel'); renderPanel(); return; }
   const pv=t.closest('[data-pv]'); if(pv){ S.pv=pv.getAttribute('data-pv'); renderPanel(); return; }
   const conn=t.closest('[data-conn]'); if(conn){ openConnection(conn.getAttribute('data-conn')); return; }
-  const av=t.closest('.abar .ai'); if(av && av.getAttribute('data-view')){ toast('View: '+av.getAttribute('data-view')+' (Data Pipeline view active in this prototype)'); return; }
+  const av=t.closest('.abar .ai'); if(av && av.getAttribute('data-view')){ const v=av.getAttribute('data-view'); const mp={scm:'git',run:'ops',settings:'settings',ai:'ai'}; if(mp[v])return openDoc(mp[v]); if(v==='pipeline')return openPipe(lastPipe()); toast('View: '+v+' — Data Pipeline view active in this prototype'); return; }
   const cmd=t.closest('[data-cmd]'); if(cmd){ runCmd(cmd.getAttribute('data-cmd')); return; }
   if(t.closest('#cmdopen')){ openPalette(); return; }
   if(t.id==='scrim'){ closeOverlays(); return; }
 });
-function openPipe(id){ if(!DB.pipelines[id])return; S.open=id; S.sel=null; if(!S.tabs.includes(id))S.tabs.push(id); render(); }
+function openPipe(id){ if(id[0]!=='@' && !DB.pipelines[id])return; S.open=id; if(id[0]!=='@')S.sel=null; if(!S.tabs.includes(id))S.tabs.push(id); render(); }
 function closeTab(id){ S.tabs=S.tabs.filter(x=>x!==id); if(S.open===id&&S.tabs.length)S.open=S.tabs[0]; render(); }
 function runCmd(c){
   if(c==='run') return doRun();
   if(c==='runtests') return doTests();
   if(c==='deselect'){ S.sel=null; renderMain(); return; }
-  if(c==='validate'){ toast('✓ Validation passed — 0 errors, 0 warnings'); return; }
+  if(c==='closemodal'){ closeOverlays(); return; }
+  if(c==='validate'){ if(!isDoc()){S.panel='problems';renderPanel();} toast('✓ Validation passed — 0 errors, 0 warnings'); return; }
   if(c==='autolayout'){ toast('Auto-layout applied'); return; }
   if(c==='fit'){ toast('Fit to graph'); return; }
   if(c==='new'){ openTemplates(); return; }
+  if(c==='preview'){ if(isDoc())openPipe(lastPipe()); S.panel='preview'; renderPanel(); return; }
+  const M={resume:'↻ Resuming from checkpoint 09:15:04Z — no data loss',replay:'↩ Replaying 18k dead-lettered rows into the pipeline',dobuild:'▲ Build started — compiling pipeline → single binary',aiapply:'✓ Applied — Filter node inserted before Router',aiask:'Impact: drops ~1 row (ORD-000002) in the sample; downstream counts update automatically.',expandgroup:'Extracted 3 nodes into sub-pipeline “standardise-customer”',testconn:'✓ Connection succeeded',save:'✓ Saved'};
+  if(M[c]){ toast(M[c]); return; }
+  if(typeof DOCS!=='undefined' && DOCS[c]) return openDoc(c);
   toast(c);
 }
 function doRun(){
@@ -525,8 +582,24 @@ const COMMANDS=[
   {ico:'▷',label:'Data Pipeline: Run Tests',cmd:'runtests',kb:''},
   {ico:'✓',label:'Data Pipeline: Validate',cmd:'validate',kb:''},
   {ico:'◇',label:'Data Pipeline: Preview Data',cmd:'preview',kb:''},
+  {ico:'▤',label:'Data Pipeline: Schema & Formats',cmd:'schema',kb:''},
+  {ico:'⇧',label:'Data Pipeline: Incremental & CDC',cmd:'incremental',kb:''},
+  {ico:'⧖',label:'Data Pipeline: Windowing',cmd:'windowing',kb:''},
+  {ico:'⧉',label:'Data Pipeline: Lineage & Impact',cmd:'lineage',kb:''},
+  {ico:'🛡',label:'Data Pipeline: Security & Governance',cmd:'security',kb:''},
+  {ico:'⚙',label:'Data Pipeline: Environments',cmd:'environments',kb:''},
+  {ico:'⚙',label:'Data Pipeline: Settings',cmd:'settings',kb:''},
+  {ico:'📊',label:'Data Pipeline: Operations Monitor',cmd:'ops',kb:''},
+  {ico:'⚡',label:'Data Pipeline: Performance & Scaling',cmd:'performance',kb:''},
+  {ico:'⏰',label:'Data Pipeline: Schedule & Orchestrate',cmd:'schedule',kb:''},
+  {ico:'↩',label:'Data Pipeline: Recovery & DLQ',cmd:'recover',kb:''},
   {ico:'▲',label:'Data Pipeline: Build & Deploy…',cmd:'deploy',kb:''},
   {ico:'⑂',label:'Data Pipeline: Show Git Diff',cmd:'git',kb:''},
+  {ico:'▦',label:'Data Pipeline: Sub-pipelines & Reuse',cmd:'groups',kb:''},
+  {ico:'✨',label:'Data Pipeline: AI Copilot',cmd:'ai',kb:''},
+  {ico:'⇄',label:'Data Pipeline: Migrate Existing Job',cmd:'migrate',kb:''},
+  {ico:'◈',label:'Data Pipeline: Runtime Model',cmd:'model',kb:''},
+  {ico:'⌨',label:'Preferences: Keyboard Shortcuts',cmd:'keys',kb:''},
 ];
 function openPalette(){ document.getElementById('scrim').classList.add('on'); const cp=document.getElementById('cmdp'); cp.classList.add('on'); const inp=document.getElementById('cmdinput'); inp.value=''; renderCmdList(''); inp.focus(); }
 function renderCmdList(q){ const list=COMMANDS.filter(c=>c.label.toLowerCase().includes(q.toLowerCase())); document.getElementById('cmdlist').innerHTML=list.map((c,i)=>`<div class="ci ${i===0?'on':''}" data-run="__cmd_${c.cmd}"><span class="ico">${c.ico}</span>${c.label}<span class="kb">${c.kb}</span></div>`).join('')||`<div class="ci">No matching commands</div>`; }
@@ -549,11 +622,220 @@ function openConnection(id){
     <div style="display:flex;gap:8px;margin-top:8px"><span class="btn pri" data-cmd="testconn">Test connection</span><span class="muted" style="align-self:center">used by 4 pipelines</span></div>`);
 }
 function showModal(title,html){ document.getElementById('scrim').classList.add('on'); const m=document.getElementById('modal'); m.classList.add('on'); m.innerHTML=`<div class="mh">${title}<span class="x" data-cmd="closemodal">✕</span></div><div class="mc">${html}</div>`; }
-document.addEventListener('click',e=>{
-  if(e.target.closest('[data-cmd="closemodal"]')){closeOverlays();return;}
-  if(e.target.closest('[data-cmd="testconn"]')){toast('✓ Connection succeeded');return;}
-  const tm=e.target.closest('[data-tmpl]'); if(tm){ closeOverlays(); toast('Scaffolded pipeline from template — opening…'); }
-});
+document.addEventListener('click',e=>{ const tm=e.target.closest('[data-tmpl]'); if(tm){ closeOverlays(); toast('Scaffolded pipeline from template — opening…'); }});
+document.addEventListener('click',e=>{ const it=e.target.closest('[data-itab]'); if(it){ S.itab=it.getAttribute('data-itab'); renderMain(); return; } const dc=e.target.closest('[data-doc]'); if(dc){ openDoc(dc.getAttribute('data-doc')); }});
+
+/* ============================ DOC VIEWS ============================ */
+const H=(t,s,b)=>`<div class="docview"><div class="dtitle">${t}</div><div class="dsub">${s}</div>${b}</div>`;
+const spark=(pts,c)=>`<svg viewBox="0 0 100 28" preserveAspectRatio="none" style="width:100%;height:26px;margin-top:6px"><polyline points="${pts}" fill="none" stroke="${c}" stroke-width="2"/></svg>`;
+const DOCS = {
+  settings:{title:'Settings',icon:'⚙',render:()=>H('Pipeline settings','Execution mode, error handling, checkpointing & effective configuration.',
+    `<div class="g2">
+      <div class="card"><h4>Execution mode</h4><div class="subtab"><span class="on">ETL</span><span>ELT</span><span>EL</span></div><p class="muted">Transform in-engine before load. Switch to ELT to push transforms down to the warehouse.</p></div>
+      <div class="card"><h4>Error handling</h4><p>On violation: <b>route to dead-letter</b></p><p>maxErrors <b>0</b> · onError <b>fail-fast</b></p></div>
+    </div>
+    <div class="g2">
+      <div class="card"><h4>Checkpointing</h4><p>Store <b>file</b> · interval <b>10s</b> · resume on restart ✓</p></div>
+      <div class="card"><h4>Parallelism</h4><p>Workers <b>8</b> · batch <b>10,000</b> · backpressure ✓</p></div>
+    </div>
+    <div class="sec">Effective configuration</div>
+    <div class="fld"><div class="v mono" style="white-space:pre">mode: etl
+checkpoint: { store: file, intervalMs: 10000 }
+error:      { onViolation: route, maxErrors: 0 }
+parallelism: 8</div></div>
+    <p class="muted">Resolved from defaults + the active environment. (Definition.Mode · CheckpointDef · PerformanceDef)</p>`)},
+
+  environments:{title:'Environments',icon:'⚙',render:()=>{ const rows=[['source.path','./data/orders.csv','s3://stg/orders/','s3://prod/orders/'],['jdbc.url','localhost:5432','pg-stg:5432','warehouse:5432'],['kafka.brokers','localhost:9092','stg-kafka:9092','prod-kafka:9092'],['parallelism','2','4','8'],['batch.size','1,000','5,000','10,000'],['checkpoint.dir','/tmp/ckpt','/mnt/ckpt','/mnt/ckpt']];
+    return H('Environments','App properties resolved per environment — promote without changing the pipeline.',
+    `<div style="margin-bottom:10px"><span class="chip ok">active · dev</span> <span class="chip idle">staging</span> <span class="chip idle">prod</span></div>
+     <table class="grid"><tr><th>Property</th><th>dev</th><th>staging</th><th>prod</th></tr>
+     ${rows.map(r=>`<tr><td class="fld0">${r[0]}</td><td class="mono">${r[1]}</td><td class="mono">${r[2]}</td><td class="mono">${r[3]}</td></tr>`).join('')}</table>
+     <p class="muted" style="margin-top:10px">Secrets resolve from the environment at runtime — never stored in the .datapipeline. (internal/appprops)</p>`);}},
+
+  security:{title:'Security & governance',icon:'🛡',render:()=>{ const rows=[['full_name','PII','mask · partial','sink','masked','warn'],['email','PII','hash · sha-256','transform','masked','warn'],['ssn','Sensitive','redact','source','blocked','err'],['tier','Internal','—','—','',''],['net_amount','None','—','—','','']];
+    return H('Security & governance','Field-level classification, masking policy & audit — enforced in-pipeline.',
+    `<div class="g3" style="margin-bottom:12px">
+       <div class="metric"><div class="ml">Classified fields</div><div class="mv">3</div><div class="muted">of 12 columns</div></div>
+       <div class="metric"><div class="ml">Masking policies</div><div class="mv">2</div><div class="muted">mask · hash</div></div>
+       <div class="metric"><div class="ml">Audit log</div><div class="mv" style="color:var(--ok)">on</div><div class="muted">every run recorded</div></div>
+     </div>
+     <table class="grid"><tr><th>Field</th><th>Classification</th><th>Policy</th><th>Applied at</th><th>Effect</th></tr>
+     ${rows.map(r=>`<tr><td class="fld0">${r[0]}</td><td>${r[1]}</td><td class="mono">${r[2]}</td><td>${r[3]}</td><td>${r[5]?`<span class="chip ${r[5]}">${r[4]}</span>`:'<span class="muted">—</span>'}</td></tr>`).join('')}</table>
+     <p class="muted" style="margin-top:10px">Classifications travel with lineage; masking runs before data leaves the engine. (audit.Config · ObservabilityDef)</p>`);}},
+
+  lineage:{title:'Lineage & impact',icon:'⧉',render:()=>H('Lineage & impact','OpenLineage dataset + column lineage, emitted on every run.',
+    `<div class="sec">Dataset lineage</div>
+     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12.5px">
+       <span class="chip no" style="background:var(--src-bg);color:var(--src)">orders.csv</span>
+       <span class="chip no" style="background:var(--src-bg);color:var(--src)">customers</span>
+       <span class="muted">→</span>
+       <span class="chip run">enrich-route-load</span>
+       <span class="muted">→</span>
+       <span class="chip no" style="background:var(--snk-bg);color:var(--snk)">lake/EU</span>
+       <span class="chip no" style="background:var(--snk-bg);color:var(--snk)">warehouse/US</span>
+       <span class="chip no" style="background:var(--snk-bg);color:var(--snk)">orders.enriched</span>
+     </div>
+     <div class="sec">Column lineage · net_amount</div>
+     <div class="card"><p class="mono" style="font-size:12px;margin:0">warehouse.orders_us.net_amount ← orders.amount − orders.discount × customers.tier_factor</p><p class="muted" style="margin:6px 0 0">3 source columns · 1 transform (map) · emitted to catalog</p></div>
+     <div class="sec">Impact analysis — if you change <b>orders.amount</b></div>
+     <table class="grid"><tr><th>Downstream</th><th>Type</th><th>Impact</th></tr>
+       <tr><td class="fld0">enrich customer</td><td>transform</td><td><span class="chip warn">recompute</span></td></tr>
+       <tr><td class="fld0">warehouse/US.net_amount</td><td>column</td><td><span class="chip warn">schema change</span></td></tr>
+       <tr><td class="fld0">orders.enriched</td><td>topic</td><td><span class="chip err">consumer break</span></td></tr>
+       <tr><td class="fld0">daily-cdc-load</td><td>pipeline</td><td><span class="chip warn">re-run</span></td></tr></table>
+     <p class="muted" style="margin-top:10px">Lineage events are OpenLineage-compatible. (lineage/lineage.go)</p>`)},
+
+  incremental:{title:'Incremental & CDC',icon:'⇧',render:()=>H('Incremental load','Only process what changed — high-water-mark or change-data-capture.',
+    `<div class="g2">
+       <div class="card"><h4>Strategy</h4><div class="subtab"><span class="on">High-water-mark</span><span>CDC (log)</span><span>Full</span></div><p class="muted">Track a monotonic column; next run starts where the last one stopped.</p></div>
+       <div class="card"><h4>Watermark column</h4><p class="mono">updated_at · timestamp</p><p>Last committed: <b class="mono">2026-07-28 09:15:04Z</b></p></div>
+     </div>
+     <div class="sec">Run windows</div>
+     <table class="grid"><tr><th>Run</th><th>From</th><th>To</th><th>Rows</th></tr>
+       <tr><td class="fld0">#128</td><td class="mono">08:00:00Z</td><td class="mono">09:15:04Z</td><td class="num">480k</td></tr>
+       <tr><td class="fld0">#127</td><td class="mono">00:00:00Z</td><td class="mono">08:00:00Z</td><td class="num">2.0M</td></tr></table>
+     <p class="muted" style="margin-top:10px">The watermark is checkpointed; a failed run resumes without double-processing. (IncrementalDef · watermark/)</p>`)},
+
+  windowing:{title:'Windowing',icon:'⧖',render:()=>H('Event-time windowing','Group unbounded streams into finite windows for aggregation.',
+    `<div class="g2">
+       <div class="card"><h4>Window</h4><div class="subtab"><span class="on">Tumbling</span><span>Sliding</span><span>Session</span></div><p>Size <b>5 min</b> · key <b>region</b> · fire <b>on watermark</b></p></div>
+       <div class="card"><h4>Watermark & lateness</h4><p>Watermark: <b class="mono">event_time − 30s</b></p><p>Allowed lateness <b>2 min</b> → late rows to <span class="chip warn">side output</span></p></div>
+     </div>
+     <div class="sec">Timeline</div>
+     <div class="tl">${[0,1,2,3].map(i=>`<div class="win"><span>w${i}</span><small>10:${(i*5).toString().padStart(2,'0')}</small></div>`).join('')}<div class="late">late ↩</div></div>
+     <p class="muted" style="margin-top:12px">Windows close on the watermark, not wall-clock — deterministic under replay. (window transform)</p>`)},
+
+  ops:{title:'Operations',icon:'📊',render:()=>H('Operations & monitoring','Fleet health across all running pipelines.',
+    `<div class="g3" style="margin-bottom:6px">
+       <div class="metric"><div class="ml">Pipelines running</div><div class="mv">3</div>${spark('0,20 20,14 40,16 60,8 80,10 100,4','var(--ok)')}</div>
+       <div class="metric"><div class="ml">Throughput</div><div class="mv">48k/s</div>${spark('0,22 20,10 40,18 60,6 80,12 100,8','var(--run)')}</div>
+       <div class="metric"><div class="ml">Error rate</div><div class="mv" style="color:var(--warn)">0.8%</div>${spark('0,6 20,10 40,8 60,16 80,12 100,18','var(--warn)')}</div>
+     </div>
+     <div class="sec">Active pipelines</div>
+     <table class="grid"><tr><th>Pipeline</th><th>State</th><th>Throughput</th><th>Lag</th><th>DQ</th><th>Uptime</th></tr>
+       <tr><td class="fld0">daily-cdc-load</td><td><span class="chip run">streaming</span></td><td class="num">48k/s</td><td class="num">12k</td><td class="num">97.1%</td><td class="mono">6h 12m</td></tr>
+       <tr><td class="fld0">enrich-route-load</td><td><span class="chip ok">completed</span></td><td class="num">—</td><td class="num">—</td><td class="num">99.2%</td><td class="mono">4m 12s</td></tr>
+       <tr><td class="fld0">orders-quality</td><td><span class="chip idle">idle</span></td><td class="num">—</td><td class="num">—</td><td class="num">100%</td><td class="mono">—</td></tr></table>
+     <p class="muted" style="margin-top:10px">Metrics exported for Prometheus / OpenTelemetry. (metrics/ · ObservabilityDef)</p>`)},
+
+  performance:{title:'Performance & scaling',icon:'⚡',render:()=>H('Performance & scaling','Partitioning, parallelism and per-stage timing.',
+    `<div class="g2">
+       <div class="card"><h4>Scaling mode</h4><div class="subtab"><span>Single</span><span class="on">Sharded</span><span>Distributed</span></div><p>Shards <b>8</b> · partition key <b>region</b> · coordinator <b>lease</b></p></div>
+       <div class="card"><h4>Throughput</h4><p style="font:700 22px var(--sans);margin:2px 0">2.0M <span class="muted" style="font:400 12px var(--sans)">rows in 4m 12s</span></p><p>≈ <b>7,940 rows/s</b></p></div>
+     </div>
+     <div class="sec">Per-stage timing</div>
+     ${[['source · read',18],['join · enrich',34],['validate · DQ',22],['router',6],['sinks · write',20]].map(s=>`<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px"><span style="width:120px;font-size:12px">${s[0]}</span><div style="flex:1;background:#eef0f2;border-radius:6px;overflow:hidden"><div style="width:${s[1]*2.4}%;height:14px;background:var(--accent)"></div></div><span class="mono" style="width:40px;text-align:right;font-size:11px">${s[1]}%</span></div>`).join('')}
+     <p class="muted" style="margin-top:10px">Sharded / distributed execution with lease-based coordination. (scaling/coordinator.go · partition/)</p>`)},
+
+  schedule:{title:'Schedule & orchestrate',icon:'⏰',render:()=>H('Schedule & orchestrate','Triggers, control flow and cross-pipeline dependencies.',
+    `<div class="g2">
+       <div class="card"><h4>Trigger</h4><div class="subtab"><span class="on">Cron</span><span>Event</span><span>Manual</span></div><p class="mono">0 2 * * *  ·  daily 02:00 UTC</p></div>
+       <div class="card"><h4>On completion</h4><p>✓ success → start <b>publish-metrics</b></p><p>✗ failure → <span class="chip err">alert</span> + retry ×2</p></div>
+     </div>
+     <div class="sec">Pipeline dependency graph</div>
+     <div style="display:flex;align-items:center;gap:8px;font-size:12.5px;flex-wrap:wrap">
+       <span class="chip ok">extract-orders</span><span class="muted">→</span>
+       <span class="chip run">enrich-route-load</span><span class="muted">→</span>
+       <span class="chip no" style="background:var(--tf-bg);color:var(--tf)">publish-metrics</span>
+     </div>
+     <p class="muted" style="margin-top:12px">Trigger-driven; a completed run can chain the next pipeline. (trigger/)</p>`)},
+
+  recover:{title:'Recovery & DLQ',icon:'↩',render:()=>H('Recovery & dead-letter','Inspect failures, resume from checkpoint or replay the dead-letter queue.',
+    `<div class="g3" style="margin-bottom:10px">
+       <div class="metric"><div class="ml">Dead-lettered</div><div class="mv" style="color:var(--warn)">18k</div><div class="muted">0.9% of input</div></div>
+       <div class="metric"><div class="ml">Last checkpoint</div><div class="mv" style="font-size:15px">09:15:04Z</div><div class="muted">offset 1,982,004</div></div>
+       <div class="metric"><div class="ml">Resumable</div><div class="mv" style="color:var(--ok)">yes</div><div class="muted">no data loss</div></div>
+     </div>
+     <div style="display:flex;gap:8px;margin-bottom:12px"><span class="btn pri" data-cmd="resume">↻ Resume from checkpoint</span><span class="btn" data-cmd="replay">↩ Replay DLQ</span></div>
+     <div class="sec">Dead-letter queue</div>
+     <table class="grid"><tr><th>order_id</th><th>reason</th><th>value</th><th>stage</th></tr>
+       <tr><td class="fld0">ORD-000004</td><td><span class="reason">amount ≤ 0</span></td><td class="num">-12.00</td><td>validate</td></tr>
+       <tr><td class="fld0">ORD-000007</td><td><span class="reason">status unknown</span></td><td class="mono">"RETURND"</td><td>validate</td></tr>
+       <tr><td class="fld0">ORD-000011</td><td><span class="reason">not a number</span></td><td class="mono">"N/A"</td><td>cast</td></tr></table>
+     <p class="muted" style="margin-top:10px">Checkpoints let a failed run resume exactly-once. (CheckpointDef · checkpoint/{file,redis})</p>`)},
+
+  deploy:{title:'Build & deploy',icon:'▲',render:()=>H('Build & deploy','Compile the pipeline to a self-contained Flogo binary or container.',
+    `<div class="g2">
+       ${[['⬢ Local binary','go build · single executable','Build'],['🐳 Docker image','multi-stage · distroless','Build image'],['☸ Kubernetes','Deployment + HPA','Apply'],['◆ TIBCO Platform','managed capability bundle','Push']].map(t=>`<div class="card"><h4>${t[0]}</h4><p class="muted">${t[1]}</p><span class="btn pri" data-cmd="dobuild" style="margin-top:8px">${t[2]}</span></div>`).join('')}
+     </div>
+     <div class="sec">Last build</div>
+     <div class="rlog"><span class="t">[10:40:02]</span> <span class="i">compiling pipeline → flogo app…</span><br><span class="t">[10:40:14]</span> <span class="ok">✓ built enrich-route-load (linux/amd64) · 24.1 MB</span><br><span class="t">[10:40:15]</span> <span class="ok">✓ image ghcr.io/acme/enrich-route-load:1.4.0</span></div>
+     <p class="muted" style="margin-top:10px">One artifact — no external runtime. (FlogoWorkDirAssets: Dockerfile · k8s template)</p>`)},
+
+  git:{title:'Source control',icon:'⑂',render:()=>H('Git-native diff','.datapipeline is plain JSON — reviewable in any pull request.',
+    `<div class="sec">Changes · 1 file</div>
+     <div class="ti" style="padding-left:12px;color:var(--ink)"><span class="tc" style="color:var(--warn)">M</span>enrich-route-load.datapipeline</div>
+     <div class="sec">Diff</div>
+     <div class="diff">
+       <div class="ln ctx">  "transforms": [</div>
+       <div class="ln ctx">    { "type": "join", "with": "customers" },</div>
+       <div class="ln del">-   { "type": "validate", "rules": 4 },</div>
+       <div class="ln add">+   { "type": "validate", "rules": 5, "onViolation": "route" },</div>
+       <div class="ln add">+   { "type": "router", "routes": ["EU","US","rest"] }</div>
+       <div class="ln ctx">  ],</div>
+     </div>
+     <div class="sec">Semantic graph diff</div>
+     <div class="g2"><div class="card"><h4 style="color:var(--ok)">+ Added</h4><p>Router · by region (3 routes)</p></div><div class="card"><h4 style="color:var(--warn)">~ Changed</h4><p>Validate · 4 → 5 rules, now routes rejects to DLQ</p></div></div>
+     <p class="muted" style="margin-top:10px">Reviewers see intent, not opaque XML. Merges cleanly.</p>`)},
+
+  ai:{title:'AI copilot',icon:'✨',render:()=>H('AI copilot','Describe a change in plain language — review the diff before it applies.',
+    `<div class="chat">
+       <div class="msg u">Add a filter to drop orders under $100 before the router.</div>
+       <div class="msg a">I'll insert a <b>Filter</b> node between <b>Validate</b> and <b>Router</b>:<br><span class="mono" style="font-size:11.5px">filter: net_amount ≥ 100</span><br>This drops ~1 row in the sample. Apply?</div>
+     </div>
+     <div style="display:flex;gap:8px;margin:12px 0"><span class="btn pri" data-cmd="aiapply">✓ Apply change</span><span class="btn" data-cmd="aiask">Explain the impact</span></div>
+     <div class="fld"><div class="v" style="color:var(--mute)">Ask the copilot to add nodes, write validation rules, or explain a mapping…</div></div>
+     <p class="muted">Grounded in your pipeline schema — suggestions are typed and validated. (flogo-agents)</p>`)},
+
+  groups:{title:'Sub-pipelines',icon:'▦',render:()=>H('Sub-pipelines & reuse','Extract a subgraph into a reusable, versioned sub-pipeline.',
+    `<div class="g2">
+       <div class="card"><h4>▦ standardise-customer</h4><p class="muted">trim → lowercase → validate email</p><p>Used by <b>4</b> pipelines · v1.2</p></div>
+       <div class="card"><h4>▦ to-warehouse</h4><p class="muted">cast → upsert (conflict = id)</p><p>Used by <b>2</b> pipelines · v2.0</p></div>
+     </div>
+     <div class="sec">In this pipeline</div>
+     <div style="display:flex;align-items:center;gap:8px"><span class="chip no" style="background:var(--tf-bg);color:var(--tf)">▦ standardise-customer</span><span class="muted">expands to 3 nodes</span><span class="btn" data-cmd="expandgroup" style="margin-left:auto">Extract selection to sub-pipeline</span></div>
+     <p class="muted" style="margin-top:12px">A sub-pipeline is a normal .datapipeline referenced by others — versioned and testable on its own.</p>`)},
+
+  schema:{title:'Schema & formats',icon:'▤',render:()=>{ const rows=[['order_id','string','no','—'],['amount','decimal(12,2)','no','fixed · offset 12 · len 10'],['status','string','no','ebcdic · cp037'],['region','string','yes','—'],['updated_at','timestamp','no','yyyy-MM-dd']];
+    return H('Schema & formats','Typed columns with fixed-width / EBCDIC support for mainframe feeds.',
+    `<div style="margin-bottom:10px"><span class="chip run">✨ inferred from sample</span> <span class="muted">12 columns · edit types, nullability & format</span></div>
+     <table class="grid"><tr><th>Column</th><th>Type</th><th>Nullable</th><th>Format / encoding</th></tr>
+     ${rows.map(r=>`<tr><td class="fld0">${r[0]}</td><td class="mono">${r[1]}</td><td>${r[2]}</td><td class="mono">${r[3]}</td></tr>`).join('')}</table>
+     <p class="muted" style="margin-top:10px">Fixed-width offsets and EBCDIC code pages are first-class. (ColumnDef · schema/)</p>`);}},
+
+  migrate:{title:'Migrate',icon:'⇄',render:()=>H('Migrate existing jobs','Import BusinessWorks / legacy ETL and map constructs to pipeline nodes.',
+    `<div class="g2">
+       <div class="card"><h4>Source</h4><p class="mono">MC300ConversionModule (BW6)</p><p class="muted">4 processes · 12 activities</p></div>
+       <div class="card"><h4>Coverage</h4><p style="font:700 22px var(--sans);color:var(--ok);margin:2px 0">83%</p><p class="muted">10 of 12 activities auto-mapped</p></div>
+     </div>
+     <div class="sec">Construct mapping</div>
+     <table class="grid"><tr><th>Source construct</th><th>→ Pipeline node</th><th>Status</th></tr>
+       <tr><td class="mono">File Poller</td><td>Source · CSV</td><td><span class="chip ok">mapped</span></td></tr>
+       <tr><td class="mono">Mapper (XSLT)</td><td>Map · Filter · Cast</td><td><span class="chip ok">mapped</span></td></tr>
+       <tr><td class="mono">JDBC Update</td><td>Sink · JDBC (upsert)</td><td><span class="chip ok">mapped</span></td></tr>
+       <tr><td class="mono">Custom Java</td><td>—</td><td><span class="chip warn">review</span></td></tr></table>
+     <p class="muted" style="margin-top:10px">Import maps activities to typed nodes; unmapped steps are flagged for review.</p>`)},
+
+  model:{title:'Runtime model',icon:'◈',render:()=>H('Runtime model','How a .datapipeline executes on the Flogo engine.',
+    `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12.5px;margin-bottom:12px">
+       <span class="chip no" style="background:#eef0f2">.datapipeline (JSON)</span><span class="muted">→</span>
+       <span class="chip no" style="background:#eef0f2">compile</span><span class="muted">→</span>
+       <span class="chip run">Flogo app + engine</span><span class="muted">→</span>
+       <span class="chip ok">single binary</span>
+     </div>
+     <div class="g2">
+       <div class="card"><h4>Records, not events</h4><p class="muted">Bounded sources stream records through the DAG in batches; unbounded sources run continuously.</p></div>
+       <div class="card"><h4>Executor</h4><p class="muted">Batch → funnel to completion. Streaming → long-running with windows + checkpoints.</p></div>
+       <div class="card"><h4>Backpressure</h4><p class="muted">Each stage pulls; slow sinks throttle upstream automatically.</p></div>
+       <div class="card"><h4>Exactly-once</h4><p class="muted">Checkpointed offsets + idempotent upserts on restart.</p></div>
+     </div>
+     <p class="muted" style="margin-top:10px">Same model, two shapes — inferred from the source, not chosen. (action/pipeline)</p>`)},
+
+  keys:{title:'Keyboard shortcuts',icon:'⌨',render:()=>{ const ks=[['⌘⇧P','Command palette'],['⌘R','Run pipeline'],['⌘K','Search components'],['⌘S','Save'],['⌘⏎','Preview selected node'],['⌘/','Toggle Design / Code'],['⌘F','Find in pipeline'],['⌫','Delete node']];
+    return H('Keyboard shortcuts','Move at speed — everything is keyboard-first.',
+    `<div class="g2">${ks.map(k=>`<div style="display:flex;align-items:center;gap:10px;padding:7px 2px;border-bottom:1px solid #eef0f2"><span class="kbd">${k[0]}</span><span>${k[1]}</span></div>`).join('')}</div>`);}},
+};
+function openDoc(key){ if(!DOCS[key])return; if(!S.tabs.includes('@'+key))S.tabs.push('@'+key); S.open='@'+key; render(); }
 
 render();
 </script>
