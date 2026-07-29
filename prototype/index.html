@@ -186,6 +186,8 @@
 
   /* panel */
   .panel{height:210px;border-top:1px solid var(--lineL);background:#fff;display:flex;flex-direction:column;min-height:0}
+  .panel.cfg{height:48vh}
+  .pbody.cfgbody{padding:0;display:flex;flex-direction:column}
   .ptabs{display:flex;align-items:center;gap:0;border-bottom:1px solid var(--lineL);background:#fafbfc;padding:0 8px}
   .ptab{padding:8px 12px;font-size:11.5px;text-transform:uppercase;letter-spacing:.03em;color:var(--body);border-bottom:2px solid transparent;cursor:pointer}
   .ptab.on{color:var(--ink);border-bottom-color:var(--tibco);font-weight:700}
@@ -734,7 +736,6 @@ function renderMain(){
     el.innerHTML=`<div class="codeview">${esc(CODE[S.open]||JSON.stringify({name:p.id,mode:p.mode,nodes:p.nodes.length},null,2))}</div>`;
     return;
   }
-  if(S.sel){ const sn=p.nodes.find(x=>x.id===S.sel); if(sn){ el.style.gridTemplateColumns='1fr'; el.innerHTML=renderConfigPanel(sn); return; } S.sel=null; }
   el.style.gridTemplateColumns=`172px 1fr ${S.selEdge!=null?'290px':'0px'}`;
   // palette
   const pal=`<div class="palette">
@@ -780,6 +781,7 @@ function renderMain(){
       </defs>${wires}</svg>${nodes}${wireChip}</div></div>`;
   el.innerHTML=pal+canvas+(S.selEdge!=null?edgeInspector():'');
   if(S.palQ) filterPalette(S.palQ);
+  renderPanel();
 }
 function filterPalette(q){
   q=(q||'').trim().toLowerCase();
@@ -885,11 +887,32 @@ function renderInspector(){
     <div class="itabs">${tb}</div>
     <div class="ib">${body}</div></div>`;
 }
+function configBarHTML(n){
+  const isMap=['mapper','map','cast'].includes(n.type);
+  const kc={src:['Source','var(--src)','var(--src-bg)'],transform:['Transform','var(--tf)','var(--tf-bg)'],control:['Control','var(--tf)','var(--tf-bg)'],sink:['Sink','var(--snk)','var(--snk-bg)'],dlq:['Error','var(--dlq)','var(--dlq-bg)']}[n.kind]||['Node','var(--tf)','var(--tf-bg)'];
+  const tab=S.cfgTab||'Input', mode=S.mapMode||'visual';
+  const tabsHTML=['Settings','Input','Output','Test'].map(t=>`<span class="${tab===t?'on':''}" data-cfgtab="${t}">${t}</span>`).join('');
+  const mapped=MAP3.fields.filter(f=>f.kind!=='empty').length;
+  const autoBtn=isMap?`<span class="btn pri" data-cmd="automap">⚡ Auto-map by name</span>`:'';
+  const modeSeg=isMap?`<span class="modeseg"><span class="${mode==='visual'?'on':''}" data-mapmode="visual">▤ Visual</span><span class="${mode==='fx'?'on':''}" data-mapmode="fx">fx Expression</span></span>`:'';
+  const status=isMap?`<span class="chip ok">${mapped} of ${mapped} mapped</span>`:`<span class="chip ok">valid</span>`;
+  return `<span class="ik" style="color:${kc[1]};background:${kc[2]}">${kc[0]}</span><span class="inm">${esc(n.name)}</span><span class="mtabs2" style="margin-left:10px">${tabsHTML}</span><span style="flex:1"></span>${autoBtn}${modeSeg}${status}<span class="pt-tools" style="margin-left:8px"><span class="ptool" data-cmd="panelmax" title="Toggle height">⤢</span><span class="ptool" data-cmd="paneltoggle" title="${S.panelOpen===false?'Expand':'Collapse'}">${S.panelOpen===false?'⌃':'⌄'}</span><span class="ptool" data-cmd="deselect" title="Close">✕</span></span>`;
+}
+function configMid(n){
+  const isMap=['mapper','map','cast'].includes(n.type), mode=S.mapMode||'visual', tab=S.cfgTab||'Input';
+  if(tab==='Input') return isMap?((mode==='fx')?mapperFxHTML():mapper3HTML(n)):configPanelInput(n);
+  if(tab==='Output') return outputBody(n);
+  if(tab==='Settings') return settingsBody(n);
+  return testBody(n);
+}
 function renderPanel(){
   const el=document.getElementById('panel');
   if(isDoc()||!S.tabs.length){ el.classList.add('hidden'); el.innerHTML=''; return; } el.classList.remove('hidden');
   el.classList.toggle('collapsed', S.panelOpen===false);
   el.classList.toggle('max', !!S.panelMax);
+  const selNode = S.sel ? PIPE().nodes.find(x=>x.id===S.sel) : null;
+  el.classList.toggle('cfg', !!selNode);
+  if(selNode){ el.innerHTML=`<div class="mapbar">${configBarHTML(selNode)}</div><div class="pbody cfgbody" id="pbody">${configMid(selNode)}</div>`; return; }
   const pc=probsFor().length;
   const tabs=[['preview','Preview'],['problems','Problems'+(pc?` <b style="color:var(--err)">${pc}</b>`:'')],['output','Output'],['tests','Tests']];
   const th=tabs.map(([k,l])=>`<div class="ptab ${S.panel===k?'on':''}" data-panel="${k}">${l}</div>`).join('');
@@ -933,7 +956,7 @@ document.addEventListener('click',e=>{
   const close=t.closest('[data-close]'); if(close){ e.stopPropagation(); closeTab(close.getAttribute('data-close')); return; }
   const open=t.closest('[data-open]'); if(open){ openPipe(open.getAttribute('data-open')); return; }
   const ew=t.closest('[data-edge]'); if(ew){ S.selEdge=+ew.getAttribute('data-edge'); S.sel=null; S.linking=null; renderMain(); return; }
-  const node=t.closest('[data-node]'); if(node){ if(_suppressClick){_suppressClick=false;return;} S.sel=node.getAttribute('data-node'); S.cfgTab='Input'; S.selEdge=null; S.linking=null; renderMain(); return; }
+  const node=t.closest('[data-node]'); if(node){ if(_suppressClick){_suppressClick=false;return;} S.sel=node.getAttribute('data-node'); S.cfgTab='Input'; S.selEdge=null; S.linking=null; S.panelOpen=true; renderMain(); return; }
   const v2=t.closest('[data-view2]'); if(v2){ S.view=v2.getAttribute('data-view2'); renderToolbar(); renderMain(); return; }
   const pn=t.closest('[data-panel]'); if(pn){ const k=pn.getAttribute('data-panel'); if(k===S.panel&&S.panelOpen!==false){ S.panelOpen=false; } else { S.panel=k; S.panelOpen=true; } renderPanel(); return; }
   const pv=t.closest('[data-pv]'); if(pv){ S.pv=pv.getAttribute('data-pv'); renderPanel(); return; }
