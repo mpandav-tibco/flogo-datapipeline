@@ -95,6 +95,7 @@
   .canvaswrap{position:relative;overflow:auto;background:radial-gradient(circle at 1px 1px,#e2e5e9 1px,transparent 0) 0 0/20px 20px,#f7f8fa}
   .ctool{position:absolute;top:10px;left:10px;right:10px;display:flex;gap:8px;z-index:6;pointer-events:none}
   .ctool .mb{pointer-events:auto;background:#fff;border:1px solid var(--lineL);border-radius:7px;padding:4px 9px;font-size:11.5px;color:var(--body);font-weight:600;cursor:pointer}
+  .ctool .zlvl{pointer-events:auto;background:#fff;border:1px solid var(--lineL);border-radius:7px;padding:4px 8px;font-size:11px;color:var(--body);font-weight:600;cursor:pointer;min-width:42px;text-align:center;font-family:var(--mono)}
   .canvas{position:relative;margin:44px auto 20px}
   svg.wires{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
   .node{position:absolute;width:152px;background:#fff;border:1px solid var(--lineL);border-radius:10px;box-shadow:0 1px 2px rgba(20,25,30,.06),0 6px 16px rgba(20,25,30,.08);cursor:pointer;z-index:3}
@@ -477,7 +478,7 @@ const CODE = {
 };
 
 /* ============================ STATE ============================ */
-const S = { open:'enrich-route-load', tabs:['enrich-route-load'], sel:'validate', view:'design', panel:'preview', pv:'output', abar:'pipeline', running:false, itab:'Config', inspOpen:true, panelOpen:true, panelMax:false, sideOpen:true, grpc:{}, env:'dev', links:{}, linking:null, schemaLinks:{validate:'orders'}, schlinking:null, palQ:'', joinType:'inner' };
+const S = { open:'enrich-route-load', tabs:['enrich-route-load'], sel:'validate', view:'design', panel:'preview', pv:'output', abar:'pipeline', running:false, itab:'Config', inspOpen:true, panelOpen:true, panelMax:false, sideOpen:true, grpc:{}, env:'dev', links:{}, linking:null, schemaLinks:{validate:'orders'}, schlinking:null, palQ:'', joinType:'inner', zoom:1 };
 const PIPE = ()=>DB.pipelines[S.open]||DB.pipelines['enrich-route-load'];
 const isDoc = ()=> typeof S.open==='string' && S.open[0]==='@';
 const DOCKEY = ()=> S.open.slice(1);
@@ -576,8 +577,8 @@ function renderMain(){
       <div class="nb"><div class="nnm">${n.name}</div><div class="nmeta">${n.meta}</div></div>
       ${ins}${outs}</div>`;
   }).join('');
-  const canvas=`<div class="canvaswrap"><div class="ctool"><span class="mb" data-cmd="fit">⤢ Fit</span><span class="mb" data-cmd="autolayout">▦ Auto-layout</span><span class="mb" data-cmd="validate">✓ Validate</span></div>
-    <div class="canvas" style="width:${W}px;height:${H}px">
+  const canvas=`<div class="canvaswrap"><div class="ctool"><span class="mb" data-cmd="fit">⤢ Fit</span><span class="mb" data-cmd="autolayout">▦ Auto-layout</span><span class="mb" data-cmd="validate">✓ Validate</span><span style="flex:1"></span><span class="mb" data-cmd="zoomout" title="Zoom out ⌘−">−</span><span class="zlvl" data-cmd="zoomreset" title="Reset zoom ⌘0">${Math.round((S.zoom||1)*100)}%</span><span class="mb" data-cmd="zoomin" title="Zoom in ⌘+">＋</span></div>
+    <div class="canvas" style="width:${W}px;height:${H}px;zoom:${S.zoom||1}">
       <svg class="wires" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><defs>
         <marker id="arw" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#9aa4b0"/></marker>
         <marker id="arwe" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="var(--dlq)"/></marker>
@@ -754,7 +755,10 @@ function runCmd(c){
   if(c==='closemodal'){ closeOverlays(); return; }
   if(c==='validate'){ if(!isDoc()){S.panel='problems';renderPanel();} toast('✓ Validation passed — 0 errors, 0 warnings'); return; }
   if(c==='autolayout'){ toast('Auto-layout applied'); return; }
-  if(c==='fit'){ toast('Fit to graph'); return; }
+  if(c==='fit'){ S.zoom=1; renderMain(); toast('Fit to graph · 100%'); return; }
+  if(c==='zoomin'){ S.zoom=Math.min(1.6, Math.round(((S.zoom||1)+0.1)*10)/10); renderMain(); return; }
+  if(c==='zoomout'){ S.zoom=Math.max(0.4, Math.round(((S.zoom||1)-0.1)*10)/10); renderMain(); return; }
+  if(c==='zoomreset'){ S.zoom=1; renderMain(); return; }
   if(c==='new'){ openTemplates(); return; }
   if(c==='preview'){ if(isDoc())openPipe(lastPipe()); S.panel='preview'; renderPanel(); return; }
   if(c==='automap'){ S.mapped=true; renderMain(); toast('✨ Mapped 2 fields by name + type'); return; }
@@ -835,7 +839,7 @@ function renderCmdList(q){ const list=COMMANDS.filter(c=>c.label.toLowerCase().i
 document.getElementById('cmdinput').addEventListener('input',e=>renderCmdList(e.target.value));
 document.getElementById('cmdinput').addEventListener('keydown',e=>{ if(e.key==='Enter'){ const on=document.querySelector('#cmdlist .ci.on')||document.querySelector('#cmdlist .ci[data-run]'); if(on){const c=on.getAttribute('data-run').replace('__cmd_','');closeOverlays();runCmd(c);} } if(e.key==='Escape')closeOverlays(); });
 document.getElementById('cmdlist').addEventListener('click',e=>{ const ci=e.target.closest('.ci[data-run]'); if(ci){const c=ci.getAttribute('data-run').replace('__cmd_','');closeOverlays();runCmd(c);} });
-document.addEventListener('keydown',e=>{ if((e.metaKey||e.ctrlKey)&&e.shiftKey&&e.key.toLowerCase()==='p'){e.preventDefault();openPalette();} if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='r'){e.preventDefault();doRun();} if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='k'){e.preventDefault();const s=document.getElementById('palsearch');if(s){s.focus();s.select();}} if(e.key==='Escape'){ if(S.linking){ S.linking=null; renderMain(); } else if(document.getElementById('scrim').classList.contains('on')){closeOverlays();} else if(S.sel){ S.sel=null; S.inspOpen=true; renderMain(); } } });
+document.addEventListener('keydown',e=>{ if((e.metaKey||e.ctrlKey)&&e.shiftKey&&e.key.toLowerCase()==='p'){e.preventDefault();openPalette();} if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='r'){e.preventDefault();doRun();} if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='k'){e.preventDefault();const s=document.getElementById('palsearch');if(s){s.focus();s.select();}} if((e.metaKey||e.ctrlKey)&&(e.key==='='||e.key==='+')){e.preventDefault();runCmd('zoomin');} if((e.metaKey||e.ctrlKey)&&e.key==='-'){e.preventDefault();runCmd('zoomout');} if((e.metaKey||e.ctrlKey)&&e.key==='0'){e.preventDefault();runCmd('zoomreset');} if(e.key==='Escape'){ if(S.linking){ S.linking=null; renderMain(); } else if(document.getElementById('scrim').classList.contains('on')){closeOverlays();} else if(S.sel){ S.sel=null; S.inspOpen=true; renderMain(); } } });
 function closeOverlays(){ document.getElementById('scrim').classList.remove('on'); document.getElementById('cmdp').classList.remove('on'); document.getElementById('modal').classList.remove('on'); }
 
 /* modals */
