@@ -8,6 +8,7 @@ import type { PipelineDoc } from '../src/model/pipeline';
 import type { HostToWebview, WebviewToHost } from '../src/protocol';
 import type { RunResponse, PreviewResult, StatusResponse, StageTestResult } from '../src/engine/apiClient';
 import { TRIGGER_CATALOG, triggerDef } from '../src/model/triggers';
+import { deriveBranches, branchesByOwner, type DerivedBranch } from '../src/model/graph';
 interface VsCodeApi {
   postMessage(msg: WebviewToHost): void;
   getState(): unknown;
@@ -77,6 +78,7 @@ interface Pipe {
   mode: string;
   status: string;
   nodes: Node[];
+  branches: DerivedBranch[];
   hasDlq: boolean;
   dlqNode: Node | null;
 }
@@ -91,6 +93,7 @@ const S = {
   inspTab: 'Config',
   inspClosed: false,
   inspWidth: 300,
+  showBranches: true,
   setOpen: null as Record<string, boolean> | null,
   tabs: [{ id: 'canvas', type: 'canvas' as string }],
   active: 'canvas',
@@ -255,12 +258,14 @@ function buildPipe(doc: PipelineDoc): Pipe {
     };
   }
 
+  const branches = deriveBranches(doc);
   return {
     name: doc.name || S.fileName.replace(/\.datapipeline$/, ''),
     description: doc.description || '',
     mode: String(doc.mode || 'etl').toUpperCase(),
     status: S.running ? 'running' : S.ran ? 'partial' : 'idle',
     nodes,
+    branches,
     hasDlq,
     dlqNode,
   };
@@ -2854,6 +2859,54 @@ function renderEditor() {
   }
 }
 
+// Render one derived branch (router route-sink, join reference source, validate
+// reject sink, source parse-error sink) as a read-only satellite that hangs
+// beneath its owner. Clicking it opens the owning stage's inspector — the branch
+// is configured there, so the canvas node is a view, not a separate editor.
+function renderBranch(b: DerivedBranch): HTMLElement {
+  const item = el('div', 'nbranch nbranch-' + b.kind);
+  const up = b.flow === 'in';
+  const elbow = el('div', 'belbow');
+  elbow.innerHTML = `<span class="bline"></span><span class="blabel" title="${escapeHtml(b.label)}">${up ? '▲ ' : ''}${escapeHtml(b.label)}</span>`;
+  item.appendChild(elbow);
+  const icon = b.nodeKind === 'source' ? '⇥' : '⇤';
+  const kindText =
+    b.kind === 'reference' ? 'reference input'
+      : b.kind === 'route' ? 'route → sink'
+      : b.kind === 'default-route' ? 'default → sink'
+      : b.kind === 'reject' ? 'rejects → sink'
+      : 'parse errors → sink';
+  const meta = metaFor(b.nodeKind, b.type, b.cfg);
+  const label = typeLabel(b.type);
+  const showMeta = meta && meta !== b.title && meta !== label;
+  const nd = el('div', 'node satellite s-' + b.nodeKind);
+  nd.innerHTML = `<div class="kind"><span class="kico">${icon}</span>${kindText}</div>`
+    + `<div class="nm">${escapeHtml(b.title)}</div>`
+    + (showMeta ? `<div class="meta">${escapeHtml(meta)}</div>` : '');
+  nd.tabIndex = 0;
+  nd.title = 'Configured on the ' + (b.ownerIndex === 'source' ? 'source' : 'owning transform') + ' — click to edit.';
+  nd.onclick = () => { S.selNode = b.ownerId; S.inspTab = 'Config'; S.inspClosed = false; renderEditor(); };
+  item.appendChild(nd);
+  return item;
+}
+
+// The top-level DLQ ("catch") rendered as a satellite under the sink column, so
+// it stays glued to the sink even when other nodes carry branches of their own.
+function renderDlqBranch(dn: Node): HTMLElement {
+  const item = el('div', 'nbranch nbranch-dlq');
+  const elbow = el('div', 'belbow');
+  elbow.innerHTML = `<span class="bline"></span><span class="blabel" title="on write failure">⚠ on failure → catch</span>`;
+  item.appendChild(elbow);
+  const dnode = el('div', 'node catch satellite' + (S.selNode === 'dlq' ? ' sel' : ''));
+  dnode.innerHTML = `<div class="kind">dead-letter (catch)</div><div class="nm">${escapeHtml(dn.nm)}</div><div class="meta">${escapeHtml(dn.type)} · ${escapeHtml(dn.meta)}</div>`;
+  dnode.tabIndex = 0;
+  dnode.title = 'Rows rejected by the sink are captured here — the main pipeline keeps running.';
+  dnode.onclick = () => { S.selNode = 'dlq'; S.inspTab = 'Config'; S.inspClosed = false; renderEditor(); };
+  dnode.oncontextmenu = (e) => dlqMenu(e);
+  item.appendChild(dnode);
+  return item;
+}
+
 function renderCanvas(m: HTMLElement) {
   const p = S.pipe!;
   const c = el('div', 'edcontent');
@@ -2888,6 +2941,7 @@ function renderCanvas(m: HTMLElement) {
   head.appendChild(descIn);
   cv.appendChild(head);
 
+  const branchMap = branchesByOwner(p.branches);
   const row = el('div', 'flowrow');
   p.nodes.forEach((n, i) => {
     if (i > 0) {
@@ -2918,7 +2972,21 @@ function renderCanvas(m: HTMLElement) {
     nd.tabIndex = 0;
     nd.onclick = () => { S.selNode = n.id; S.inspTab = 'Config'; S.inspClosed = false; renderEditor(); };
     nd.oncontextmenu = (e) => nodeMenu(n, i, e);
-    row.appendChild(nd);
+    // Wrap each node in a column so its implicit branches hang directly beneath
+    // it, aligned under their owner, without pushing the main flow off its line.
+    const col = el('div', 'nodecol');
+    col.appendChild(nd);
+    if (S.showBranches) {
+      const owned = branchMap[n.id] || [];
+      const withDlq = n.id === 'sink' && p.hasDlq && !!p.dlqNode;
+      if (owned.length || withDlq) {
+        const stack = el('div', 'nbranches');
+        owned.forEach((b) => stack.appendChild(renderBranch(b)));
+        if (withDlq) stack.appendChild(renderDlqBranch(p.dlqNode!));
+        col.appendChild(stack);
+      }
+    }
+    row.appendChild(col);
   });
   row.appendChild(el('div', 'conn'));
   const add = el('div', 'addnode', '＋');
@@ -2930,29 +2998,14 @@ function renderCanvas(m: HTMLElement) {
   wrap.appendChild(row);
   cv.appendChild(wrap);
 
-  // DLQ: the pipeline's "catch" — a dead-letter handler that captures rows the
-  // main sink rejects (write failures, post-isolation validate rejects). It is
-  // rendered as an error-handler lane beneath the flow, elbow-connected from the
-  // sink, so it reads as a try/catch rather than a disconnected node.
-  if (p.hasDlq && p.dlqNode) {
-    const dn = p.dlqNode;
-    const br = el('div', 'catchlane');
-    const col = el('div', 'catchcol');
-    col.innerHTML = '<span class="elbow-line"></span><span class="elbow-tag">⚠ on failure → catch</span>';
-    const dnode = el('div', 'node catch' + (S.selNode === 'dlq' ? ' sel' : ''));
-    dnode.innerHTML = `<div class="kind">dead-letter (catch)</div><div class="nm">${escapeHtml(dn.nm)}</div><div class="meta">${escapeHtml(dn.type)} · ${escapeHtml(dn.meta)}</div>`;
-    dnode.tabIndex = 0;
-    dnode.title = 'Rows rejected by the sink are captured here — the main pipeline keeps running.';
-    dnode.onclick = () => { S.selNode = 'dlq'; S.inspTab = 'Config'; S.inspClosed = false; renderEditor(); };
-    dnode.oncontextmenu = (e) => dlqMenu(e);
-    col.appendChild(dnode);
-    br.appendChild(col);
-    wrap.appendChild(br);
-  }
+  // The DLQ ("catch") now renders as a satellite inside the sink's column (see
+  // renderDlqBranch), so it stays aligned under the sink alongside any other
+  // implicit branches instead of floating below a branch-tall flow row.
 
   const hint = el('div', 'canvas-hint pillrow');
   const dlqPill = p.hasDlq ? '' : '<span class="pill" data-h="dlq">＋ DLQ</span>';
-  hint.innerHTML = '<span class="pill" data-h="src">＋ Source</span><span class="pill" data-h="tf">＋ Transform</span><span class="pill" data-h="sink">＋ Sink</span>' + dlqPill + '<span class="pill">⤢ Fit</span>';
+  const brPill = p.branches.length ? `<span class="pill toggle${S.showBranches ? ' on' : ''}" data-h="branches" title="Show or hide the implicit router, join, reject and parse-error branches">⎇ Branches</span>` : '';
+  hint.innerHTML = '<span class="pill" data-h="src">＋ Source</span><span class="pill" data-h="tf">＋ Transform</span><span class="pill" data-h="sink">＋ Sink</span>' + dlqPill + brPill + '<span class="pill">⤢ Fit</span>';
   (hint.querySelector('[data-h="tf"]') as HTMLElement).onclick = () => addTransform(p.nodes.length - 1);
   (hint.querySelector('[data-h="src"]') as HTMLElement).onclick = () =>
     quickPick('Change source type', SOURCE_TYPES, (v) => {
@@ -2968,6 +3021,8 @@ function renderCanvas(m: HTMLElement) {
     }, typeLabel);
   const dlqBtn = hint.querySelector('[data-h="dlq"]') as HTMLElement | null;
   if (dlqBtn) dlqBtn.onclick = () => addDlq();
+  const brBtn = hint.querySelector('[data-h="branches"]') as HTMLElement | null;
+  if (brBtn) brBtn.onclick = () => { S.showBranches = !S.showBranches; renderEditor(); };
   cv.appendChild(hint);
   m.appendChild(c);
 
