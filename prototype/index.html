@@ -193,6 +193,15 @@
   .presize{position:absolute;top:0;left:0;right:0;height:6px;cursor:ns-resize;z-index:9}
   .presize::after{content:"";position:absolute;top:2px;left:50%;transform:translateX(-50%);width:34px;height:3px;border-radius:3px;background:var(--lineL);opacity:0;transition:opacity .12s}
   .presize:hover::after{opacity:1}
+  .panel.termh{height:40vh}
+  .pbody.termbody{padding:0}
+  .term{display:flex;flex-direction:column;height:100%;background:#1e1e1e;font-family:var(--mono);font-size:12px;color:#d4d4d4}
+  .termout{flex:1;overflow:auto;padding:8px 10px;min-height:0}
+  .term .tl{white-space:pre-wrap;line-height:1.55;word-break:break-word}
+  .termin{display:flex;align-items:center;gap:7px;padding:5px 10px;border-top:1px solid #333;flex:none}
+  .termps{color:#4ec9b0;white-space:nowrap;flex:none}
+  .termin input{flex:1;min-width:0;background:transparent;border:none;outline:none;color:#d4d4d4;font-family:var(--mono);font-size:12px}
+  .term .ok{color:#4ec36b} .term .err{color:#f48771} .term .mut{color:#8a8a8a} .term .warn{color:#e0a63a} .term b{color:#fff;font-weight:700}
   .ptabs{display:flex;align-items:center;gap:0;border-bottom:1px solid var(--lineL);background:#fafbfc;padding:0 8px}
   .ptab{padding:8px 12px;font-size:11.5px;text-transform:uppercase;letter-spacing:.03em;color:var(--body);border-bottom:2px solid transparent;cursor:pointer}
   .ptab.on{color:var(--ink);border-bottom-color:var(--tibco);font-weight:700}
@@ -557,7 +566,7 @@ const CODE = {
 };
 
 /* ============================ STATE ============================ */
-const S = { open:'enrich-route-load', tabs:['enrich-route-load'], sel:'validate', view:'design', panel:'preview', pv:'output', abar:'pipeline', running:false, itab:'Config', inspOpen:true, panelOpen:true, panelMax:false, sideOpen:true, grpc:{}, env:'dev', links:{}, linking:null, schemaLinks:{validate:'orders'}, schlinking:null, palQ:'', joinType:'inner', zoom:1, selEdge:null, mapEdit:null, cfgTab:'Input', mapTab:'Input', mapMode:'visual', mapField:'full_name', panelH:null };
+const S = { open:'enrich-route-load', tabs:['enrich-route-load'], sel:'validate', view:'design', panel:'preview', pv:'output', abar:'pipeline', running:false, itab:'Config', inspOpen:true, panelOpen:true, panelMax:false, sideOpen:true, grpc:{}, env:'dev', links:{}, linking:null, schemaLinks:{validate:'orders'}, schlinking:null, palQ:'', joinType:'inner', zoom:1, selEdge:null, mapEdit:null, cfgTab:'Input', mapTab:'Input', mapMode:'visual', mapField:'full_name', panelH:null, term:[], termHist:[], termHistIdx:0 };
 const PIPE = ()=>DB.pipelines[S.open]||DB.pipelines['enrich-route-load'];
 const isDoc = ()=> typeof S.open==='string' && S.open[0]==='@';
 const DOCKEY = ()=> S.open.slice(1);
@@ -934,12 +943,14 @@ function renderPanel(){
   const selNode = S.sel ? PIPE().nodes.find(x=>x.id===S.sel) : null;
   const selEdge = (!selNode && S.selEdge!=null) ? PIPE().edges[S.selEdge] : null;
   el.classList.toggle('cfg', !!selNode || !!selEdge);
+  el.classList.toggle('termh', !selNode && !selEdge && S.panel==='terminal');
   if(selNode){ el.innerHTML=PRESIZE+`<div class="mapbar">${configBarHTML(selNode)}</div><div class="pbody cfgbody" id="pbody">${configMid(selNode)}</div>`; return; }
   if(selEdge){ el.innerHTML=PRESIZE+`<div class="mapbar">${wireBarHTML(selEdge)}</div><div class="pbody cfgbody" id="pbody">${wireMidHTML(selEdge)}</div>`; return; }
   const pc=probsFor().length;
-  const tabs=[['preview','Preview'],['problems','Problems'+(pc?` <b style="color:var(--err)">${pc}</b>`:'')],['output','Output'],['tests','Tests']];
+  const tabs=[['preview','Preview'],['problems','Problems'+(pc?` <b style="color:var(--err)">${pc}</b>`:'')],['output','Output'],['tests','Tests'],['terminal','Terminal']];
   const th=tabs.map(([k,l])=>`<div class="ptab ${S.panel===k?'on':''}" data-panel="${k}">${l}</div>`).join('');
-  el.innerHTML=PRESIZE+`<div class="ptabs">${th}<span class="pt-tools"><span class="ptool" data-cmd="panelmax" title="Toggle max height">⤢</span><span class="ptool" data-cmd="paneltoggle" title="${S.panelOpen===false?'Expand':'Collapse'} panel">${S.panelOpen===false?'⌃':'⌄'}</span></span></div><div class="pbody" id="pbody">${panelBody()}</div>`;
+  el.innerHTML=PRESIZE+`<div class="ptabs">${th}<span class="pt-tools"><span class="ptool" data-cmd="panelmax" title="Toggle max height">⤢</span><span class="ptool" data-cmd="paneltoggle" title="${S.panelOpen===false?'Expand':'Collapse'} panel">${S.panelOpen===false?'⌃':'⌄'}</span></span></div><div class="pbody${S.panel==='terminal'?' termbody':''}" id="pbody">${panelBody()}</div>`;
+  if(S.panel==='terminal') requestAnimationFrame(()=>{ const to=document.getElementById('termout'); if(to)to.scrollTop=to.scrollHeight; const ti=document.getElementById('terminput'), ae=document.activeElement; if(ti && (!ae||ae===document.body||ae.id==='terminput'))ti.focus(); });
 }
 function panelBody(){
   if(S.panel==='preview'){
@@ -959,6 +970,7 @@ function panelBody(){
   }
   if(S.panel==='output') return `<div class="rlog" id="runlog"><span class="muted">Press ▶ Run to execute the pipeline (mock engine).</span></div>`;
   if(S.panel==='tests') return testsBody();
+  if(S.panel==='terminal') return termHTML();
 }
 function testsBody(){
   const rows=[['rowCount · output==100 · rejected==3',9,0],['schema · 5 cols, types locked',14,0],['goldenSample · first 20 rows',22,1],['dqPassRate · amount ≥ 99.5%',6,0],['noDeadLetter · dlq==0',4,0]];
@@ -966,6 +978,51 @@ function testsBody(){
     <div id="trows">${rows.map((r,i)=>`<div class="trow" data-fail="${r[2]}" data-ms="${r[1]}"><span class="td"></span>${r[0]}<span class="ts">idle</span></div>`).join('')}</div>
     <div id="tsum" style="margin-top:8px;font-weight:700"></div>`;
 }
+function termPrompt(){ return '~/'+S.open; }
+const TERMHELP=[
+  'Commands:',
+  '  flogo build      — compile the pipeline to a self-contained binary',
+  '  flogo run        — execute the pipeline (mock engine)',
+  '  flogo test       — run the .datapipelinetest assertions',
+  '  flogo validate   — check mappings, ports, cycles',
+  '  flogo deploy     — build image and push',
+  '  flogo version    — CLI version',
+  '  ls · pwd · git status · echo · date · clear',
+  '  <span class="mut">↑/↓ recall history · mock shell for the demo</span>',
+];
+function termGit(a){ if(a[0]==='status') return 'On branch <b>prototype/studio-demo</b>\nnothing to commit, working tree clean'; if(a[0]==='log') return '<span class="warn">e219945</span> per-node mapper data + node tests\n<span class="warn">d36e43e</span> dock config at bottom (ADF pattern)'; return 'usage: git &lt;status|log&gt;'; }
+function termFlogo(a){ const s=a[0];
+  if(s==='version'||s==='--version'||s==='-v') S.term.push('Flogo Data Pipeline CLI · v2.26.5');
+  else if(s==='build'){ S.term.push('<span class="mut">compiling '+esc(S.open)+' → flogo app…</span>'); S.term.push('<span class="ok">✓ built '+esc(S.open)+' (linux/amd64) · 24.1 MB · 11.8s</span>'); }
+  else if(s==='run'){ S.term.push('<span class="mut">starting '+esc(S.open)+' · mode=etl…</span>'); S.term.push('<span class="ok">✓ completed — 2.0M rows · 4m12s · DQ 99.2%</span>'); }
+  else if(s==='test'){ S.term.push('<span class="mut">running '+esc(S.open)+'.datapipelinetest…</span>'); S.term.push('<span class="ok">✓ 5 passed</span> <span class="warn">· 1 flaky</span> · 0 failed'); }
+  else if(s==='validate'){ S.term.push('<span class="ok">✓ 0 errors · 0 warnings</span> — mappings resolve, ports connected, no cycles'); }
+  else if(s==='deploy'){ S.term.push('<span class="mut">build + push…</span>'); S.term.push('<span class="ok">✓ ghcr.io/acme/'+esc(S.open)+':1.4.0</span>'); }
+  else S.term.push('usage: flogo &lt;build|run|test|validate|deploy|version&gt;');
+}
+function runTerm(raw){
+  if(!S.term)S.term=[];
+  S.term.push('<span class="termps">'+esc(termPrompt())+' $</span> '+esc(raw));
+  const cmd=(raw||'').trim(), parts=cmd.split(/\s+/), c=parts[0], a=parts.slice(1);
+  if(cmd===''){}
+  else if(c==='help'||c==='?') TERMHELP.forEach(l=>S.term.push(l));
+  else if(c==='clear'||c==='cls') S.term=[];
+  else if(c==='pwd') S.term.push('/Users/you/flogo/'+esc(S.open));
+  else if(c==='ls') S.term.push('<span class="ok">'+esc(S.open)+'.datapipeline</span>  '+esc(S.open)+'.datapipelinetest  README.md  bin/  config/');
+  else if(c==='echo') S.term.push(esc(a.join(' ')));
+  else if(c==='date') S.term.push(esc(new Date().toString()));
+  else if(c==='whoami') S.term.push('flogo');
+  else if(c==='git') termGit(a).split('\n').forEach(l=>S.term.push(l));
+  else if(c==='flogo'||c==='fcli') termFlogo(a);
+  else S.term.push('<span class="err">command not found: '+esc(c)+'</span> · type <b>help</b>');
+  renderPanel();
+}
+function termHTML(){
+  if(!S.term||!S.term.length) S.term=['<b>Flogo Data Pipeline</b> — integrated terminal','<span class="mut">local mock engine · type </span><b>help</b><span class="mut"> for commands</span>',''];
+  const out=S.term.map(l=>`<div class="tl">${l}</div>`).join('');
+  return `<div class="term"><div class="termout" id="termout">${out}</div><div class="termin"><span class="termps">${esc(termPrompt())} $</span><input id="terminput" autocomplete="off" autocapitalize="off" spellcheck="false"></div></div>`;
+}
+document.addEventListener('keydown',e=>{ if(!e.target||e.target.id!=='terminput')return; if(e.key==='Enter'){ const v=e.target.value; if(v.trim())S.termHist.push(v); S.termHistIdx=S.termHist.length; runTerm(v); } else if(e.key==='ArrowUp'){ e.preventDefault(); if(S.termHistIdx>0){S.termHistIdx--; e.target.value=S.termHist[S.termHistIdx]||'';} } else if(e.key==='ArrowDown'){ e.preventDefault(); if(S.termHistIdx<S.termHist.length-1){S.termHistIdx++; e.target.value=S.termHist[S.termHistIdx]||'';}else{S.termHistIdx=S.termHist.length; e.target.value='';} } });
 function renderStatus(){
   if(!S.tabs.length){ document.getElementById('statusbar').innerHTML=`<span class="s">⑂ prototype/studio-demo</span><span class="grow"></span><span class="s">Flogo engine: ready</span>`; return; }
   if(isDoc()){ document.getElementById('statusbar').innerHTML=`<span class="s">⑂ prototype/studio-demo</span><span class="s">◈ ${DOCS[DOCKEY()].title}</span><span class="grow"></span><span class="s">mock data</span><span class="s">Flogo engine: ready</span>`; return; }
