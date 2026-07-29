@@ -257,6 +257,7 @@
   /* composability + design-time problems (Flogo-3.x adoption) */
   .fld .k{display:flex;align-items:center;gap:6px}
   .wt{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--mute);background:#eef0f2;border-radius:5px;padding:1px 6px;margin-left:auto}
+  .wt.sec{background:var(--err-bg);color:var(--err)}
   .slot{border:1px dashed var(--accent);border-radius:7px;padding:5px 7px;background:var(--accent-soft)}
   .linkchip{display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);font-size:11px;border-radius:20px;padding:2px 9px;font-weight:600}
   .linkchip.conn{color:var(--snk);background:var(--snk-bg)}
@@ -378,7 +379,7 @@ const probsFor = ()=> PROB[S.open]||[];
 const probOf = (id)=> probsFor().find(p=>p.node===id);
 const CFG = {
   src_orders:[['Type','CSV · header row'],['Path','data/orders.csv'],['Columns','12 · ✨ infer from file'],['Encoding','utf-8']],
-  src_cust:[['Connection','pg-warehouse ▾'],['Query','SELECT id,name,tier,segment FROM customers'],['Role','Join reference table']],
+  src_cust:[['Connection','pg-warehouse ▾'],['Query','SELECT id,name,tier,segment FROM customers'],['Password','pg$ecret2024'],['Role','Join reference table']],
   join:[['Type','inner join'],['Keys','orders.cust_id = customers.id'],['Emit right','name · tier · segment']],
   validate:[['Rules','5 · amount not null, status in […]'],['On violation','route to reject port →'],['Reject target','⚠ orders_dlq (wired)']],
   router:[['Routes','3 · EU / US / rest'],['EU','region == \'EU\''],['US','region == \'US\''],['Match','first-match · default → rest']],
@@ -544,13 +545,18 @@ function renderInspector(){
     const mrows=MP.map(m=>`<div class="maprow ${m[2]?'':'un'}"><span class="mf">${m[0]}</span><span class="ma">←</span><span class="mt">${m[1]}</span></div>`).join('');
     body=`<div class="k" style="margin-bottom:4px">Field mapping <span class="muted">· available data → target</span></div>${mrows}<div style="margin-top:9px">${un?`<span class="btn pri" data-cmd="automap">✨ Auto-map ${un} remaining</span>`:`<span class="chip ok">all ${MP.length} fields mapped</span>`}</div>`;
   } else {
-    const wtag=(k,v)=>/^connection$/i.test(k)?'listbox':/password|secret/i.test(k)?'secret':/query|expr|sql|rule/i.test(k)?'code':(/^[\d., ]+$/.test(v)?'number':'text');
+    const isRef=(v)=>/\$env|\$property|CONNECTION\./i.test(v);
+    const isPwd=(k)=>/password|secret|token|passphrase/i.test(k);
+    const wtag=(k,v)=>/^connection$/i.test(k)?'listbox':isPwd(k)?'password':/query|expr|sql|rule/i.test(k)?'code':(/^[\d., ]+$/.test(v)?'number':'text');
     const widget=(k,v)=>{
       if(/^connection$/i.test(k)) return `<div class="slot"><span class="linkchip conn">🔗 ${esc(v.replace(/ ▾$/,''))}</span></div>`;
-      if(/password|secret/i.test(k)||/\$env|\$property/i.test(v)) return `<div class="slot"><span class="linkchip secret">🔒 ${esc(v)}</span></div>`;
+      if(isPwd(k)){
+        if(isRef(v)) return `<div class="slot"><span class="linkchip secret">🔒 ${esc(v)}</span></div>`;
+        return `<div class="v" style="display:flex;align-items:center;gap:8px"><span class="pwv" data-val="${esc(v)}" style="font-family:var(--mono);letter-spacing:2px;flex:1">••••••••</span><span data-reveal style="cursor:pointer;color:var(--mute)" title="reveal">👁</span></div>`;
+      }
       return `<div class="v ${/[=·{]/.test(v)?'mono':''}">${esc(v)}</div>`;
     };
-    const rows=(CFG[n.id]||[['Type',n.type]]).map(([k,v])=>`<div class="fld"><div class="k">${k}<span class="wt">${wtag(k,v)}</span></div>${widget(k,v)}</div>`).join('');
+    const rows=(CFG[n.id]||[['Type',n.type]]).map(([k,v])=>{const t=wtag(k,v);return `<div class="fld"><div class="k">${k}<span class="wt${t==='password'?' sec':''}">${t}</span></div>${widget(k,v)}</div>`;}).join('');
     const actions = (n.kind==='src'||n.kind==='sink')?`<div style="display:flex;gap:6px;margin:2px 0 9px"><span class="btn" data-cmd="readschema">↻ Read schema</span><span class="btn" data-cmd="testconn">◉ Test</span></div>`:'';
     const ctx = n.type==='window'?`<div class="addrow" data-doc="windowing">⧖ Configure windowing →</div>`:n.kind==='dlq'?`<div class="addrow" data-doc="recover">↩ Open recovery / DLQ →</div>`:n.kind==='src'?`<div class="addrow" data-doc="incremental">⇧ Incremental load →</div>`:`<div class="addrow" data-cmd="addfield">＋ Add field</div>`;
     body=rows+actions+ctx;
@@ -741,7 +747,7 @@ function openRun(t){
 }
 function showModal(title,html){ document.getElementById('scrim').classList.add('on'); const m=document.getElementById('modal'); m.classList.add('on'); m.innerHTML=`<div class="mh">${title}<span class="x" data-cmd="closemodal">✕</span></div><div class="mc">${html}</div>`; }
 document.addEventListener('click',e=>{ const tm=e.target.closest('[data-tmpl]'); if(tm){ closeOverlays(); toast('Scaffolded pipeline from template — opening…'); } const g=e.target.closest('[data-goto]'); if(g){ closeOverlays(); const v=g.getAttribute('data-goto'); if(v[0]==='@')openDoc(v.slice(1)); else openPipe(v); }});
-document.addEventListener('click',e=>{ const it=e.target.closest('[data-itab]'); if(it){ S.itab=it.getAttribute('data-itab'); renderMain(); return; } const dc=e.target.closest('[data-doc]'); if(dc){ openDoc(dc.getAttribute('data-doc')); }});
+document.addEventListener('click',e=>{ const it=e.target.closest('[data-itab]'); if(it){ S.itab=it.getAttribute('data-itab'); renderMain(); return; } const dc=e.target.closest('[data-doc]'); if(dc){ openDoc(dc.getAttribute('data-doc')); return; } const rv=e.target.closest('[data-reveal]'); if(rv){ const v=rv.parentElement.querySelector('.pwv'); if(v){ const sh=v.dataset.shown==='1'; v.textContent=sh?'••••••••':v.dataset.val; v.dataset.shown=sh?'0':'1'; rv.textContent=sh?'👁':'🙈'; } }});
 
 /* ============================ DOC VIEWS ============================ */
 const H=(t,s,b)=>`<div class="docview"><div class="dtitle">${t}</div><div class="dsub">${s}</div>${b}</div>`;
