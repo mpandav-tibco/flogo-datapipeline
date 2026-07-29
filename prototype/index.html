@@ -275,6 +275,16 @@
   .node.nprob.warn{border-color:var(--warn)}
   .reg td.grp{background:#eef0f2;font-weight:700;color:var(--ink)}
   .cver{font:700 9.5px var(--mono);color:#fff;background:var(--tf);border-radius:5px;padding:1px 6px}
+  .linkbtn{flex:none;width:22px;height:22px;border-radius:6px;display:inline-grid;place-items:center;border:1px solid var(--lineL);background:#fff;color:var(--mute);font-size:11px;cursor:pointer}
+  .linkbtn:hover{border-color:var(--accent);color:var(--accent)}
+  .picker{border:1px solid var(--lineL);border-radius:9px;background:#fff;box-shadow:0 12px 28px rgba(20,25,30,.18);overflow:hidden}
+  .picker .ph{padding:7px 10px;font-size:11px;color:var(--mute);border-bottom:1px solid var(--lineL);background:#f6f7f9}
+  .picker .pi{display:flex;align-items:center;gap:8px;padding:7px 10px;font-size:12px;color:var(--ink);border-bottom:1px solid #eef0f2;cursor:pointer}
+  .picker .pi:last-child{border-bottom:none}
+  .picker .pi:hover{background:var(--accent-soft)}
+  .picker .pi .pt{font-family:var(--mono);font-size:11px}
+  .picker .pi .pty{margin-left:auto;font-size:9.5px;color:var(--mute);font-family:var(--mono)}
+  .picker .pi.new{color:var(--accent);font-weight:600}
 </style>
 </head>
 <body>
@@ -377,6 +387,22 @@ const PROB = { 'enrich-route-load':[
   {node:'validate',sev:'warn',msg:'<code>$property["dq.threshold"]</code> has no value in <b>dev</b>',loc:'prop'} ] };
 const probsFor = ()=> PROB[S.open]||[];
 const probOf = (id)=> probsFor().find(p=>p.node===id);
+// app properties registry (per-environment values) + linking helpers
+const APPPROPS = [
+  {name:'batch.size',type:'number',dev:'1,000',stg:'5,000',prod:'10,000'},
+  {name:'db.schema',type:'string',dev:'dev',stg:'staging',prod:'public'},
+  {name:'dq.threshold',type:'number',dev:'0.90',stg:'0.95',prod:'0.98'},
+  {name:'s3.prefix',type:'string',dev:'dev/',stg:'stg/',prod:'curated/'},
+  {name:'CONNECTION.pg-warehouse.host',type:'string',cat:'conn',dev:'localhost',stg:'pg-stg',prod:'warehouse.internal'},
+  {name:'CONNECTION.pg-warehouse.password',type:'password',cat:'conn',dev:'secret',stg:'secret',prod:'secret'},
+  {name:'CONNECTION.kafka-prod.brokers',type:'string',cat:'conn',dev:'localhost:9092',stg:'stg-kafka:9092',prod:'prod-kafka:9092'},
+];
+const propByName=(nm)=>APPPROPS.find(p=>p.name===nm);
+const propVal=(p)=>p?p[S.env]:'';
+function pickerHTML(k,v,lk){
+  const items=APPPROPS.map(p=>`<div class="pi" data-pick="${lk}~~${p.name}"><span class="pt">${p.name}</span><span class="pty">${p.type} · ${S.env}=${esc(String(p[S.env]))}</span></div>`).join('');
+  return `<div class="picker" style="margin-top:7px"><div class="ph">🔗 Link “${esc(k)}” to an app property</div>${items}<div class="pi new" data-pick="${lk}~~__new">＋ New property from “${esc(String(v)).slice(0,16)}”…</div></div>`;
+}
 const CFG = {
   src_orders:[['Type','CSV · header row'],['Path','data/orders.csv'],['Columns','12 · ✨ infer from file'],['Encoding','utf-8']],
   src_cust:[['Connection','pg-warehouse ▾'],['Query','SELECT id,name,tier,segment FROM customers'],['Password','pg$ecret2024'],['Role','Join reference table']],
@@ -418,7 +444,7 @@ const CODE = {
 };
 
 /* ============================ STATE ============================ */
-const S = { open:'enrich-route-load', tabs:['enrich-route-load'], sel:'validate', view:'design', panel:'preview', pv:'output', abar:'pipeline', running:false, itab:'Config', inspOpen:true, panelOpen:true, panelMax:false, sideOpen:true, grpc:{} };
+const S = { open:'enrich-route-load', tabs:['enrich-route-load'], sel:'validate', view:'design', panel:'preview', pv:'output', abar:'pipeline', running:false, itab:'Config', inspOpen:true, panelOpen:true, panelMax:false, sideOpen:true, grpc:{}, env:'dev', links:{}, linking:null };
 const PIPE = ()=>DB.pipelines[S.open]||DB.pipelines['enrich-route-load'];
 const isDoc = ()=> typeof S.open==='string' && S.open[0]==='@';
 const DOCKEY = ()=> S.open.slice(1);
@@ -548,15 +574,20 @@ function renderInspector(){
     const isRef=(v)=>/\$env|\$property|CONNECTION\./i.test(v);
     const isPwd=(k)=>/password|secret|token|passphrase/i.test(k);
     const wtag=(k,v)=>/^connection$/i.test(k)?'listbox':isPwd(k)?'password':/query|expr|sql|rule/i.test(k)?'code':(/^[\d., ]+$/.test(v)?'number':'text');
-    const widget=(k,v)=>{
-      if(/^connection$/i.test(k)) return `<div class="slot"><span class="linkchip conn">🔗 ${esc(v.replace(/ ▾$/,''))}</span></div>`;
-      if(isPwd(k)){
-        if(isRef(v)) return `<div class="slot"><span class="linkchip secret">🔒 ${esc(v)}</span></div>`;
-        return `<div class="v" style="display:flex;align-items:center;gap:8px"><span class="pwv" data-val="${esc(v)}" style="font-family:var(--mono);letter-spacing:2px;flex:1">••••••••</span><span data-reveal style="cursor:pointer;color:var(--mute)" title="reveal">👁</span></div>`;
-      }
-      return `<div class="v ${/[=·{]/.test(v)?'mono':''}">${esc(v)}</div>`;
+    const linkbtn=(lk)=>`<span class="linkbtn" data-link="${lk}" title="Link to app property">🔗</span>`;
+    const row=(k,v)=>{
+      const lk=n.id+'~~'+k, lp=S.links[lk]; let tag=wtag(k,v), ctl;
+      if(lp){ const p=propByName(lp); tag='property';
+        ctl=`<div class="slot"><span class="linkchip prop">🔗 $property["${esc(lp)}"]</span><span class="muted" style="margin-left:auto;font-family:var(--mono);font-size:11px">→ ${esc(String(propVal(p)))}</span><span data-unlink="${lk}" title="unlink" style="cursor:pointer;color:var(--mute);margin-left:8px">✕</span></div>`;
+      } else if(/^connection$/i.test(k)){ ctl=`<div class="slot"><span class="linkchip conn">🔗 ${esc(v.replace(/ ▾$/,''))}</span></div>`;
+      } else if(isPwd(k)&&isRef(v)){ ctl=`<div class="slot"><span class="linkchip secret">🔒 ${esc(v)}</span></div>`;
+      } else if(isPwd(k)){ ctl=`<div class="v" style="display:flex;align-items:center;gap:8px"><span class="pwv" data-val="${esc(v)}" style="font-family:var(--mono);letter-spacing:2px;flex:1">••••••••</span><span data-reveal style="cursor:pointer;color:var(--mute)" title="reveal">👁</span>${linkbtn(lk)}</div>`;
+      } else { ctl=`<div class="v" style="display:flex;align-items:center;gap:8px"><span style="flex:1;${/[=·{]/.test(v)?'font-family:var(--mono);font-size:11.5px':''}">${esc(v)}</span>${linkbtn(lk)}</div>`; }
+      const tsec=(tag==='password'||tag==='property'), tst=tag==='property'?' style="background:var(--accent-soft);color:var(--accent)"':'';
+      const pick=S.linking===lk?pickerHTML(k,v,lk):'';
+      return `<div class="fld"><div class="k">${k}<span class="wt${tsec?' sec':''}"${tst}>${tag}</span></div>${ctl}${pick}</div>`;
     };
-    const rows=(CFG[n.id]||[['Type',n.type]]).map(([k,v])=>{const t=wtag(k,v);return `<div class="fld"><div class="k">${k}<span class="wt${t==='password'?' sec':''}">${t}</span></div>${widget(k,v)}</div>`;}).join('');
+    const rows=(CFG[n.id]||[['Type',n.type]]).map(([k,v])=>row(k,v)).join('');
     const actions = (n.kind==='src'||n.kind==='sink')?`<div style="display:flex;gap:6px;margin:2px 0 9px"><span class="btn" data-cmd="readschema">↻ Read schema</span><span class="btn" data-cmd="testconn">◉ Test</span></div>`:'';
     const ctx = n.type==='window'?`<div class="addrow" data-doc="windowing">⧖ Configure windowing →</div>`:n.kind==='dlq'?`<div class="addrow" data-doc="recover">↩ Open recovery / DLQ →</div>`:n.kind==='src'?`<div class="addrow" data-doc="incremental">⇧ Incremental load →</div>`:`<div class="addrow" data-cmd="addfield">＋ Add field</div>`;
     body=rows+actions+ctx;
@@ -604,7 +635,7 @@ function renderStatus(){
   if(!S.tabs.length){ document.getElementById('statusbar').innerHTML=`<span class="s">⑂ prototype/studio-demo</span><span class="grow"></span><span class="s">Flogo engine: ready</span>`; return; }
   if(isDoc()){ document.getElementById('statusbar').innerHTML=`<span class="s">⑂ prototype/studio-demo</span><span class="s">◈ ${DOCS[DOCKEY()].title}</span><span class="grow"></span><span class="s">mock data</span><span class="s">Flogo engine: ready</span>`; return; }
   const p=PIPE();
-  document.getElementById('statusbar').innerHTML=`<span class="s">⑂ prototype/studio-demo</span><span class="s">◈ Data Pipeline</span><span class="s">${p.shape==='unbounded'?'∞ streaming':'▦ batch'}</span><span class="grow"></span><span class="s" id="statusvalid">✓ valid</span><span class="s">${p.mode.toUpperCase()}</span><span class="s">UTF-8</span><span class="s">Flogo engine: ready</span>`;
+  document.getElementById('statusbar').innerHTML=`<span class="s">⑂ prototype/studio-demo</span><span class="s">◈ Data Pipeline</span><span class="s" data-cmd="envswitch" style="cursor:pointer" title="switch environment">🌐 ${S.env}</span><span class="s">${p.shape==='unbounded'?'∞ streaming':'▦ batch'}</span><span class="grow"></span><span class="s" id="statusvalid">✓ valid</span><span class="s">${p.mode.toUpperCase()}</span><span class="s">UTF-8</span><span class="s">Flogo engine: ready</span>`;
 }
 
 /* ============================ INTERACTIONS ============================ */
@@ -612,7 +643,7 @@ document.addEventListener('click',e=>{
   const t=e.target;
   const close=t.closest('[data-close]'); if(close){ e.stopPropagation(); closeTab(close.getAttribute('data-close')); return; }
   const open=t.closest('[data-open]'); if(open){ openPipe(open.getAttribute('data-open')); return; }
-  const node=t.closest('[data-node]'); if(node){ S.sel=node.getAttribute('data-node'); S.inspOpen=true; renderMain(); return; }
+  const node=t.closest('[data-node]'); if(node){ S.sel=node.getAttribute('data-node'); S.inspOpen=true; S.linking=null; renderMain(); return; }
   const v2=t.closest('[data-view2]'); if(v2){ S.view=v2.getAttribute('data-view2'); renderToolbar(); renderMain(); return; }
   const pn=t.closest('[data-panel]'); if(pn){ const k=pn.getAttribute('data-panel'); if(k===S.panel&&S.panelOpen!==false){ S.panelOpen=false; } else { S.panel=k; S.panelOpen=true; } renderPanel(); return; }
   const pv=t.closest('[data-pv]'); if(pv){ S.pv=pv.getAttribute('data-pv'); renderPanel(); return; }
@@ -635,6 +666,7 @@ function runCmd(c){
   if(c==='paneltoggle'){ S.panelOpen=S.panelOpen===false; renderPanel(); return; }
   if(c==='panelmax'){ S.panelMax=!S.panelMax; renderPanel(); return; }
   if(c==='addfield'){ toast('Field editor (mock) — type · default · nullability'); return; }
+  if(c==='envswitch'){ const q=['dev','stg','prod']; S.env=q[(q.indexOf(S.env)+1)%3]; render(); toast('Active environment: '+S.env); return; }
   if(c==='closemodal'){ closeOverlays(); return; }
   if(c==='validate'){ if(!isDoc()){S.panel='problems';renderPanel();} toast('✓ Validation passed — 0 errors, 0 warnings'); return; }
   if(c==='autolayout'){ toast('Auto-layout applied'); return; }
@@ -719,7 +751,7 @@ function renderCmdList(q){ const list=COMMANDS.filter(c=>c.label.toLowerCase().i
 document.getElementById('cmdinput').addEventListener('input',e=>renderCmdList(e.target.value));
 document.getElementById('cmdinput').addEventListener('keydown',e=>{ if(e.key==='Enter'){ const on=document.querySelector('#cmdlist .ci.on')||document.querySelector('#cmdlist .ci[data-run]'); if(on){const c=on.getAttribute('data-run').replace('__cmd_','');closeOverlays();runCmd(c);} } if(e.key==='Escape')closeOverlays(); });
 document.getElementById('cmdlist').addEventListener('click',e=>{ const ci=e.target.closest('.ci[data-run]'); if(ci){const c=ci.getAttribute('data-run').replace('__cmd_','');closeOverlays();runCmd(c);} });
-document.addEventListener('keydown',e=>{ if((e.metaKey||e.ctrlKey)&&e.shiftKey&&e.key.toLowerCase()==='p'){e.preventDefault();openPalette();} if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='r'){e.preventDefault();doRun();} if(e.key==='Escape'){ if(document.getElementById('scrim').classList.contains('on')){closeOverlays();} else if(S.sel){ S.sel=null; S.inspOpen=true; renderMain(); } } });
+document.addEventListener('keydown',e=>{ if((e.metaKey||e.ctrlKey)&&e.shiftKey&&e.key.toLowerCase()==='p'){e.preventDefault();openPalette();} if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='r'){e.preventDefault();doRun();} if(e.key==='Escape'){ if(S.linking){ S.linking=null; renderMain(); } else if(document.getElementById('scrim').classList.contains('on')){closeOverlays();} else if(S.sel){ S.sel=null; S.inspOpen=true; renderMain(); } } });
 function closeOverlays(){ document.getElementById('scrim').classList.remove('on'); document.getElementById('cmdp').classList.remove('on'); document.getElementById('modal').classList.remove('on'); }
 
 /* modals */
@@ -747,7 +779,7 @@ function openRun(t){
 }
 function showModal(title,html){ document.getElementById('scrim').classList.add('on'); const m=document.getElementById('modal'); m.classList.add('on'); m.innerHTML=`<div class="mh">${title}<span class="x" data-cmd="closemodal">✕</span></div><div class="mc">${html}</div>`; }
 document.addEventListener('click',e=>{ const tm=e.target.closest('[data-tmpl]'); if(tm){ closeOverlays(); toast('Scaffolded pipeline from template — opening…'); } const g=e.target.closest('[data-goto]'); if(g){ closeOverlays(); const v=g.getAttribute('data-goto'); if(v[0]==='@')openDoc(v.slice(1)); else openPipe(v); }});
-document.addEventListener('click',e=>{ const it=e.target.closest('[data-itab]'); if(it){ S.itab=it.getAttribute('data-itab'); renderMain(); return; } const dc=e.target.closest('[data-doc]'); if(dc){ openDoc(dc.getAttribute('data-doc')); return; } const rv=e.target.closest('[data-reveal]'); if(rv){ const v=rv.parentElement.querySelector('.pwv'); if(v){ const sh=v.dataset.shown==='1'; v.textContent=sh?'••••••••':v.dataset.val; v.dataset.shown=sh?'0':'1'; rv.textContent=sh?'👁':'🙈'; } }});
+document.addEventListener('click',e=>{ const it=e.target.closest('[data-itab]'); if(it){ S.itab=it.getAttribute('data-itab'); renderMain(); return; } const dc=e.target.closest('[data-doc]'); if(dc){ openDoc(dc.getAttribute('data-doc')); return; } const rv=e.target.closest('[data-reveal]'); if(rv){ const v=rv.parentElement.querySelector('.pwv'); if(v){ const sh=v.dataset.shown==='1'; v.textContent=sh?'••••••••':v.dataset.val; v.dataset.shown=sh?'0':'1'; rv.textContent=sh?'👁':'🙈'; } return; } const lb=e.target.closest('[data-link]'); if(lb){ const lk=lb.getAttribute('data-link'); S.linking=S.linking===lk?null:lk; renderMain(); return; } const pk=e.target.closest('[data-pick]'); if(pk){ const raw=pk.getAttribute('data-pick'), ix=raw.lastIndexOf('~~'), lk=raw.slice(0,ix), name=raw.slice(ix+2); if(name==='__new'){ const nm='new.property'; if(!propByName(nm))APPPROPS.push({name:nm,type:'string',dev:'—',stg:'—',prod:'—'}); S.links[lk]=nm; toast('Created & linked $property["'+nm+'"]'); } else { S.links[lk]=name; toast('Linked to $property["'+name+'"]'); } S.linking=null; renderMain(); return; } const ul=e.target.closest('[data-unlink]'); if(ul){ delete S.links[ul.getAttribute('data-unlink')]; S.linking=null; renderMain(); toast('Unlinked — back to a literal value'); return; } const ev=e.target.closest('[data-env]'); if(ev){ S.env=ev.getAttribute('data-env'); render(); return; }});
 
 /* ============================ DOC VIEWS ============================ */
 const H=(t,s,b)=>`<div class="docview"><div class="dtitle">${t}</div><div class="dsub">${s}</div>${b}</div>`;
@@ -769,19 +801,18 @@ error:      { onViolation: route, maxErrors: 0 }
 parallelism: 8</div></div>
     <p class="muted">Resolved from defaults + the active environment. (Definition.Mode · CheckpointDef · PerformanceDef)</p>`)},
 
-  appprops:{title:'App properties',icon:'◆',render:()=>H('App properties','The shared registry every field binds to — $property["…"], resolved per environment.',
-    `<div style="margin-bottom:10px"><span class="btn pri">＋ New property</span> <span class="muted" style="margin-left:6px">typed · grouped · env-overridable</span></div>
-     <table class="grid reg"><tr><th>Property</th><th>Type</th><th>Default</th><th>Used by</th></tr>
-     <tr><td class="grp" colspan="4">Pipeline · user-defined</td></tr>
-     <tr><td class="fld0">batch.size</td><td class="mono">number</td><td class="mono">10000</td><td class="muted">2 fields</td></tr>
-     <tr><td class="fld0">db.schema</td><td class="mono">string</td><td class="mono">public</td><td class="muted">3 fields</td></tr>
-     <tr><td class="fld0">dq.threshold</td><td class="mono">number</td><td class="mono">0.98</td><td class="muted">1 field</td></tr>
-     <tr><td class="grp" colspan="4">Connections · auto-managed</td></tr>
-     <tr><td class="fld0">CONNECTION.pg-warehouse.host</td><td class="mono">string</td><td class="mono">warehouse.internal</td><td class="muted">bound</td></tr>
-     <tr><td class="fld0">CONNECTION.pg-warehouse.password</td><td class="mono">password</td><td><span class="linkchip secret">🔒 ••••••</span></td><td class="muted">secret</td></tr>
-     <tr><td class="fld0">CONNECTION.kafka-prod.brokers</td><td class="mono">string</td><td class="mono">3 brokers</td><td class="muted">bound</td></tr>
+  appprops:{title:'App properties',icon:'◆',render:()=>{ const envs=['dev','stg','prod'];
+    const cell=(p,en)=> p.type==='password'?`<span class="linkchip secret">🔒 ••••</span>`:esc(String(p[en]));
+    const tr=(p)=>`<tr><td class="fld0">${p.name}</td><td class="mono">${p.type}</td>${envs.map(en=>`<td class="mono" style="${en===S.env?'background:var(--accent-soft)':''}">${cell(p,en)}</td>`).join('')}</tr>`;
+    return H('App properties','The shared registry every field binds to — one value per environment, resolved at runtime.',
+    `<div style="margin-bottom:10px;display:flex;align-items:center;gap:8px"><span class="btn pri">＋ New property</span><span class="muted">Active environment:</span><span class="subtab">${envs.map(en=>`<span class="${en===S.env?'on':''}" data-env="${en}">${en}</span>`).join('')}</span></div>
+     <table class="grid reg"><tr><th>Property</th><th>Type</th>${envs.map(en=>`<th style="${en===S.env?'color:var(--accent)':''}">${en}</th>`).join('')}</tr>
+     <tr><td class="grp" colspan="5">Pipeline · user-defined</td></tr>
+     ${APPPROPS.filter(p=>p.cat!=='conn').map(tr).join('')}
+     <tr><td class="grp" colspan="5">Connections · auto-managed</td></tr>
+     ${APPPROPS.filter(p=>p.cat==='conn').map(tr).join('')}
      </table>
-     <p class="muted" style="margin-top:10px">Connections auto-project their fields into properties; env vars override at runtime (FLOGO_APP_PROPS_ENV). (app.appProperties · internal/appprops)</p>`)},
+     <p class="muted" style="margin-top:10px">Each property resolves to its value for the active environment; a field that links to it inherits that value. Secrets stay by reference (FLOGO_APP_PROPS_ENV). (app.appProperties · internal/appprops)</p>`);}},
 
   contracts:{title:'Schemas & contracts',icon:'▤',render:()=>H('Shared schemas & data contracts','Define a schema once, link it everywhere, version it — with drift detection.',
     `<div class="g2">
