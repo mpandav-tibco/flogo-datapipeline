@@ -80,7 +80,12 @@
   /* editor main (palette | canvas | inspector) */
   .emain{display:grid;grid-template-columns:172px 1fr 290px;min-height:0;overflow:hidden}
   .palette{background:#f3f4f6;border-right:1px solid var(--lineL);overflow:auto;padding:10px}
-  .palette .psearch{background:#fff;border:1px solid var(--lineL);border-radius:7px;padding:6px 9px;font-size:12px;color:var(--mute);margin-bottom:10px}
+  .palette .psearch{display:flex;align-items:center;gap:7px;background:#fff;border:1px solid var(--lineL);border-radius:7px;padding:5px 9px;margin-bottom:10px}
+  .palette .psearch:focus-within{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft)}
+  .palette .psearch .psi{color:var(--mute);font-size:12px}
+  .palette .psearch input{flex:1;min-width:0;border:none;outline:none;background:transparent;font-size:12px;color:var(--body);font-family:inherit}
+  .palette .psearch input::placeholder{color:var(--mute)}
+  .palette .psearch .pkb{font-family:var(--mono);font-size:10px;color:var(--mute);background:#f1f3f5;border-radius:4px;padding:1px 5px}
   .palette .pg{font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--mute);margin:12px 2px 6px}
   .pitem{display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px solid var(--lineL);border-radius:7px;background:#fff;margin-bottom:5px;font-size:12px;color:var(--body);cursor:grab}
   .pitem:hover{border-color:var(--accent);color:var(--ink)}
@@ -152,6 +157,11 @@
   .subtab{display:inline-flex;border:1px solid var(--lineL);border-radius:7px;overflow:hidden;margin-bottom:10px}
   .subtab span{padding:4px 10px;font-size:11px;color:var(--body);border-right:1px solid var(--lineL);cursor:pointer}
   .subtab span:last-child{border-right:none}.subtab span.on{background:var(--accent-soft);color:var(--accent);font-weight:600}
+  .keyrow{display:flex;align-items:center;gap:6px;margin-bottom:6px}
+  .keyrow .kc{flex:1;min-width:0;background:#fff;border:1px solid var(--lineL);border-radius:6px;padding:5px 8px;font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .keyrow .keq{color:var(--mute);font-weight:700}
+  .keyrow .kx{color:var(--mute);cursor:pointer;font-size:11px}
+  .keyrow .kx:hover{color:var(--err)}
   .trow{display:flex;align-items:center;gap:10px;padding:7px 4px;border-bottom:1px solid #eef0f2;font-family:var(--mono);font-size:11.5px}
   .trow .td{width:10px;height:10px;border-radius:50%;background:#c4c9cf;flex:none}
   .trow.run .td{background:var(--run);animation:pulse .5s infinite}.trow.pass .td{background:var(--ok)}.trow.fail .td{background:var(--err)}
@@ -462,7 +472,7 @@ const CODE = {
 };
 
 /* ============================ STATE ============================ */
-const S = { open:'enrich-route-load', tabs:['enrich-route-load'], sel:'validate', view:'design', panel:'preview', pv:'output', abar:'pipeline', running:false, itab:'Config', inspOpen:true, panelOpen:true, panelMax:false, sideOpen:true, grpc:{}, env:'dev', links:{}, linking:null, schemaLinks:{validate:'orders'}, schlinking:null };
+const S = { open:'enrich-route-load', tabs:['enrich-route-load'], sel:'validate', view:'design', panel:'preview', pv:'output', abar:'pipeline', running:false, itab:'Config', inspOpen:true, panelOpen:true, panelMax:false, sideOpen:true, grpc:{}, env:'dev', links:{}, linking:null, schemaLinks:{validate:'orders'}, schlinking:null, palQ:'', joinType:'inner' };
 const PIPE = ()=>DB.pipelines[S.open]||DB.pipelines['enrich-route-load'];
 const isDoc = ()=> typeof S.open==='string' && S.open[0]==='@';
 const DOCKEY = ()=> S.open.slice(1);
@@ -530,13 +540,14 @@ function renderMain(){
   el.style.gridTemplateColumns=`172px 1fr ${!S.sel?'0px':(S.inspOpen===false?'34px':'290px')}`;
   // palette
   const pal=`<div class="palette">
-    <div class="psearch">⌕ Search components… <span style="float:right;font-family:var(--mono)">⌘K</span></div>
+    <div class="psearch"><span class="psi">⌕</span><input id="palsearch" placeholder="Search components…" autocomplete="off" spellcheck="false" value="${esc(S.palQ||'')}"><span class="pkb">⌘K</span></div>
     <div class="pg">Sources</div>
     <div class="pitem" data-add="csv"><span class="pico s">C</span>CSV / TSV</div><div class="pitem" data-add="jdbc-src"><span class="pico s">J</span>JDBC</div><div class="pitem" data-add="kafka-src"><span class="pico s">K</span>Kafka</div><div class="pitem" data-add="objstore-src"><span class="pico s">◇</span>Object store</div>
     <div class="pg">Transforms</div>
     <div class="pitem" data-add="join"><span class="pico t">⨝</span>Join</div><div class="pitem" data-add="router"><span class="pico c">⋔</span>Router</div><div class="pitem" data-add="validate"><span class="pico t">✓</span>Validate</div><div class="pitem" data-add="map"><span class="pico t">ƒ</span>Map · Filter · Cast</div><div class="pitem" data-add="window"><span class="pico t">⧖</span>Window</div>
     <div class="pg">Sinks</div>
     <div class="pitem" data-add="jdbc-sink"><span class="pico k">▣</span>JDBC · Kafka</div><div class="pitem" data-add="objstore-sink"><span class="pico k">◇</span>Object store</div><div class="pitem" data-add="dlq"><span class="pico d">⚠</span>Dead-letter</div>
+    <div class="pnores muted" style="display:none;padding:6px 4px;font-size:12px">No components match.</div>
   </div>`;
   // canvas dims
   let maxX=0,maxY=0; p.nodes.forEach(n=>{maxX=Math.max(maxX,n.x+152);maxY=Math.max(maxY,n.y+70);});
@@ -567,6 +578,19 @@ function renderMain(){
         <marker id="arwe" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="var(--dlq)"/></marker>
       </defs>${wires}</svg>${nodes}</div></div>`;
   el.innerHTML=pal+canvas+renderInspector();
+  if(S.palQ) filterPalette(S.palQ);
+}
+function filterPalette(q){
+  q=(q||'').trim().toLowerCase();
+  const pal=document.querySelector('.palette'); if(!pal) return;
+  let anyVisible=false, lastGroup=null, groupHas=false; const groups=[];
+  [...pal.children].forEach(el=>{
+    if(el.classList.contains('pg')){ if(lastGroup)groups.push([lastGroup,groupHas]); lastGroup=el; groupHas=false; }
+    else if(el.classList.contains('pitem')){ const show=!q||el.innerText.toLowerCase().includes(q); el.style.display=show?'':'none'; if(show){groupHas=true;anyVisible=true;} }
+  });
+  if(lastGroup)groups.push([lastGroup,groupHas]);
+  groups.forEach(([g,vis])=>g.style.display=vis?'':'none');
+  const nr=pal.querySelector('.pnores'); if(nr)nr.style.display=anyVisible?'none':'';
 }
 function renderInspector(){
   if(!S.sel) return '';
@@ -602,6 +626,21 @@ function renderInspector(){
     body=`<div class="k" style="margin-bottom:5px">Data-quality rules <span class="muted" style="font-weight:400">· ${rules.length} · field → condition</span></div>${rr}<div class="addrow" data-cmd="addfield">＋ Add rule</div>
       <div class="k" style="margin:13px 0 5px">On violation</div><div class="v" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">Route failing rows to <span class="linkchip" style="color:var(--err);background:var(--err-bg)">⚠ reject → orders_dlq</span></div>
       <div class="addrow" data-doc="recover" style="margin-top:8px">↩ Open recovery / DLQ →</div>`;
+  } else if(n.type==='join'){
+    const jt=S.joinType||'inner';
+    const types=[['inner','Inner'],['left','Left'],['right','Right'],['full','Full']];
+    const L=upOf(n.id,'left'), R=upOf(n.id,'right');
+    const keys=[['orders.cust_id','customers.id']];
+    const emit=['name','tier','segment'];
+    const jrow=(lbl,role,node)=>`<div class="rcard"><div class="rh" style="margin:0;gap:6px"><b>${lbl}</b><span class="wt">${role}</span><span class="muted" style="flex:1;text-align:right;font-weight:400">${node?esc(node.name):'<span style=\"color:var(--err)\">unwired</span>'}</span></div></div>`;
+    body=`<div class="k" style="margin-bottom:5px">Join type <span class="muted" style="font-weight:400">· how rows are matched</span></div>
+      <div class="subtab" style="margin-bottom:12px">${types.map(t=>`<span class="${jt===t[0]?'on':''}" data-jt="${t[0]}">${t[1]}</span>`).join('')}</div>
+      <div class="k" style="margin-bottom:5px">Inputs</div>${jrow('Left','driving',L)}${jrow('Right','lookup',R)}
+      <div class="k" style="margin:13px 0 6px">Match keys <span class="muted" style="font-weight:400">· left = right</span></div>
+      ${keys.map(k=>`<div class="keyrow"><span class="kc mono">${k[0]}</span><span class="keq">=</span><span class="kc mono">${k[1]}</span><span class="kx" data-rmkey title="remove">✕</span></div>`).join('')}
+      <div class="addrow" data-cmd="addfield">＋ Add key pair</div>
+      <div class="k" style="margin:13px 0 6px">Emit from right <span class="muted" style="font-weight:400">· columns added to left rows</span></div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">${emit.map(c=>`<span class="linkchip">${c}</span>`).join('')}</div>`;
   } else {
     const isRef=(v)=>/\$env|\$property|CONNECTION\./i.test(v);
     const isPwd=(k)=>/password|secret|token|passphrase/i.test(k);
@@ -783,7 +822,7 @@ function renderCmdList(q){ const list=COMMANDS.filter(c=>c.label.toLowerCase().i
 document.getElementById('cmdinput').addEventListener('input',e=>renderCmdList(e.target.value));
 document.getElementById('cmdinput').addEventListener('keydown',e=>{ if(e.key==='Enter'){ const on=document.querySelector('#cmdlist .ci.on')||document.querySelector('#cmdlist .ci[data-run]'); if(on){const c=on.getAttribute('data-run').replace('__cmd_','');closeOverlays();runCmd(c);} } if(e.key==='Escape')closeOverlays(); });
 document.getElementById('cmdlist').addEventListener('click',e=>{ const ci=e.target.closest('.ci[data-run]'); if(ci){const c=ci.getAttribute('data-run').replace('__cmd_','');closeOverlays();runCmd(c);} });
-document.addEventListener('keydown',e=>{ if((e.metaKey||e.ctrlKey)&&e.shiftKey&&e.key.toLowerCase()==='p'){e.preventDefault();openPalette();} if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='r'){e.preventDefault();doRun();} if(e.key==='Escape'){ if(S.linking){ S.linking=null; renderMain(); } else if(document.getElementById('scrim').classList.contains('on')){closeOverlays();} else if(S.sel){ S.sel=null; S.inspOpen=true; renderMain(); } } });
+document.addEventListener('keydown',e=>{ if((e.metaKey||e.ctrlKey)&&e.shiftKey&&e.key.toLowerCase()==='p'){e.preventDefault();openPalette();} if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='r'){e.preventDefault();doRun();} if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='k'){e.preventDefault();const s=document.getElementById('palsearch');if(s){s.focus();s.select();}} if(e.key==='Escape'){ if(S.linking){ S.linking=null; renderMain(); } else if(document.getElementById('scrim').classList.contains('on')){closeOverlays();} else if(S.sel){ S.sel=null; S.inspOpen=true; renderMain(); } } });
 function closeOverlays(){ document.getElementById('scrim').classList.remove('on'); document.getElementById('cmdp').classList.remove('on'); document.getElementById('modal').classList.remove('on'); }
 
 /* modals */
@@ -812,6 +851,10 @@ function openRun(t){
 function showModal(title,html){ document.getElementById('scrim').classList.add('on'); const m=document.getElementById('modal'); m.classList.add('on'); m.innerHTML=`<div class="mh">${title}<span class="x" data-cmd="closemodal">✕</span></div><div class="mc">${html}</div>`; }
 document.addEventListener('click',e=>{ const tm=e.target.closest('[data-tmpl]'); if(tm){ closeOverlays(); toast('Scaffolded pipeline from template — opening…'); } const g=e.target.closest('[data-goto]'); if(g){ closeOverlays(); const v=g.getAttribute('data-goto'); if(v[0]==='@')openDoc(v.slice(1)); else openPipe(v); }});
 document.addEventListener('click',e=>{ const it=e.target.closest('[data-itab]'); if(it){ S.itab=it.getAttribute('data-itab'); renderMain(); return; } const dc=e.target.closest('[data-doc]'); if(dc){ openDoc(dc.getAttribute('data-doc')); return; } const rv=e.target.closest('[data-reveal]'); if(rv){ const v=rv.parentElement.querySelector('.pwv'); if(v){ const sh=v.dataset.shown==='1'; v.textContent=sh?'••••••••':v.dataset.val; v.dataset.shown=sh?'0':'1'; rv.textContent=sh?'👁':'🙈'; } return; } const lb=e.target.closest('[data-link]'); if(lb){ const lk=lb.getAttribute('data-link'); S.linking=S.linking===lk?null:lk; renderMain(); return; } const pk=e.target.closest('[data-pick]'); if(pk){ const raw=pk.getAttribute('data-pick'), ix=raw.lastIndexOf('~~'), lk=raw.slice(0,ix), name=raw.slice(ix+2); if(name==='__new'){ const nm='new.property'; if(!propByName(nm))APPPROPS.push({name:nm,type:'string',dev:'—',stg:'—',prod:'—'}); S.links[lk]=nm; toast('Created & linked $property["'+nm+'"]'); } else { S.links[lk]=name; toast('Linked to $property["'+name+'"]'); } S.linking=null; renderMain(); return; } const ul=e.target.closest('[data-unlink]'); if(ul){ delete S.links[ul.getAttribute('data-unlink')]; S.linking=null; renderMain(); toast('Unlinked — back to a literal value'); return; } const ev=e.target.closest('[data-env]'); if(ev){ S.env=ev.getAttribute('data-env'); render(); return; } const sl=e.target.closest('[data-schlink]'); if(sl){ const id=sl.getAttribute('data-schlink'); S.schlinking=S.schlinking===id?null:id; renderMain(); return; } const sp=e.target.closest('[data-schpick]'); if(sp){ const raw=sp.getAttribute('data-schpick'), ix=raw.lastIndexOf('~~'); S.schemaLinks[raw.slice(0,ix)]=raw.slice(ix+2); S.schlinking=null; renderMain(); toast('Linked to shared schema “'+raw.slice(ix+2)+'”'); return; } const su=e.target.closest('[data-schunlink]'); if(su){ delete S.schemaLinks[su.getAttribute('data-schunlink')]; renderMain(); toast('Unlinked shared schema'); return; }});
+
+/* palette search + join-type interactions */
+document.addEventListener('input',e=>{ if(e.target&&e.target.id==='palsearch'){ S.palQ=e.target.value; filterPalette(S.palQ); } });
+document.addEventListener('click',e=>{ const jt=e.target.closest('[data-jt]'); if(jt){ S.joinType=jt.getAttribute('data-jt'); renderMain(); toast('Join type · '+jt.getAttribute('data-jt')); return; } const rk=e.target.closest('[data-rmkey]'); if(rk){ toast('Removed key pair (demo)'); } });
 
 /* ============================ DOC VIEWS ============================ */
 const H=(t,s,b)=>`<div class="docview"><div class="dtitle">${t}</div><div class="dsub">${s}</div>${b}</div>`;
