@@ -97,6 +97,8 @@
   .ctool .mb{pointer-events:auto;background:#fff;border:1px solid var(--lineL);border-radius:7px;padding:4px 9px;font-size:11.5px;color:var(--body);font-weight:600;cursor:pointer}
   .ctool .zlvl{pointer-events:auto;background:#fff;border:1px solid var(--lineL);border-radius:7px;padding:4px 8px;font-size:11px;color:var(--body);font-weight:600;cursor:pointer;min-width:42px;text-align:center;font-family:var(--mono)}
   .canvas{position:relative;margin:44px auto 20px}
+  .wirehit{cursor:pointer}
+  .wirechip{position:absolute;transform:translate(-50%,-50%);background:var(--accent);color:#fff;font-size:10px;font-weight:600;padding:2px 7px;border-radius:9px;white-space:nowrap;pointer-events:none;box-shadow:0 1px 4px rgba(0,0,0,.22);z-index:5}
   svg.wires{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
   .node{position:absolute;width:152px;background:#fff;border:1px solid var(--lineL);border-radius:10px;box-shadow:0 1px 2px rgba(20,25,30,.06),0 6px 16px rgba(20,25,30,.08);cursor:pointer;z-index:3}
   .node.sel{outline:2px solid var(--accent);outline-offset:1px}
@@ -478,7 +480,7 @@ const CODE = {
 };
 
 /* ============================ STATE ============================ */
-const S = { open:'enrich-route-load', tabs:['enrich-route-load'], sel:'validate', view:'design', panel:'preview', pv:'output', abar:'pipeline', running:false, itab:'Config', inspOpen:true, panelOpen:true, panelMax:false, sideOpen:true, grpc:{}, env:'dev', links:{}, linking:null, schemaLinks:{validate:'orders'}, schlinking:null, palQ:'', joinType:'inner', zoom:1 };
+const S = { open:'enrich-route-load', tabs:['enrich-route-load'], sel:'validate', view:'design', panel:'preview', pv:'output', abar:'pipeline', running:false, itab:'Config', inspOpen:true, panelOpen:true, panelMax:false, sideOpen:true, grpc:{}, env:'dev', links:{}, linking:null, schemaLinks:{validate:'orders'}, schlinking:null, palQ:'', joinType:'inner', zoom:1, selEdge:null };
 const PIPE = ()=>DB.pipelines[S.open]||DB.pipelines['enrich-route-load'];
 const isDoc = ()=> typeof S.open==='string' && S.open[0]==='@';
 const DOCKEY = ()=> S.open.slice(1);
@@ -543,7 +545,7 @@ function renderMain(){
     el.innerHTML=`<div class="codeview">${esc(CODE[S.open]||JSON.stringify({name:p.id,mode:p.mode,nodes:p.nodes.length},null,2))}</div>`;
     return;
   }
-  el.style.gridTemplateColumns=`172px 1fr ${!S.sel?'0px':(S.inspOpen===false?'34px':'290px')}`;
+  el.style.gridTemplateColumns=`172px 1fr ${S.selEdge!=null?'290px':(!S.sel?'0px':(S.inspOpen===false?'34px':'290px'))}`;
   // palette
   const pal=`<div class="palette">
     <div class="psearch"><span class="psi">⌕</span><input id="palsearch" placeholder="Search components…" autocomplete="off" spellcheck="false" value="${esc(S.palQ||'')}"><span class="pkb">⌘K</span></div>
@@ -559,12 +561,13 @@ function renderMain(){
   let maxX=0,maxY=0; p.nodes.forEach(n=>{maxX=Math.max(maxX,n.x+152);maxY=Math.max(maxY,n.y+70);});
   const W=maxX+40,H=maxY+40;
   const byId={}; p.nodes.forEach(n=>byId[n.id]=n);
-  const wires=p.edges.map(e=>{
+  const wires=p.edges.map((e,i)=>{
     const[sid,sp,tid,tp,err]=e; const s=byId[sid],t=byId[tid]; if(!s||!t)return'';
     const oi=(s.out||['rows']).indexOf(sp), ii=(t.in||['in']).indexOf(tp);
     const x1=s.x+152, y1=s.y+portY(s,'out',oi<0?0:oi), x2=t.x, y2=t.y+portY(t,'in',ii<0?0:ii);
-    const col=err?'var(--dlq)':'#9aa4b0', dash=err?'stroke-dasharray="6 4"':'';
-    return `<path d="M${x1},${y1} C${x1+42},${y1} ${x2-42},${y2} ${x2},${y2}" fill="none" stroke="${col}" stroke-width="2.4" ${dash} marker-end="url(#arw${err?'e':''})"/>`;
+    const sel=i===S.selEdge; const col=sel?'var(--accent)':(err?'var(--dlq)':'#9aa4b0'), dash=err?'stroke-dasharray="6 4"':'';
+    const d=`M${x1},${y1} C${x1+42},${y1} ${x2-42},${y2} ${x2},${y2}`;
+    return `<path class="wirehit" data-edge="${i}" d="${d}" fill="none" stroke="transparent" stroke-width="14"/><path d="${d}" fill="none" stroke="${col}" stroke-width="${sel?3.4:2.4}" ${dash} marker-end="url(#arw${err?'e':''})" style="pointer-events:none"/>`;
   }).join('');
   const nodes=p.nodes.map(n=>{
     const st=n.st||'ok'; const pb=probOf(n.id);
@@ -577,12 +580,14 @@ function renderMain(){
       <div class="nb"><div class="nnm">${n.name}</div><div class="nmeta">${n.meta}</div></div>
       ${ins}${outs}</div>`;
   }).join('');
+  let wireChip='';
+  if(S.selEdge!=null && p.edges[S.selEdge]){ const [sid,sp,tid,tp,err]=p.edges[S.selEdge]; const s=byId[sid],t=byId[tid]; if(s&&t){ const oi=(s.out||['rows']).indexOf(sp), ii=(t.in||['in']).indexOf(tp); const x1=s.x+152,y1=s.y+portY(s,'out',oi<0?0:oi),x2=t.x,y2=t.y+portY(t,'in',ii<0?0:ii); const sch=schemaOf(sid); wireChip=`<div class="wirechip" style="left:${(x1+x2)/2}px;top:${(y1+y2)/2}px">${sch.length} cols · ${s.count||'—'}${err?' · reject':''}</div>`; } }
   const canvas=`<div class="canvaswrap"><div class="ctool"><span class="mb" data-cmd="fit">⤢ Fit</span><span class="mb" data-cmd="autolayout">▦ Auto-layout</span><span class="mb" data-cmd="validate">✓ Validate</span><span style="flex:1"></span><span class="mb" data-cmd="zoomout" title="Zoom out ⌘−">−</span><span class="zlvl" data-cmd="zoomreset" title="Reset zoom ⌘0">${Math.round((S.zoom||1)*100)}%</span><span class="mb" data-cmd="zoomin" title="Zoom in ⌘+">＋</span></div>
     <div class="canvas" style="width:${W}px;height:${H}px;zoom:${S.zoom||1}">
       <svg class="wires" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><defs>
         <marker id="arw" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#9aa4b0"/></marker>
         <marker id="arwe" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="var(--dlq)"/></marker>
-      </defs>${wires}</svg>${nodes}</div></div>`;
+      </defs>${wires}</svg>${nodes}${wireChip}</div></div>`;
   el.innerHTML=pal+canvas+renderInspector();
   if(S.palQ) filterPalette(S.palQ);
 }
@@ -598,7 +603,19 @@ function filterPalette(q){
   groups.forEach(([g,vis])=>g.style.display=vis?'':'none');
   const nr=pal.querySelector('.pnores'); if(nr)nr.style.display=anyVisible?'none':'';
 }
+function edgeInspector(){
+  const p=PIPE(), e=p.edges[S.selEdge]; if(!e) return '';
+  const [sid,sp,tid,tp,err]=e; const s=p.nodes.find(n=>n.id===sid), t=p.nodes.find(n=>n.id===tid); if(!s||!t) return '';
+  const sch=schemaOf(sid);
+  const tbl=`<table class="grid"><tr><th>Field</th><th>Type</th></tr>${sch.map(r=>`<tr><td class="fld0">${r[0]}</td><td class="mono">${r[1]}</td></tr>`).join('')}</table>`;
+  return `<div class="insp"><div class="ih"><span class="ik" style="color:var(--accent);background:var(--accent-soft)">Wire</span><span class="inm">data on this link</span><span class="itools"><span class="itool" data-cmd="deselect" title="Close">✕</span></span></div>
+    <div class="ib">
+      <div class="rcard"><div class="rh" style="margin:0;gap:6px"><b>${esc(s.name)}</b>${sp&&sp!=='rows'?`<span class="muted">${sp}</span>`:''}<span class="muted" style="flex:1;text-align:center">→</span><b>${esc(t.name)}</b></div>${err?'<div class="muted" style="margin-top:5px;color:var(--err)">error · reject path</div>':''}</div>
+      <div class="k" style="margin:12px 0 5px">Schema on wire <span class="muted" style="font-weight:400">· ${sch.length} cols · ${s.count||'—'} rows</span></div>${tbl}
+      <div class="addrow" data-cmd="preview" style="margin-top:9px">▷ Preview sample rows on this wire →</div></div></div>`;
+}
 function renderInspector(){
+  if(S.selEdge!=null) return edgeInspector();
   if(!S.sel) return '';
   const n=PIPE().nodes.find(x=>x.id===S.sel);
   if(!n) return '';
@@ -728,7 +745,8 @@ document.addEventListener('click',e=>{
   const t=e.target;
   const close=t.closest('[data-close]'); if(close){ e.stopPropagation(); closeTab(close.getAttribute('data-close')); return; }
   const open=t.closest('[data-open]'); if(open){ openPipe(open.getAttribute('data-open')); return; }
-  const node=t.closest('[data-node]'); if(node){ S.sel=node.getAttribute('data-node'); S.inspOpen=true; S.linking=null; renderMain(); return; }
+  const ew=t.closest('[data-edge]'); if(ew){ S.selEdge=+ew.getAttribute('data-edge'); S.sel=null; S.linking=null; renderMain(); return; }
+  const node=t.closest('[data-node]'); if(node){ S.sel=node.getAttribute('data-node'); S.selEdge=null; S.inspOpen=true; S.linking=null; renderMain(); return; }
   const v2=t.closest('[data-view2]'); if(v2){ S.view=v2.getAttribute('data-view2'); renderToolbar(); renderMain(); return; }
   const pn=t.closest('[data-panel]'); if(pn){ const k=pn.getAttribute('data-panel'); if(k===S.panel&&S.panelOpen!==false){ S.panelOpen=false; } else { S.panel=k; S.panelOpen=true; } renderPanel(); return; }
   const pv=t.closest('[data-pv]'); if(pv){ S.pv=pv.getAttribute('data-pv'); renderPanel(); return; }
@@ -738,6 +756,7 @@ document.addEventListener('click',e=>{
   const cmd=t.closest('[data-cmd]'); if(cmd){ runCmd(cmd.getAttribute('data-cmd')); return; }
   const grp=t.closest('[data-grp]'); if(grp){ const g=grp.getAttribute('data-grp'); S.grpc[g]=!S.grpc[g]; renderSide(); return; }
   if(t.closest('#cmdopen')){ openPalette(); return; }
+  if(S.selEdge!=null && t.closest('.canvas') && !t.closest('[data-edge]') && !t.closest('[data-node]')){ S.selEdge=null; renderMain(); return; }
   if(t.id==='scrim'){ closeOverlays(); return; }
 });
 function openPipe(id){ if(id[0]!=='@' && !DB.pipelines[id])return; S.open=id; if(id[0]!=='@')S.sel=null; if(!S.tabs.includes(id))S.tabs.push(id); render(); }
@@ -839,7 +858,7 @@ function renderCmdList(q){ const list=COMMANDS.filter(c=>c.label.toLowerCase().i
 document.getElementById('cmdinput').addEventListener('input',e=>renderCmdList(e.target.value));
 document.getElementById('cmdinput').addEventListener('keydown',e=>{ if(e.key==='Enter'){ const on=document.querySelector('#cmdlist .ci.on')||document.querySelector('#cmdlist .ci[data-run]'); if(on){const c=on.getAttribute('data-run').replace('__cmd_','');closeOverlays();runCmd(c);} } if(e.key==='Escape')closeOverlays(); });
 document.getElementById('cmdlist').addEventListener('click',e=>{ const ci=e.target.closest('.ci[data-run]'); if(ci){const c=ci.getAttribute('data-run').replace('__cmd_','');closeOverlays();runCmd(c);} });
-document.addEventListener('keydown',e=>{ if((e.metaKey||e.ctrlKey)&&e.shiftKey&&e.key.toLowerCase()==='p'){e.preventDefault();openPalette();} if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='r'){e.preventDefault();doRun();} if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='k'){e.preventDefault();const s=document.getElementById('palsearch');if(s){s.focus();s.select();}} if((e.metaKey||e.ctrlKey)&&(e.key==='='||e.key==='+')){e.preventDefault();runCmd('zoomin');} if((e.metaKey||e.ctrlKey)&&e.key==='-'){e.preventDefault();runCmd('zoomout');} if((e.metaKey||e.ctrlKey)&&e.key==='0'){e.preventDefault();runCmd('zoomreset');} if(e.key==='Escape'){ if(S.linking){ S.linking=null; renderMain(); } else if(document.getElementById('scrim').classList.contains('on')){closeOverlays();} else if(S.sel){ S.sel=null; S.inspOpen=true; renderMain(); } } });
+document.addEventListener('keydown',e=>{ if((e.metaKey||e.ctrlKey)&&e.shiftKey&&e.key.toLowerCase()==='p'){e.preventDefault();openPalette();} if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='r'){e.preventDefault();doRun();} if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='k'){e.preventDefault();const s=document.getElementById('palsearch');if(s){s.focus();s.select();}} if((e.metaKey||e.ctrlKey)&&(e.key==='='||e.key==='+')){e.preventDefault();runCmd('zoomin');} if((e.metaKey||e.ctrlKey)&&e.key==='-'){e.preventDefault();runCmd('zoomout');} if((e.metaKey||e.ctrlKey)&&e.key==='0'){e.preventDefault();runCmd('zoomreset');} if(e.key==='Escape'){ if(S.linking){ S.linking=null; renderMain(); } else if(document.getElementById('scrim').classList.contains('on')){closeOverlays();} else if(S.selEdge!=null){ S.selEdge=null; renderMain(); } else if(S.sel){ S.sel=null; S.inspOpen=true; renderMain(); } } });
 function closeOverlays(){ document.getElementById('scrim').classList.remove('on'); document.getElementById('cmdp').classList.remove('on'); document.getElementById('modal').classList.remove('on'); }
 
 /* modals */
