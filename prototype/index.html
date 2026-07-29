@@ -263,6 +263,9 @@
   .maprow .ma{color:var(--tf);font-weight:700}
   .maprow .mt{font-family:var(--mono);font-weight:600;color:var(--ink)}
   .maprow.un .mt{color:var(--mute);font-weight:400}
+  .srcwrap{display:flex;flex-wrap:wrap;gap:5px;padding:8px;border:1px dashed var(--lineL);border-radius:8px;background:#f7f8fa}
+  .srcchip{background:#fff;border:1px solid var(--lineL);border-radius:6px;padding:3px 8px;font-size:11px;color:var(--body);cursor:grab}
+  .srcchip:hover{border-color:var(--accent);color:var(--accent)}
   /* usability: collapse / rails / panel tools */
   .grp{-webkit-user-select:none;user-select:none}
   .grp .tw{display:inline-block;width:10px}
@@ -646,10 +649,15 @@ function renderInspector(){
   } else if(S.itab==='Test'){
     body=`<div class="rcard">assert · output rows &gt; 0</div><div class="rcard">assert · no nulls in order_id</div><span class="btn run" data-cmd="runtests" style="margin-top:6px">▷ Run node tests</span>`;
   } else if(['mapper','map','cast'].includes(n.type)){
+    const up=(n.in&&n.in.length)?upOf(n.id,n.in[0]):null; const inSch=up?schemaOf(up.id):[];
     const MP=[['order_id','order_id',true],['net_amount','amount − discount',true],['customer_name',S.mapped?'customers.name':'—',!!S.mapped],['tier',S.mapped?'customers.tier':'—',!!S.mapped]];
     const un=MP.filter(m=>!m[2]).length;
-    const mrows=MP.map(m=>`<div class="maprow ${m[2]?'':'un'}"><span class="mf">${m[0]}</span><span class="ma">←</span><span class="mt">${m[1]}</span></div>`).join('');
-    body=`<div class="k" style="margin-bottom:4px">Field mapping <span class="muted">· available data → target</span></div>${mrows}<div style="margin-top:9px">${un?`<span class="btn pri" data-cmd="automap">✨ Auto-map ${un} remaining</span>`:`<span class="chip ok">all ${MP.length} fields mapped</span>`}</div>`;
+    const src=inSch.length?inSch.map(c=>`<span class="srcchip mono" title="${esc(c[1])}">${esc(c[0])}</span>`).join(''):`<span class="muted">↻ Read schema on the source to list fields</span>`;
+    const mrows=MP.map(m=>{ const none=m[1]==='—'; const fn=!none&&/[−+*/()]|\s/.test(m[1]); return `<div class="maprow ${m[2]?'':'un'}"><span class="mf">${esc(m[0])}</span><span class="ma">←</span><span class="mt">${none?'<span style="color:var(--warn);font-weight:400">drag a field ›</span>':(fn?'ƒ ':'')+esc(m[1])}</span></div>`; }).join('');
+    body=`<div class="k" style="margin-bottom:5px">Input fields <span class="muted" style="font-weight:400">· ${inSch.length} available${up?' from '+esc(up.name):''}</span></div>
+      <div class="srcwrap">${src}</div>
+      <div class="k" style="margin:13px 0 5px">Target mapping <span class="muted" style="font-weight:400">· target ← expression</span></div>${mrows}
+      <div style="margin-top:10px;display:flex;gap:7px;align-items:center;flex-wrap:wrap">${un?`<span class="btn pri" data-cmd="automap">✨ Auto-map ${un} remaining</span>`:`<span class="chip ok">all ${MP.length} mapped</span>`}<span class="addrow" data-cmd="addfield" style="margin:0">＋ Add target field</span></div>`;
   } else if(n.type==='validate'){
     const rules=VRULES[n.id]||[['field','condition']];
     const rr=rules.map(r=>`<div class="rcard"><div class="rh" style="margin:0"><b>${esc(r[0])}</b><span class="muted" style="margin-left:auto;font-family:var(--mono);font-size:11px">${esc(r[1])}</span></div></div>`).join('');
