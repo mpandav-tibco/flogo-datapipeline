@@ -162,6 +162,11 @@
   .keyrow .keq{color:var(--mute);font-weight:700}
   .keyrow .kx{color:var(--mute);cursor:pointer;font-size:11px}
   .keyrow .kx:hover{color:var(--err)}
+  .routerow{display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px solid var(--lineL);border-radius:7px;background:#fff;margin-bottom:5px}
+  .routerow.def{background:var(--panel2,#f7f8fa);border-style:dashed}
+  .routerow .rnum{width:15px;text-align:center;font-size:11px;color:var(--mute);font-family:var(--mono);flex:none}
+  .routerow .rcond{flex:1;min-width:0;font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .routerow .rto{font-size:10.5px;white-space:nowrap;flex:none}
   .trow{display:flex;align-items:center;gap:10px;padding:7px 4px;border-bottom:1px solid #eef0f2;font-family:var(--mono);font-size:11.5px}
   .trow .td{width:10px;height:10px;border-radius:50%;background:#c4c9cf;flex:none}
   .trow.run .td{background:var(--run);animation:pulse .5s infinite}.trow.pass .td{background:var(--ok)}.trow.fail .td{background:var(--err)}
@@ -641,6 +646,14 @@ function renderInspector(){
       <div class="addrow" data-cmd="addfield">＋ Add key pair</div>
       <div class="k" style="margin:13px 0 6px">Emit from right <span class="muted" style="font-weight:400">· columns added to left rows</span></div>
       <div style="display:flex;gap:6px;flex-wrap:wrap">${emit.map(c=>`<span class="linkchip">${c}</span>`).join('')}</div>`;
+  } else if(n.type==='router'){
+    const routes=[['eu',"region == 'EU'"],['us',"region == 'US'"],['rest','__default']];
+    const rr=routes.map((r,i)=>{ const ds=downOf(n.id,r[0]); const tgt=ds.length?ds.map(d=>esc(d.node.name)).join(', '):'<span style="color:var(--warn)">unwired</span>'; const isDef=r[1]==='__default'; return `<div class="routerow${isDef?' def':''}"><span class="rnum">${isDef?'∗':(i+1)}</span><span class="linkchip">${r[0]}</span><span class="rcond mono">${isDef?'<span class="muted">everything else · default</span>':esc(r[1])}</span><span class="rto muted">→ ${tgt}</span></div>`; }).join('');
+    body=`<div class="k" style="margin-bottom:5px">Match mode <span class="muted" style="font-weight:400">· first matching route wins</span></div>
+      <div class="subtab" style="margin-bottom:12px"><span class="on">First-match</span><span>All-match</span></div>
+      <div class="k" style="margin-bottom:6px">Routes <span class="muted" style="font-weight:400">· evaluated top to bottom</span></div>${rr}
+      <div class="addrow" data-cmd="addfield">＋ Add route</div>
+      <p class="muted" style="font-size:11px;margin-top:9px">Each row sends matching rows out its named port; the default catches the rest — like a conditional split.</p>`;
   } else {
     const isRef=(v)=>/\$env|\$property|CONNECTION\./i.test(v);
     const isPwd=(k)=>/password|secret|token|passphrase/i.test(k);
