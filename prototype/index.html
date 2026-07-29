@@ -117,7 +117,7 @@
   .modeseg span:last-child{border-right:none} .modeseg span.on{background:var(--accent-soft);color:var(--accent);font-weight:600}
   .mapper3{display:grid;grid-template-columns:250px 1fr 250px;flex:1;min-height:0}
   .mapper2{display:grid;grid-template-columns:250px 1fr;flex:1;min-height:0}
-  .mcol{border-right:1px solid var(--lineL);display:flex;flex-direction:column;min-width:0;overflow:hidden}
+  .mcol{border-right:1px solid var(--lineL);display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden}
   .mcol:last-child{border-right:none}
   .mcolh{font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute);padding:9px 12px;border-bottom:1px solid var(--lineL);background:#fafbfc;display:flex;justify-content:space-between;flex:none}
   .mcb{padding:8px;overflow:auto}
@@ -185,9 +185,14 @@
   .addrow{border:1px dashed var(--lineL);border-radius:7px;padding:6px;text-align:center;font-size:12px;color:var(--accent);font-weight:600;cursor:pointer}
 
   /* panel */
-  .panel{height:210px;border-top:1px solid var(--lineL);background:#fff;display:flex;flex-direction:column;min-height:0}
+  .panel{height:210px;border-top:1px solid var(--lineL);background:#fff;display:flex;flex-direction:column;min-height:0;position:relative}
   .panel.cfg{height:48vh}
-  .pbody.cfgbody{padding:0;display:flex;flex-direction:column}
+  .pbody.cfgbody{padding:0;display:flex;flex-direction:column;min-height:0}
+  .cfgbody .mcb{min-height:0}
+  .mcol .mcb{flex:1}
+  .presize{position:absolute;top:0;left:0;right:0;height:6px;cursor:ns-resize;z-index:9}
+  .presize::after{content:"";position:absolute;top:2px;left:50%;transform:translateX(-50%);width:34px;height:3px;border-radius:3px;background:var(--lineL);opacity:0;transition:opacity .12s}
+  .presize:hover::after{opacity:1}
   .ptabs{display:flex;align-items:center;gap:0;border-bottom:1px solid var(--lineL);background:#fafbfc;padding:0 8px}
   .ptab{padding:8px 12px;font-size:11.5px;text-transform:uppercase;letter-spacing:.03em;color:var(--body);border-bottom:2px solid transparent;cursor:pointer}
   .ptab.on{color:var(--ink);border-bottom-color:var(--tibco);font-weight:700}
@@ -544,7 +549,7 @@ const CODE = {
 };
 
 /* ============================ STATE ============================ */
-const S = { open:'enrich-route-load', tabs:['enrich-route-load'], sel:'validate', view:'design', panel:'preview', pv:'output', abar:'pipeline', running:false, itab:'Config', inspOpen:true, panelOpen:true, panelMax:false, sideOpen:true, grpc:{}, env:'dev', links:{}, linking:null, schemaLinks:{validate:'orders'}, schlinking:null, palQ:'', joinType:'inner', zoom:1, selEdge:null, mapEdit:null, cfgTab:'Input', mapTab:'Input', mapMode:'visual', mapField:'full_name' };
+const S = { open:'enrich-route-load', tabs:['enrich-route-load'], sel:'validate', view:'design', panel:'preview', pv:'output', abar:'pipeline', running:false, itab:'Config', inspOpen:true, panelOpen:true, panelMax:false, sideOpen:true, grpc:{}, env:'dev', links:{}, linking:null, schemaLinks:{validate:'orders'}, schlinking:null, palQ:'', joinType:'inner', zoom:1, selEdge:null, mapEdit:null, cfgTab:'Input', mapTab:'Input', mapMode:'visual', mapField:'full_name', panelH:null };
 const PIPE = ()=>DB.pipelines[S.open]||DB.pipelines['enrich-route-load'];
 const isDoc = ()=> typeof S.open==='string' && S.open[0]==='@';
 const DOCKEY = ()=> S.open.slice(1);
@@ -736,7 +741,7 @@ function renderMain(){
     el.innerHTML=`<div class="codeview">${esc(CODE[S.open]||JSON.stringify({name:p.id,mode:p.mode,nodes:p.nodes.length},null,2))}</div>`;
     return;
   }
-  el.style.gridTemplateColumns=`172px 1fr ${S.selEdge!=null?'290px':'0px'}`;
+  el.style.gridTemplateColumns='172px 1fr';
   // palette
   const pal=`<div class="palette">
     <div class="psearch"><span class="psi">⌕</span><input id="palsearch" placeholder="Search components…" autocomplete="off" spellcheck="false" value="${esc(S.palQ||'')}"><span class="pkb">⌘K</span></div>
@@ -779,7 +784,7 @@ function renderMain(){
         <marker id="arw" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#9aa4b0"/></marker>
         <marker id="arwe" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="var(--dlq)"/></marker>
       </defs>${wires}</svg>${nodes}${wireChip}</div></div>`;
-  el.innerHTML=pal+canvas+(S.selEdge!=null?edgeInspector():'');
+  el.innerHTML=pal+canvas;
   if(S.palQ) filterPalette(S.palQ);
   renderPanel();
 }
@@ -905,18 +910,31 @@ function configMid(n){
   if(tab==='Settings') return settingsBody(n);
   return testBody(n);
 }
+function wireBarHTML(e){
+  const p=PIPE(); const [sid,sp,tid,tp,err]=e; const s=p.nodes.find(n=>n.id===sid), t=p.nodes.find(n=>n.id===tid);
+  return `<span class="ik" style="color:var(--accent);background:var(--accent-soft)">Wire</span><span class="inm">${esc(s?s.name:'?')} → ${esc(t?t.name:'?')}</span>${err?'<span class="wt sec" style="margin-left:8px">error · reject</span>':''}<span style="flex:1"></span><span class="chip ok">valid</span><span class="pt-tools" style="margin-left:8px"><span class="ptool" data-cmd="panelmax" title="Toggle height">⤢</span><span class="ptool" data-cmd="paneltoggle" title="${S.panelOpen===false?'Expand':'Collapse'}">${S.panelOpen===false?'⌃':'⌄'}</span><span class="ptool" data-cmd="deselect" title="Close">✕</span></span>`;
+}
+function wireMidHTML(e){
+  const p=PIPE(); const [sid,sp,tid,tp,err]=e; const s=p.nodes.find(n=>n.id===sid), t=p.nodes.find(n=>n.id===tid); const sch=schemaOf(sid);
+  const tbl=`<table class="grid"><tr><th>Field</th><th>Type</th></tr>${sch.map(r=>`<tr><td class="fld0">${r[0]}</td><td class="mono">${r[1]}</td></tr>`).join('')}</table>`;
+  return `<div class="mcb" style="flex:1;max-width:640px"><div class="rcard"><div class="rh" style="margin:0;gap:6px"><b>${esc(s?s.name:'?')}</b>${sp&&sp!=='rows'?`<span class="muted">${sp}</span>`:''}<span class="muted" style="flex:1;text-align:center">→</span><b>${esc(t?t.name:'?')}</b></div>${err?'<div class="muted" style="margin-top:5px;color:var(--err)">error · reject path</div>':''}</div><div class="k" style="margin:12px 0 5px">Schema on wire <span class="muted" style="font-weight:400">· ${sch.length} cols · ${s?s.count||'—':'—'} rows</span></div>${tbl}<div class="addrow" data-cmd="preview" style="margin-top:9px">▷ Preview sample rows on this wire →</div></div>`;
+}
 function renderPanel(){
   const el=document.getElementById('panel');
   if(isDoc()||!S.tabs.length){ el.classList.add('hidden'); el.innerHTML=''; return; } el.classList.remove('hidden');
   el.classList.toggle('collapsed', S.panelOpen===false);
   el.classList.toggle('max', !!S.panelMax);
+  el.style.height=(S.panelOpen!==false && S.panelH)?S.panelH+'px':'';
+  const PRESIZE='<div class="presize" data-resize title="Drag to resize"></div>';
   const selNode = S.sel ? PIPE().nodes.find(x=>x.id===S.sel) : null;
-  el.classList.toggle('cfg', !!selNode);
-  if(selNode){ el.innerHTML=`<div class="mapbar">${configBarHTML(selNode)}</div><div class="pbody cfgbody" id="pbody">${configMid(selNode)}</div>`; return; }
+  const selEdge = (!selNode && S.selEdge!=null) ? PIPE().edges[S.selEdge] : null;
+  el.classList.toggle('cfg', !!selNode || !!selEdge);
+  if(selNode){ el.innerHTML=PRESIZE+`<div class="mapbar">${configBarHTML(selNode)}</div><div class="pbody cfgbody" id="pbody">${configMid(selNode)}</div>`; return; }
+  if(selEdge){ el.innerHTML=PRESIZE+`<div class="mapbar">${wireBarHTML(selEdge)}</div><div class="pbody cfgbody" id="pbody">${wireMidHTML(selEdge)}</div>`; return; }
   const pc=probsFor().length;
   const tabs=[['preview','Preview'],['problems','Problems'+(pc?` <b style="color:var(--err)">${pc}</b>`:'')],['output','Output'],['tests','Tests']];
   const th=tabs.map(([k,l])=>`<div class="ptab ${S.panel===k?'on':''}" data-panel="${k}">${l}</div>`).join('');
-  el.innerHTML=`<div class="ptabs">${th}<span class="pt-tools"><span class="ptool" data-cmd="panelmax" title="Toggle max height">⤢</span><span class="ptool" data-cmd="paneltoggle" title="${S.panelOpen===false?'Expand':'Collapse'} panel">${S.panelOpen===false?'⌃':'⌄'}</span></span></div><div class="pbody" id="pbody">${panelBody()}</div>`;
+  el.innerHTML=PRESIZE+`<div class="ptabs">${th}<span class="pt-tools"><span class="ptool" data-cmd="panelmax" title="Toggle max height">⤢</span><span class="ptool" data-cmd="paneltoggle" title="${S.panelOpen===false?'Expand':'Collapse'} panel">${S.panelOpen===false?'⌃':'⌄'}</span></span></div><div class="pbody" id="pbody">${panelBody()}</div>`;
 }
 function panelBody(){
   if(S.panel==='preview'){
@@ -955,7 +973,7 @@ document.addEventListener('click',e=>{
   const t=e.target;
   const close=t.closest('[data-close]'); if(close){ e.stopPropagation(); closeTab(close.getAttribute('data-close')); return; }
   const open=t.closest('[data-open]'); if(open){ openPipe(open.getAttribute('data-open')); return; }
-  const ew=t.closest('[data-edge]'); if(ew){ S.selEdge=+ew.getAttribute('data-edge'); S.sel=null; S.linking=null; renderMain(); return; }
+  const ew=t.closest('[data-edge]'); if(ew){ S.selEdge=+ew.getAttribute('data-edge'); S.sel=null; S.linking=null; S.panelOpen=true; renderMain(); return; }
   const node=t.closest('[data-node]'); if(node){ if(_suppressClick){_suppressClick=false;return;} S.sel=node.getAttribute('data-node'); S.cfgTab='Input'; S.selEdge=null; S.linking=null; S.panelOpen=true; renderMain(); return; }
   const v2=t.closest('[data-view2]'); if(v2){ S.view=v2.getAttribute('data-view2'); renderToolbar(); renderMain(); return; }
   const pn=t.closest('[data-panel]'); if(pn){ const k=pn.getAttribute('data-panel'); if(k===S.panel&&S.panelOpen!==false){ S.panelOpen=false; } else { S.panel=k; S.panelOpen=true; } renderPanel(); return; }
@@ -974,11 +992,11 @@ function closeTab(id){ S.tabs=S.tabs.filter(x=>x!==id); if(S.open===id)S.open=S.
 function runCmd(c){
   if(c==='run') return doRun();
   if(c==='runtests') return doTests();
-  if(c==='deselect'){ S.sel=null; S.inspOpen=true; renderMain(); return; }
+  if(c==='deselect'){ S.sel=null; S.selEdge=null; S.inspOpen=true; renderMain(); return; }
   if(c==='inspcollapse'){ S.inspOpen=false; renderMain(); return; }
   if(c==='inspopen'){ S.inspOpen=true; renderMain(); return; }
   if(c==='paneltoggle'){ S.panelOpen=S.panelOpen===false; renderPanel(); return; }
-  if(c==='panelmax'){ S.panelMax=!S.panelMax; renderPanel(); return; }
+  if(c==='panelmax'){ S.panelMax=!S.panelMax; S.panelH=null; renderPanel(); return; }
   if(c==='addfield'){ toast('Field editor (mock) — type · default · nullability'); return; }
   if(c==='envswitch'){ const q=['dev','stg','prod']; S.env=q[(q.indexOf(S.env)+1)%3]; render(); toast('Active environment: '+S.env); return; }
   if(c==='closemodal'){ closeOverlays(); return; }
@@ -1399,7 +1417,10 @@ function ctxAction(act,id){ const p=PIPE(); const n=p.nodes.find(z=>z.id===id); 
 document.addEventListener('contextmenu',e=>{ const nd=e.target.closest('.node'); if(nd&&!isDoc()){ e.preventDefault(); showCtxMenu(nd.getAttribute('data-node'),e.clientX,e.clientY); } });
 document.addEventListener('click',e=>{ const ci=e.target.closest('[data-ctx]'); if(ci){ const id=document.getElementById('ctxmenu')?._node; const act=ci.getAttribute('data-ctx'); closeCtxMenu(); ctxAction(act,id); return; } if(!e.target.closest('#ctxmenu')) closeCtxMenu(); });
 
-let _drag=null, _suppressClick=false;
+let _drag=null, _suppressClick=false, _presize=null;
+document.addEventListener('mousedown',e=>{ const rh=e.target.closest('[data-resize]'); if(rh){ e.preventDefault(); _presize={y:e.clientY,h:document.getElementById('panel').offsetHeight}; document.body.style.userSelect='none'; document.body.style.cursor='ns-resize'; } });
+document.addEventListener('mousemove',e=>{ if(!_presize)return; let h=_presize.h+(_presize.y-e.clientY); h=Math.max(120,Math.min(Math.round(window.innerHeight*0.82),h)); S.panelH=Math.round(h); S.panelMax=false; const panel=document.getElementById('panel'); panel.classList.remove('max'); panel.style.height=S.panelH+'px'; });
+document.addEventListener('mouseup',()=>{ if(_presize){ _presize=null; document.body.style.userSelect=''; document.body.style.cursor=''; } });
 document.addEventListener('mousedown',e=>{
   if(e.button!==0)return;
   _suppressClick=false;
