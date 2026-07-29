@@ -659,13 +659,15 @@ function availCol(n){
 }
 function settingsBody(n){
   const connRow=(n.kind==='src'||n.kind==='sink')?(CFG[n.id]||[]).find(r=>/connection/i.test(r[0])):null;
+  let exec;
+  if(n.kind==='src') exec=`<div class="fld"><div class="k">On bad row<span class="wt">listbox</span></div><div class="v">skip &amp; log ▾</div></div><div class="fld"><div class="k">Fetch size<span class="wt">number</span></div><div class="v mono">5,000</div></div>`;
+  else if(n.kind==='sink'||n.kind==='dlq') exec=`<div class="fld"><div class="k">On write error<span class="wt">listbox</span></div><div class="v">retry ×3 → dead-letter ▾</div></div><div class="fld"><div class="k">Batch size<span class="wt">number</span></div><div class="v mono">10,000</div></div>`;
+  else exec=`<div class="fld"><div class="k">On error<span class="wt">listbox</span></div><div class="v">route to reject ▾</div></div><div class="fld"><div class="k">Parallelism<span class="wt">number</span></div><div class="v mono">8</div></div>`;
   return `<div class="mcb" style="flex:1;max-width:560px"><div class="k" style="margin-bottom:6px">Node</div>
     <div class="fld"><div class="k">Name<span class="wt">text</span></div><div class="v">${esc(n.name)}</div></div>
     <div class="fld"><div class="k">Description<span class="wt">text</span></div><div class="v" style="color:var(--mute)">Add a description…</div></div>
     ${connRow?`<div class="fld"><div class="k">Connection<span class="wt">listbox</span></div><div class="slot"><span class="linkchip conn">🔗 ${esc(String(connRow[1]).replace(/ ▾$/,''))}</span></div></div>`:''}
-    <div class="k" style="margin:13px 0 6px">Execution</div>
-    <div class="fld"><div class="k">On error<span class="wt">listbox</span></div><div class="v">route to reject ▾</div></div>
-    <div class="fld"><div class="k">Parallelism<span class="wt">number</span></div><div class="v mono">8</div></div></div>`;
+    <div class="k" style="margin:13px 0 6px">Execution</div>${exec}</div>`;
 }
 function outputBody(n){
   const outSch=schemaOf(n.id);
