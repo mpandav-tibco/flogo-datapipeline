@@ -94,6 +94,7 @@ const S = {
   inspClosed: false,
   inspWidth: 300,
   showBranches: true,
+  canvasMode: 'linear' as 'linear' | 'graph',
   setOpen: null as Record<string, boolean> | null,
   tabs: [{ id: 'canvas', type: 'canvas' as string }],
   active: 'canvas',
@@ -2873,9 +2874,9 @@ function renderBranch(b: DerivedBranch): HTMLElement {
   const kindText =
     b.kind === 'reference' ? 'reference input'
       : b.kind === 'route' ? 'route → sink'
-      : b.kind === 'default-route' ? 'default → sink'
-      : b.kind === 'reject' ? 'rejects → sink'
-      : 'parse errors → sink';
+        : b.kind === 'default-route' ? 'default → sink'
+          : b.kind === 'reject' ? 'rejects → sink'
+            : 'parse errors → sink';
   const meta = metaFor(b.nodeKind, b.type, b.cfg);
   const label = typeLabel(b.type);
   const showMeta = meta && meta !== b.title && meta !== label;
@@ -2905,6 +2906,171 @@ function renderDlqBranch(dn: Node): HTMLElement {
   dnode.oncontextmenu = (e) => dlqMenu(e);
   item.appendChild(dnode);
   return item;
+}
+
+// ── graph (node + wire) canvas ─────────────────────────────────────────────
+// A read-only DAG view of the same pipeline: the main chain laid out left-to-
+// right with the implicit branches fanning below, drawn with real ports and SVG
+// wires. It reuses the node cards + inspector wiring (clicking a node selects it
+// exactly as on the linear canvas) and is the substrate the wire-authoring steps
+// build on. Toggle it with the "◇ Graph view" pill.
+const GSVG_NS = 'http://www.w3.org/2000/svg' as const;
+
+function gKindCls(kind: string): string {
+  return kind === 'source' ? 's-source' : kind === 'sink' ? 's-sink' : 'tf';
+}
+
+function buildGraphNode(n: Node, i: number, x: number, y: number, w: number): HTMLElement {
+  const nd = el('div', 'gnode node ' + (n.kind === 'source' ? 'src' : n.kind === 'sink' ? 'sink' : 'tf') + (S.selNode === n.id ? ' sel' : ''));
+  nd.style.left = x + 'px'; nd.style.top = y + 'px'; nd.style.width = w + 'px';
+  const icon = n.kind === 'source' ? '⇥' : n.kind === 'sink' ? '⇤' : 'ƒ';
+  const label = typeLabel(n.type);
+  const hasCustomName = n.nm && n.nm !== label && n.nm !== n.type;
+  const title = hasCustomName ? n.nm : label;
+  const showMeta = n.meta && n.meta !== title && n.meta !== label;
+  nd.innerHTML = `<div class='kind'><span class='kico'>${icon}</span>${n.kind}</div>`
+    + `<div class='nm'>${escapeHtml(title)}</div>`
+    + (showMeta ? `<div class='meta'>${escapeHtml(n.meta)}</div>` : '');
+  nd.tabIndex = 0;
+  nd.onclick = () => { S.selNode = n.id; S.inspTab = 'Config'; S.inspClosed = false; renderEditor(); };
+  nd.oncontextmenu = (e) => nodeMenu(n, i, e);
+  return nd;
+}
+
+function buildGraphBranchCard(b: DerivedBranch): HTMLElement {
+  const nd = el('div', 'gnode node satellite s-' + b.nodeKind);
+  const icon = b.nodeKind === 'source' ? '⇥' : '⇤';
+  const kindText =
+    b.kind === 'reference' ? 'reference input'
+      : b.kind === 'route' ? 'route → sink'
+        : b.kind === 'default-route' ? 'default → sink'
+          : b.kind === 'reject' ? 'rejects → sink'
+            : 'parse errors → sink';
+  const meta = metaFor(b.nodeKind, b.type, b.cfg);
+  const label = typeLabel(b.type);
+  const showMeta = meta && meta !== b.title && meta !== label;
+  nd.innerHTML = `<div class='kind'><span class='kico'>${icon}</span>${kindText}</div>`
+    + `<div class='nm'>${escapeHtml(b.title)}</div>`
+    + (showMeta ? `<div class='meta'>${escapeHtml(meta)}</div>` : '');
+  nd.tabIndex = 0;
+  nd.title = 'Configured on the ' + (b.ownerIndex === 'source' ? 'source' : 'owning transform') + ' — click to edit.';
+  nd.onclick = () => { S.selNode = b.ownerId; S.inspTab = 'Config'; S.inspClosed = false; renderEditor(); };
+  return nd;
+}
+
+function buildGraphDlqCard(dn: Node): HTMLElement {
+  const nd = el('div', 'gnode node catch satellite' + (S.selNode === 'dlq' ? ' sel' : ''));
+  nd.innerHTML = `<div class='kind'>dead-letter (catch)</div><div class='nm'>${escapeHtml(dn.nm)}</div><div class='meta'>${escapeHtml(dn.type)} · ${escapeHtml(dn.meta)}</div>`;
+  nd.tabIndex = 0;
+  nd.title = 'Rows rejected by the sink are captured here — the main pipeline keeps running.';
+  nd.onclick = () => { S.selNode = 'dlq'; S.inspTab = 'Config'; S.inspClosed = false; renderEditor(); };
+  nd.oncontextmenu = (e) => dlqMenu(e);
+  return nd;
+}
+
+function graphPort(wrap: HTMLElement, x: number, y: number, cls: string): void {
+  const port = el('span', 'gport gport-' + cls);
+  port.style.left = (x - 5) + 'px';
+  port.style.top = (y - 5) + 'px';
+  wrap.appendChild(port);
+}
+
+function graphEdge(svg: SVGElement, x1: number, y1: number, x2: number, y2: number, cls: string): void {
+  const path = document.createElementNS(GSVG_NS, 'path');
+  const dx = Math.abs(x2 - x1), dy = Math.abs(y2 - y1);
+  const d = dx >= dy
+    ? `M ${x1} ${y1} C ${(x1 + x2) / 2} ${y1}, ${(x1 + x2) / 2} ${y2}, ${x2} ${y2}`
+    : `M ${x1} ${y1} C ${x1} ${(y1 + y2) / 2}, ${x2} ${(y1 + y2) / 2}, ${x2} ${y2}`;
+  path.setAttribute('d', d);
+  path.setAttribute('class', 'gedge ' + cls);
+  path.setAttribute('marker-end', 'url(#gah)');
+  svg.appendChild(path);
+}
+
+// Lay out the pipeline as a DAG: main chain across the top row, implicit branches
+// stacked beneath each owner, wired with SVG paths and ports. Read-only for now.
+function renderGraphCanvas(cv: HTMLElement): void {
+  const p = S.pipe!;
+  const branchMap = branchesByOwner(p.branches);
+  const W = 200, H = 96, GX = 92, TOP = 28, BW = 186, BH = 78, BGY = 30;
+  const branchTop = TOP + H + 46;
+
+  const xs: number[] = [];
+  let x = 24;
+  for (let i = 0; i < p.nodes.length; i++) { xs.push(x); x += W + GX; }
+  const contentW = x + 8;
+
+  let maxRows = 0;
+  if (S.showBranches) {
+    p.nodes.forEach((n) => {
+      let c = (branchMap[n.id] || []).length;
+      if (n.id === 'sink' && p.hasDlq) c += 1;
+      if (c > maxRows) maxRows = c;
+    });
+  }
+  const contentH = maxRows > 0 ? branchTop + maxRows * (BH + BGY) + 16 : TOP + H + 40;
+
+  const wrap = el('div', 'gcanvas');
+  wrap.style.width = contentW + 'px';
+  wrap.style.height = contentH + 'px';
+
+  const svg = document.createElementNS(GSVG_NS, 'svg');
+  svg.setAttribute('class', 'gedges');
+  svg.setAttribute('width', String(contentW));
+  svg.setAttribute('height', String(contentH));
+  const defs = document.createElementNS(GSVG_NS, 'defs');
+  const marker = document.createElementNS(GSVG_NS, 'marker');
+  marker.setAttribute('id', 'gah');
+  marker.setAttribute('markerWidth', '9');
+  marker.setAttribute('markerHeight', '9');
+  marker.setAttribute('refX', '7');
+  marker.setAttribute('refY', '3');
+  marker.setAttribute('orient', 'auto');
+  const mpath = document.createElementNS(GSVG_NS, 'path');
+  mpath.setAttribute('d', 'M0,0 L7,3 L0,6 Z');
+  mpath.setAttribute('fill', '#8a929c');
+  marker.appendChild(mpath);
+  defs.appendChild(marker);
+  svg.appendChild(defs);
+  wrap.appendChild(svg);
+
+  const mp: Record<string, { inX: number; inY: number; outX: number; outY: number; botX: number; botY: number }> = {};
+  p.nodes.forEach((n, i) => {
+    const nx = xs[i], ny = TOP;
+    wrap.appendChild(buildGraphNode(n, i, nx, ny, W));
+    mp[n.id] = { inX: nx, inY: ny + H / 2, outX: nx + W, outY: ny + H / 2, botX: nx + W / 2, botY: ny + H };
+  });
+
+  for (let i = 1; i < p.nodes.length; i++) {
+    const a = mp[p.nodes[i - 1].id], b = mp[p.nodes[i].id];
+    graphEdge(svg, a.outX, a.outY, b.inX, b.inY, 'main');
+  }
+  p.nodes.forEach((n) => {
+    if (n.kind !== 'source') graphPort(wrap, mp[n.id].inX, mp[n.id].inY, gKindCls(n.kind));
+    if (n.kind !== 'sink') graphPort(wrap, mp[n.id].outX, mp[n.id].outY, gKindCls(n.kind));
+  });
+
+  if (S.showBranches) {
+    p.nodes.forEach((n) => {
+      let row = 0;
+      const place = (card: HTMLElement, cls: string, flow: 'in' | 'out') => {
+        const by = branchTop + row * (BH + BGY);
+        const bx = mp[n.id].botX - BW / 2;
+        card.style.left = bx + 'px'; card.style.top = by + 'px'; card.style.width = BW + 'px';
+        wrap.appendChild(card);
+        const oX = mp[n.id].botX, oY = mp[n.id].botY;
+        if (flow === 'out') graphEdge(svg, oX, oY, bx + BW / 2, by, 'br-' + cls);
+        else graphEdge(svg, bx + BW / 2, by, oX, oY, 'br-' + cls);
+        graphPort(wrap, oX, oY, 'branch');
+        graphPort(wrap, bx + BW / 2, by, 'branch');
+        row++;
+      };
+      (branchMap[n.id] || []).forEach((b) => place(buildGraphBranchCard(b), b.kind, b.flow));
+      if (n.id === 'sink' && p.hasDlq && p.dlqNode) place(buildGraphDlqCard(p.dlqNode), 'dlq', 'out');
+    });
+  }
+
+  cv.appendChild(wrap);
 }
 
 function renderCanvas(m: HTMLElement) {
@@ -2941,6 +3107,13 @@ function renderCanvas(m: HTMLElement) {
   head.appendChild(descIn);
   cv.appendChild(head);
 
+  // Flow area — the graph (node + wire) view, or the classic linear flow. The
+  // linear branch below is left at its original indentation to keep the diff
+  // minimal; both render into the same canvas so the header/hint/inspector are
+  // shared.
+  if (S.canvasMode === 'graph') {
+    renderGraphCanvas(cv);
+  } else {
   const branchMap = branchesByOwner(p.branches);
   const row = el('div', 'flowrow');
   p.nodes.forEach((n, i) => {
@@ -2997,6 +3170,7 @@ function renderCanvas(m: HTMLElement) {
   const wrap = el('div', 'flowwrap');
   wrap.appendChild(row);
   cv.appendChild(wrap);
+  }
 
   // The DLQ ("catch") now renders as a satellite inside the sink's column (see
   // renderDlqBranch), so it stays aligned under the sink alongside any other
@@ -3005,7 +3179,8 @@ function renderCanvas(m: HTMLElement) {
   const hint = el('div', 'canvas-hint pillrow');
   const dlqPill = p.hasDlq ? '' : '<span class="pill" data-h="dlq">＋ DLQ</span>';
   const brPill = p.branches.length ? `<span class="pill toggle${S.showBranches ? ' on' : ''}" data-h="branches" title="Show or hide the implicit router, join, reject and parse-error branches">⎇ Branches</span>` : '';
-  hint.innerHTML = '<span class="pill" data-h="src">＋ Source</span><span class="pill" data-h="tf">＋ Transform</span><span class="pill" data-h="sink">＋ Sink</span>' + dlqPill + brPill + '<span class="pill">⤢ Fit</span>';
+  const modePill = `<span class="pill toggle${S.canvasMode === 'graph' ? ' on' : ''}" data-h="gmode" title="Switch between the linear flow and the graph (node + wire) view">◇ Graph view</span>`;
+  hint.innerHTML = '<span class="pill" data-h="src">＋ Source</span><span class="pill" data-h="tf">＋ Transform</span><span class="pill" data-h="sink">＋ Sink</span>' + dlqPill + brPill + modePill + '<span class="pill">⤢ Fit</span>';
   (hint.querySelector('[data-h="tf"]') as HTMLElement).onclick = () => addTransform(p.nodes.length - 1);
   (hint.querySelector('[data-h="src"]') as HTMLElement).onclick = () =>
     quickPick('Change source type', SOURCE_TYPES, (v) => {
@@ -3023,6 +3198,8 @@ function renderCanvas(m: HTMLElement) {
   if (dlqBtn) dlqBtn.onclick = () => addDlq();
   const brBtn = hint.querySelector('[data-h="branches"]') as HTMLElement | null;
   if (brBtn) brBtn.onclick = () => { S.showBranches = !S.showBranches; renderEditor(); };
+  const gmBtn = hint.querySelector('[data-h="gmode"]') as HTMLElement | null;
+  if (gmBtn) gmBtn.onclick = () => { S.canvasMode = S.canvasMode === 'graph' ? 'linear' : 'graph'; renderEditor(); };
   cv.appendChild(hint);
   m.appendChild(c);
 

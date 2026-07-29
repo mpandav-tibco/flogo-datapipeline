@@ -149,6 +149,21 @@ button{font-family:inherit;color:inherit;background:none;border:none;cursor:poin
 .nbranch-dlq .blabel{color:#c9903f}
 .pill.toggle{cursor:pointer;user-select:none}
 .pill.toggle.on{color:var(--blueHi);background:rgba(0,120,212,.18)}
+/* graph (node + wire) canvas — read-only DAG view (opt-in via the Graph view pill) */
+.gcanvas{position:relative;align-self:flex-start;margin:6px 0 0}
+.gedges{position:absolute;left:0;top:0;pointer-events:none;overflow:visible;z-index:1}
+.gedge{fill:none;stroke:#5a6069;stroke-width:2}
+.gedge.main{stroke:#6b7280}
+.gedge.br-route,.gedge.br-default-route{stroke:#a978d9}
+.gedge.br-reject{stroke:#d9603f;stroke-dasharray:6 4}
+.gedge.br-source-error,.gedge.br-dlq{stroke:#c9903f;stroke-dasharray:6 4}
+.gedge.br-reference{stroke:#4a90d9}
+.gnode{position:absolute;z-index:2}
+.gport{position:absolute;width:10px;height:10px;border-radius:50%;background:var(--editor);border:2px solid #7a828c;z-index:3;pointer-events:none}
+.gport.s-source{border-color:#4a90d9}
+.gport.s-sink{border-color:#4caf7d}
+.gport.tf{border-color:#a978d9}
+.gport.branch{border-color:#8a929c;width:8px;height:8px}
 .addnode{flex:none;width:52px;height:52px;border:1px dashed var(--inputBorder);border-radius:11px;color:var(--dim);display:flex;align-items:center;justify-content:center;font-size:20px}
 .addnode:hover{color:var(--text);border-color:#565a60}
 .canvas-hint{position:absolute;left:20px;bottom:14px;padding:5px 7px;background:rgba(24,24,24,.72);border:1px solid var(--border);border-radius:9px;backdrop-filter:blur(3px)}
