@@ -213,6 +213,31 @@
   .tl .win{flex:1;height:58px;background:var(--tf-bg);border:1px solid #bcd0ea;border-radius:8px;display:flex;flex-direction:column;justify-content:center;align-items:center;color:var(--tf);font-weight:700;font-size:12px}
   .tl .win small{color:var(--body);font-weight:400;font-family:var(--mono);font-size:10px}
   .tl .late{align-self:center;background:var(--warn-bg);color:var(--warn);border-radius:8px;padding:6px 9px;font-size:11px;font-weight:700;white-space:nowrap}
+  .ik{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;border-radius:6px;padding:2px 7px;display:inline-block}
+  .mgraph{display:flex;align-items:center;gap:5px;flex-wrap:wrap;justify-content:center;padding:8px 0}
+  .mnode{border:1px solid var(--lineL);border-radius:9px;padding:6px 10px;background:#fff;min-width:74px;text-align:center}
+  .mnode .mk{font-size:9px;text-transform:uppercase;letter-spacing:.05em;color:var(--mute)}
+  .mnode .mn{font-size:12px;font-weight:700;color:var(--ink);margin-top:1px}
+  .mnode.add{border-color:var(--ok);box-shadow:0 0 0 2px var(--ok-bg)}.mnode.add .mk{color:var(--ok)}
+  .mnode.chg{border-color:var(--warn);box-shadow:0 0 0 2px var(--warn-bg)}.mnode.chg .mk{color:var(--warn)}
+  .mnode.del{border-color:var(--err);box-shadow:0 0 0 2px var(--err-bg);opacity:.65}.mnode.del .mk{color:var(--err)}
+  .marrow{width:18px;height:2px;background:#c4ccd4;position:relative;flex:none}
+  .marrow::after{content:"";position:absolute;right:-1px;top:-3px;border:4px solid transparent;border-left-color:#c4ccd4}
+  .difframe{border:1px solid var(--lineL);border-radius:9px;overflow:hidden}
+  .difframe .dfh{display:flex;align-items:center;gap:8px;padding:8px 11px;border-bottom:1px solid var(--lineL);background:#fafbfc;font-size:12px;font-weight:600}
+  .dl{display:flex;font-family:var(--mono);font-size:11.5px;line-height:1.7}
+  .dl .g{width:22px;text-align:center;color:var(--mute);flex:none;-webkit-user-select:none;user-select:none}
+  .dl .tx{flex:1;white-space:pre;padding-right:8px}
+  .dl.add{background:var(--ok-bg)}.dl.add .g{color:var(--ok);font-weight:700}
+  .dl.del{background:var(--err-bg)}.dl.del .g{color:var(--err);font-weight:700}
+  .lgnd{display:flex;gap:14px;font-size:11px;color:var(--body);margin-top:10px}
+  .lgnd b{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:4px;vertical-align:middle}
+  .node.drag{opacity:.9;box-shadow:0 10px 26px rgba(20,25,30,.2);z-index:9;cursor:grabbing}
+  .maprow{display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid #eef0f2;font-size:11.5px}
+  .maprow .mf{font-family:var(--mono);color:var(--body);min-width:98px}
+  .maprow .ma{color:var(--tf);font-weight:700}
+  .maprow .mt{font-family:var(--mono);font-weight:600;color:var(--ink)}
+  .maprow.un .mt{color:var(--mute);font-weight:400}
 </style>
 </head>
 <body>
@@ -359,7 +384,7 @@ function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').repl
 function toast(m){const t=document.getElementById('toast');t.textContent=m;t.classList.add('on');clearTimeout(t._h);t._h=setTimeout(()=>t.classList.remove('on'),2200);}
 
 /* ============================ RENDER ============================ */
-function render(){ renderSide(); renderTabs(); renderToolbar(); renderMain(); renderPanel(); renderStatus(); }
+function render(){ clearInterval(S._striv); renderSide(); renderTabs(); renderToolbar(); renderMain(); renderPanel(); renderStatus(); }
 
 function renderSide(){
   const el=document.getElementById('side');
@@ -385,9 +410,10 @@ function renderTabs(){
     if(t[0]==='@'){ const d=DOCS[t.slice(1)]; return `<div class="etab ${t===S.open?'on':''}" data-open="${t}"><span style="opacity:.75">${d.icon}</span>${d.title}<span class="x" data-close="${t}">✕</span></div>`; }
     return `<div class="etab ${t===S.open?'on':''}" data-open="${t}"><span class="md"></span>${t}.datapipeline<span class="x" data-close="${t}">✕</span></div>`;
   }).join('');
-  document.getElementById('ttname').textContent=isDoc()?DOCS[DOCKEY()].title:S.open+'.datapipeline';
+  document.getElementById('ttname').textContent=!S.tabs.length?'Welcome':isDoc()?DOCS[DOCKEY()].title:S.open+'.datapipeline';
 }
 function renderToolbar(){
+  if(!S.tabs.length){ document.getElementById('etoolbar').innerHTML=''; return; }
   if(isDoc()){ const d=DOCS[DOCKEY()]; document.getElementById('etoolbar').innerHTML=`<span class="badge no" style="background:#eef0f2;color:var(--ink)">${d.icon} ${d.title}</span><span class="grow"></span><span class="muted" style="font-size:11.5px">mock data · read-only preview</span>`; return; }
   const p=PIPE();
   document.getElementById('etoolbar').innerHTML=`
@@ -402,6 +428,7 @@ function renderToolbar(){
 function portY(node,side,i){ const arr=(side==='in'?node.in:node.out)||['x']; const n=arr.length; const c=27; return c+(i-(n-1)/2)*18; }
 function renderMain(){
   const el=document.getElementById('emain');
+  if(!S.tabs.length){ el.style.gridTemplateColumns='1fr'; el.innerHTML=welcomeHTML(); return; }
   if(isDoc()){ el.style.gridTemplateColumns='1fr'; el.innerHTML=DOCS[DOCKEY()].render(); return; }
   const p=PIPE();
   if(S.view==='code'){
@@ -414,11 +441,11 @@ function renderMain(){
   const pal=`<div class="palette">
     <div class="psearch">⌕ Search components… <span style="float:right;font-family:var(--mono)">⌘K</span></div>
     <div class="pg">Sources</div>
-    <div class="pitem"><span class="pico s">C</span>CSV / TSV</div><div class="pitem"><span class="pico s">J</span>JDBC</div><div class="pitem"><span class="pico s">K</span>Kafka</div><div class="pitem"><span class="pico s">◇</span>Object store</div>
+    <div class="pitem" data-add="csv"><span class="pico s">C</span>CSV / TSV</div><div class="pitem" data-add="jdbc-src"><span class="pico s">J</span>JDBC</div><div class="pitem" data-add="kafka-src"><span class="pico s">K</span>Kafka</div><div class="pitem" data-add="objstore-src"><span class="pico s">◇</span>Object store</div>
     <div class="pg">Transforms</div>
-    <div class="pitem"><span class="pico t">⨝</span>Join</div><div class="pitem"><span class="pico c">⋔</span>Router</div><div class="pitem"><span class="pico t">✓</span>Validate</div><div class="pitem"><span class="pico t">ƒ</span>Map · Filter · Cast</div><div class="pitem"><span class="pico t">⧖</span>Window</div>
+    <div class="pitem" data-add="join"><span class="pico t">⨝</span>Join</div><div class="pitem" data-add="router"><span class="pico c">⋔</span>Router</div><div class="pitem" data-add="validate"><span class="pico t">✓</span>Validate</div><div class="pitem" data-add="map"><span class="pico t">ƒ</span>Map · Filter · Cast</div><div class="pitem" data-add="window"><span class="pico t">⧖</span>Window</div>
     <div class="pg">Sinks</div>
-    <div class="pitem"><span class="pico k">▣</span>JDBC · Kafka</div><div class="pitem"><span class="pico k">◇</span>Object store</div><div class="pitem"><span class="pico d">⚠</span>Dead-letter</div>
+    <div class="pitem" data-add="jdbc-sink"><span class="pico k">▣</span>JDBC · Kafka</div><div class="pitem" data-add="objstore-sink"><span class="pico k">◇</span>Object store</div><div class="pitem" data-add="dlq"><span class="pico d">⚠</span>Dead-letter</div>
   </div>`;
   // canvas dims
   let maxX=0,maxY=0; p.nodes.forEach(n=>{maxX=Math.max(maxX,n.x+152);maxY=Math.max(maxY,n.y+70);});
@@ -462,6 +489,11 @@ function renderInspector(){
     body=`<table class="grid"><tr><th>Field</th><th>Type</th></tr><tr><td class="fld0">order_id</td><td class="mono">string</td></tr><tr><td class="fld0">net_amount</td><td class="mono">decimal(12,2)</td></tr><tr><td class="fld0">region</td><td class="mono">string</td></tr></table><div class="addrow" style="margin-top:8px" data-doc="schema">Open schema editor →</div>`;
   } else if(S.itab==='Test'){
     body=`<div class="rcard">assert · output rows &gt; 0</div><div class="rcard">assert · no nulls in order_id</div><span class="btn run" data-cmd="runtests" style="margin-top:6px">▷ Run node tests</span>`;
+  } else if(['mapper','map','cast'].includes(n.type)){
+    const MP=[['order_id','order_id',true],['net_amount','amount − discount',true],['customer_name',S.mapped?'customers.name':'—',!!S.mapped],['tier',S.mapped?'customers.tier':'—',!!S.mapped]];
+    const un=MP.filter(m=>!m[2]).length;
+    const mrows=MP.map(m=>`<div class="maprow ${m[2]?'':'un'}"><span class="mf">${m[0]}</span><span class="ma">←</span><span class="mt">${m[1]}</span></div>`).join('');
+    body=`<div class="k" style="margin-bottom:4px">Field mapping <span class="muted">· available data → target</span></div>${mrows}<div style="margin-top:9px">${un?`<span class="btn pri" data-cmd="automap">✨ Auto-map ${un} remaining</span>`:`<span class="chip ok">all ${MP.length} fields mapped</span>`}</div>`;
   } else {
     const rows=(CFG[n.id]||[['Type',n.type]]).map(([k,v])=>`<div class="fld"><div class="k">${k}</div><div class="v ${/[=·{]/.test(v)?'mono':''}">${esc(v)}</div></div>`).join('');
     const ctx = n.type==='window'?`<div class="addrow" data-doc="windowing">⧖ Configure windowing →</div>`:n.kind==='dlq'?`<div class="addrow" data-doc="recover">↩ Open recovery / DLQ →</div>`:n.kind==='src'?`<div class="addrow" data-doc="incremental">⇧ Incremental load →</div>`:`<div class="addrow">＋ Add field</div>`;
@@ -473,7 +505,7 @@ function renderInspector(){
 }
 function renderPanel(){
   const el=document.getElementById('panel');
-  if(isDoc()){ el.classList.add('hidden'); el.innerHTML=''; return; } el.classList.remove('hidden');
+  if(isDoc()||!S.tabs.length){ el.classList.add('hidden'); el.innerHTML=''; return; } el.classList.remove('hidden');
   const tabs=[['preview','Preview'],['problems','Problems'],['output','Output'],['tests','Tests']];
   const th=tabs.map(([k,l])=>`<div class="ptab ${S.panel===k?'on':''}" data-panel="${k}">${l}</div>`).join('');
   el.innerHTML=`<div class="ptabs">${th}<span style="margin-left:auto;color:var(--mute);font-size:11px;padding-right:6px">${S.open}</span></div><div class="pbody" id="pbody">${panelBody()}</div>`;
@@ -500,6 +532,7 @@ function testsBody(){
     <div id="tsum" style="margin-top:8px;font-weight:700"></div>`;
 }
 function renderStatus(){
+  if(!S.tabs.length){ document.getElementById('statusbar').innerHTML=`<span class="s">⑂ prototype/studio-demo</span><span class="grow"></span><span class="s">Flogo engine: ready</span>`; return; }
   if(isDoc()){ document.getElementById('statusbar').innerHTML=`<span class="s">⑂ prototype/studio-demo</span><span class="s">◈ ${DOCS[DOCKEY()].title}</span><span class="grow"></span><span class="s">mock data</span><span class="s">Flogo engine: ready</span>`; return; }
   const p=PIPE();
   document.getElementById('statusbar').innerHTML=`<span class="s">⑂ prototype/studio-demo</span><span class="s">◈ Data Pipeline</span><span class="s">${p.shape==='unbounded'?'∞ streaming':'▦ batch'}</span><span class="grow"></span><span class="s" id="statusvalid">✓ valid</span><span class="s">${p.mode.toUpperCase()}</span><span class="s">UTF-8</span><span class="s">Flogo engine: ready</span>`;
@@ -508,9 +541,9 @@ function renderStatus(){
 /* ============================ INTERACTIONS ============================ */
 document.addEventListener('click',e=>{
   const t=e.target;
-  const open=t.closest('[data-open]'); if(open){ openPipe(open.getAttribute('data-open')); return; }
   const close=t.closest('[data-close]'); if(close){ e.stopPropagation(); closeTab(close.getAttribute('data-close')); return; }
-  const node=t.closest('[data-node]'); if(node){ S.sel=node.getAttribute('data-node'); document.querySelector('.emain').innerHTML=document.querySelector('.emain').innerHTML; renderMain(); return; }
+  const open=t.closest('[data-open]'); if(open){ openPipe(open.getAttribute('data-open')); return; }
+  const node=t.closest('[data-node]'); if(node){ S.sel=node.getAttribute('data-node'); renderMain(); return; }
   const v2=t.closest('[data-view2]'); if(v2){ S.view=v2.getAttribute('data-view2'); renderToolbar(); renderMain(); return; }
   const pn=t.closest('[data-panel]'); if(pn){ S.panel=pn.getAttribute('data-panel'); renderPanel(); return; }
   const pv=t.closest('[data-pv]'); if(pv){ S.pv=pv.getAttribute('data-pv'); renderPanel(); return; }
@@ -521,7 +554,7 @@ document.addEventListener('click',e=>{
   if(t.id==='scrim'){ closeOverlays(); return; }
 });
 function openPipe(id){ if(id[0]!=='@' && !DB.pipelines[id])return; S.open=id; if(id[0]!=='@')S.sel=null; if(!S.tabs.includes(id))S.tabs.push(id); render(); }
-function closeTab(id){ S.tabs=S.tabs.filter(x=>x!==id); if(S.open===id&&S.tabs.length)S.open=S.tabs[0]; render(); }
+function closeTab(id){ S.tabs=S.tabs.filter(x=>x!==id); if(S.open===id)S.open=S.tabs[0]||''; render(); }
 function runCmd(c){
   if(c==='run') return doRun();
   if(c==='runtests') return doTests();
@@ -532,13 +565,14 @@ function runCmd(c){
   if(c==='fit'){ toast('Fit to graph'); return; }
   if(c==='new'){ openTemplates(); return; }
   if(c==='preview'){ if(isDoc())openPipe(lastPipe()); S.panel='preview'; renderPanel(); return; }
+  if(c==='automap'){ S.mapped=true; renderMain(); toast('✨ Mapped 2 fields by name + type'); return; }
   const M={resume:'↻ Resuming from checkpoint 09:15:04Z — no data loss',replay:'↩ Replaying 18k dead-lettered rows into the pipeline',dobuild:'▲ Build started — compiling pipeline → single binary',aiapply:'✓ Applied — Filter node inserted before Router',aiask:'Impact: drops ~1 row (ORD-000002) in the sample; downstream counts update automatically.',expandgroup:'Extracted 3 nodes into sub-pipeline “standardise-customer”',testconn:'✓ Connection succeeded',save:'✓ Saved'};
   if(M[c]){ toast(M[c]); return; }
   if(typeof DOCS!=='undefined' && DOCS[c]) return openDoc(c);
   toast(c);
 }
 function doRun(){
-  if(S.running)return; S.running=true;
+  if(S.running)return; S.running=true; clearInterval(S._striv);
   S.panel='output'; renderPanel();
   const log=document.getElementById('runlog'); log.innerHTML='';
   const p=PIPE(), nodes=p.nodes.filter(n=>n.kind!=='dlq');
@@ -548,9 +582,10 @@ function doRun(){
   let i=0;
   const step=()=>{
     if(i>=nodes.length){
-      line('ok', p.shape==='unbounded'?'streaming · healthy — 48k events/sec · lag 12k':'pipeline run completed — processed 2,000,000 · written 1,980,000 · rejected→DLQ 18,000');
-      const vc=document.getElementById('valchip'); if(vc){vc.className='chip ok';vc.textContent=p.shape==='unbounded'?'streaming · healthy':'completed · 2.0M rows';}
-      S.running=false; return;
+      const vc=document.getElementById('valchip'); if(vc){vc.className='chip '+(p.shape==='unbounded'?'run':'ok');vc.textContent=p.shape==='unbounded'?'streaming · live':'completed · 2.0M rows';}
+      if(p.shape==='unbounded'){ startStream(); }
+      else { line('ok','pipeline run completed — processed 2,000,000 · written 1,980,000 · rejected→DLQ 18,000'); S.running=false; }
+      return;
     }
     const n=nodes[i]; const dot=document.querySelector(`.node[data-node="${n.id}"] .nst`);
     if(dot)dot.className='nst run';
@@ -762,21 +797,41 @@ parallelism: 8</div></div>
      <div class="rlog"><span class="t">[10:40:02]</span> <span class="i">compiling pipeline → flogo app…</span><br><span class="t">[10:40:14]</span> <span class="ok">✓ built enrich-route-load (linux/amd64) · 24.1 MB</span><br><span class="t">[10:40:15]</span> <span class="ok">✓ image ghcr.io/acme/enrich-route-load:1.4.0</span></div>
      <p class="muted" style="margin-top:10px">One artifact — no external runtime. (FlogoWorkDirAssets: Dockerfile · k8s template)</p>`)},
 
-  git:{title:'Source control',icon:'⑂',render:()=>H('Git-native diff','.datapipeline is plain JSON — reviewable in any pull request.',
-    `<div class="sec">Changes · 1 file</div>
-     <div class="ti" style="padding-left:12px;color:var(--ink)"><span class="tc" style="color:var(--warn)">M</span>enrich-route-load.datapipeline</div>
-     <div class="sec">Diff</div>
-     <div class="diff">
-       <div class="ln ctx">  "transforms": [</div>
-       <div class="ln ctx">    { "type": "join", "with": "customers" },</div>
-       <div class="ln del">-   { "type": "validate", "rules": 4 },</div>
-       <div class="ln add">+   { "type": "validate", "rules": 5, "onViolation": "route" },</div>
-       <div class="ln add">+   { "type": "router", "routes": ["EU","US","rest"] }</div>
-       <div class="ln ctx">  ],</div>
-     </div>
-     <div class="sec">Semantic graph diff</div>
-     <div class="g2"><div class="card"><h4 style="color:var(--ok)">+ Added</h4><p>Router · by region (3 routes)</p></div><div class="card"><h4 style="color:var(--warn)">~ Changed</h4><p>Validate · 4 → 5 rules, now routes rejects to DLQ</p></div></div>
-     <p class="muted" style="margin-top:10px">Reviewers see intent, not opaque XML. Merges cleanly.</p>`)},
+  git:{title:'Source control',icon:'⑂',render:()=>H('Git-native diff','A .datapipeline is text — Studio renders the change as a readable graph, not line noise.',
+    `<div class="g2">
+      <div class="difframe">
+        <div class="dfh"><span class="ik" style="color:var(--snk);background:var(--snk-bg)">Diff</span>enrich-route-load.datapipeline<span class="grow"></span><span class="chip run">PR #142</span></div>
+        <div style="padding:6px 0">
+          <div class="dl"><span class="g"> </span><span class="tx">  transforms:</span></div>
+          <div class="dl add"><span class="g">+</span><span class="tx">    - type: validate      # DQ gate · 5 rules</span></div>
+          <div class="dl add"><span class="g">+</span><span class="tx">      onViolation: route → dlq</span></div>
+          <div class="dl"><span class="g"> </span><span class="tx">    - type: router</span></div>
+          <div class="dl del"><span class="g">−</span><span class="tx">      routes: [US, rest]</span></div>
+          <div class="dl add"><span class="g">+</span><span class="tx">      routes: [EU, US, rest]</span></div>
+        </div>
+      </div>
+      <div class="difframe">
+        <div class="dfh"><span class="ik" style="color:var(--tf);background:var(--tf-bg)">Graph diff</span>what changed, visually</div>
+        <div style="padding:16px 10px">
+          <div class="mgraph">
+            <div class="mnode"><div class="mk">Source</div><div class="mn">orders</div></div>
+            <span class="marrow"></span>
+            <div class="mnode add"><div class="mk">+ added</div><div class="mn">validate</div></div>
+            <span class="marrow"></span>
+            <div class="mnode chg"><div class="mk">~ changed</div><div class="mn">router · +EU</div></div>
+            <span class="marrow"></span>
+            <div class="mnode"><div class="mk">Sinks</div><div class="mn">3 ways</div></div>
+          </div>
+          <div class="lgnd"><span><b style="background:var(--ok)"></b>added</span><span><b style="background:var(--err)"></b>removed</span><span><b style="background:var(--warn)"></b>changed config</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="g3" style="margin-top:14px">
+      <div class="card"><h4>Native VS Code SCM</h4><p class="muted">Branch, stage, commit, PR in the editor. Node positions live in a side-car ui block so a layout nudge never pollutes the diff.</p></div>
+      <div class="card"><h4>Reviewable by anyone</h4><p class="muted">The graph diff makes a routing or mapping change legible to a reviewer who doesn't read JSON.</p></div>
+      <div class="card"><h4>CI on the file</h4><p class="muted">Same file drives validate, tests and build in CI — a red check blocks the merge.</p></div>
+    </div>
+    <p class="muted" style="margin-top:10px">The net-new piece is the graph-aware diff renderer over the JSON. (studio is a VS Code extension with native SCM)</p>`)},
 
   ai:{title:'AI copilot',icon:'✨',render:()=>H('AI copilot','Describe a change in plain language — review the diff before it applies.',
     `<div class="chat">
@@ -836,6 +891,83 @@ parallelism: 8</div></div>
     `<div class="g2">${ks.map(k=>`<div style="display:flex;align-items:center;gap:10px;padding:7px 2px;border-bottom:1px solid #eef0f2"><span class="kbd">${k[0]}</span><span>${k[1]}</span></div>`).join('')}</div>`);}},
 };
 function openDoc(key){ if(!DOCS[key])return; if(!S.tabs.includes('@'+key))S.tabs.push('@'+key); S.open='@'+key; render(); }
+
+/* ============================ AUTHORING · add / drag ============================ */
+const PADD={
+  'csv':{kind:'src',type:'csv',ico:'C',name:'new source',meta:'csv · header',out:['rows']},
+  'jdbc-src':{kind:'src',type:'jdbc',ico:'J',name:'jdbc source',meta:'jdbc · query',out:['rows']},
+  'kafka-src':{kind:'src',type:'kafka',ico:'K',name:'kafka source',meta:'kafka · topic',out:['rows']},
+  'objstore-src':{kind:'src',type:'s3',ico:'◇',name:'object source',meta:'s3 · prefix',out:['rows']},
+  'join':{kind:'transform',type:'join',ico:'⨝',name:'join',meta:'left = right',in:['left','right'],out:['rows']},
+  'router':{kind:'control',type:'router',ico:'⋔',name:'router',meta:'by rule',in:['in'],out:['a','b']},
+  'validate':{kind:'transform',type:'validate',ico:'✓',name:'validate',meta:'DQ rules',in:['in'],out:['pass','reject']},
+  'map':{kind:'transform',type:'mapper',ico:'ƒ',name:'map · filter',meta:'expression',in:['in'],out:['rows']},
+  'window':{kind:'transform',type:'window',ico:'⧖',name:'window',meta:'tumbling',in:['in'],out:['rows']},
+  'jdbc-sink':{kind:'sink',type:'jdbc',ico:'▣',name:'jdbc sink',meta:'upsert',in:['in']},
+  'objstore-sink':{kind:'sink',type:'s3',ico:'◇',name:'object sink',meta:'parquet',in:['in']},
+  'dlq':{kind:'dlq',type:'jdbc',ico:'⚠',name:'dead-letter',meta:'+reason',in:['in']},
+};
+function addNode(key){
+  if(isDoc()||!S.tabs.length)return; const spec=PADD[key]; if(!spec)return;
+  const p=PIPE(); p._n=(p._n||0)+1;
+  const n=Object.assign({},spec,{id:'n'+Date.now(),x:70+(p._n%6)*26,y:44+(p._n%6)*24});
+  p.nodes.push(n); S.sel=n.id; S.view='design'; renderToolbar(); renderMain();
+  toast('Added '+spec.name+' — drag to position, then wire a port');
+}
+document.addEventListener('click',e=>{ const a=e.target.closest('[data-add]'); if(a){ addNode(a.getAttribute('data-add')); }});
+
+let _drag=null;
+document.addEventListener('mousedown',e=>{
+  const nd=e.target.closest('.node'); if(!nd||isDoc()||e.target.closest('.port'))return;
+  const cv=nd.closest('.canvas'); if(!cv)return; const r=nd.getBoundingClientRect();
+  _drag={id:nd.getAttribute('data-node'),n:PIPE().nodes.find(x=>x.id===nd.getAttribute('data-node')),el:nd,cv,dx:e.clientX-r.left,dy:e.clientY-r.top,sx:e.clientX,sy:e.clientY,moved:false};
+  nd.classList.add('drag');
+});
+document.addEventListener('mousemove',e=>{
+  if(!_drag)return; const cr=_drag.cv.getBoundingClientRect();
+  const x=Math.max(0,Math.round(e.clientX-cr.left-_drag.dx)), y=Math.max(0,Math.round(e.clientY-cr.top-_drag.dy));
+  _drag.n.x=x; _drag.n.y=y; _drag.el.style.left=x+'px'; _drag.el.style.top=y+'px';
+  if(Math.abs(e.clientX-_drag.sx)+Math.abs(e.clientY-_drag.sy)>3)_drag.moved=true;
+});
+document.addEventListener('mouseup',()=>{ if(!_drag)return; const d=_drag; _drag=null; d.el.classList.remove('drag'); if(d.moved){ S.sel=d.id; renderMain(); } });
+
+/* ============================ STREAMING · live run ============================ */
+function startStream(){
+  const log=document.getElementById('runlog'), pb=document.getElementById('pbody'); if(!pb)return;
+  const dash=document.createElement('div'); dash.className='g3'; dash.style.margin='0 0 10px';
+  dash.innerHTML=`<div class="metric"><div class="ml">Events / sec</div><div class="mv" id="m_eps">—</div>${spark('0,20 20,12 40,16 60,7 80,11 100,5','var(--run)')}</div><div class="metric"><div class="ml">Consumer lag</div><div class="mv" id="m_lag" style="color:var(--warn)">—</div></div><div class="metric"><div class="ml">Watermark</div><div class="mv" id="m_wm" style="font-size:15px">—</div></div>`;
+  pb.insertBefore(dash,pb.firstChild);
+  let lag=42000, wm=Date.parse('2026-07-28T10:42:00Z'), k=0;
+  clearInterval(S._striv);
+  S._striv=setInterval(()=>{
+    const eps=document.getElementById('m_eps'); if(!eps){clearInterval(S._striv);return;}
+    k++; const ev=46000+Math.floor(Math.random()*6000); lag=Math.max(700,lag-1200-Math.floor(Math.random()*4200)); wm+=3000;
+    eps.textContent=(ev/1000).toFixed(1)+'k';
+    document.getElementById('m_lag').textContent=(lag/1000).toFixed(1)+'k';
+    document.getElementById('m_wm').textContent=new Date(wm).toISOString().substr(11,8)+'Z';
+    if(log){ log.innerHTML+=`<div><span class="t">[${new Date().toLocaleTimeString()}]</span> <span class="i">▸ window closed · ${Math.floor(ev/50)} rollups → metrics table · lag ${(lag/1000).toFixed(1)}k</span></div>`; log.scrollTop=log.scrollHeight; }
+    if(k>=8){ clearInterval(S._striv); if(log)log.innerHTML+=`<div><span class="ok">streaming · healthy — lag draining, watermark advancing</span></div>`; S.running=false; }
+  },700);
+}
+
+/* ============================ WELCOME / first-run ============================ */
+function welcomeHTML(){
+  return `<div class="docview" style="display:grid;place-items:center;text-align:center">
+    <div style="max-width:540px">
+      <div style="font-size:40px;color:var(--tibco);line-height:1">◈</div>
+      <div class="dtitle" style="font-size:21px;margin-top:8px">Flogo Data Pipeline Studio</div>
+      <div class="dsub">Design, preview and ship batch &amp; streaming data pipelines — as versionable text.</div>
+      <div style="display:flex;gap:10px;justify-content:center;margin:16px 0">
+        <span class="btn pri" data-cmd="new">＋ New from template</span>
+        <span class="btn" data-open="enrich-route-load">Open a sample pipeline</span>
+      </div>
+      <div class="sec" style="text-align:left;margin-top:22px">Recent</div>
+      <div style="text-align:left;border:1px solid var(--lineL);border-radius:9px;overflow:hidden">
+        ${Object.values(DB.pipelines).map(p=>`<div style="display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid #eef0f2;cursor:pointer;font-size:13px" data-open="${p.id}"><span style="color:var(--tibco)">◈</span><span style="flex:1;font-weight:600">${p.id}.datapipeline</span><span class="muted" style="font-size:11px">${p.shape==='unbounded'?'stream':'batch'}</span></div>`).join('')}
+      </div>
+      <p class="muted" style="margin-top:14px;font-size:11.5px">⌘⇧P for all commands · everything runs on the local mock engine</p>
+    </div></div>`;
+}
 
 render();
 </script>
