@@ -254,6 +254,26 @@
   .panel.collapsed{height:auto}
   .panel.collapsed .pbody{display:none}
   .panel.max{height:58vh}
+  /* composability + design-time problems (Flogo-3.x adoption) */
+  .fld .k{display:flex;align-items:center;gap:6px}
+  .wt{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--mute);background:#eef0f2;border-radius:5px;padding:1px 6px;margin-left:auto}
+  .slot{border:1px dashed var(--accent);border-radius:7px;padding:5px 7px;background:var(--accent-soft)}
+  .linkchip{display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);font-size:11px;border-radius:20px;padding:2px 9px;font-weight:600}
+  .linkchip.conn{color:var(--snk);background:var(--snk-bg)}
+  .linkchip.secret{color:var(--err);background:var(--err-bg)}
+  .linkchip.prop{color:var(--accent);background:var(--accent-soft)}
+  .prob{display:flex;align-items:flex-start;gap:8px;padding:7px 6px;border-bottom:1px solid #eef0f2;font-size:12px;cursor:pointer}
+  .prob:hover{background:#f6f8fa}
+  .prob .pi{width:14px;flex:none;font-weight:700;text-align:center}
+  .prob.err .pi{color:var(--err)} .prob.warn .pi{color:var(--warn)}
+  .prob .pl{color:var(--body)} .prob .pl b{color:var(--ink)}
+  .prob .pw{margin-left:auto;font-size:10px;color:var(--mute);font-family:var(--mono);white-space:nowrap}
+  .node .nbadge{position:absolute;top:-9px;left:-9px;width:18px;height:18px;border-radius:50%;display:grid;place-items:center;color:#fff;font-size:11px;font-weight:700;box-shadow:0 2px 5px rgba(0,0,0,.22);z-index:6}
+  .node .nbadge.err{background:var(--err)} .node .nbadge.warn{background:var(--warn)}
+  .node.nprob.err{border-color:var(--err);box-shadow:0 0 0 2px var(--err-bg),0 6px 16px rgba(20,25,30,.08)}
+  .node.nprob.warn{border-color:var(--warn)}
+  .reg td.grp{background:#eef0f2;font-weight:700;color:var(--ink)}
+  .cver{font:700 9.5px var(--mono);color:#fff;background:var(--tf);border-radius:5px;padding:1px 6px}
 </style>
 </head>
 <body>
@@ -350,6 +370,12 @@ const DB = {
   },
 };
 // node config (per-node inspector body)
+const PROB = { 'enrich-route-load':[
+  {node:'join',sev:'err',msg:'right input port is <b>required but unconnected</b>',loc:'join #2'},
+  {node:'snk_us',sev:'err',msg:'<code>conflict key</code> is required for <code>upsert</code> mode',loc:'sink.mode'},
+  {node:'validate',sev:'warn',msg:'<code>$property["dq.threshold"]</code> has no value in <b>dev</b>',loc:'prop'} ] };
+const probsFor = ()=> PROB[S.open]||[];
+const probOf = (id)=> probsFor().find(p=>p.node===id);
 const CFG = {
   src_orders:[['Type','CSV · header row'],['Path','data/orders.csv'],['Columns','12 · ✨ infer from file'],['Encoding','utf-8']],
   src_cust:[['Connection','pg-warehouse ▾'],['Query','SELECT id,name,tier,segment FROM customers'],['Role','Join reference table']],
@@ -409,7 +435,9 @@ function renderSide(){
     `<div class="ti ${p.id===S.open?'on':''}" data-open="${p.id}"><span class="tc">◈</span>${p.id}<span class="sub">${p.shape==='unbounded'?'stream':'batch'}</span></div>`).join('');
   const conns=DB.connections.map(c=>`<div class="ti" data-conn="${c.id}"><span class="tc" style="color:${c.color}">${c.icon}</span>${c.id}<span class="dot" style="background:var(--ok);margin-left:auto"></span></div>`).join('');
   const runs=DB.runs.map(r=>`<div class="ti" data-run="${r.t}"><span class="tc"><span class="dot" style="background:${r.status==='completed'?'#4ec36b':'#e0a63a'}"></span></span>${r.t} · ${r.status}<span class="sub">${r.rows}</span></div>`).join('');
-  const gov=`<div class="ti" data-doc="ops"><span class="tc">📊</span>Operations</div>
+  const gov=`<div class="ti" data-doc="appprops"><span class="tc">◆</span>App properties</div>
+    <div class="ti" data-doc="contracts"><span class="tc">▤</span>Schemas &amp; contracts</div>
+    <div class="ti" data-doc="ops"><span class="tc">📊</span>Operations</div>
     <div class="ti" data-doc="lineage"><span class="tc">⧉</span>Lineage &amp; impact</div>
     <div class="ti" data-doc="security"><span class="tc">🛡</span>Security</div>
     <div class="ti" data-doc="environments"><span class="tc">⚙</span>Environments</div>
@@ -477,10 +505,11 @@ function renderMain(){
     return `<path d="M${x1},${y1} C${x1+42},${y1} ${x2-42},${y2} ${x2},${y2}" fill="none" stroke="${col}" stroke-width="2.4" ${dash} marker-end="url(#arw${err?'e':''})"/>`;
   }).join('');
   const nodes=p.nodes.map(n=>{
-    const st=n.st||'ok';
+    const st=n.st||'ok'; const pb=probOf(n.id);
     const ins=(n.in||[]).map((pl,i)=>`<span class="port" style="left:-6px;top:${portY(n,'in',i)-5}px"></span>`).join('');
     const outs=(n.out||[]).map((pl,i)=>`<span class="port ${pl==='reject'?'err':''}" style="right:-6px;top:${portY(n,'out',i)-5}px"><span class="pl">${pl==='rows'?'':pl}</span></span>`).join('');
-    return `<div class="node ${n.kind} ${n.id===S.sel?'sel':''}" data-node="${n.id}" style="left:${n.x}px;top:${n.y}px">
+    return `<div class="node ${n.kind} ${n.id===S.sel?'sel':''} ${pb?'nprob '+pb.sev:''}" data-node="${n.id}" style="left:${n.x}px;top:${n.y}px">
+      ${pb?`<span class="nbadge ${pb.sev}">!</span>`:''}
       ${n.count?`<span class="ncount">${n.count}</span>`:''}
       <div class="nh"><span class="nico">${n.ico}</span><span class="nk">${n.kind==='src'?'Source':n.kind==='dlq'?'Dead-letter':n.kind}</span><span class="nst ${st}" data-st></span></div>
       <div class="nb"><div class="nnm">${n.name}</div><div class="nmeta">${n.meta}</div></div>
@@ -515,9 +544,16 @@ function renderInspector(){
     const mrows=MP.map(m=>`<div class="maprow ${m[2]?'':'un'}"><span class="mf">${m[0]}</span><span class="ma">←</span><span class="mt">${m[1]}</span></div>`).join('');
     body=`<div class="k" style="margin-bottom:4px">Field mapping <span class="muted">· available data → target</span></div>${mrows}<div style="margin-top:9px">${un?`<span class="btn pri" data-cmd="automap">✨ Auto-map ${un} remaining</span>`:`<span class="chip ok">all ${MP.length} fields mapped</span>`}</div>`;
   } else {
-    const rows=(CFG[n.id]||[['Type',n.type]]).map(([k,v])=>`<div class="fld"><div class="k">${k}</div><div class="v ${/[=·{]/.test(v)?'mono':''}">${esc(v)}</div></div>`).join('');
+    const wtag=(k,v)=>/^connection$/i.test(k)?'listbox':/password|secret/i.test(k)?'secret':/query|expr|sql|rule/i.test(k)?'code':(/^[\d., ]+$/.test(v)?'number':'text');
+    const widget=(k,v)=>{
+      if(/^connection$/i.test(k)) return `<div class="slot"><span class="linkchip conn">🔗 ${esc(v.replace(/ ▾$/,''))}</span></div>`;
+      if(/password|secret/i.test(k)||/\$env|\$property/i.test(v)) return `<div class="slot"><span class="linkchip secret">🔒 ${esc(v)}</span></div>`;
+      return `<div class="v ${/[=·{]/.test(v)?'mono':''}">${esc(v)}</div>`;
+    };
+    const rows=(CFG[n.id]||[['Type',n.type]]).map(([k,v])=>`<div class="fld"><div class="k">${k}<span class="wt">${wtag(k,v)}</span></div>${widget(k,v)}</div>`).join('');
+    const actions = (n.kind==='src'||n.kind==='sink')?`<div style="display:flex;gap:6px;margin:2px 0 9px"><span class="btn" data-cmd="readschema">↻ Read schema</span><span class="btn" data-cmd="testconn">◉ Test</span></div>`:'';
     const ctx = n.type==='window'?`<div class="addrow" data-doc="windowing">⧖ Configure windowing →</div>`:n.kind==='dlq'?`<div class="addrow" data-doc="recover">↩ Open recovery / DLQ →</div>`:n.kind==='src'?`<div class="addrow" data-doc="incremental">⇧ Incremental load →</div>`:`<div class="addrow" data-cmd="addfield">＋ Add field</div>`;
-    body=rows+ctx;
+    body=rows+actions+ctx;
   }
   return `<div class="insp"><div class="ih"><span class="ik" style="color:${kc[1]};background:${kc[2]}">${kc[0]}</span><span class="inm">${esc(n.name)}</span><span class="itools"><span class="itool" data-cmd="inspcollapse" title="Collapse inspector">»</span><span class="itool" data-cmd="deselect" title="Close">✕</span></span></div>
     <div class="itabs">${tb}</div>
@@ -528,7 +564,8 @@ function renderPanel(){
   if(isDoc()||!S.tabs.length){ el.classList.add('hidden'); el.innerHTML=''; return; } el.classList.remove('hidden');
   el.classList.toggle('collapsed', S.panelOpen===false);
   el.classList.toggle('max', !!S.panelMax);
-  const tabs=[['preview','Preview'],['problems','Problems'],['output','Output'],['tests','Tests']];
+  const pc=probsFor().length;
+  const tabs=[['preview','Preview'],['problems','Problems'+(pc?` <b style="color:var(--err)">${pc}</b>`:'')],['output','Output'],['tests','Tests']];
   const th=tabs.map(([k,l])=>`<div class="ptab ${S.panel===k?'on':''}" data-panel="${k}">${l}</div>`).join('');
   el.innerHTML=`<div class="ptabs">${th}<span class="pt-tools"><span class="ptool" data-cmd="panelmax" title="Toggle max height">⤢</span><span class="ptool" data-cmd="paneltoggle" title="${S.panelOpen===false?'Expand':'Collapse'} panel">${S.panelOpen===false?'⌃':'⌄'}</span></span></div><div class="pbody" id="pbody">${panelBody()}</div>`;
 }
@@ -543,7 +580,11 @@ function panelBody(){
     else body=`<table class="grid"><tr><th>Column</th><th>Null</th><th>Distinct</th><th>Range / top</th></tr>${d.profile.map(r=>`<tr><td class="fld0">${r[0]}</td><td class="mono">${r[1]}</td><td class="mono">${r[2]}</td><td class="mono">${r[3]}</td></tr>`).join('')}</table>`;
     return `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><span class="chip run no">sample 104 rows · 38 ms</span></div>${sub}${body}`;
   }
-  if(S.panel==='problems') return `<div class="rlog"><span class="ok">✓ 0 errors · 0 warnings</span> — pipeline valid. Mappings resolve, ports connected, no cycles.</div>`;
+  if(S.panel==='problems'){ const ps=probsFor(); if(!ps.length) return `<div class="rlog"><span class="ok">✓ 0 errors · 0 warnings</span> — pipeline valid. Mappings resolve, ports connected, no cycles.</div>`;
+    const ec=ps.filter(p=>p.sev==='err').length, wc=ps.filter(p=>p.sev==='warn').length;
+    return `<div style="margin-bottom:8px"><span class="chip err" style="color:var(--err)">✗ ${ec} error${ec!==1?'s':''}</span> <span class="chip warn" style="color:var(--warn)">! ${wc} warning${wc!==1?'s':''}</span> <span class="muted" style="margin-left:6px">design-time · blocks Run &amp; build</span></div>`
+      + ps.map(p=>`<div class="prob ${p.sev}" data-node="${p.node}"><span class="pi">${p.sev==='err'?'✗':'!'}</span><span class="pl"><b>${esc(PIPE().nodes.find(n=>n.id===p.node)?.name||p.node)}</b> — ${p.msg}</span><span class="pw">${p.loc}</span></div>`).join('');
+  }
   if(S.panel==='output') return `<div class="rlog" id="runlog"><span class="muted">Press ▶ Run to execute the pipeline (mock engine).</span></div>`;
   if(S.panel==='tests') return testsBody();
 }
@@ -595,7 +636,7 @@ function runCmd(c){
   if(c==='new'){ openTemplates(); return; }
   if(c==='preview'){ if(isDoc())openPipe(lastPipe()); S.panel='preview'; renderPanel(); return; }
   if(c==='automap'){ S.mapped=true; renderMain(); toast('✨ Mapped 2 fields by name + type'); return; }
-  const M={resume:'↻ Resuming from checkpoint 09:15:04Z — no data loss',replay:'↩ Replaying 18k dead-lettered rows into the pipeline',dobuild:'▲ Build started — compiling pipeline → single binary',aiapply:'✓ Applied — Filter node inserted before Router',aiask:'Impact: drops ~1 row (ORD-000002) in the sample; downstream counts update automatically.',expandgroup:'Extracted 3 nodes into sub-pipeline “standardise-customer”',testconn:'✓ Connection succeeded',save:'✓ Saved'};
+  const M={resume:'↻ Resuming from checkpoint 09:15:04Z — no data loss',replay:'↩ Replaying 18k dead-lettered rows into the pipeline',dobuild:'▲ Build started — compiling pipeline → single binary',aiapply:'✓ Applied — Filter node inserted before Router',aiask:'Impact: drops ~1 row (ORD-000002) in the sample; downstream counts update automatically.',expandgroup:'Extracted 3 nodes into sub-pipeline “standardise-customer”',testconn:'✓ Connection succeeded',readschema:'↻ Read 12 columns from source — schema updated',save:'✓ Saved'};
   if(M[c]){ toast(M[c]); return; }
   if(typeof DOCS!=='undefined' && DOCS[c]) return openDoc(c);
   toast(c);
@@ -642,6 +683,8 @@ document.addEventListener('click',e=>{ if(e.target.closest('[data-cmd="fixtests"
 /* command palette */
 const COMMANDS=[
   {ico:'＋',label:'Data Pipeline: New Pipeline from Template…',cmd:'new',kb:''},
+  {ico:'◆',label:'Data Pipeline: App Properties',cmd:'appprops',kb:''},
+  {ico:'▤',label:'Data Pipeline: Schemas & Contracts',cmd:'contracts',kb:''},
   {ico:'▶',label:'Data Pipeline: Run Pipeline',cmd:'run',kb:'⌘R'},
   {ico:'▷',label:'Data Pipeline: Run Tests',cmd:'runtests',kb:''},
   {ico:'✓',label:'Data Pipeline: Validate',cmd:'validate',kb:''},
@@ -719,6 +762,40 @@ checkpoint: { store: file, intervalMs: 10000 }
 error:      { onViolation: route, maxErrors: 0 }
 parallelism: 8</div></div>
     <p class="muted">Resolved from defaults + the active environment. (Definition.Mode · CheckpointDef · PerformanceDef)</p>`)},
+
+  appprops:{title:'App properties',icon:'◆',render:()=>H('App properties','The shared registry every field binds to — $property["…"], resolved per environment.',
+    `<div style="margin-bottom:10px"><span class="btn pri">＋ New property</span> <span class="muted" style="margin-left:6px">typed · grouped · env-overridable</span></div>
+     <table class="grid reg"><tr><th>Property</th><th>Type</th><th>Default</th><th>Used by</th></tr>
+     <tr><td class="grp" colspan="4">Pipeline · user-defined</td></tr>
+     <tr><td class="fld0">batch.size</td><td class="mono">number</td><td class="mono">10000</td><td class="muted">2 fields</td></tr>
+     <tr><td class="fld0">db.schema</td><td class="mono">string</td><td class="mono">public</td><td class="muted">3 fields</td></tr>
+     <tr><td class="fld0">dq.threshold</td><td class="mono">number</td><td class="mono">0.98</td><td class="muted">1 field</td></tr>
+     <tr><td class="grp" colspan="4">Connections · auto-managed</td></tr>
+     <tr><td class="fld0">CONNECTION.pg-warehouse.host</td><td class="mono">string</td><td class="mono">warehouse.internal</td><td class="muted">bound</td></tr>
+     <tr><td class="fld0">CONNECTION.pg-warehouse.password</td><td class="mono">password</td><td><span class="linkchip secret">🔒 ••••••</span></td><td class="muted">secret</td></tr>
+     <tr><td class="fld0">CONNECTION.kafka-prod.brokers</td><td class="mono">string</td><td class="mono">3 brokers</td><td class="muted">bound</td></tr>
+     </table>
+     <p class="muted" style="margin-top:10px">Connections auto-project their fields into properties; env vars override at runtime (FLOGO_APP_PROPS_ENV). (app.appProperties · internal/appprops)</p>`)},
+
+  contracts:{title:'Schemas & contracts',icon:'▤',render:()=>H('Shared schemas & data contracts','Define a schema once, link it everywhere, version it — with drift detection.',
+    `<div class="g2">
+      <div class="card"><h4>Shared schema library</h4>
+        <div class="rcard"><b>▤ orders</b> <span class="cver">v3</span><div class="muted" style="font-family:var(--mono);font-size:11px;margin-top:3px">order_id · amount · region · … 12 cols</div><div class="muted" style="font-size:11px;margin-top:3px">🔗 linked by 4 fields · 2 pipelines</div></div>
+        <div class="rcard"><b>▤ customer</b> <span class="cver">v2</span><div class="muted" style="font-family:var(--mono);font-size:11px;margin-top:3px">id · name · tier · segment</div><div class="muted" style="font-size:11px;margin-top:3px">🔗 linked by 3 fields</div></div>
+        <div class="addrow">＋ New shared schema · or ✨ infer</div></div>
+      <div class="card"><h4>Contract · orders <span class="cver">v3</span> <span class="chip warn" style="color:var(--warn);margin-left:6px">⚠ drift on region</span></h4>
+        <table class="grid"><tr><th>Column</th><th>Type</th><th>Rule</th></tr>
+        <tr><td class="fld0">order_id</td><td class="mono">string</td><td class="mono">not null · unique</td></tr>
+        <tr><td class="fld0">amount</td><td class="mono">decimal(2)</td><td class="mono">≥ 0</td></tr>
+        <tr><td class="fld0">region</td><td class="mono">string</td><td class="mono">in [EU,US,APAC] · <span style="color:var(--warn)">+LATAM</span></td></tr></table>
+        <p class="muted" style="margin-top:8px">Bump to v4 to accept LATAM, or route violators to the DLQ.</p></div>
+    </div>
+    <div class="g3" style="margin-top:10px">
+      <div class="metric"><div class="ml">Shared schemas</div><div class="mv">2</div></div>
+      <div class="metric"><div class="ml">Bound fields</div><div class="mv">7</div></div>
+      <div class="metric"><div class="ml">Drift alerts</div><div class="mv" style="color:var(--warn)">1</div></div>
+    </div>
+    <p class="muted" style="margin-top:10px">Bind by reference (🔗) like properties; promote to a versioned contract (dbt · Databricks DLT); drift = the schemadrift stage as governance. (task.schemaMap · shared-schemas)</p>`)},
 
   environments:{title:'Environments',icon:'⚙',render:()=>{ const rows=[['source.path','./data/orders.csv','s3://stg/orders/','s3://prod/orders/'],['jdbc.url','localhost:5432','pg-stg:5432','warehouse:5432'],['kafka.brokers','localhost:9092','stg-kafka:9092','prod-kafka:9092'],['parallelism','2','4','8'],['batch.size','1,000','5,000','10,000'],['checkpoint.dir','/tmp/ckpt','/mnt/ckpt','/mnt/ckpt']];
     return H('Environments','App properties resolved per environment — promote without changing the pipeline.',
