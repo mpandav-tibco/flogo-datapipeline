@@ -263,6 +263,8 @@
   .linkchip.conn{color:var(--snk);background:var(--snk-bg)}
   .linkchip.secret{color:var(--err);background:var(--err-bg)}
   .linkchip.prop{color:var(--accent);background:var(--accent-soft)}
+  .linkchip.schema{color:#106cc8;background:var(--tf-bg)}
+  .rcard .rh{display:flex;align-items:center;gap:6px}
   .prob{display:flex;align-items:flex-start;gap:8px;padding:7px 6px;border-bottom:1px solid #eef0f2;font-size:12px;cursor:pointer}
   .prob:hover{background:#f6f8fa}
   .prob .pi{width:14px;flex:none;font-weight:700;text-align:center}
@@ -399,6 +401,22 @@ const APPPROPS = [
 ];
 const propByName=(nm)=>APPPROPS.find(p=>p.name===nm);
 const propVal=(p)=>p?p[S.env]:'';
+// per-node OUTPUT schema (a node's input schema = its upstream node's output), validate rules, shared schemas
+const NSCHEMA = {
+  src_orders:[['order_id','string'],['cust_id','string'],['qty','int'],['price','decimal'],['region','string']],
+  src_cust:[['id','string'],['name','string'],['tier','string'],['segment','string']],
+  join:[['order_id','string'],['cust_id','string'],['qty','int'],['price','decimal'],['region','string'],['name','string'],['tier','string'],['segment','string']],
+  validate:[['order_id','string'],['net_amount','decimal(12,2)'],['region','string'],['full_name','string'],['loaded_at','datetime']],
+  router:[['order_id','string'],['net_amount','decimal(12,2)'],['region','string'],['full_name','string']],
+};
+const VRULES = {
+  validate:[['amount','not null'],['amount','≥ 0'],['status','in [PENDING, SHIPPED, DELIVERED]'],['region','in [EU, US, APAC]'],['order_id','matches ^ORD-\\d+$']],
+  val:[['amount','not null'],['amount','decimal(2)'],['status','in […]'],['order_id','unique'],['region','not null']],
+};
+const SHSCHEMAS = [{name:'orders',ver:'v3'},{name:'customer',ver:'v2'}];
+const schemaOf=(nid)=> NSCHEMA[nid] || [['order_id','string'],['net_amount','decimal(12,2)'],['region','string']];
+function upOf(nid,port){ const p=PIPE(), e=(p.edges||[]).find(x=>x[2]===nid&&x[3]===port); return e?p.nodes.find(n=>n.id===e[0]):null; }
+function downOf(nid,port){ const p=PIPE(); return (p.edges||[]).filter(x=>x[0]===nid&&x[1]===port).map(x=>({node:p.nodes.find(n=>n.id===x[2]),err:x[4]})); }
 function pickerHTML(k,v,lk){
   const items=APPPROPS.map(p=>`<div class="pi" data-pick="${lk}~~${p.name}"><span class="pt">${p.name}</span><span class="pty">${p.type} · ${S.env}=${esc(String(p[S.env]))}</span></div>`).join('');
   return `<div class="picker" style="margin-top:7px"><div class="ph">🔗 Link “${esc(k)}” to an app property</div>${items}<div class="pi new" data-pick="${lk}~~__new">＋ New property from “${esc(String(v)).slice(0,16)}”…</div></div>`;
@@ -444,7 +462,7 @@ const CODE = {
 };
 
 /* ============================ STATE ============================ */
-const S = { open:'enrich-route-load', tabs:['enrich-route-load'], sel:'validate', view:'design', panel:'preview', pv:'output', abar:'pipeline', running:false, itab:'Config', inspOpen:true, panelOpen:true, panelMax:false, sideOpen:true, grpc:{}, env:'dev', links:{}, linking:null };
+const S = { open:'enrich-route-load', tabs:['enrich-route-load'], sel:'validate', view:'design', panel:'preview', pv:'output', abar:'pipeline', running:false, itab:'Config', inspOpen:true, panelOpen:true, panelMax:false, sideOpen:true, grpc:{}, env:'dev', links:{}, linking:null, schemaLinks:{validate:'orders'}, schlinking:null };
 const PIPE = ()=>DB.pipelines[S.open]||DB.pipelines['enrich-route-load'];
 const isDoc = ()=> typeof S.open==='string' && S.open[0]==='@';
 const DOCKEY = ()=> S.open.slice(1);
@@ -556,13 +574,19 @@ function renderInspector(){
   if(!n) return '';
   if(S.inspOpen===false){ return `<div class="insp rail"><span class="railbtn" data-cmd="inspopen" title="Expand inspector">‹ ${esc(n.name)}</span></div>`; }
   const kc={src:['Source','var(--src)','var(--src-bg)'],transform:['Transform','var(--tf)','var(--tf-bg)'],control:['Control','var(--ctrl)','var(--ctrl-bg)'],sink:['Sink','var(--snk)','var(--snk-bg)'],dlq:['Error','var(--dlq)','var(--dlq-bg)']}[n.kind];
-  const tb=['Config','Ports','Schema','Test'].map(t=>`<span class="${S.itab===t?'on':''}" data-itab="${t}">${t}</span>`).join('');
+  const tb=['Config','I/O','Schema','Test'].map(t=>`<span class="${S.itab===t?'on':''}" data-itab="${t}">${t}</span>`).join('');
   let body;
-  if(S.itab==='Ports'){
-    const mk=(arr,dir)=>(arr||[]).map(p=>`<div class="rcard"><b>${p}</b> <span class="muted">· ${dir==='in'?'input':'output'} port${p==='reject'?' → DLQ':''}</span></div>`).join('')||`<div class="muted">none</div>`;
-    body=`<div class="k" style="margin-bottom:4px">Inputs</div>${mk(n.in,'in')}<div class="k" style="margin:10px 0 4px">Outputs</div>${mk(n.out,'out')}`;
+  if(S.itab==='I/O'){
+    const inRows=(n.in||[]).map(port=>{ const up=upOf(n.id,port); const sch=up?schemaOf(up.id):[]; return `<div class="rcard"><div class="rh" style="margin:0;gap:6px"><b>${port}</b><span class="muted" style="font-weight:400;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${up?'← '+esc(up.name):'<span style="color:var(--err)">← unconnected</span>'}</span><span class="muted" style="flex:none">${sch.length} cols</span></div>${up?`<div class="muted" style="font-family:var(--mono);font-size:10.5px;margin-top:4px">${sch.slice(0,4).map(c=>c[0]).join(' · ')}${sch.length>4?' …':''}</div>`:''}</div>`; }).join('')||`<div class="muted">No inputs — this is a source.</div>`;
+    const outRows=(n.out||[]).map(port=>{ const ds=downOf(n.id,port); const sch=schemaOf(n.id); const err=ds.some(d=>d.err); const tgt=ds.length?ds.map(d=>esc(d.node.name)).join(', '):`<span style="color:var(--warn)">unwired</span>`; return `<div class="rcard"><div class="rh" style="margin:0;gap:6px"><b style="${err?'color:var(--err)':''}">${port}</b><span class="muted" style="font-weight:400;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">→ ${tgt}${err?' <span style="color:var(--err)">· error</span>':''}</span><span class="muted" style="flex:none">${sch.length} cols · ${n.count||'—'}</span></div></div>`; }).join('')||`<div class="muted">No outputs — this is a sink.</div>`;
+    body=`<div class="k" style="margin-bottom:5px">Inputs <span class="muted" style="font-weight:400">· what feeds this node</span></div>${inRows}<div class="k" style="margin:13px 0 5px">Outputs <span class="muted" style="font-weight:400">· where its rows go</span></div>${outRows}<p class="muted" style="font-size:11px;margin-top:11px">An input / output carries a typed schema from the node it's wired to — not a network port.</p>`;
   } else if(S.itab==='Schema'){
-    body=`<table class="grid"><tr><th>Field</th><th>Type</th></tr><tr><td class="fld0">order_id</td><td class="mono">string</td></tr><tr><td class="fld0">net_amount</td><td class="mono">decimal(12,2)</td></tr><tr><td class="fld0">region</td><td class="mono">string</td></tr></table><div class="addrow" style="margin-top:8px" data-doc="schema">Open schema editor →</div>`;
+    const inp=(n.in&&n.in.length)?upOf(n.id,n.in[0]):null; const inSch=inp?schemaOf(inp.id):null; const outSch=schemaOf(n.id);
+    const linked=S.schemaLinks[n.id], ls=linked?SHSCHEMAS.find(s=>s.name===linked):null;
+    const tbl=(rows)=>`<table class="grid"><tr><th>Field</th><th>Type</th></tr>${rows.map(r=>`<tr><td class="fld0">${r[0]}</td><td class="mono">${r[1]}</td></tr>`).join('')}</table>`;
+    const linkRow=linked?`<div class="slot" style="margin-bottom:8px"><span class="linkchip schema">🔗 ${esc(linked)} ${ls?ls.ver:''}</span><span class="muted" style="margin-left:auto;font-size:11px">shared contract</span><span data-schunlink="${n.id}" style="cursor:pointer;color:var(--mute);margin-left:8px" title="unlink">✕</span></div>`:`<div style="margin-bottom:8px"><span class="linkbtn" data-schlink="${n.id}" style="width:auto;padding:0 10px;height:24px">🔗 Link a shared schema</span></div>`;
+    const pick=S.schlinking===n.id?`<div class="picker" style="margin-bottom:8px"><div class="ph">🔗 Link output to a shared schema (contract)</div>${SHSCHEMAS.map(s=>`<div class="pi" data-schpick="${n.id}~~${s.name}"><span class="pt">${s.name}</span><span class="pty">${s.ver} · contract</span></div>`).join('')}</div>`:'';
+    body=`${inSch?`<div class="k" style="margin-bottom:5px">Input schema <span class="muted" style="font-weight:400">· from ${esc(inp.name)}</span></div>${tbl(inSch)}`:''}<div class="k" style="margin:13px 0 5px">Output schema</div>${linkRow}${pick}${tbl(outSch)}<div class="addrow" style="margin-top:8px" data-doc="contracts">Open shared schemas & contracts →</div>`;
   } else if(S.itab==='Test'){
     body=`<div class="rcard">assert · output rows &gt; 0</div><div class="rcard">assert · no nulls in order_id</div><span class="btn run" data-cmd="runtests" style="margin-top:6px">▷ Run node tests</span>`;
   } else if(['mapper','map','cast'].includes(n.type)){
@@ -570,6 +594,12 @@ function renderInspector(){
     const un=MP.filter(m=>!m[2]).length;
     const mrows=MP.map(m=>`<div class="maprow ${m[2]?'':'un'}"><span class="mf">${m[0]}</span><span class="ma">←</span><span class="mt">${m[1]}</span></div>`).join('');
     body=`<div class="k" style="margin-bottom:4px">Field mapping <span class="muted">· available data → target</span></div>${mrows}<div style="margin-top:9px">${un?`<span class="btn pri" data-cmd="automap">✨ Auto-map ${un} remaining</span>`:`<span class="chip ok">all ${MP.length} fields mapped</span>`}</div>`;
+  } else if(n.type==='validate'){
+    const rules=VRULES[n.id]||[['field','condition']];
+    const rr=rules.map(r=>`<div class="rcard"><div class="rh" style="margin:0"><b>${esc(r[0])}</b><span class="muted" style="margin-left:auto;font-family:var(--mono);font-size:11px">${esc(r[1])}</span></div></div>`).join('');
+    body=`<div class="k" style="margin-bottom:5px">Data-quality rules <span class="muted" style="font-weight:400">· ${rules.length} · field → condition</span></div>${rr}<div class="addrow" data-cmd="addfield">＋ Add rule</div>
+      <div class="k" style="margin:13px 0 5px">On violation</div><div class="v" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">Route failing rows to <span class="linkchip" style="color:var(--err);background:var(--err-bg)">⚠ reject → orders_dlq</span></div>
+      <div class="addrow" data-doc="recover" style="margin-top:8px">↩ Open recovery / DLQ →</div>`;
   } else {
     const isRef=(v)=>/\$env|\$property|CONNECTION\./i.test(v);
     const isPwd=(k)=>/password|secret|token|passphrase/i.test(k);
@@ -779,7 +809,7 @@ function openRun(t){
 }
 function showModal(title,html){ document.getElementById('scrim').classList.add('on'); const m=document.getElementById('modal'); m.classList.add('on'); m.innerHTML=`<div class="mh">${title}<span class="x" data-cmd="closemodal">✕</span></div><div class="mc">${html}</div>`; }
 document.addEventListener('click',e=>{ const tm=e.target.closest('[data-tmpl]'); if(tm){ closeOverlays(); toast('Scaffolded pipeline from template — opening…'); } const g=e.target.closest('[data-goto]'); if(g){ closeOverlays(); const v=g.getAttribute('data-goto'); if(v[0]==='@')openDoc(v.slice(1)); else openPipe(v); }});
-document.addEventListener('click',e=>{ const it=e.target.closest('[data-itab]'); if(it){ S.itab=it.getAttribute('data-itab'); renderMain(); return; } const dc=e.target.closest('[data-doc]'); if(dc){ openDoc(dc.getAttribute('data-doc')); return; } const rv=e.target.closest('[data-reveal]'); if(rv){ const v=rv.parentElement.querySelector('.pwv'); if(v){ const sh=v.dataset.shown==='1'; v.textContent=sh?'••••••••':v.dataset.val; v.dataset.shown=sh?'0':'1'; rv.textContent=sh?'👁':'🙈'; } return; } const lb=e.target.closest('[data-link]'); if(lb){ const lk=lb.getAttribute('data-link'); S.linking=S.linking===lk?null:lk; renderMain(); return; } const pk=e.target.closest('[data-pick]'); if(pk){ const raw=pk.getAttribute('data-pick'), ix=raw.lastIndexOf('~~'), lk=raw.slice(0,ix), name=raw.slice(ix+2); if(name==='__new'){ const nm='new.property'; if(!propByName(nm))APPPROPS.push({name:nm,type:'string',dev:'—',stg:'—',prod:'—'}); S.links[lk]=nm; toast('Created & linked $property["'+nm+'"]'); } else { S.links[lk]=name; toast('Linked to $property["'+name+'"]'); } S.linking=null; renderMain(); return; } const ul=e.target.closest('[data-unlink]'); if(ul){ delete S.links[ul.getAttribute('data-unlink')]; S.linking=null; renderMain(); toast('Unlinked — back to a literal value'); return; } const ev=e.target.closest('[data-env]'); if(ev){ S.env=ev.getAttribute('data-env'); render(); return; }});
+document.addEventListener('click',e=>{ const it=e.target.closest('[data-itab]'); if(it){ S.itab=it.getAttribute('data-itab'); renderMain(); return; } const dc=e.target.closest('[data-doc]'); if(dc){ openDoc(dc.getAttribute('data-doc')); return; } const rv=e.target.closest('[data-reveal]'); if(rv){ const v=rv.parentElement.querySelector('.pwv'); if(v){ const sh=v.dataset.shown==='1'; v.textContent=sh?'••••••••':v.dataset.val; v.dataset.shown=sh?'0':'1'; rv.textContent=sh?'👁':'🙈'; } return; } const lb=e.target.closest('[data-link]'); if(lb){ const lk=lb.getAttribute('data-link'); S.linking=S.linking===lk?null:lk; renderMain(); return; } const pk=e.target.closest('[data-pick]'); if(pk){ const raw=pk.getAttribute('data-pick'), ix=raw.lastIndexOf('~~'), lk=raw.slice(0,ix), name=raw.slice(ix+2); if(name==='__new'){ const nm='new.property'; if(!propByName(nm))APPPROPS.push({name:nm,type:'string',dev:'—',stg:'—',prod:'—'}); S.links[lk]=nm; toast('Created & linked $property["'+nm+'"]'); } else { S.links[lk]=name; toast('Linked to $property["'+name+'"]'); } S.linking=null; renderMain(); return; } const ul=e.target.closest('[data-unlink]'); if(ul){ delete S.links[ul.getAttribute('data-unlink')]; S.linking=null; renderMain(); toast('Unlinked — back to a literal value'); return; } const ev=e.target.closest('[data-env]'); if(ev){ S.env=ev.getAttribute('data-env'); render(); return; } const sl=e.target.closest('[data-schlink]'); if(sl){ const id=sl.getAttribute('data-schlink'); S.schlinking=S.schlinking===id?null:id; renderMain(); return; } const sp=e.target.closest('[data-schpick]'); if(sp){ const raw=sp.getAttribute('data-schpick'), ix=raw.lastIndexOf('~~'); S.schemaLinks[raw.slice(0,ix)]=raw.slice(ix+2); S.schlinking=null; renderMain(); toast('Linked to shared schema “'+raw.slice(ix+2)+'”'); return; } const su=e.target.closest('[data-schunlink]'); if(su){ delete S.schemaLinks[su.getAttribute('data-schunlink')]; renderMain(); toast('Unlinked shared schema'); return; }});
 
 /* ============================ DOC VIEWS ============================ */
 const H=(t,s,b)=>`<div class="docview"><div class="dtitle">${t}</div><div class="dsub">${s}</div>${b}</div>`;
