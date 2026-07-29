@@ -238,6 +238,22 @@
   .maprow .ma{color:var(--tf);font-weight:700}
   .maprow .mt{font-family:var(--mono);font-weight:600;color:var(--ink)}
   .maprow.un .mt{color:var(--mute);font-weight:400}
+  /* usability: collapse / rails / panel tools */
+  .grp{-webkit-user-select:none;user-select:none}
+  .grp .tw{display:inline-block;width:10px}
+  .side .sh{-webkit-user-select:none;user-select:none}
+  .insp.rail{width:34px;min-width:34px;align-items:stretch;padding:0}
+  .railbtn{writing-mode:vertical-rl;cursor:pointer;color:var(--body);font-size:11px;font-weight:700;letter-spacing:.03em;display:flex;align-items:center;justify-content:center;gap:6px;width:100%}
+  .railbtn:hover{color:var(--accent);background:#f4f6f8}
+  .insp .itools{margin-left:auto;display:flex;align-items:center;gap:1px}
+  .insp .itool{color:var(--mute);cursor:pointer;font-size:13px;padding:2px 6px;border-radius:5px;line-height:1}
+  .insp .itool:hover{background:#eef0f2;color:var(--ink)}
+  .pt-tools{margin-left:auto;display:flex;align-items:center;gap:1px;padding-right:4px}
+  .pt-tools .ptool{padding:4px 7px;color:var(--mute);cursor:pointer;border-radius:5px;font-size:13px;line-height:1}
+  .pt-tools .ptool:hover{background:#eef0f2;color:var(--ink)}
+  .panel.collapsed{height:auto}
+  .panel.collapsed .pbody{display:none}
+  .panel.max{height:58vh}
 </style>
 </head>
 <body>
@@ -375,7 +391,7 @@ const CODE = {
 };
 
 /* ============================ STATE ============================ */
-const S = { open:'enrich-route-load', tabs:['enrich-route-load'], sel:'validate', view:'design', panel:'preview', pv:'output', abar:'pipeline', running:false, itab:'Config' };
+const S = { open:'enrich-route-load', tabs:['enrich-route-load'], sel:'validate', view:'design', panel:'preview', pv:'output', abar:'pipeline', running:false, itab:'Config', inspOpen:true, panelOpen:true, panelMax:false, sideOpen:true, grpc:{} };
 const PIPE = ()=>DB.pipelines[S.open]||DB.pipelines['enrich-route-load'];
 const isDoc = ()=> typeof S.open==='string' && S.open[0]==='@';
 const DOCKEY = ()=> S.open.slice(1);
@@ -384,26 +400,28 @@ function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').repl
 function toast(m){const t=document.getElementById('toast');t.textContent=m;t.classList.add('on');clearTimeout(t._h);t._h=setTimeout(()=>t.classList.remove('on'),2200);}
 
 /* ============================ RENDER ============================ */
-function render(){ clearInterval(S._striv); renderSide(); renderTabs(); renderToolbar(); renderMain(); renderPanel(); renderStatus(); }
+function render(){ clearInterval(S._striv); applyChrome(); renderSide(); renderTabs(); renderToolbar(); renderMain(); renderPanel(); renderStatus(); }
+function applyChrome(){ const b=document.querySelector('.body'); if(b)b.style.gridTemplateColumns=S.sideOpen===false?'48px 0 1fr':'48px 250px 1fr'; }
 
 function renderSide(){
-  const el=document.getElementById('side');
+  const el=document.getElementById('side'); const gc=S.grpc||{};
   const pipes=Object.values(DB.pipelines).map(p=>
     `<div class="ti ${p.id===S.open?'on':''}" data-open="${p.id}"><span class="tc">◈</span>${p.id}<span class="sub">${p.shape==='unbounded'?'stream':'batch'}</span></div>`).join('');
   const conns=DB.connections.map(c=>`<div class="ti" data-conn="${c.id}"><span class="tc" style="color:${c.color}">${c.icon}</span>${c.id}<span class="dot" style="background:var(--ok);margin-left:auto"></span></div>`).join('');
   const runs=DB.runs.map(r=>`<div class="ti" data-run="${r.t}"><span class="tc"><span class="dot" style="background:${r.status==='completed'?'#4ec36b':'#e0a63a'}"></span></span>${r.t} · ${r.status}<span class="sub">${r.rows}</span></div>`).join('');
-  el.innerHTML=`<div class="sh">Data Pipeline <span>⋯</span></div>
-    <div class="grp" data-tw><span class="tw">▾</span>Pipelines <span style="margin-left:auto;color:var(--tibco);cursor:pointer" data-cmd="new">＋</span></div>${pipes}
-    <div class="grp"><span class="tw">▾</span>Connections</div>${conns}
-    <div class="grp"><span class="tw">▾</span>Runs</div>${runs}
-    <div class="grp"><span class="tw">▾</span>Operate &amp; Govern</div>
-    <div class="ti" data-doc="ops"><span class="tc">📊</span>Operations</div>
+  const gov=`<div class="ti" data-doc="ops"><span class="tc">📊</span>Operations</div>
     <div class="ti" data-doc="lineage"><span class="tc">⧉</span>Lineage &amp; impact</div>
     <div class="ti" data-doc="security"><span class="tc">🛡</span>Security</div>
     <div class="ti" data-doc="environments"><span class="tc">⚙</span>Environments</div>
     <div class="ti" data-doc="schedule"><span class="tc">⏰</span>Schedule</div>
     <div class="ti" data-doc="recover"><span class="tc">↩</span>Recovery &amp; DLQ</div>
     <div class="ti" data-doc="deploy"><span class="tc">▲</span>Build &amp; deploy</div>`;
+  const grp=(name,items,extra='')=>`<div class="grp" data-grp="${name}"><span class="tw">${gc[name]?'▸':'▾'}</span>${name}${extra}</div>${gc[name]?'':items}`;
+  el.innerHTML=`<div class="sh">Data Pipeline <span>⋯</span></div>`
+    + grp('Pipelines', pipes, `<span style="margin-left:auto;color:var(--tibco);cursor:pointer" data-cmd="new">＋</span>`)
+    + grp('Connections', conns)
+    + grp('Runs', runs)
+    + grp('Operate & Govern', gov);
 }
 function renderTabs(){
   document.getElementById('etabs').innerHTML=S.tabs.map(t=>{
@@ -436,7 +454,7 @@ function renderMain(){
     el.innerHTML=`<div class="codeview">${esc(CODE[S.open]||JSON.stringify({name:p.id,mode:p.mode,nodes:p.nodes.length},null,2))}</div>`;
     return;
   }
-  el.style.gridTemplateColumns='172px 1fr 290px';
+  el.style.gridTemplateColumns=`172px 1fr ${!S.sel?'0px':(S.inspOpen===false?'34px':'290px')}`;
   // palette
   const pal=`<div class="palette">
     <div class="psearch">⌕ Search components… <span style="float:right;font-family:var(--mono)">⌘K</span></div>
@@ -477,8 +495,10 @@ function renderMain(){
   el.innerHTML=pal+canvas+renderInspector();
 }
 function renderInspector(){
+  if(!S.sel) return '';
   const n=PIPE().nodes.find(x=>x.id===S.sel);
-  if(!n) return `<div class="insp"><div class="empty">Select a node on the canvas to open its configuration.</div></div>`;
+  if(!n) return '';
+  if(S.inspOpen===false){ return `<div class="insp rail"><span class="railbtn" data-cmd="inspopen" title="Expand inspector">‹ ${esc(n.name)}</span></div>`; }
   const kc={src:['Source','var(--src)','var(--src-bg)'],transform:['Transform','var(--tf)','var(--tf-bg)'],control:['Control','var(--ctrl)','var(--ctrl-bg)'],sink:['Sink','var(--snk)','var(--snk-bg)'],dlq:['Error','var(--dlq)','var(--dlq-bg)']}[n.kind];
   const tb=['Config','Ports','Schema','Test'].map(t=>`<span class="${S.itab===t?'on':''}" data-itab="${t}">${t}</span>`).join('');
   let body;
@@ -496,19 +516,21 @@ function renderInspector(){
     body=`<div class="k" style="margin-bottom:4px">Field mapping <span class="muted">· available data → target</span></div>${mrows}<div style="margin-top:9px">${un?`<span class="btn pri" data-cmd="automap">✨ Auto-map ${un} remaining</span>`:`<span class="chip ok">all ${MP.length} fields mapped</span>`}</div>`;
   } else {
     const rows=(CFG[n.id]||[['Type',n.type]]).map(([k,v])=>`<div class="fld"><div class="k">${k}</div><div class="v ${/[=·{]/.test(v)?'mono':''}">${esc(v)}</div></div>`).join('');
-    const ctx = n.type==='window'?`<div class="addrow" data-doc="windowing">⧖ Configure windowing →</div>`:n.kind==='dlq'?`<div class="addrow" data-doc="recover">↩ Open recovery / DLQ →</div>`:n.kind==='src'?`<div class="addrow" data-doc="incremental">⇧ Incremental load →</div>`:`<div class="addrow">＋ Add field</div>`;
+    const ctx = n.type==='window'?`<div class="addrow" data-doc="windowing">⧖ Configure windowing →</div>`:n.kind==='dlq'?`<div class="addrow" data-doc="recover">↩ Open recovery / DLQ →</div>`:n.kind==='src'?`<div class="addrow" data-doc="incremental">⇧ Incremental load →</div>`:`<div class="addrow" data-cmd="addfield">＋ Add field</div>`;
     body=rows+ctx;
   }
-  return `<div class="insp"><div class="ih"><span class="ik" style="color:${kc[1]};background:${kc[2]}">${kc[0]}</span><span class="inm">${n.name}</span><span style="margin-left:auto;color:var(--mute);cursor:pointer" data-cmd="deselect">✕</span></div>
+  return `<div class="insp"><div class="ih"><span class="ik" style="color:${kc[1]};background:${kc[2]}">${kc[0]}</span><span class="inm">${esc(n.name)}</span><span class="itools"><span class="itool" data-cmd="inspcollapse" title="Collapse inspector">»</span><span class="itool" data-cmd="deselect" title="Close">✕</span></span></div>
     <div class="itabs">${tb}</div>
     <div class="ib">${body}</div></div>`;
 }
 function renderPanel(){
   const el=document.getElementById('panel');
   if(isDoc()||!S.tabs.length){ el.classList.add('hidden'); el.innerHTML=''; return; } el.classList.remove('hidden');
+  el.classList.toggle('collapsed', S.panelOpen===false);
+  el.classList.toggle('max', !!S.panelMax);
   const tabs=[['preview','Preview'],['problems','Problems'],['output','Output'],['tests','Tests']];
   const th=tabs.map(([k,l])=>`<div class="ptab ${S.panel===k?'on':''}" data-panel="${k}">${l}</div>`).join('');
-  el.innerHTML=`<div class="ptabs">${th}<span style="margin-left:auto;color:var(--mute);font-size:11px;padding-right:6px">${S.open}</span></div><div class="pbody" id="pbody">${panelBody()}</div>`;
+  el.innerHTML=`<div class="ptabs">${th}<span class="pt-tools"><span class="ptool" data-cmd="panelmax" title="Toggle max height">⤢</span><span class="ptool" data-cmd="paneltoggle" title="${S.panelOpen===false?'Expand':'Collapse'} panel">${S.panelOpen===false?'⌃':'⌄'}</span></span></div><div class="pbody" id="pbody">${panelBody()}</div>`;
 }
 function panelBody(){
   if(S.panel==='preview'){
@@ -543,13 +565,15 @@ document.addEventListener('click',e=>{
   const t=e.target;
   const close=t.closest('[data-close]'); if(close){ e.stopPropagation(); closeTab(close.getAttribute('data-close')); return; }
   const open=t.closest('[data-open]'); if(open){ openPipe(open.getAttribute('data-open')); return; }
-  const node=t.closest('[data-node]'); if(node){ S.sel=node.getAttribute('data-node'); renderMain(); return; }
+  const node=t.closest('[data-node]'); if(node){ S.sel=node.getAttribute('data-node'); S.inspOpen=true; renderMain(); return; }
   const v2=t.closest('[data-view2]'); if(v2){ S.view=v2.getAttribute('data-view2'); renderToolbar(); renderMain(); return; }
-  const pn=t.closest('[data-panel]'); if(pn){ S.panel=pn.getAttribute('data-panel'); renderPanel(); return; }
+  const pn=t.closest('[data-panel]'); if(pn){ const k=pn.getAttribute('data-panel'); if(k===S.panel&&S.panelOpen!==false){ S.panelOpen=false; } else { S.panel=k; S.panelOpen=true; } renderPanel(); return; }
   const pv=t.closest('[data-pv]'); if(pv){ S.pv=pv.getAttribute('data-pv'); renderPanel(); return; }
   const conn=t.closest('[data-conn]'); if(conn){ openConnection(conn.getAttribute('data-conn')); return; }
-  const av=t.closest('.abar .ai'); if(av && av.getAttribute('data-view')){ const v=av.getAttribute('data-view'); const mp={scm:'git',run:'ops',settings:'settings',ai:'ai'}; if(mp[v])return openDoc(mp[v]); if(v==='pipeline')return openPipe(lastPipe()); toast('View: '+v+' — Data Pipeline view active in this prototype'); return; }
+  const run=t.closest('[data-run]'); if(run){ openRun(run.getAttribute('data-run')); return; }
+  const av=t.closest('.abar .ai'); if(av && av.getAttribute('data-view')){ const v=av.getAttribute('data-view'); const mp={scm:'git',run:'ops',settings:'settings',ai:'ai'}; if(mp[v])return openDoc(mp[v]); if(v==='pipeline'){ if(isDoc())return openPipe(lastPipe()); S.sideOpen=!S.sideOpen; applyChrome(); return; } if(v==='explorer'){ S.sideOpen=!S.sideOpen; applyChrome(); return; } toast('View: '+v+' — Data Pipeline view active in this prototype'); return; }
   const cmd=t.closest('[data-cmd]'); if(cmd){ runCmd(cmd.getAttribute('data-cmd')); return; }
+  const grp=t.closest('[data-grp]'); if(grp){ const g=grp.getAttribute('data-grp'); S.grpc[g]=!S.grpc[g]; renderSide(); return; }
   if(t.closest('#cmdopen')){ openPalette(); return; }
   if(t.id==='scrim'){ closeOverlays(); return; }
 });
@@ -558,7 +582,12 @@ function closeTab(id){ S.tabs=S.tabs.filter(x=>x!==id); if(S.open===id)S.open=S.
 function runCmd(c){
   if(c==='run') return doRun();
   if(c==='runtests') return doTests();
-  if(c==='deselect'){ S.sel=null; renderMain(); return; }
+  if(c==='deselect'){ S.sel=null; S.inspOpen=true; renderMain(); return; }
+  if(c==='inspcollapse'){ S.inspOpen=false; renderMain(); return; }
+  if(c==='inspopen'){ S.inspOpen=true; renderMain(); return; }
+  if(c==='paneltoggle'){ S.panelOpen=S.panelOpen===false; renderPanel(); return; }
+  if(c==='panelmax'){ S.panelMax=!S.panelMax; renderPanel(); return; }
+  if(c==='addfield'){ toast('Field editor (mock) — type · default · nullability'); return; }
   if(c==='closemodal'){ closeOverlays(); return; }
   if(c==='validate'){ if(!isDoc()){S.panel='problems';renderPanel();} toast('✓ Validation passed — 0 errors, 0 warnings'); return; }
   if(c==='autolayout'){ toast('Auto-layout applied'); return; }
@@ -641,7 +670,7 @@ function renderCmdList(q){ const list=COMMANDS.filter(c=>c.label.toLowerCase().i
 document.getElementById('cmdinput').addEventListener('input',e=>renderCmdList(e.target.value));
 document.getElementById('cmdinput').addEventListener('keydown',e=>{ if(e.key==='Enter'){ const on=document.querySelector('#cmdlist .ci.on')||document.querySelector('#cmdlist .ci[data-run]'); if(on){const c=on.getAttribute('data-run').replace('__cmd_','');closeOverlays();runCmd(c);} } if(e.key==='Escape')closeOverlays(); });
 document.getElementById('cmdlist').addEventListener('click',e=>{ const ci=e.target.closest('.ci[data-run]'); if(ci){const c=ci.getAttribute('data-run').replace('__cmd_','');closeOverlays();runCmd(c);} });
-document.addEventListener('keydown',e=>{ if((e.metaKey||e.ctrlKey)&&e.shiftKey&&e.key.toLowerCase()==='p'){e.preventDefault();openPalette();} if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='r'){e.preventDefault();doRun();} });
+document.addEventListener('keydown',e=>{ if((e.metaKey||e.ctrlKey)&&e.shiftKey&&e.key.toLowerCase()==='p'){e.preventDefault();openPalette();} if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='r'){e.preventDefault();doRun();} if(e.key==='Escape'){ if(document.getElementById('scrim').classList.contains('on')){closeOverlays();} else if(S.sel){ S.sel=null; S.inspOpen=true; renderMain(); } } });
 function closeOverlays(){ document.getElementById('scrim').classList.remove('on'); document.getElementById('cmdp').classList.remove('on'); document.getElementById('modal').classList.remove('on'); }
 
 /* modals */
@@ -656,8 +685,19 @@ function openConnection(id){
     <div class="fld"><div class="k">Password <span style="color:var(--err)">secret</span></div><div class="v mono">$env:${c.id.toUpperCase().replace(/-/g,'_')}_PASSWORD</div></div>
     <div style="display:flex;gap:8px;margin-top:8px"><span class="btn pri" data-cmd="testconn">Test connection</span><span class="muted" style="align-self:center">used by 4 pipelines</span></div>`);
 }
+function openRun(t){
+  const r=DB.runs.find(x=>x.t===t); if(!r)return;
+  const sc=r.status==='completed'?'ok':r.status==='partial'?'warn':'idle';
+  showModal('▷ Run · '+r.pipe+' · '+r.t, `<div class="g3" style="margin-bottom:10px">
+     <div class="metric"><div class="ml">Status</div><div class="mv" style="font-size:15px"><span class="chip ${sc}">${r.status}</span></div></div>
+     <div class="metric"><div class="ml">Duration</div><div class="mv" style="font-size:18px">${r.dur}</div></div>
+     <div class="metric"><div class="ml">Rows · DQ</div><div class="mv" style="font-size:18px">${r.rows} · ${r.dq}</div></div>
+   </div>
+   <div class="rlog"><span class="t">[${r.t}]</span> <span class="i">run started · ${r.pipe}</span><br><span class="t">[${r.t}]</span> <span class="${sc==='ok'?'ok':'w'}">${r.status==='completed'?'✓ completed — '+r.rows+' rows · '+r.dur:r.status==='partial'?'⚠ partial — some rows routed to DLQ':'idle'}</span></div>
+   <div style="display:flex;gap:8px;margin-top:12px"><span class="btn pri" data-goto="${r.pipe}">Open pipeline</span><span class="btn" data-goto="@ops">View in Operations</span></div>`);
+}
 function showModal(title,html){ document.getElementById('scrim').classList.add('on'); const m=document.getElementById('modal'); m.classList.add('on'); m.innerHTML=`<div class="mh">${title}<span class="x" data-cmd="closemodal">✕</span></div><div class="mc">${html}</div>`; }
-document.addEventListener('click',e=>{ const tm=e.target.closest('[data-tmpl]'); if(tm){ closeOverlays(); toast('Scaffolded pipeline from template — opening…'); }});
+document.addEventListener('click',e=>{ const tm=e.target.closest('[data-tmpl]'); if(tm){ closeOverlays(); toast('Scaffolded pipeline from template — opening…'); } const g=e.target.closest('[data-goto]'); if(g){ closeOverlays(); const v=g.getAttribute('data-goto'); if(v[0]==='@')openDoc(v.slice(1)); else openPipe(v); }});
 document.addEventListener('click',e=>{ const it=e.target.closest('[data-itab]'); if(it){ S.itab=it.getAttribute('data-itab'); renderMain(); return; } const dc=e.target.closest('[data-doc]'); if(dc){ openDoc(dc.getAttribute('data-doc')); }});
 
 /* ============================ DOC VIEWS ============================ */
