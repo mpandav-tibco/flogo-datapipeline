@@ -35,7 +35,12 @@ function post(msg: WebviewToHost) {
 // Make the config dock resizable: applies the remembered height and adds a
 // top-edge drag grip that updates S.inspHeight live (clamped to a sane range).
 function attachResize(insp: HTMLElement): void {
-  insp.style.height = (S.inspHeight || 340) + 'px';
+  // Mappers need more vertical room than a simple form, so give map/mapper nodes
+  // a taller default dock — until the user drags it to a height of their own.
+  const sn = S.pipe && S.pipe.nodes ? S.pipe.nodes.find((n) => n.id === S.selNode) : null;
+  const tall = !!(sn && (sn.type === 'map' || sn.type === 'mapper'));
+  const def = tall ? Math.min(580, Math.round(window.innerHeight * 0.6)) : 340;
+  insp.style.height = (S.inspHeightSet ? (S.inspHeight || def) : def) + 'px';
   const grip = el('div', 'inspgrip');
   grip.title = 'Drag to resize the config panel';
   grip.onmousedown = (e: MouseEvent) => {
@@ -48,6 +53,7 @@ function attachResize(insp: HTMLElement): void {
       const h = Math.max(160, Math.min(Math.round(window.innerHeight * 0.78), startH + (startY - ev.clientY)));
       insp.style.height = h + 'px';
       S.inspHeight = h;
+      S.inspHeightSet = true;
     };
     const up = () => {
       document.removeEventListener('mousemove', move);
@@ -93,6 +99,7 @@ const S = {
   inspTab: 'Config',
   inspClosed: false,
   inspHeight: 340,
+  inspHeightSet: false,
   zoom: 1,
   showBranches: true,
   setOpen: null as Record<string, boolean> | null,
