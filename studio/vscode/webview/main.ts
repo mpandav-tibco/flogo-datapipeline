@@ -2153,8 +2153,25 @@ function renderMapEditor(node: Node): HTMLElement {
     const del = el('span', 'del', '✕');
     del.title = 'Remove field';
     del.onclick = (e) => { e.stopPropagation(); delete fields[outName]; order = order.filter((k) => k !== outName); if (mapSelectedTarget === outName) mapSelectedTarget = null; persist(); renderEditor(); };
-    row.appendChild(dot); row.appendChild(out); row.appendChild(del);
-    row.onclick = (e) => { if (e.target === row || (e.target as HTMLElement).classList.contains('tdot')) { mapSelectedTarget = outName; renderEditor(); } };
+    const top = el('div', 'trowtop');
+    top.appendChild(dot); top.appendChild(out); top.appendChild(del);
+    row.appendChild(top);
+    // Inline mapping preview (like the board-04 aggrid source/expression cell):
+    // a direct $path shows as a green ⇢ chip; a richer expression shows with an
+    // fx marker; an empty mapping shows a dashed hint. Click selects the row.
+    const disp = exprForDisplay(String(fields[outName] || ''));
+    const tmap = el('div', 'tmap');
+    if (!disp.trim()) { tmap.classList.add('empty'); tmap.textContent = 'drag a source field or type ='; }
+    else if (/^\$[\w.]+$/.test(disp)) { tmap.classList.add('direct'); tmap.innerHTML = '<span class="tmi">⇢</span>' + escapeHtml(disp.replace(/^\$/, '')); }
+    else { tmap.classList.add('expr'); tmap.innerHTML = '<span class="tmi fx">fx</span>' + escapeHtml(disp); }
+    tmap.title = String(fields[outName] || '') || 'unmapped';
+    row.appendChild(tmap);
+    row.onclick = (e) => {
+      const t = e.target as HTMLElement;
+      if (t === row || t === top || t === tmap || t.classList.contains('tdot') || t.classList.contains('tmap') || t.classList.contains('tmi')) {
+        mapSelectedTarget = outName; renderEditor();
+      }
+    };
     tgtBody.appendChild(row);
   });
   const addZone = el('div', 'maddzone');

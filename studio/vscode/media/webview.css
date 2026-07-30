@@ -325,7 +325,13 @@ select.v{appearance:none;cursor:pointer;background-image:linear-gradient(45deg,t
 .msrc .mkids{display:none}
 .msrc .mkids.show{display:block}
 /* middle: target field names (click to select) */
-.mtgt .trow{display:flex;align-items:center;gap:5px;padding:3px 5px;border:1px solid transparent;border-radius:5px;margin-bottom:3px;background:#202020;cursor:pointer}
+.mtgt .trow{display:flex;flex-direction:column;align-items:stretch;gap:3px;padding:4px 5px;border:1px solid transparent;border-radius:5px;margin-bottom:3px;background:#202020;cursor:pointer}
+.mtgt .trowtop{display:flex;align-items:center;gap:5px}
+.mtgt .trow .tmap{font:10.5px var(--mono);color:var(--dim);padding:0 4px 0 16px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mtgt .trow .tmap.direct{color:#7fd6a0}
+.mtgt .trow .tmap.empty{color:var(--dim);font-style:italic;opacity:.7}
+.mtgt .trow .tmap .tmi{font-weight:700;margin-right:5px;margin-left:-12px;color:#7fd6a0}
+.mtgt .trow .tmap .tmi.fx{color:var(--orange);font-style:italic}
 .mtgt .trow:hover{background:#262b33}
 .mtgt .trow.sel{border-color:var(--blue);background:#1e2a3a}
 .mtgt .trow.drop{border-color:var(--blue);border-style:dashed;background:#1e2a3a}
