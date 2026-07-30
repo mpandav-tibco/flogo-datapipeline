@@ -132,6 +132,18 @@ func (t *TransformDef) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// MarshalJSON emits the full transform config (the flattened Extra map, which
+// already carries "type" plus every stage-specific key). Extra is tagged
+// `json:"-"`, so without this method default struct marshaling would drop all
+// transform configuration — a serialized pipeline would keep only {"type":...}
+// and silently lose filter expressions, mapper fields, dq expectations, etc.
+func (t TransformDef) MarshalJSON() ([]byte, error) {
+	if len(t.Extra) > 0 {
+		return json.Marshal(t.Extra)
+	}
+	return json.Marshal(map[string]interface{}{"type": t.Type})
+}
+
 // SinkDef configures the data sink for the pipeline.
 type SinkDef struct {
 	Type    string                 `json:"type"`              // jdbc | parquet | csv | kafka | null
@@ -148,6 +160,18 @@ func (s *SinkDef) UnmarshalJSON(data []byte) error {
 	}
 	s.Options = raw
 	return nil
+}
+
+// MarshalJSON emits the flattened sink object (type plus every option at the top
+// level, since UnmarshalJSON stores the whole flat object in Options). Without
+// this method default struct marshaling would nest everything under "options",
+// and the reloaded sink — whose UnmarshalJSON reads flat keys — would lose its
+// configuration (e.g. a kafka sink's brokers/topic).
+func (s SinkDef) MarshalJSON() ([]byte, error) {
+	if len(s.Options) > 0 {
+		return json.Marshal(s.Options)
+	}
+	return json.Marshal(map[string]interface{}{"type": s.Type})
 }
 
 // CheckpointDef configures the checkpoint backend.

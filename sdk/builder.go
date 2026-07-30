@@ -442,12 +442,46 @@ func (b *PipelineBuilder) Validate(rules []ValidateRule, onViolation string) *Pi
 type DQExpectation struct {
 	// Name is a human-readable description of the expectation (required).
 	Name string `json:"name"`
-	// Type selects the expectation kind: "notNull" | "unique" | "range" | "pattern" | "custom".
+	// Type selects the expectation kind. The following friendly names are
+	// accepted (and translated to the underlying dq engine names):
+	//   "notNull"  → expectColumnNotNull        (column completeness)
+	//   "unique"   → expectColumnUnique         (column uniqueness)
+	//   "range"    → expectColumnValuesBetween  (Params: min, max)
+	//   "inSet"    → expectColumnValuesInSet    (Params: values)
+	//   "rowCount" → expectTableRowCountBetween (Params: min, max)
+	//   "mean"     → expectColumnMeanBetween    (Params: min, max)
+	//   "stddev"   → expectColumnStddevBelow    (Params: threshold)
+	// The canonical engine names (expectColumn…) are also accepted verbatim.
 	Type string `json:"type"`
 	// Column is the target column name.
 	Column string `json:"column,omitempty"`
 	// Params carries type-specific parameters (e.g. {"min": 0, "max": 100}).
 	Params map[string]interface{} `json:"params,omitempty"`
+}
+
+// canonicalDQType maps the SDK's friendly expectation names to the canonical
+// type understood by the dq transform's expectation registry. Canonical names
+// (and any unrecognised value) pass through unchanged so the transform performs
+// the final validation and reports a clear "unknown type" error if needed.
+func canonicalDQType(t string) string {
+	switch t {
+	case "notNull":
+		return "expectColumnNotNull"
+	case "unique":
+		return "expectColumnUnique"
+	case "range", "between":
+		return "expectColumnValuesBetween"
+	case "inSet", "valuesInSet":
+		return "expectColumnValuesInSet"
+	case "rowCount", "rowCountBetween":
+		return "expectTableRowCountBetween"
+	case "mean", "meanBetween":
+		return "expectColumnMeanBetween"
+	case "stddev", "stddevBelow":
+		return "expectColumnStddevBelow"
+	default:
+		return t
+	}
 }
 
 // DQOption is a functional option for the WithDQ builder method.
@@ -482,7 +516,7 @@ func (b *PipelineBuilder) WithDQ(expectations []DQExpectation, opts ...DQOption)
 	for i, e := range expectations {
 		m := map[string]interface{}{
 			"name":   e.Name,
-			"type":   e.Type,
+			"type":   canonicalDQType(e.Type),
 			"column": e.Column,
 		}
 		for k, v := range e.Params {

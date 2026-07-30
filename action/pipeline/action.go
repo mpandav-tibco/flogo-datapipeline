@@ -379,6 +379,15 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 	def := a.def
 	out := &Output{}
 
+	// Honor a context that is already cancelled before any work begins. Without
+	// this the read-ahead goroutine sees the cancelled context, produces nothing,
+	// and the drain loop returns nil — reporting a misleading "completed" run with
+	// zero rows. A caller that aborts pre-flight must get a deterministic failure
+	// so it never mistakes a cancelled run for a successful load.
+	if err := ctx.Err(); err != nil {
+		return out, err
+	}
+
 	// Echo the effective run configuration so operators can confirm from the run
 	// log which settings were honored (many settings have no other visible
 	// side-effect). Kept to a single line to avoid log noise.
