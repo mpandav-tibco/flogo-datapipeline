@@ -4782,6 +4782,8 @@ window.addEventListener('message', (ev: MessageEvent<HostToWebview>) => {
       migratePodlogSource(S.doc);
       S.pipe = buildPipe(S.doc);
       if (!S.selNode) S.selNode = 'source';
+      // Open pipelines that already carry an explicit graph block in the graph view.
+      if ((S.doc as any).graph) S.canvasMode = 'graph';
       renderAll();
       post({ type: 'validate' });
       break;
