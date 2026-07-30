@@ -8,7 +8,7 @@ import type { PipelineDoc } from '../src/model/pipeline';
 import type { HostToWebview, WebviewToHost } from '../src/protocol';
 import type { RunResponse, PreviewResult, StatusResponse, StageTestResult } from '../src/engine/apiClient';
 import { TRIGGER_CATALOG, triggerDef } from '../src/model/triggers';
-import { deriveBranches, branchesByOwner, type DerivedBranch } from '../src/model/graph';
+import { deriveBranches, branchesByOwner, deriveGraph, type DerivedBranch } from '../src/model/graph';
 interface VsCodeApi {
   postMessage(msg: WebviewToHost): void;
   getState(): unknown;
@@ -3180,7 +3180,13 @@ function renderCanvas(m: HTMLElement) {
   const dlqPill = p.hasDlq ? '' : '<span class="pill" data-h="dlq">＋ DLQ</span>';
   const brPill = p.branches.length ? `<span class="pill toggle${S.showBranches ? ' on' : ''}" data-h="branches" title="Show or hide the implicit router, join, reject and parse-error branches">⎇ Branches</span>` : '';
   const modePill = `<span class="pill toggle${S.canvasMode === 'graph' ? ' on' : ''}" data-h="gmode" title="Switch between the linear flow and the graph (node + wire) view">◇ Graph view</span>`;
-  hint.innerHTML = '<span class="pill" data-h="src">＋ Source</span><span class="pill" data-h="tf">＋ Transform</span><span class="pill" data-h="sink">＋ Sink</span>' + dlqPill + brPill + modePill + '<span class="pill">⤢ Fit</span>';
+  const hasGraph = !!(S.doc as any).graph;
+  const promotePill = S.canvasMode === 'graph'
+    ? (hasGraph
+      ? `<span class="pill toggle on" data-h="unpromote" title="Remove the explicit graph block and return to a purely linear file">graph ✓ · reset</span>`
+      : `<span class="pill toggle" data-h="promote" title="Write an explicit graph block (nodes + edges) to the file from this pipeline">⇪ Promote to graph</span>`)
+    : '';
+  hint.innerHTML = '<span class="pill" data-h="src">＋ Source</span><span class="pill" data-h="tf">＋ Transform</span><span class="pill" data-h="sink">＋ Sink</span>' + dlqPill + brPill + modePill + promotePill + '<span class="pill">⤢ Fit</span>';
   (hint.querySelector('[data-h="tf"]') as HTMLElement).onclick = () => addTransform(p.nodes.length - 1);
   (hint.querySelector('[data-h="src"]') as HTMLElement).onclick = () =>
     quickPick('Change source type', SOURCE_TYPES, (v) => {
@@ -3200,6 +3206,19 @@ function renderCanvas(m: HTMLElement) {
   if (brBtn) brBtn.onclick = () => { S.showBranches = !S.showBranches; renderEditor(); };
   const gmBtn = hint.querySelector('[data-h="gmode"]') as HTMLElement | null;
   if (gmBtn) gmBtn.onclick = () => { S.canvasMode = S.canvasMode === 'graph' ? 'linear' : 'graph'; renderEditor(); };
+  const prBtn = hint.querySelector('[data-h="promote"]') as HTMLElement | null;
+  if (prBtn) prBtn.onclick = () => {
+    const g = deriveGraph(S.doc);
+    (S.doc as any).graph = g;
+    persistAndRebuild();
+    toast('ok', `Wrote graph block — ${g.nodes.length} nodes, ${g.edges.length} edges`);
+  };
+  const unBtn = hint.querySelector('[data-h="unpromote"]') as HTMLElement | null;
+  if (unBtn) unBtn.onclick = () => {
+    delete (S.doc as any).graph;
+    persistAndRebuild();
+    toast('ok', 'Removed graph block — back to linear');
+  };
   cv.appendChild(hint);
   m.appendChild(c);
 

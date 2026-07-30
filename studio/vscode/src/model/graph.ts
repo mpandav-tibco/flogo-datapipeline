@@ -162,3 +162,102 @@ export function branchesByOwner(branches: DerivedBranch[]): Record<string, Deriv
   for (const b of branches) (map[b.ownerId] = map[b.ownerId] || []).push(b);
   return map;
 }
+
+// ─────────────────────────── explicit graph block ───────────────────────────
+// deriveGraph builds the board-08 `graph { nodes[], edges[] }` shape from a
+// linear pipeline — the same structure the engine's Definition.Graph parses and
+// validates. It is the "promote to graph" bridge: Studio writes this block so
+// the topology becomes explicit (and, in a future phase, executable). Node ids
+// match the canvas node ids (source | t{i} | sink | branch ids | dlq) so a
+// promoted graph round-trips with the derived view.
+
+/** A node in the explicit graph block. */
+export interface GraphNodeOut {
+  id: string;
+  kind: 'source' | 'transform' | 'sink';
+  type: string;
+  ports?: { in?: string[]; out?: string[] };
+}
+
+/** An edge in the explicit graph block: ["fromNode:port", "toNode:port"]. */
+export type GraphEdgeOut = [string, string];
+
+/** The explicit graph block. */
+export interface PipeGraph {
+  nodes: GraphNodeOut[];
+  edges: GraphEdgeOut[];
+}
+
+/** Declared ports for a transform, by type (drives the port dots + edge labels). */
+function transformPorts(type: string, t: Record<string, unknown>): { in?: string[]; out?: string[] } {
+  if (type === 'join') return { in: ['left', 'right'], out: ['out'] };
+  if (type === 'validate') return { in: ['in'], out: ['pass', 'reject'] };
+  if (type === 'router' || type === 'split') {
+    const routes = Array.isArray(t.routes) ? t.routes : [];
+    const out = routes.map((r, j) => str(asObj(r).name) || 'route' + j);
+    if (str(t.defaultSinkType)) out.push('default');
+    out.push('out'); // the pass-through for unmatched rows (onUnmatched: pass)
+    return { in: ['in'], out };
+  }
+  return { in: ['in'], out: ['out'] };
+}
+
+/**
+ * Build the explicit `graph { nodes, edges }` block from a linear pipeline
+ * document, including the implicit branches (router route-sinks, join reference
+ * source, validate reject, source parse-error sink, and the top-level DLQ). The
+ * result is a DAG (acyclic), so it passes the engine's graph validator.
+ */
+export function deriveGraph(doc: PipelineDoc | undefined): PipeGraph {
+  const nodes: GraphNodeOut[] = [];
+  const edges: GraphEdgeOut[] = [];
+  if (!doc) return { nodes, edges };
+
+  const src = asObj(doc.source);
+  nodes.push({ id: 'source', kind: 'source', type: str(src.type) || 'source', ports: { out: ['rows'] } });
+
+  const transforms = Array.isArray(doc.transforms) ? doc.transforms : [];
+  let prevOut = 'source:rows';
+  transforms.forEach((traw, i) => {
+    const t = asObj(traw);
+    const type = str(t.type) || 'transform';
+    const id = 't' + i;
+    nodes.push({ id, kind: 'transform', type, ports: transformPorts(type, t) });
+    edges.push([prevOut, id + ':in']);
+    prevOut = id + ':out'; // main pass-through to the next stage
+  });
+
+  nodes.push({ id: 'sink', kind: 'sink', type: str(asObj(doc.sink).type) || 'sink', ports: { in: ['in'] } });
+  edges.push([prevOut, 'sink:in']);
+
+  // Implicit branches as first-class nodes + edges.
+  const branches = deriveBranches(doc);
+  branches.forEach((b) => {
+    nodes.push({
+      id: b.id,
+      kind: b.nodeKind,
+      type: b.type,
+      ports: b.nodeKind === 'sink' ? { in: ['in'] } : { out: ['rows'] },
+    });
+    if (b.flow === 'out') {
+      const port =
+        b.kind === 'route' ? (b.title || 'route')
+          : b.kind === 'default-route' ? 'default'
+            : b.kind === 'reject' ? 'reject'
+              : 'errors';
+      edges.push([b.ownerId + ':' + port, b.id + ':in']);
+    } else {
+      // A join's reference source feeds the join's right input.
+      edges.push([b.id + ':rows', b.ownerId + ':right']);
+    }
+  });
+
+  const dlq = asObj(doc.dlq);
+  if (str(dlq.type)) {
+    nodes.push({ id: 'dlq', kind: 'sink', type: str(dlq.type) as string, ports: { in: ['in'] } });
+    edges.push(['sink:err', 'dlq:in']);
+  }
+
+  return { nodes, edges };
+}
+

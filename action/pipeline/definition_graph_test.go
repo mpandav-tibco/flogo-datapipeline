@@ -112,3 +112,54 @@ func TestGraphJSONRoundTrip(t *testing.T) {
 		t.Fatalf("re-marshaled graph dropped node config: %s", out)
 	}
 }
+
+// TestPromotedGraphShapeValidates proves the exact graph block Studio's
+// deriveGraph emits (board-08 nodes + edges for a router/join/validate/dlq
+// pipeline) passes the engine validator — verifying the Studio→engine round-trip.
+func TestPromotedGraphShapeValidates(t *testing.T) {
+	src := []byte(`{
+      "source": {"type":"csv","path":"orders.csv"},
+      "sink": {"type":"jsonlines"},
+      "graph": {
+        "nodes": [
+          {"id":"source","kind":"source","type":"csv","ports":{"out":["rows"]}},
+          {"id":"t0","kind":"transform","type":"join","ports":{"in":["left","right"],"out":["out"]}},
+          {"id":"t1","kind":"transform","type":"validate","ports":{"in":["in"],"out":["pass","reject"]}},
+          {"id":"t2","kind":"transform","type":"router","ports":{"in":["in"],"out":["eu","us","default","out"]}},
+          {"id":"sink","kind":"sink","type":"jsonlines","ports":{"in":["in"]}},
+          {"id":"source.err","kind":"sink","type":"csv","ports":{"in":["in"]}},
+          {"id":"t0.right","kind":"source","type":"csv","ports":{"out":["rows"]}},
+          {"id":"t1.reject","kind":"sink","type":"csv","ports":{"in":["in"]}},
+          {"id":"t2.route0","kind":"sink","type":"jsonlines","ports":{"in":["in"]}},
+          {"id":"t2.route1","kind":"sink","type":"jsonlines","ports":{"in":["in"]}},
+          {"id":"t2.default","kind":"sink","type":"jsonlines","ports":{"in":["in"]}},
+          {"id":"dlq","kind":"sink","type":"null","ports":{"in":["in"]}}
+        ],
+        "edges": [
+          ["source:rows","t0:in"],
+          ["t0:out","t1:in"],
+          ["t1:out","t2:in"],
+          ["t2:out","sink:in"],
+          ["source:errors","source.err:in"],
+          ["t0.right:rows","t0:right"],
+          ["t1:reject","t1.reject:in"],
+          ["t2:eu","t2.route0:in"],
+          ["t2:us","t2.route1:in"],
+          ["t2:default","t2.default:in"],
+          ["sink:err","dlq:in"]
+        ]
+      }
+    }`)
+	var def Definition
+	if err := json.Unmarshal(src, &def); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	def.Defaults()
+	if err := def.Validate(); err != nil {
+		t.Fatalf("promoted graph shape should validate, got: %v", err)
+	}
+	if def.Graph == nil || len(def.Graph.Nodes) != 12 || len(def.Graph.Edges) != 11 {
+		t.Fatalf("graph not parsed as expected: %+v", def.Graph)
+	}
+}
+
