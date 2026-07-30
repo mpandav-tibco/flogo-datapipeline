@@ -158,7 +158,8 @@ button{font-family:inherit;color:inherit;background:none;border:none;cursor:poin
 .gedge.br-reject{stroke:#d9603f;stroke-dasharray:6 4}
 .gedge.br-source-error,.gedge.br-dlq{stroke:#c9903f;stroke-dasharray:6 4}
 .gedge.br-reference{stroke:#4a90d9}
-.gnode{position:absolute;z-index:2}
+.gnode{position:absolute;z-index:2;cursor:grab}
+.gnode:active{cursor:grabbing}
 .gport{position:absolute;width:10px;height:10px;border-radius:50%;background:var(--editor);border:2px solid #7a828c;z-index:3;pointer-events:none}
 .gport.s-source{border-color:#4a90d9}
 .gport.s-sink{border-color:#4caf7d}

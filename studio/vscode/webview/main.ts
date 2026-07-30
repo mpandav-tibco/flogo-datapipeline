@@ -2915,6 +2915,9 @@ function renderDlqBranch(dn: Node): HTMLElement {
 // exactly as on the linear canvas) and is the substrate the wire-authoring steps
 // build on. Toggle it with the "◇ Graph view" pill.
 const GSVG_NS = 'http://www.w3.org/2000/svg' as const;
+// Set while a node is being dragged so the trailing mouseup click doesn't also
+// select it (and open the inspector).
+let _gDragged = false;
 
 function gKindCls(kind: string): string {
   return kind === 'source' ? 's-source' : kind === 'sink' ? 's-sink' : 'tf';
@@ -2932,7 +2935,7 @@ function buildGraphNode(n: Node, i: number, x: number, y: number, w: number): HT
     + `<div class='nm'>${escapeHtml(title)}</div>`
     + (showMeta ? `<div class='meta'>${escapeHtml(n.meta)}</div>` : '');
   nd.tabIndex = 0;
-  nd.onclick = () => { S.selNode = n.id; S.inspTab = 'Config'; S.inspClosed = false; renderEditor(); };
+  nd.onclick = () => { if (_gDragged) { _gDragged = false; return; } S.selNode = n.id; S.inspTab = 'Config'; S.inspClosed = false; renderEditor(); };
   nd.oncontextmenu = (e) => nodeMenu(n, i, e);
   return nd;
 }
@@ -2954,7 +2957,7 @@ function buildGraphBranchCard(b: DerivedBranch): HTMLElement {
     + (showMeta ? `<div class='meta'>${escapeHtml(meta)}</div>` : '');
   nd.tabIndex = 0;
   nd.title = 'Configured on the ' + (b.ownerIndex === 'source' ? 'source' : 'owning transform') + ' — click to edit.';
-  nd.onclick = () => { S.selNode = b.ownerId; S.inspTab = 'Config'; S.inspClosed = false; renderEditor(); };
+  nd.onclick = () => { if (_gDragged) { _gDragged = false; return; } S.selNode = b.ownerId; S.inspTab = 'Config'; S.inspClosed = false; renderEditor(); };
   return nd;
 }
 
@@ -2963,7 +2966,7 @@ function buildGraphDlqCard(dn: Node): HTMLElement {
   nd.innerHTML = `<div class='kind'>dead-letter (catch)</div><div class='nm'>${escapeHtml(dn.nm)}</div><div class='meta'>${escapeHtml(dn.type)} · ${escapeHtml(dn.meta)}</div>`;
   nd.tabIndex = 0;
   nd.title = 'Rows rejected by the sink are captured here — the main pipeline keeps running.';
-  nd.onclick = () => { S.selNode = 'dlq'; S.inspTab = 'Config'; S.inspClosed = false; renderEditor(); };
+  nd.onclick = () => { if (_gDragged) { _gDragged = false; return; } S.selNode = 'dlq'; S.inspTab = 'Config'; S.inspClosed = false; renderEditor(); };
   nd.oncontextmenu = (e) => dlqMenu(e);
   return nd;
 }
@@ -2994,21 +2997,37 @@ function renderGraphCanvas(cv: HTMLElement): void {
   const branchMap = branchesByOwner(p.branches);
   const W = 200, H = 96, GX = 92, TOP = 28, BW = 186, BH = 78, BGY = 30;
   const branchTop = TOP + H + 46;
+  // Saved node positions live in a side-car `ui.positions` block so the pipeline
+  // (and any promoted graph) JSON stays clean. Absent = auto-laid-out.
+  const saved: Record<string, { x: number; y: number }> = ((S.doc as any).ui && (S.doc as any).ui.positions) || {};
 
+  // 1) Default auto-layout: main chain across the top, branches stacked below.
+  const pos: Record<string, { x: number; y: number; w: number; h: number }> = {};
   const xs: number[] = [];
   let x = 24;
   for (let i = 0; i < p.nodes.length; i++) { xs.push(x); x += W + GX; }
-  const contentW = x + 8;
+  p.nodes.forEach((n, i) => { pos[n.id] = { x: xs[i], y: TOP, w: W, h: H }; });
 
-  let maxRows = 0;
-  if (S.showBranches) {
-    p.nodes.forEach((n) => {
-      let c = (branchMap[n.id] || []).length;
-      if (n.id === 'sink' && p.hasDlq) c += 1;
-      if (c > maxRows) maxRows = c;
-    });
-  }
-  const contentH = maxRows > 0 ? branchTop + maxRows * (BH + BGY) + 16 : TOP + H + 40;
+  const branchList: Array<{ id: string; owner: string; cls: string; flow: 'in' | 'out'; card: HTMLElement }> = [];
+  p.nodes.forEach((n) => {
+    if (!S.showBranches) return;
+    let row = 0;
+    const add = (id: string, card: HTMLElement, cls: string, flow: 'in' | 'out') => {
+      pos[id] = { x: pos[n.id].x + W / 2 - BW / 2, y: branchTop + row * (BH + BGY), w: BW, h: BH };
+      branchList.push({ id, owner: n.id, cls, flow, card });
+      row++;
+    };
+    (branchMap[n.id] || []).forEach((b) => add(b.id, buildGraphBranchCard(b), 'br-' + b.kind, b.flow));
+    if (n.id === 'sink' && p.hasDlq && p.dlqNode) add('dlq', buildGraphDlqCard(p.dlqNode), 'br-dlq', 'out');
+  });
+
+  // Apply saved overrides.
+  for (const id in saved) if (pos[id]) { pos[id].x = saved[id].x; pos[id].y = saved[id].y; }
+
+  // 2) Content size from the furthest node.
+  let cw = 0, ch = 0;
+  for (const id in pos) { cw = Math.max(cw, pos[id].x + pos[id].w); ch = Math.max(ch, pos[id].y + pos[id].h); }
+  const contentW = cw + 24, contentH = ch + 20;
 
   const wrap = el('div', 'gcanvas');
   wrap.style.width = contentW + 'px';
@@ -3034,42 +3053,81 @@ function renderGraphCanvas(cv: HTMLElement): void {
   svg.appendChild(defs);
   wrap.appendChild(svg);
 
-  const mp: Record<string, { inX: number; inY: number; outX: number; outY: number; botX: number; botY: number }> = {};
-  p.nodes.forEach((n, i) => {
-    const nx = xs[i], ny = TOP;
-    wrap.appendChild(buildGraphNode(n, i, nx, ny, W));
-    mp[n.id] = { inX: nx, inY: ny + H / 2, outX: nx + W, outY: ny + H / 2, botX: nx + W / 2, botY: ny + H };
-  });
-
-  for (let i = 1; i < p.nodes.length; i++) {
-    const a = mp[p.nodes[i - 1].id], b = mp[p.nodes[i].id];
-    graphEdge(svg, a.outX, a.outY, b.inX, b.inY, 'main');
-  }
-  p.nodes.forEach((n) => {
-    if (n.kind !== 'source') graphPort(wrap, mp[n.id].inX, mp[n.id].inY, gKindCls(n.kind));
-    if (n.kind !== 'sink') graphPort(wrap, mp[n.id].outX, mp[n.id].outY, gKindCls(n.kind));
-  });
-
-  if (S.showBranches) {
+  // 3) Connection points from the live position map, and a redraw() that repaints
+  // every edge + port — called on each drag frame so wires track the node.
+  const cp = (id: string) => {
+    const q = pos[id];
+    return { inX: q.x, inY: q.y + q.h / 2, outX: q.x + q.w, outY: q.y + q.h / 2, botX: q.x + q.w / 2, botY: q.y + q.h, topX: q.x + q.w / 2, topY: q.y };
+  };
+  const redraw = () => {
+    svg.querySelectorAll('.gedge').forEach((e) => e.remove());
+    wrap.querySelectorAll('.gport').forEach((e) => e.remove());
+    for (let i = 1; i < p.nodes.length; i++) {
+      const a = cp(p.nodes[i - 1].id), b = cp(p.nodes[i].id);
+      graphEdge(svg, a.outX, a.outY, b.inX, b.inY, 'main');
+    }
     p.nodes.forEach((n) => {
-      let row = 0;
-      const place = (card: HTMLElement, cls: string, flow: 'in' | 'out') => {
-        const by = branchTop + row * (BH + BGY);
-        const bx = mp[n.id].botX - BW / 2;
-        card.style.left = bx + 'px'; card.style.top = by + 'px'; card.style.width = BW + 'px';
-        wrap.appendChild(card);
-        const oX = mp[n.id].botX, oY = mp[n.id].botY;
-        if (flow === 'out') graphEdge(svg, oX, oY, bx + BW / 2, by, 'br-' + cls);
-        else graphEdge(svg, bx + BW / 2, by, oX, oY, 'br-' + cls);
-        graphPort(wrap, oX, oY, 'branch');
-        graphPort(wrap, bx + BW / 2, by, 'branch');
-        row++;
-      };
-      (branchMap[n.id] || []).forEach((b) => place(buildGraphBranchCard(b), b.kind, b.flow));
-      if (n.id === 'sink' && p.hasDlq && p.dlqNode) place(buildGraphDlqCard(p.dlqNode), 'dlq', 'out');
+      const q = cp(n.id);
+      if (n.kind !== 'source') graphPort(wrap, q.inX, q.inY, gKindCls(n.kind));
+      if (n.kind !== 'sink') graphPort(wrap, q.outX, q.outY, gKindCls(n.kind));
     });
-  }
+    branchList.forEach((b) => {
+      const o = cp(b.owner), nn = cp(b.id);
+      if (b.flow === 'out') graphEdge(svg, o.botX, o.botY, nn.topX, nn.topY, b.cls);
+      else graphEdge(svg, nn.topX, nn.topY, o.botX, o.botY, b.cls);
+      graphPort(wrap, o.botX, o.botY, 'branch');
+      graphPort(wrap, nn.topX, nn.topY, 'branch');
+    });
+  };
 
+  // 4) Drag-to-reposition: move the node, repaint wires live, persist on release.
+  const attachDrag = (nd: HTMLElement, id: string) => {
+    nd.addEventListener('mousedown', (ev: MouseEvent) => {
+      if (ev.button !== 0) return;
+      const sx = ev.clientX, sy = ev.clientY, ox = pos[id].x, oy = pos[id].y;
+      let moved = false;
+      const move = (m: MouseEvent) => {
+        const dx = m.clientX - sx, dy = m.clientY - sy;
+        if (!moved && Math.abs(dx) + Math.abs(dy) > 3) moved = true;
+        if (moved) {
+          pos[id].x = Math.max(0, ox + dx); pos[id].y = Math.max(0, oy + dy);
+          nd.style.left = pos[id].x + 'px'; nd.style.top = pos[id].y + 'px';
+          redraw();
+        }
+      };
+      const up = () => {
+        document.removeEventListener('mousemove', move);
+        document.removeEventListener('mouseup', up);
+        document.body.style.userSelect = '';
+        if (moved) {
+          _gDragged = true;
+          const doc = S.doc as any;
+          doc.ui = doc.ui || {};
+          doc.ui.positions = doc.ui.positions || {};
+          doc.ui.positions[id] = { x: Math.round(pos[id].x), y: Math.round(pos[id].y) };
+          post({ type: 'save', doc: S.doc });
+        }
+      };
+      document.addEventListener('mousemove', move);
+      document.addEventListener('mouseup', up);
+      document.body.style.userSelect = 'none';
+      ev.preventDefault();
+    });
+  };
+
+  // 5) Render node cards at their positions, then paint the wires.
+  p.nodes.forEach((n, i) => {
+    const nd = buildGraphNode(n, i, pos[n.id].x, pos[n.id].y, W);
+    attachDrag(nd, n.id);
+    wrap.appendChild(nd);
+  });
+  branchList.forEach((b) => {
+    b.card.style.left = pos[b.id].x + 'px'; b.card.style.top = pos[b.id].y + 'px'; b.card.style.width = BW + 'px';
+    attachDrag(b.card, b.id);
+    wrap.appendChild(b.card);
+  });
+
+  redraw();
   cv.appendChild(wrap);
 }
 
