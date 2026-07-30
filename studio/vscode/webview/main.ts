@@ -32,22 +32,22 @@ function post(msg: WebviewToHost) {
   vscode.postMessage(msg);
 }
 
-// Make an inspector panel resizable: applies the remembered width and adds a
-// left-edge drag grip that updates S.inspWidth live (clamped to a sane range).
+// Make the config dock resizable: applies the remembered height and adds a
+// top-edge drag grip that updates S.inspHeight live (clamped to a sane range).
 function attachResize(insp: HTMLElement): void {
-  insp.style.width = (S.inspWidth || 300) + 'px';
+  insp.style.height = (S.inspHeight || 340) + 'px';
   const grip = el('div', 'inspgrip');
-  grip.title = 'Drag to resize panel';
+  grip.title = 'Drag to resize the config panel';
   grip.onmousedown = (e: MouseEvent) => {
     e.preventDefault();
-    const startX = e.clientX;
-    const startW = insp.getBoundingClientRect().width;
-    document.body.style.cursor = 'col-resize';
+    const startY = e.clientY;
+    const startH = insp.getBoundingClientRect().height;
+    document.body.style.cursor = 'row-resize';
     document.body.style.userSelect = 'none';
     const move = (ev: MouseEvent) => {
-      const w = Math.max(260, Math.min(760, startW + (startX - ev.clientX)));
-      insp.style.width = w + 'px';
-      S.inspWidth = w;
+      const h = Math.max(160, Math.min(Math.round(window.innerHeight * 0.78), startH + (startY - ev.clientY)));
+      insp.style.height = h + 'px';
+      S.inspHeight = h;
     };
     const up = () => {
       document.removeEventListener('mousemove', move);
@@ -92,7 +92,7 @@ const S = {
   selNode: null as string | null,
   inspTab: 'Config',
   inspClosed: false,
-  inspWidth: 300,
+  inspHeight: 340,
   showBranches: true,
   setOpen: null as Record<string, boolean> | null,
   tabs: [{ id: 'canvas', type: 'canvas' as string }],
@@ -3198,7 +3198,7 @@ function renderCanvas(m: HTMLElement) {
   if (S.inspClosed) {
     const reopen = el('div', 'inspreopen');
     reopen.title = 'Show config panel';
-    reopen.innerHTML = '<span>⚙</span>';
+    reopen.innerHTML = '<span>⚙ Configuration</span>';
     reopen.onclick = () => { S.inspClosed = false; renderEditor(); };
     m.appendChild(reopen);
     return;

@@ -32,8 +32,8 @@ button{font-family:inherit;color:inherit;background:none;border:none;cursor:poin
 .tabsbar .egacts{margin-left:auto;display:flex;align-items:center;gap:8px;padding:0 10px;flex:none}
 .breadcrumb{height:26px;display:flex;align-items:center;gap:6px;padding:0 14px;font-size:12px;color:var(--dim);border-bottom:1px solid var(--border);flex:none}
 .breadcrumb .sep{color:#4a4a4a}
-.edmain{flex:1;min-height:0;display:flex}
-.edcontent{flex:1;min-width:0;position:relative;overflow:auto}
+.edmain{flex:1;min-height:0;display:flex;flex-direction:column}
+.edcontent{flex:1;min-width:0;min-height:0;position:relative;overflow:auto}
 
 .btn{display:inline-flex;align-items:center;gap:6px;background:var(--input);border:1px solid var(--inputBorder);color:var(--text);border-radius:5px;padding:4px 10px;font-size:12px;font-weight:600;transition:background .12s,border-color .12s}
 .btn:hover{background:#3a3a3a;border-color:#4a4f55}
@@ -177,8 +177,8 @@ button{font-family:inherit;color:inherit;background:none;border:none;cursor:poin
 .canvas-hint .pill{cursor:pointer;border:1px solid transparent;transition:background .12s,border-color .12s,color .12s}
 .canvas-hint .pill:hover{background:#333;border-color:#4a4f55;color:var(--text)}
 
-.inspector{width:300px;flex:none;border-left:1px solid var(--border);background:#1b1b1b;overflow:auto;position:relative}
-.inspgrip{position:absolute;left:0;top:0;bottom:0;width:6px;cursor:col-resize;z-index:6}
+.inspector{height:340px;flex:none;border-top:1px solid var(--border);background:#1b1b1b;overflow:auto;position:relative}
+.inspgrip{position:absolute;left:0;right:0;top:0;height:6px;cursor:row-resize;z-index:6}
 .inspgrip:hover,.inspgrip:active{background:var(--blue)}
 .inspector .ih{height:38px;display:flex;align-items:center;gap:8px;padding:0 12px;border-bottom:1px solid var(--border);font-size:14px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--text)}
 .inspector .ih .ihname{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -189,7 +189,7 @@ button{font-family:inherit;color:inherit;background:none;border:none;cursor:poin
 .inspector .ih .ihkind.dlq{color:#e0a13c;background:rgba(224,161,60,.16);border-color:rgba(224,161,60,.35)}
 .inspector .ih .ihx{flex:none;cursor:pointer;color:var(--mute);font-size:13px;font-weight:400;line-height:1;padding:4px 6px;border-radius:4px}
 .inspector .ih .ihx:hover{background:var(--sel);color:var(--text)}
-.inspreopen{width:34px;flex:none;border-left:1px solid var(--border);background:#1b1b1b;display:flex;justify-content:center;padding-top:9px;cursor:pointer;color:var(--mute);font-size:15px}
+.inspreopen{height:28px;flex:none;border-top:1px solid var(--border);background:#1b1b1b;display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--mute);font-size:14px}
 .inspreopen:hover{color:var(--text);background:var(--sel)}
 .inspector .ib{padding:12px}
 .tabs{display:flex;gap:2px;border-bottom:1px solid var(--border);margin-bottom:12px}
