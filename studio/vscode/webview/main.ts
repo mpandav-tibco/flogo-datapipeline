@@ -93,6 +93,7 @@ const S = {
   inspTab: 'Config',
   inspClosed: false,
   inspHeight: 340,
+  zoom: 1,
   showBranches: true,
   setOpen: null as Record<string, boolean> | null,
   tabs: [{ id: 'canvas', type: 'canvas' as string }],
@@ -2983,6 +2984,7 @@ function renderGraphCanvas(cv: HTMLElement): void {
   const wrap = el('div', 'gcanvas');
   wrap.style.width = contentW + 'px';
   wrap.style.height = contentH + 'px';
+  wrap.style.setProperty('zoom', String(S.zoom || 1));
 
   const svg = document.createElementNS(GSVG_NS, 'svg');
   svg.setAttribute('class', 'gedges');
@@ -3037,8 +3039,9 @@ function renderGraphCanvas(cv: HTMLElement): void {
       if (ev.button !== 0) return;
       const sx = ev.clientX, sy = ev.clientY, ox = pos[id].x, oy = pos[id].y;
       let moved = false;
+      const z = S.zoom || 1;
       const move = (m: MouseEvent) => {
-        const dx = m.clientX - sx, dy = m.clientY - sy;
+        const dx = (m.clientX - sx) / z, dy = (m.clientY - sy) / z;
         if (!moved && Math.abs(dx) + Math.abs(dy) > 3) moved = true;
         if (moved) {
           pos[id].x = Math.max(0, ox + dx); pos[id].y = Math.max(0, oy + dy);
@@ -3107,6 +3110,14 @@ function renderGraphCanvas(cv: HTMLElement): void {
   cv.appendChild(wrap);
 }
 
+function applyZoom(z: number): void {
+  S.zoom = Math.max(0.4, Math.min(1.6, Math.round(z * 10) / 10));
+  const cvw = $('.gcanvas');
+  if (cvw) cvw.style.setProperty('zoom', String(S.zoom));
+  const lvl = $('.zlvl');
+  if (lvl) lvl.textContent = Math.round(S.zoom * 100) + '%';
+}
+
 function renderCanvas(m: HTMLElement) {
   const p = S.pipe!;
   const c = el('div', 'edcontent');
@@ -3151,7 +3162,8 @@ function renderCanvas(m: HTMLElement) {
   const promotePill = hasGraph
     ? `<span class="pill toggle on" data-h="unpromote" title="Remove the explicit graph block from the file (the canvas keeps showing the derived DAG)">graph ✓ · reset</span>`
     : `<span class="pill toggle" data-h="promote" title="Write an explicit graph block (nodes + edges) to the file from this pipeline">⇪ Promote to graph</span>`;
-  hint.innerHTML = '<span class="pill" data-h="src">＋ Source</span><span class="pill" data-h="tf">＋ Transform</span><span class="pill" data-h="sink">＋ Sink</span>' + dlqPill + brPill + promotePill + '<span class="pill" data-h="fit">⤢ Fit</span>';
+  const zoomCluster = '<span class="pilldiv"></span><span class="pill zoomctl" data-h="zoomout" title="Zoom out (⌘−)">−</span><span class="pill zoomctl zlvl" data-h="zoomreset" title="Reset zoom to 100% (⌘0)">' + Math.round((S.zoom || 1) * 100) + '%</span><span class="pill zoomctl" data-h="zoomin" title="Zoom in (⌘+)">＋</span>';
+  hint.innerHTML = '<span class="pill" data-h="src">＋ Source</span><span class="pill" data-h="tf">＋ Transform</span><span class="pill" data-h="sink">＋ Sink</span>' + dlqPill + brPill + promotePill + '<span class="pill" data-h="fit">⤢ Fit</span>' + zoomCluster;
   (hint.querySelector('[data-h="tf"]') as HTMLElement).onclick = () => addTransform(p.nodes.length - 1);
   (hint.querySelector('[data-h="src"]') as HTMLElement).onclick = () =>
     quickPick('Change source type', SOURCE_TYPES, (v) => {
@@ -3187,10 +3199,17 @@ function renderCanvas(m: HTMLElement) {
     const doc = S.doc as any;
     const hadPos = doc.ui && doc.ui.positions;
     if (hadPos) { delete doc.ui.positions; if (!Object.keys(doc.ui).length) delete doc.ui; post({ type: 'save', doc: S.doc }); }
+    S.zoom = 1;
     renderEditor();
     const cvEl = $('.canvas'); if (cvEl) cvEl.scrollTo({ left: 0, top: 0 });
     if (hadPos) toast('ok', 'Reset to auto-layout');
   };
+  const zoomIn = hint.querySelector('[data-h="zoomin"]') as HTMLElement | null;
+  if (zoomIn) zoomIn.onclick = () => applyZoom((S.zoom || 1) + 0.1);
+  const zoomOut = hint.querySelector('[data-h="zoomout"]') as HTMLElement | null;
+  if (zoomOut) zoomOut.onclick = () => applyZoom((S.zoom || 1) - 0.1);
+  const zoomReset = hint.querySelector('[data-h="zoomreset"]') as HTMLElement | null;
+  if (zoomReset) zoomReset.onclick = () => applyZoom(1);
   cv.appendChild(hint);
   m.appendChild(c);
 
@@ -4945,6 +4964,9 @@ document.addEventListener('keydown', (e) => {
   const mod = e.metaKey || e.ctrlKey;
   if (mod && e.shiftKey && e.key.toLowerCase() === 'p') { e.preventDefault(); openPalette(); }
   else if (mod && e.key.toLowerCase() === 'r' && e.shiftKey) { e.preventDefault(); doRun(); }
+  else if (mod && (e.key === '=' || e.key === '+')) { e.preventDefault(); applyZoom((S.zoom || 1) + 0.1); }
+  else if (mod && e.key === '-') { e.preventDefault(); applyZoom((S.zoom || 1) - 0.1); }
+  else if (mod && e.key === '0') { e.preventDefault(); applyZoom(1); }
   else if (e.key === 'Escape') closeOverlays();
 });
 
