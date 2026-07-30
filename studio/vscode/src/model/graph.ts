@@ -150,6 +150,20 @@ export function deriveBranches(doc: PipelineDoc | undefined): DerivedBranch[] {
           title: titleFor(stype, cfg), label: 'violations', cfg,
         });
       }
+    } else if (type === 'union') {
+      // Each bounded secondary source is a reference input into the union.
+      const withArr = Array.isArray(t.with) ? t.with : [];
+      withArr.forEach((wraw, j) => {
+        const w = asObj(wraw);
+        if (str(w.type)) {
+          const wtype = str(w.type) as string;
+          out.push({
+            id: ownerId + '.with' + j, ownerId, ownerIndex: i, flow: 'in',
+            kind: 'reference', nodeKind: 'source', type: wtype,
+            title: titleFor(wtype, w), label: 'union source', cfg: omit(w, []),
+          });
+        }
+      });
     }
   });
 

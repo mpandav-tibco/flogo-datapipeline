@@ -4168,6 +4168,10 @@ const TRANSFORMS: Array<{ type: string; label: string; cfg: Record<string, unkno
     cfg: { leftKey: 'id', rightKey: 'id', joinType: 'inner', right: { type: 'csv', path: 'reference.csv', hasHeader: true } }
   },
   {
+    type: 'union', label: 'Union — append bounded same-schema sources (UNION ALL)',
+    cfg: { with: [{ type: 'csv', path: 'more-orders.csv', hasHeader: true }] }
+  },
+  {
     type: 'cast', label: 'Cast — convert column types (int / float / decimal / date / …)',
     cfg: { columns: [{ name: 'amount', type: 'decimal' }], onError: 'null' }
   },
