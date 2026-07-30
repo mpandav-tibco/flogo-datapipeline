@@ -3244,7 +3244,7 @@ function renderCanvas(m: HTMLElement) {
       ? `<span class="pill toggle on" data-h="unpromote" title="Remove the explicit graph block and return to a purely linear file">graph ✓ · reset</span>`
       : `<span class="pill toggle" data-h="promote" title="Write an explicit graph block (nodes + edges) to the file from this pipeline">⇪ Promote to graph</span>`)
     : '';
-  hint.innerHTML = '<span class="pill" data-h="src">＋ Source</span><span class="pill" data-h="tf">＋ Transform</span><span class="pill" data-h="sink">＋ Sink</span>' + dlqPill + brPill + modePill + promotePill + '<span class="pill">⤢ Fit</span>';
+  hint.innerHTML = '<span class="pill" data-h="src">＋ Source</span><span class="pill" data-h="tf">＋ Transform</span><span class="pill" data-h="sink">＋ Sink</span>' + dlqPill + brPill + modePill + promotePill + '<span class="pill" data-h="fit">⤢ Fit</span>';
   (hint.querySelector('[data-h="tf"]') as HTMLElement).onclick = () => addTransform(p.nodes.length - 1);
   (hint.querySelector('[data-h="src"]') as HTMLElement).onclick = () =>
     quickPick('Change source type', SOURCE_TYPES, (v) => {
@@ -3276,6 +3276,15 @@ function renderCanvas(m: HTMLElement) {
     delete (S.doc as any).graph;
     persistAndRebuild();
     toast('ok', 'Removed graph block — back to linear');
+  };
+  const fitBtn = hint.querySelector('[data-h="fit"]') as HTMLElement | null;
+  if (fitBtn) fitBtn.onclick = () => {
+    const doc = S.doc as any;
+    const hadPos = S.canvasMode === 'graph' && doc.ui && doc.ui.positions;
+    if (hadPos) { delete doc.ui.positions; if (!Object.keys(doc.ui).length) delete doc.ui; post({ type: 'save', doc: S.doc }); }
+    renderEditor();
+    const cvEl = $('.canvas'); if (cvEl) cvEl.scrollTo({ left: 0, top: 0 });
+    if (hadPos) toast('ok', 'Reset to auto-layout');
   };
   cv.appendChild(hint);
   m.appendChild(c);
