@@ -94,7 +94,7 @@ const S = {
   inspClosed: false,
   inspWidth: 300,
   showBranches: true,
-  canvasMode: 'linear' as 'linear' | 'graph',
+  canvasMode: 'graph' as 'linear' | 'graph',
   setOpen: null as Record<string, boolean> | null,
   tabs: [{ id: 'canvas', type: 'canvas' as string }],
   active: 'canvas',
@@ -3262,7 +3262,7 @@ function renderCanvas(m: HTMLElement) {
   const hint = el('div', 'canvas-hint pillrow');
   const dlqPill = p.hasDlq ? '' : '<span class="pill" data-h="dlq">＋ DLQ</span>';
   const brPill = p.branches.length ? `<span class="pill toggle${S.showBranches ? ' on' : ''}" data-h="branches" title="Show or hide the implicit router, join, reject and parse-error branches">⎇ Branches</span>` : '';
-  const modePill = `<span class="pill toggle${S.canvasMode === 'graph' ? ' on' : ''}" data-h="gmode" title="Switch between the linear flow and the graph (node + wire) view">◇ Graph view</span>`;
+  const modePill = `<span class="pill toggle" data-h="gmode" title="Switch between the graph (node + wire) view and the linear flow">${S.canvasMode === 'graph' ? '▬ Linear view' : '◇ Graph view'}</span>`;
   const hasGraph = !!(S.doc as any).graph;
   const promotePill = S.canvasMode === 'graph'
     ? (hasGraph
