@@ -101,6 +101,7 @@ const S = {
   inspHeight: 340,
   inspHeightSet: false,
   zoom: 1,
+  mapMode: 'visual',
   showBranches: true,
   setOpen: null as Record<string, boolean> | null,
   tabs: [{ id: 'canvas', type: 'canvas' as string }],
@@ -2287,7 +2288,53 @@ function renderMapEditor(node: Node): HTMLElement {
   mapper.appendChild(tgtPane);
   mapper.appendChild(mapPane);
 
-  f.appendChild(el('div', 'k', 'Field mapping'));
+  // Header row: "Field mapping" label + a Visual/Code segmented toggle (board-04
+  // .modeseg). Code mode shows every target as an aligned `name = expr` line and
+  // is fully editable (parsed back into fields on change).
+  const fmHead = el('div', 'mapfmhead');
+  fmHead.appendChild(el('div', 'k', 'Field mapping'));
+  const modeSeg = el('div', 'mapmodeseg');
+  (['Visual', 'Code'] as const).forEach((mode) => {
+    const key = mode.toLowerCase();
+    const seg = el('span', S.mapMode === key ? 'on' : '', mode);
+    seg.onclick = () => { S.mapMode = key; renderEditor(); };
+    modeSeg.appendChild(seg);
+  });
+  fmHead.appendChild(modeSeg);
+  f.appendChild(fmHead);
+
+  if (S.mapMode === 'code') {
+    const w = order.reduce((mx, k) => Math.max(mx, k.length), 0);
+    const cv = el('div', 'mapcode');
+    const ta = document.createElement('textarea');
+    ta.className = 'mapcodeta';
+    ta.spellcheck = false;
+    ta.value = order.map((k) => `${k.padEnd(w)} = ${exprForDisplay(String(fields[k] || ''))}`).join('\n');
+    ta.rows = Math.max(6, order.length + 1);
+    ta.placeholder = 'one target per line:  field = expression   (e.g. total = multiply($qty,$price))';
+    ta.onchange = () => {
+      const nf: Record<string, string> = {};
+      const no: string[] = [];
+      ta.value.split('\n').forEach((line) => {
+        const t = line.trim();
+        if (!t) return;
+        const eq = t.indexOf('=');
+        const name = (eq >= 0 ? t.slice(0, eq) : t).trim();
+        if (!name || no.includes(name)) return;
+        no.push(name);
+        nf[name] = eq >= 0 ? exprForStore(t.slice(eq + 1)) : '';
+      });
+      target.fields = nf;
+      target.fieldOrder = no;
+      setCfgValue(node, 'fields', nf);
+      renderEditor();
+    };
+    cv.appendChild(ta);
+    cv.appendChild(el('div', 'focushint', 'Every target as a Flogo fx assignment — one per line (name = expression). Edit freely; switch to Visual to map by drag-and-drop.'));
+    f.appendChild(cv);
+    return f;
+  }
+
   if (hasSchema) {
     const allBtn = el('button', 'btn sm mapallbtn', '⧉ Map all fields (passthrough)');
     allBtn.onclick = () => {
@@ -3370,6 +3417,9 @@ function renderCanvas(m: HTMLElement) {
       if (boundConn && fam) for (const k of CONN_MANAGED_KEYS[fam] || []) hiddenKeys.add(k);
       Object.entries(sn.cfg).forEach(([k, v]) => {
         if (hiddenKeys.has(k)) return;
+        // fieldOrder is the internal target ordering the mapper manages — it's
+        // reflected in the mapping editor, not hand-edited as a raw JSON array.
+        if (k === 'fieldOrder' && (sn.type === 'map' || sn.type === 'mapper')) return;
         // JDBC: the conflict key only applies to upsert — hide it otherwise, and
         // render it as a column picker rather than a JSON blob.
         const isJdbc = sn.type === 'jdbc';

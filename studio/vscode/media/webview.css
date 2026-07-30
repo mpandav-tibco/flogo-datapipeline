@@ -369,6 +369,13 @@ select.v{appearance:none;cursor:pointer;background-image:linear-gradient(45deg,t
 .mmap .mfncat .mfncount{background:#2a2a2a;border-radius:8px;padding:0 5px;font-size:9px;opacity:.7}
 .mmap .mfngroup.collapsed .chips{display:none}
 .mmap .focushint{font-size:10.5px;color:var(--dim);margin-top:8px}
+.mapfmhead{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px}
+.mapmodeseg{display:inline-flex;border:1px solid var(--inputBorder);border-radius:6px;overflow:hidden;flex:none}
+.mapmodeseg span{padding:3px 10px;font-size:11px;color:var(--dim);cursor:pointer;border-right:1px solid var(--inputBorder);user-select:none}
+.mapmodeseg span:last-child{border-right:none}
+.mapmodeseg span.on{background:#33608f;color:#fff}
+.mapcode .mapcodeta{width:100%;box-sizing:border-box;min-height:180px;background:var(--input);border:1px solid var(--inputBorder);border-radius:6px;padding:8px 10px;font:12px/1.6 var(--mono);color:var(--text);white-space:pre;resize:vertical}
+.mapcode .mapcodeta:focus{border-color:var(--blue);outline:none}
 /* rule / expectation cards (validate + dq) */
 .rcards{display:flex;flex-direction:column;gap:8px}
 .rcard{border:1px solid var(--inputBorder);border-radius:6px;background:#202020;padding:8px}
