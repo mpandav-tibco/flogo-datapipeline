@@ -61,6 +61,17 @@ type PipelineRunResponse struct {
 
 	// QualityReport holds DQ expectations results when the pipeline has a DQ step.
 	QualityReport *DQReport `json:"qualityReport,omitempty"`
+
+	// StageStats holds per-transform row counters (RowsIn/RowsOut) for the graph
+	// run overlay, in transform order. Present for single-worker runs.
+	StageStats []StageRowStat `json:"stageStats,omitempty"`
+}
+
+// StageRowStat reports one transform stage's row throughput for a run.
+type StageRowStat struct {
+	Name    string `json:"name"`
+	RowsIn  int64  `json:"rowsIn"`
+	RowsOut int64  `json:"rowsOut"`
 }
 
 // DQReport carries the data-quality expectation results for a single run.

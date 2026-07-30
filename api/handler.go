@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mpandav-tibco/flogo-datapipeline/action/pipeline"
+	"github.com/mpandav-tibco/flogo-datapipeline/transform"
 )
 
 // handlePipelinesPrefix is the catch-all handler for all /v1/pipelines/{ref}
@@ -429,7 +430,7 @@ func buildPipelineInfo(ref string, act *pipeline.DataPipelineAction, s *Server) 
 
 // mapOutputToRunResponse converts a pipeline.Output to a PipelineRunResponse.
 func mapOutputToRunResponse(runID string, startedAt time.Time, out *pipeline.Output) PipelineRunResponse {
-	return PipelineRunResponse{
+	resp := PipelineRunResponse{
 		RunID:         runID,
 		Status:        out.Status,
 		RowsProcessed: out.RowsProcessed,
@@ -441,4 +442,14 @@ func mapOutputToRunResponse(runID string, startedAt time.Time, out *pipeline.Out
 		StartedAt:     startedAt,
 		FinishedAt:    startedAt.Add(time.Duration(out.DurationMs) * time.Millisecond),
 	}
+	// Surface per-stage row counters (single-path runs) for the graph run overlay.
+	if out.Metadata != nil {
+		if ss, ok := out.Metadata["stageStats"].([]transform.StageStat); ok {
+			resp.StageStats = make([]StageRowStat, len(ss))
+			for i, s := range ss {
+				resp.StageStats[i] = StageRowStat{Name: s.Name, RowsIn: s.RowsIn, RowsOut: s.RowsOut}
+			}
+		}
+	}
+	return resp
 }

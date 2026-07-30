@@ -3141,6 +3141,15 @@ function renderGraphCanvas(cv: HTMLElement): void {
     badge('source', '▶ ' + fmtK(r.rowsProcessed) + ' read', 'in');
     badge('sink', fmtK(r.rowsWritten) + ' written', 'ok');
     if (p.hasDlq && r.rowsFailed > 0) badge('dlq', fmtK(r.rowsFailed) + ' failed', 'err');
+    // Per-transform throughput when the engine reported per-stage counts and they
+    // align 1:1 with the transform nodes (i.e. no auto-injected schemadrift/hwm).
+    const ss = r.stageStats;
+    if (ss && ss.length) {
+      const txNodes = p.nodes.filter((n) => n.kind === 'transform');
+      if (ss.length === txNodes.length) {
+        txNodes.forEach((n, i) => badge(n.id, fmtK(ss[i].rowsOut) + ' out', 'in'));
+      }
+    }
   }
 
   redraw();
