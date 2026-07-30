@@ -94,7 +94,6 @@ const S = {
   inspClosed: false,
   inspWidth: 300,
   showBranches: true,
-  canvasMode: 'graph' as 'linear' | 'graph',
   setOpen: null as Record<string, boolean> | null,
   tabs: [{ id: 'canvas', type: 'canvas' as string }],
   active: 'canvas',
@@ -2860,54 +2859,6 @@ function renderEditor() {
   }
 }
 
-// Render one derived branch (router route-sink, join reference source, validate
-// reject sink, source parse-error sink) as a read-only satellite that hangs
-// beneath its owner. Clicking it opens the owning stage's inspector — the branch
-// is configured there, so the canvas node is a view, not a separate editor.
-function renderBranch(b: DerivedBranch): HTMLElement {
-  const item = el('div', 'nbranch nbranch-' + b.kind);
-  const up = b.flow === 'in';
-  const elbow = el('div', 'belbow');
-  elbow.innerHTML = `<span class="bline"></span><span class="blabel" title="${escapeHtml(b.label)}">${up ? '▲ ' : ''}${escapeHtml(b.label)}</span>`;
-  item.appendChild(elbow);
-  const icon = b.nodeKind === 'source' ? '⇥' : '⇤';
-  const kindText =
-    b.kind === 'reference' ? 'reference input'
-      : b.kind === 'route' ? 'route → sink'
-        : b.kind === 'default-route' ? 'default → sink'
-          : b.kind === 'reject' ? 'rejects → sink'
-            : 'parse errors → sink';
-  const meta = metaFor(b.nodeKind, b.type, b.cfg);
-  const label = typeLabel(b.type);
-  const showMeta = meta && meta !== b.title && meta !== label;
-  const nd = el('div', 'node satellite s-' + b.nodeKind);
-  nd.innerHTML = `<div class="kind"><span class="kico">${icon}</span>${kindText}</div>`
-    + `<div class="nm">${escapeHtml(b.title)}</div>`
-    + (showMeta ? `<div class="meta">${escapeHtml(meta)}</div>` : '');
-  nd.tabIndex = 0;
-  nd.title = 'Configured on the ' + (b.ownerIndex === 'source' ? 'source' : 'owning transform') + ' — click to edit.';
-  nd.onclick = () => { S.selNode = b.ownerId; S.inspTab = 'Config'; S.inspClosed = false; renderEditor(); };
-  item.appendChild(nd);
-  return item;
-}
-
-// The top-level DLQ ("catch") rendered as a satellite under the sink column, so
-// it stays glued to the sink even when other nodes carry branches of their own.
-function renderDlqBranch(dn: Node): HTMLElement {
-  const item = el('div', 'nbranch nbranch-dlq');
-  const elbow = el('div', 'belbow');
-  elbow.innerHTML = `<span class="bline"></span><span class="blabel" title="on write failure">⚠ on failure → catch</span>`;
-  item.appendChild(elbow);
-  const dnode = el('div', 'node catch satellite' + (S.selNode === 'dlq' ? ' sel' : ''));
-  dnode.innerHTML = `<div class="kind">dead-letter (catch)</div><div class="nm">${escapeHtml(dn.nm)}</div><div class="meta">${escapeHtml(dn.type)} · ${escapeHtml(dn.meta)}</div>`;
-  dnode.tabIndex = 0;
-  dnode.title = 'Rows rejected by the sink are captured here — the main pipeline keeps running.';
-  dnode.onclick = () => { S.selNode = 'dlq'; S.inspTab = 'Config'; S.inspClosed = false; renderEditor(); };
-  dnode.oncontextmenu = (e) => dlqMenu(e);
-  item.appendChild(dnode);
-  return item;
-}
-
 // ── graph (node + wire) canvas ─────────────────────────────────────────────
 // A read-only DAG view of the same pipeline: the main chain laid out left-to-
 // right with the implicit branches fanning below, drawn with real ports and SVG
@@ -3190,86 +3141,17 @@ function renderCanvas(m: HTMLElement) {
   head.appendChild(descIn);
   cv.appendChild(head);
 
-  // Flow area — the graph (node + wire) view, or the classic linear flow. The
-  // linear branch below is left at its original indentation to keep the diff
-  // minimal; both render into the same canvas so the header/hint/inspector are
-  // shared.
-  if (S.canvasMode === 'graph') {
-    renderGraphCanvas(cv);
-  } else {
-  const branchMap = branchesByOwner(p.branches);
-  const row = el('div', 'flowrow');
-  p.nodes.forEach((n, i) => {
-    if (i > 0) {
-      const cn = el('div', 'conn' + (S.running ? ' flow' : S.ran ? ' live' : ''));
-      const ins = el('div', 'ins', '＋');
-      ins.title = 'Insert transform here';
-      ins.onclick = (e) => { e.stopPropagation(); addTransform(i); };
-      cn.appendChild(ins);
-      cn.onclick = () => addTransform(i);
-      row.appendChild(cn);
-    }
-    const w = [92, 94, 94, 89, 89][i] || 90;
-    const nd = el('div', 'node ' + (n.kind === 'source' ? 'src' : n.kind === 'sink' ? 'sink' : 'tf') + (S.ran ? ' ran' : '') + (S.selNode === n.id ? ' sel' : ''));
-    nd.style.setProperty('--w', w + '%');
-    const icon = n.kind === 'source' ? '⇥' : n.kind === 'sink' ? '⇤' : 'ƒ';
-    // Avoid repeating the same word twice (e.g. a null sink whose name defaults
-    // to its type — "null / null"). The bold title is the custom name when set,
-    // otherwise the friendly type label; the meta line is only shown when it
-    // carries extra detail beyond that title.
-    const label = typeLabel(n.type);
-    const hasCustomName = n.nm && n.nm !== label && n.nm !== n.type;
-    const title = hasCustomName ? n.nm : label;
-    const showMeta = n.meta && n.meta !== title && n.meta !== label;
-    nd.innerHTML = `<div class="kind"><span class="kico">${icon}</span>${n.kind}</div>`
-      + `<div class="nm">${title}</div>`
-      + (showMeta ? `<div class="meta">${n.meta}</div>` : '')
-      + `<div class="thru"><i></i></div>`;
-    nd.tabIndex = 0;
-    nd.onclick = () => { S.selNode = n.id; S.inspTab = 'Config'; S.inspClosed = false; renderEditor(); };
-    nd.oncontextmenu = (e) => nodeMenu(n, i, e);
-    // Wrap each node in a column so its implicit branches hang directly beneath
-    // it, aligned under their owner, without pushing the main flow off its line.
-    const col = el('div', 'nodecol');
-    col.appendChild(nd);
-    if (S.showBranches) {
-      const owned = branchMap[n.id] || [];
-      const withDlq = n.id === 'sink' && p.hasDlq && !!p.dlqNode;
-      if (owned.length || withDlq) {
-        const stack = el('div', 'nbranches');
-        owned.forEach((b) => stack.appendChild(renderBranch(b)));
-        if (withDlq) stack.appendChild(renderDlqBranch(p.dlqNode!));
-        col.appendChild(stack);
-      }
-    }
-    row.appendChild(col);
-  });
-  row.appendChild(el('div', 'conn'));
-  const add = el('div', 'addnode', '＋');
-  add.title = 'Add transform (before the sink)';
-  add.onclick = () => addTransform(p.nodes.length - 1);
-  row.appendChild(add);
-  // Wrap the flow + catch lane so the DLQ aligns under the sink end of the flow.
-  const wrap = el('div', 'flowwrap');
-  wrap.appendChild(row);
-  cv.appendChild(wrap);
-  }
-
-  // The DLQ ("catch") now renders as a satellite inside the sink's column (see
-  // renderDlqBranch), so it stays aligned under the sink alongside any other
-  // implicit branches instead of floating below a branch-tall flow row.
+  // The DAG (node + wire) canvas — the only canvas.
+  renderGraphCanvas(cv);
 
   const hint = el('div', 'canvas-hint pillrow');
   const dlqPill = p.hasDlq ? '' : '<span class="pill" data-h="dlq">＋ DLQ</span>';
   const brPill = p.branches.length ? `<span class="pill toggle${S.showBranches ? ' on' : ''}" data-h="branches" title="Show or hide the implicit router, join, reject and parse-error branches">⎇ Branches</span>` : '';
-  const modePill = `<span class="pill toggle" data-h="gmode" title="Switch between the graph (node + wire) view and the linear flow">${S.canvasMode === 'graph' ? '▬ Linear view' : '◇ Graph view'}</span>`;
   const hasGraph = !!(S.doc as any).graph;
-  const promotePill = S.canvasMode === 'graph'
-    ? (hasGraph
-      ? `<span class="pill toggle on" data-h="unpromote" title="Remove the explicit graph block and return to a purely linear file">graph ✓ · reset</span>`
-      : `<span class="pill toggle" data-h="promote" title="Write an explicit graph block (nodes + edges) to the file from this pipeline">⇪ Promote to graph</span>`)
-    : '';
-  hint.innerHTML = '<span class="pill" data-h="src">＋ Source</span><span class="pill" data-h="tf">＋ Transform</span><span class="pill" data-h="sink">＋ Sink</span>' + dlqPill + brPill + modePill + promotePill + '<span class="pill" data-h="fit">⤢ Fit</span>';
+  const promotePill = hasGraph
+    ? `<span class="pill toggle on" data-h="unpromote" title="Remove the explicit graph block from the file (the canvas keeps showing the derived DAG)">graph ✓ · reset</span>`
+    : `<span class="pill toggle" data-h="promote" title="Write an explicit graph block (nodes + edges) to the file from this pipeline">⇪ Promote to graph</span>`;
+  hint.innerHTML = '<span class="pill" data-h="src">＋ Source</span><span class="pill" data-h="tf">＋ Transform</span><span class="pill" data-h="sink">＋ Sink</span>' + dlqPill + brPill + promotePill + '<span class="pill" data-h="fit">⤢ Fit</span>';
   (hint.querySelector('[data-h="tf"]') as HTMLElement).onclick = () => addTransform(p.nodes.length - 1);
   (hint.querySelector('[data-h="src"]') as HTMLElement).onclick = () =>
     quickPick('Change source type', SOURCE_TYPES, (v) => {
@@ -3287,8 +3169,6 @@ function renderCanvas(m: HTMLElement) {
   if (dlqBtn) dlqBtn.onclick = () => addDlq();
   const brBtn = hint.querySelector('[data-h="branches"]') as HTMLElement | null;
   if (brBtn) brBtn.onclick = () => { S.showBranches = !S.showBranches; renderEditor(); };
-  const gmBtn = hint.querySelector('[data-h="gmode"]') as HTMLElement | null;
-  if (gmBtn) gmBtn.onclick = () => { S.canvasMode = S.canvasMode === 'graph' ? 'linear' : 'graph'; renderEditor(); };
   const prBtn = hint.querySelector('[data-h="promote"]') as HTMLElement | null;
   if (prBtn) prBtn.onclick = () => {
     const g = deriveGraph(S.doc);
@@ -3300,12 +3180,12 @@ function renderCanvas(m: HTMLElement) {
   if (unBtn) unBtn.onclick = () => {
     delete (S.doc as any).graph;
     persistAndRebuild();
-    toast('ok', 'Removed graph block — back to linear');
+    toast('ok', 'Removed the explicit graph block');
   };
   const fitBtn = hint.querySelector('[data-h="fit"]') as HTMLElement | null;
   if (fitBtn) fitBtn.onclick = () => {
     const doc = S.doc as any;
-    const hadPos = S.canvasMode === 'graph' && doc.ui && doc.ui.positions;
+    const hadPos = doc.ui && doc.ui.positions;
     if (hadPos) { delete doc.ui.positions; if (!Object.keys(doc.ui).length) delete doc.ui; post({ type: 'save', doc: S.doc }); }
     renderEditor();
     const cvEl = $('.canvas'); if (cvEl) cvEl.scrollTo({ left: 0, top: 0 });
@@ -4795,8 +4675,6 @@ window.addEventListener('message', (ev: MessageEvent<HostToWebview>) => {
       migratePodlogSource(S.doc);
       S.pipe = buildPipe(S.doc);
       if (!S.selNode) S.selNode = 'source';
-      // Open pipelines that already carry an explicit graph block in the graph view.
-      if ((S.doc as any).graph) S.canvasMode = 'graph';
       renderAll();
       post({ type: 'validate' });
       break;
