@@ -2278,6 +2278,27 @@ function renderMapEditor(node: Node): HTMLElement {
     };
     renderGroups();
     mapBody.appendChild(fnwrap);
+    // Live value (board-04) — the sampled value for a DIRECT source ref when a
+    // preview sample exists. Expressions need a run (there is no client-side
+    // Flogo evaluator), so we only show a value we can honestly derive.
+    const liveWrap = el('div', 'mlive');
+    liveWrap.appendChild(el('div', 'mlivehdr', 'Live value'));
+    const liveDisp = exprForDisplay(String(fields[sel] || ''));
+    const sampleRow = (S.preview && Array.isArray(S.preview.rows) && S.preview.rows.length) ? (S.preview.rows[0] as Record<string, unknown>) : null;
+    const directRef = /^\$([\w]+)$/.exec(liveDisp);
+    let liveVal: string | null = null;
+    if (sampleRow && directRef && directRef[1] in sampleRow) liveVal = JSON.stringify(sampleRow[directRef[1]]);
+    if (liveVal !== null) {
+      liveWrap.appendChild(el('div', 'mliveval', escapeHtml(liveVal)));
+      liveWrap.appendChild(el('div', 'focushint', 'Sampled from the first preview row.'));
+    } else if (!sampleRow) {
+      const pv = el('button', 'btn sm', '⌕ Preview to see live values');
+      pv.onclick = () => doPreview();
+      liveWrap.appendChild(pv);
+    } else {
+      liveWrap.appendChild(el('div', 'focushint', 'Run the Test tab to evaluate this expression on the sample.'));
+    }
+    mapBody.appendChild(liveWrap);
     mapBody.appendChild(el('div', 'focushint', 'Drag a Source field here or type it. = is implicit — $field, upper($field); plain text is a constant.'));
   } else {
     mapBody.appendChild(el('div', 'muted', '<div style="font-size:11px;padding:8px;color:var(--dim)">Select a Target field (or add one) to edit its mapping here.</div>'));

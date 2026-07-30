@@ -376,6 +376,9 @@ select.v{appearance:none;cursor:pointer;background-image:linear-gradient(45deg,t
 .mapmodeseg span.on{background:#33608f;color:#fff}
 .mapcode .mapcodeta{width:100%;box-sizing:border-box;min-height:180px;background:var(--input);border:1px solid var(--inputBorder);border-radius:6px;padding:8px 10px;font:12px/1.6 var(--mono);color:var(--text);white-space:pre;resize:vertical}
 .mapcode .mapcodeta:focus{border-color:var(--blue);outline:none}
+.mmap .mlive{margin-top:10px;border-top:1px solid var(--inputBorder);padding-top:8px}
+.mmap .mlivehdr{font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--dim);margin-bottom:4px}
+.mmap .mliveval{font:12px var(--mono);color:#7fd6a0;background:#1e3a2a;border:1px solid #2f5c3f;border-radius:5px;padding:5px 8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* rule / expectation cards (validate + dq) */
 .rcards{display:flex;flex-direction:column;gap:8px}
 .rcard{border:1px solid var(--inputBorder);border-radius:6px;background:#202020;padding:8px}
