@@ -3064,7 +3064,7 @@ function renderGraphCanvas(cv: HTMLElement): void {
     wrap.querySelectorAll('.gport').forEach((e) => e.remove());
     for (let i = 1; i < p.nodes.length; i++) {
       const a = cp(p.nodes[i - 1].id), b = cp(p.nodes[i].id);
-      graphEdge(svg, a.outX, a.outY, b.inX, b.inY, 'main');
+      graphEdge(svg, a.outX, a.outY, b.inX, b.inY, 'main' + (S.running ? ' running' : ''));
     }
     p.nodes.forEach((n) => {
       const q = cp(n.id);
@@ -3116,16 +3116,32 @@ function renderGraphCanvas(cv: HTMLElement): void {
   };
 
   // 5) Render node cards at their positions, then paint the wires.
+  const els: Record<string, HTMLElement> = {};
   p.nodes.forEach((n, i) => {
     const nd = buildGraphNode(n, i, pos[n.id].x, pos[n.id].y, W);
+    els[n.id] = nd;
     attachDrag(nd, n.id);
     wrap.appendChild(nd);
   });
   branchList.forEach((b) => {
     b.card.style.left = pos[b.id].x + 'px'; b.card.style.top = pos[b.id].y + 'px'; b.card.style.width = BW + 'px';
+    els[b.id] = b.card;
     attachDrag(b.card, b.id);
     wrap.appendChild(b.card);
   });
+
+  // 6) Run overlay — after a run, badge the nodes with the real row counts the
+  // engine reported: read at the source, written at the sink, failed at the DLQ.
+  if (S.ran && S.lastRun) {
+    const r = S.lastRun;
+    const badge = (id: string, text: string, cls: string) => {
+      const host = els[id];
+      if (host) host.appendChild(el('div', 'grunbadge ' + cls, text));
+    };
+    badge('source', '▶ ' + fmtK(r.rowsProcessed) + ' read', 'in');
+    badge('sink', fmtK(r.rowsWritten) + ' written', 'ok');
+    if (p.hasDlq && r.rowsFailed > 0) badge('dlq', fmtK(r.rowsFailed) + ' failed', 'err');
+  }
 
   redraw();
   cv.appendChild(wrap);

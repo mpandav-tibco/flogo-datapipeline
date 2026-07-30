@@ -165,6 +165,12 @@ button{font-family:inherit;color:inherit;background:none;border:none;cursor:poin
 .gport.s-sink{border-color:#4caf7d}
 .gport.tf{border-color:#a978d9}
 .gport.branch{border-color:#8a929c;width:8px;height:8px}
+.gedge.running{stroke-dasharray:7 6;animation:gflow .7s linear infinite}
+@keyframes gflow{to{stroke-dashoffset:-13}}
+.grunbadge{position:absolute;top:-9px;right:8px;font:600 10px var(--mono);padding:1px 6px;border-radius:8px;background:#2a2d2e;color:var(--text);border:1px solid var(--border);z-index:4;pointer-events:none;white-space:nowrap}
+.grunbadge.ok{color:var(--green);border-color:#3d6b4f}
+.grunbadge.err{color:var(--red);border-color:#7a3a3a}
+.grunbadge.in{color:var(--blueHi);border-color:#2d6da3}
 .addnode{flex:none;width:52px;height:52px;border:1px dashed var(--inputBorder);border-radius:11px;color:var(--dim);display:flex;align-items:center;justify-content:center;font-size:20px}
 .addnode:hover{color:var(--text);border-color:#565a60}
 .canvas-hint{position:absolute;left:20px;bottom:14px;padding:5px 7px;background:rgba(24,24,24,.72);border:1px solid var(--border);border-radius:9px;backdrop-filter:blur(3px)}
