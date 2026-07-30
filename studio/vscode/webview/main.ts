@@ -3292,8 +3292,20 @@ function renderCanvas(m: HTMLElement) {
     if (hadPos) { delete doc.ui.positions; if (!Object.keys(doc.ui).length) delete doc.ui; post({ type: 'save', doc: S.doc }); }
     S.zoom = 1;
     renderEditor();
-    const cvEl = $('.canvas'); if (cvEl) cvEl.scrollTo({ left: 0, top: 0 });
-    if (hadPos) toast('ok', 'Reset to auto-layout');
+    // Zoom to fit: scale the freshly auto-laid-out graph down so the whole
+    // pipeline is visible in the viewport, then scroll back to the origin.
+    let msg = hadPos ? 'Reset to auto-layout' : '';
+    const cvEl = $('.canvas'); const gc = $('.gcanvas');
+    if (cvEl && gc) {
+      const cw = parseFloat(gc.style.width) || gc.offsetWidth || 1;
+      const ch = parseFloat(gc.style.height) || gc.offsetHeight || 1;
+      const availW = Math.max(200, cvEl.clientWidth - 48);
+      const availH = Math.max(200, cvEl.clientHeight - gc.offsetTop - 24);
+      const z = Math.max(0.4, Math.floor(Math.min(1, availW / cw, availH / ch) * 10) / 10);
+      if (z < 1) { applyZoom(z); msg = (hadPos ? 'Reset to auto-layout · ' : '') + 'fit to ' + Math.round(z * 100) + '%'; }
+      cvEl.scrollTo({ left: 0, top: 0 });
+    }
+    if (msg) toast('ok', msg);
   };
   const zoomIn = hint.querySelector('[data-h="zoomin"]') as HTMLElement | null;
   if (zoomIn) zoomIn.onclick = () => applyZoom((S.zoom || 1) + 0.1);
