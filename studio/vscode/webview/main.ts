@@ -2168,9 +2168,8 @@ function renderMapEditor(node: Node): HTMLElement {
     row.appendChild(tmap);
     row.onclick = (e) => {
       const t = e.target as HTMLElement;
-      if (t === row || t === top || t === tmap || t.classList.contains('tdot') || t.classList.contains('tmap') || t.classList.contains('tmi')) {
-        mapSelectedTarget = outName; renderEditor();
-      }
+      if (t.closest('.tname') || t.closest('.del')) return;
+      mapSelectedTarget = outName; renderEditor();
     };
     tgtBody.appendChild(row);
   });
