@@ -3589,7 +3589,7 @@ function autoFitCanvas(): void {
 // The wireframe's authoring model: a searchable, categorised library of
 // Sources / Transforms / Sinks. Clicking an item adds a node of that type
 // (reusing the same add logic the toolbar pills use). Collapsible to a strip.
-function addFromPalette(kind: string, type: string): void {
+function addFromPalette(kind: string, type: string, pos?: { x: number; y: number }): void {
   if (kind === 'source') {
     (S.doc.source as any) = { type, ...defaultConfigFor('source', type) };
     S.selNode = 'source'; S.inspTab = 'Config'; S.inspClosed = false;
@@ -3604,6 +3604,11 @@ function addFromPalette(kind: string, type: string): void {
     let n = 1; while (doc.graph.nodes.some((g: any) => g && g.id === 'xsink-' + n)) n++;
     const id = 'xsink-' + n;
     doc.graph.nodes.push({ id, kind: 'sink', type, ports: { in: ['in'] }, config: defaultConfigFor('sink', type) });
+    if (pos) {
+      doc.ui = doc.ui || {};
+      doc.ui.positions = doc.ui.positions || {};
+      doc.ui.positions[id] = { x: Math.max(0, Math.round(pos.x - 90)), y: Math.max(0, Math.round(pos.y - 36)) };
+    }
     S.pipe = buildPipe(S.doc);
     S.selNode = id; S.inspTab = 'Config'; S.inspClosed = false;
     post({ type: 'save', doc: S.doc });
@@ -3662,9 +3667,14 @@ function renderPalette(): HTMLElement {
       bodyEl.appendChild(el('div', 'complib-cat', cat.name));
       items.forEach((it) => {
         const row = el('div', 'complib-item');
-        row.title = 'Add ' + it.label;
+        row.title = 'Click or drag onto the canvas to add ' + it.label;
         row.innerHTML = `<span class="ci ${kcls[cat.kind]}">${glyph[cat.kind]}</span><span class="cl"></span>`;
         (row.querySelector('.cl') as HTMLElement).textContent = it.label;
+        row.draggable = true;
+        row.ondragstart = (e: DragEvent) => {
+          e.dataTransfer!.setData('text/flogo-comp', JSON.stringify({ kind: cat.kind, type: it.type }));
+          e.dataTransfer!.effectAllowed = 'copy';
+        };
         row.onclick = () => addFromPalette(cat.kind, it.type);
         bodyEl.appendChild(row);
       });
@@ -3681,11 +3691,43 @@ function renderPalette(): HTMLElement {
   return pal;
 }
 
+// Palette drag-and-drop: dropping a component onto the canvas adds it, landing a
+// free sink node at the cursor (source/transform join the auto-laid chain).
+function attachCanvasDrop(cv: HTMLElement): void {
+  const hasComp = (e: DragEvent) => !!e.dataTransfer && Array.from(e.dataTransfer.types).indexOf('text/flogo-comp') >= 0;
+  cv.addEventListener('dragover', (e: DragEvent) => {
+    if (!hasComp(e)) return;
+    e.preventDefault();
+    e.dataTransfer!.dropEffect = 'copy';
+    cv.classList.add('dragover');
+  });
+  cv.addEventListener('dragleave', (e: DragEvent) => {
+    if (e.target === cv) cv.classList.remove('dragover');
+  });
+  cv.addEventListener('drop', (e: DragEvent) => {
+    cv.classList.remove('dragover');
+    if (!hasComp(e)) return;
+    e.preventDefault();
+    let d: { kind: string; type: string };
+    try { d = JSON.parse(e.dataTransfer!.getData('text/flogo-comp')); } catch { return; }
+    if (!d || !d.kind || !d.type) return;
+    const gc = $('.gcanvas');
+    let pos: { x: number; y: number } | undefined;
+    if (gc) {
+      const r = gc.getBoundingClientRect();
+      const z = S.zoom || 1;
+      pos = { x: (e.clientX - r.left) / z, y: (e.clientY - r.top) / z };
+    }
+    addFromPalette(d.kind, d.type, pos);
+  });
+}
+
 function renderCanvas(m: HTMLElement) {
   const p = S.pipe!;
   const c = el('div', 'edcontent');
   const cv = el('div', 'canvas' + (S.running ? ' running' : ''));
   c.appendChild(cv);
+  attachCanvasDrop(cv);
 
   // Pipeline header — editable name + description that live in the pipeline file
   // (doc.name / doc.description). Lets users document the pipeline inline.
