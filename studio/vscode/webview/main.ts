@@ -75,7 +75,7 @@ interface Node {
   nm: string;
   meta: string;
   cfg: Record<string, string>;
-  ref: 'source' | 'sink' | 'dlq' | number; // where this maps back into the doc
+  ref: 'source' | 'sink' | 'dlq' | number | string; // maps back into the doc; an extra sink uses its graph node id
 }
 
 interface Pipe {
@@ -85,6 +85,7 @@ interface Pipe {
   status: string;
   nodes: Node[];
   branches: DerivedBranch[];
+  extraNodes: Node[];
   hasDlq: boolean;
   dlqNode: Node | null;
 }
@@ -267,6 +268,24 @@ function buildPipe(doc: PipelineDoc): Pipe {
     };
   }
 
+  // Extra sink nodes live ONLY in the graph (self-contained `config`), never in
+  // the linear model. Surface them as first-class nodes for the canvas + inspector
+  // but keep them OUT of `nodes` so they never join the linear main chain.
+  const extraNodes: Node[] = [];
+  const gg: any = (doc as any).graph;
+  if (gg && Array.isArray(gg.nodes)) {
+    for (const gn of gg.nodes) {
+      if (typeof gn.id !== 'string' || !gn.id.startsWith('xsink-')) continue;
+      const c = (gn.config && typeof gn.config === 'object') ? gn.config : {};
+      extraNodes.push({
+        id: gn.id, kind: 'sink', type: gn.type || 'null',
+        nm: (c.path && String(c.path).split(/[\\/]/).pop()) || c.table || typeLabel(gn.type) || 'sink',
+        meta: metaFor('sink', gn.type || '—', c),
+        cfg: cfgOf(c), ref: gn.id,
+      });
+    }
+  }
+
   const branches = deriveBranches(doc);
   return {
     name: doc.name || S.fileName.replace(/\.datapipeline$/, ''),
@@ -275,6 +294,7 @@ function buildPipe(doc: PipelineDoc): Pipe {
     status: S.running ? 'running' : S.ran ? 'partial' : 'idle',
     nodes,
     branches,
+    extraNodes,
     hasDlq,
     dlqNode,
   };
@@ -295,8 +315,29 @@ function cfgTarget(node: Node): any {
     doc.dlq.options = doc.dlq.options || {};
     return doc.dlq.options;
   }
+  if (typeof node.ref === 'string' && node.ref.startsWith('xsink-')) {
+    const gn = graphNodeById(doc, node.ref);
+    if (gn) return (gn.config = gn.config || {});
+    return {};
+  }
   doc.transforms = doc.transforms || [];
-  return (doc.transforms[node.ref] = doc.transforms[node.ref] || {});
+  const ti = node.ref as number;
+  return (doc.transforms[ti] = doc.transforms[ti] || {});
+}
+
+// Find a node in the explicit graph block by id (used for self-contained extra
+// sink nodes whose config lives in doc.graph.nodes[i].config).
+function graphNodeById(doc: any, id: string): any {
+  const g = doc && doc.graph;
+  if (!g || !Array.isArray(g.nodes)) return null;
+  return g.nodes.find((n: any) => n && n.id === id) || null;
+}
+
+// Resolve the currently-selected node across the main chain, the DLQ branch, and
+// any extra sink nodes (which live only in the graph).
+function findSelNode(p: Pipe): Node {
+  if (S.selNode === 'dlq' && p.dlqNode) return p.dlqNode;
+  return p.nodes.find((n) => n.id === S.selNode) || p.extraNodes.find((n) => n.id === S.selNode) || p.nodes[0];
 }
 
 // Write a config field back into the doc and persist (string value, coerced to
@@ -2932,7 +2973,7 @@ function renderEditor() {
     return;
   }
   if (t.type === 'canvas') {
-    const sn = (S.selNode === 'dlq' && S.pipe.dlqNode) ? S.pipe.dlqNode : (S.pipe.nodes.find((n) => n.id === S.selNode) || S.pipe.nodes[0]);
+    const sn = findSelNode(S.pipe);
     const snLabel = sn ? (sn.nm && sn.nm !== typeLabel(sn.type) && sn.nm !== sn.type ? `${typeLabel(sn.type)}: ${sn.nm}` : typeLabel(sn.type)) : '';
     bc.innerHTML = `◈ ${escapeHtml(S.pipe.name)} <span class="sep">›</span> ${escapeHtml(snLabel)} <span class="sep">›</span> <span class="chip plain" style="padding:1px 7px">${escapeHtml(S.pipe.mode)}</span>`;
     renderCanvas(m);
@@ -3223,6 +3264,18 @@ function renderGraphCanvas(cv: HTMLElement): void {
     if (n.id === 'sink' && p.hasDlq && p.dlqNode) add('dlq', buildGraphDlqCard(p.dlqNode), 'br-dlq', 'out');
   });
 
+  // Extra sink nodes (self-contained graph sinks): lay them out in a lane just
+  // below the deepest branch row; they're draggable and their positions persist.
+  let maxBrRow = 0;
+  if (S.showBranches) {
+    p.nodes.forEach((n) => {
+      const c = (branchMap[n.id] || []).length + (n.id === 'sink' && p.hasDlq && p.dlqNode ? 1 : 0);
+      if (c > maxBrRow) maxBrRow = c;
+    });
+  }
+  const exBandY = branchTop + maxBrRow * (BH + BGY);
+  p.extraNodes.forEach((n, i) => { pos[n.id] = { x: 24 + i * (BW + GX), y: exBandY, w: BW, h: BH }; });
+
   // Apply saved overrides.
   for (const id in saved) if (pos[id]) { pos[id].x = saved[id].x; pos[id].y = saved[id].y; }
 
@@ -3350,6 +3403,7 @@ function renderGraphCanvas(cv: HTMLElement): void {
       if (n.kind !== 'source') graphPort(wrap, q.inX, q.inY, gKindCls(n.kind));
       if (n.kind !== 'sink') connectPort(n.id, q.outX, q.outY, gKindCls(n.kind));
     });
+    p.extraNodes.forEach((n) => { const q = cp(n.id); graphPort(wrap, q.inX, q.inY, gKindCls('sink')); });
     branchList.forEach((b) => {
       const o = cp(b.owner), nn = cp(b.id);
       if (b.flow === 'out') graphEdge(svg, o.botX, o.botY, nn.topX, nn.topY, b.cls);
@@ -3453,6 +3507,12 @@ function renderGraphCanvas(cv: HTMLElement): void {
     attachDrag(b.card, b.id);
     wrap.appendChild(b.card);
   });
+  p.extraNodes.forEach((n, i) => {
+    const nd = buildGraphNode(n, i, pos[n.id].x, pos[n.id].y, BW);
+    els[n.id] = nd;
+    attachDrag(nd, n.id);
+    wrap.appendChild(nd);
+  });
 
   // 6) Run overlay — after a run, badge the nodes with the real row counts the
   // engine reported: read at the source, written at the sink, failed at the DLQ.
@@ -3533,7 +3593,7 @@ function renderCanvas(m: HTMLElement) {
     ? `<span class="pill toggle on" data-h="unpromote" title="Remove the explicit graph block from the file (the canvas keeps showing the derived DAG)">graph ✓ · reset</span>`
     : `<span class="pill toggle" data-h="promote" title="Write an explicit graph block (nodes + edges) to the file from this pipeline">⇪ Promote to graph</span>`;
   const zoomCluster = '<span class="pilldiv"></span><span class="pill zoomctl" data-h="zoomout" title="Zoom out (⌘−)">−</span><span class="pill zoomctl zlvl" data-h="zoomreset" title="Reset zoom to 100% (⌘0)">' + Math.round((S.zoom || 1) * 100) + '%</span><span class="pill zoomctl" data-h="zoomin" title="Zoom in (⌘+)">＋</span>';
-  hint.innerHTML = '<span class="pill" data-h="src">＋ Source</span><span class="pill" data-h="tf">＋ Transform</span><span class="pill" data-h="sink">＋ Sink</span>' + dlqPill + brPill + promotePill + '<span class="pill" data-h="fit">⤢ Fit</span>' + zoomCluster;
+  hint.innerHTML = '<span class="pill" data-h="src">＋ Source</span><span class="pill" data-h="tf">＋ Transform</span><span class="pill" data-h="sink">＋ Sink</span><span class="pill" data-h="xsink" title="Add an error / reject / audit sink node to the graph">⊕ Sink node</span>' + dlqPill + brPill + promotePill + '<span class="pill" data-h="fit">⤢ Fit</span>' + zoomCluster;
   (hint.querySelector('[data-h="tf"]') as HTMLElement).onclick = () => addTransform(p.nodes.length - 1);
   (hint.querySelector('[data-h="src"]') as HTMLElement).onclick = () =>
     quickPick('Change source type', SOURCE_TYPES, (v) => {
@@ -3549,6 +3609,8 @@ function renderCanvas(m: HTMLElement) {
     }, typeLabel);
   const dlqBtn = hint.querySelector('[data-h="dlq"]') as HTMLElement | null;
   if (dlqBtn) dlqBtn.onclick = () => addDlq();
+  const xsBtn = hint.querySelector('[data-h="xsink"]') as HTMLElement | null;
+  if (xsBtn) xsBtn.onclick = () => addExtraSink();
   const brBtn = hint.querySelector('[data-h="branches"]') as HTMLElement | null;
   if (brBtn) brBtn.onclick = () => { S.showBranches = !S.showBranches; renderEditor(); };
   const prBtn = hint.querySelector('[data-h="promote"]') as HTMLElement | null;
@@ -3615,7 +3677,7 @@ function renderCanvas(m: HTMLElement) {
 
   // inspector — the selected node may be the DLQ branch node (not in p.nodes).
   const insp = el('div', 'inspector');
-  const sn = (S.selNode === 'dlq' && p.dlqNode) ? p.dlqNode : (p.nodes.find((n) => n.id === S.selNode) || p.nodes[0]);
+  const sn = findSelNode(p);
   const ih = el('div', 'ih');
   if (sn) {
     // A color-coded kind badge (Source / Transform / Sink / DLQ) so it's obvious
@@ -3654,6 +3716,12 @@ function renderCanvas(m: HTMLElement) {
         sel.appendChild(op);
       });
       sel.onchange = () => {
+        if (typeof sn.ref === 'string' && sn.ref.startsWith('xsink-')) {
+          const gn = graphNodeById(S.doc, sn.ref);
+          if (gn) { gn.type = sel.value; gn.config = defaultConfigFor('sink', sel.value); }
+          persistAndRebuild();
+          return;
+        }
         const kind = sn.kind as 'source' | 'sink';
         (S.doc[kind] as any) = { type: sel.value, ...defaultConfigFor(kind, sel.value) };
         persistAndRebuild();
@@ -3686,6 +3754,13 @@ function renderCanvas(m: HTMLElement) {
       typeRow.appendChild(el('span', 'chip plain', transformLabel(sn.type)));
     }
     ib.appendChild(typeRow);
+    if (typeof sn.ref === 'string' && sn.ref.startsWith('xsink-')) {
+      const delRow = el('div', 'insp-type');
+      const delBtn = el('button', 'btn sm', '✕ Delete sink node');
+      delBtn.onclick = () => removeExtraSink(sn.ref as string);
+      delRow.appendChild(delBtn);
+      ib.appendChild(delRow);
+    }
 
     if (sn.kind === 'dlq') {
       ib.appendChild(el('div', 'muted', '<div style="font-size:11.5px;padding:0 0 8px">Rows that still fail after per-row isolation are written here with an error-envelope column — the main sink is unaffected.</div>'));
@@ -4563,6 +4638,38 @@ function removeDlq() {
   post({ type: 'save', doc: S.doc });
   renderEditor();
   toast('warn', 'Removed DLQ — write failures will only be counted, not routed');
+}
+
+// Add an extra sink node to the graph — a self-contained sink (error / reject /
+// audit destination) that lives only in doc.graph.nodes with its own `config`.
+// Wire a typed link (error / no match / condition) to it and it runs on the
+// graph engine. Auto-promotes so the node has a graph to live in.
+function addExtraSink() {
+  quickPick('Add a sink node — pick a type', SINK_TYPES, (type) => {
+    const doc = S.doc as any;
+    if (!doc.graph) doc.graph = deriveGraph(S.doc);
+    doc.graph.nodes = Array.isArray(doc.graph.nodes) ? doc.graph.nodes : [];
+    let n = 1;
+    while (doc.graph.nodes.some((g: any) => g && g.id === 'xsink-' + n)) n++;
+    const id = 'xsink-' + n;
+    doc.graph.nodes.push({ id, kind: 'sink', type, ports: { in: ['in'] }, config: defaultConfigFor('sink', type) });
+    S.pipe = buildPipe(S.doc);
+    S.selNode = id;
+    S.inspTab = 'Config';
+    S.inspClosed = false;
+    post({ type: 'save', doc: S.doc });
+    renderEditor();
+    toast('ok', `Added sink node → ${typeLabel(type)}. Drag a link to it, then set the link type.`);
+  }, typeLabel);
+}
+function removeExtraSink(id: string) {
+  const doc = S.doc as any;
+  if (doc.graph && Array.isArray(doc.graph.nodes)) doc.graph.nodes = doc.graph.nodes.filter((n: any) => n && n.id !== id);
+  if (doc.graph && Array.isArray(doc.graph.edges)) doc.graph.edges = doc.graph.edges.filter((e: any) => gEndpointNode(edgeFrom(e)) !== id && gEndpointNode(edgeTo(e)) !== id);
+  if (doc.ui && doc.ui.positions) delete doc.ui.positions[id];
+  S.selNode = 'sink';
+  persistAndRebuild();
+  toast('warn', 'Sink node removed');
 }
 function dlqMenu(e: MouseEvent) {
   e.preventDefault();
