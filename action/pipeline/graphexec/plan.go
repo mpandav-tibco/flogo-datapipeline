@@ -5,12 +5,12 @@ import (
 	"strings"
 )
 
-// pedge is a compiled outbound edge: the target node plus an optional row
-// predicate (nil = unconditional).
+// pedge is a compiled outbound edge: the target node, the edge's routing role,
+// and (for EdgeCondition only) its compiled row predicate.
 type pedge struct {
-	to   *pnode
-	pred Pred
-	cond string
+	to    *pnode
+	etype EdgeType
+	pred  Pred
 }
 
 // pnode is a compiled node: its operator (exactly one of src/tx/snk is set by
@@ -39,6 +39,15 @@ func nodeOf(endpoint string) string {
 		return endpoint[:i]
 	}
 	return endpoint
+}
+
+// normEdgeType maps the neutral edge type onto a canonical routing role; an
+// empty or "default" type is a success edge.
+func normEdgeType(t EdgeType) EdgeType {
+	if t == "" || t == "default" {
+		return EdgeSuccess
+	}
+	return t
 }
 
 // Compile validates the graph and constructs every operator, returning a Plan
@@ -123,13 +132,21 @@ func Compile(g *Graph, b Builders) (*Plan, error) {
 		if to.kind == KindSource {
 			return fail("graphexec: source node %q cannot have an inbound edge", toID)
 		}
-		pe := &pedge{to: to, cond: e.Cond}
-		if strings.TrimSpace(e.Cond) != "" {
+		pe := &pedge{to: to, etype: normEdgeType(e.Type)}
+		switch pe.etype {
+		case EdgeCondition:
+			if strings.TrimSpace(e.Cond) == "" {
+				return fail("graphexec: condition edge %s→%s has an empty expression", e.From, e.To)
+			}
 			pred, err := b.Predicate(e.Cond)
 			if err != nil {
 				return fail("graphexec: compile condition %q on edge %s→%s: %w", e.Cond, e.From, e.To, err)
 			}
 			pe.pred = pred
+		case EdgeSuccess, EdgeOtherwise, EdgeError:
+			// no predicate
+		default:
+			return fail("graphexec: edge %s→%s has unknown type %q", e.From, e.To, e.Type)
 		}
 		from.out = append(from.out, pe)
 		to.inDeg++

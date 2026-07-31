@@ -147,18 +147,25 @@ func (rt *runtime) runTransform(ctx context.Context, n *pnode) {
 			}
 			atomic.AddInt64(&stat.RowsIn, int64(b.Len()))
 			out, err := n.tx.Apply(b)
+			if err != nil {
+				// Route the failed batch to the node's error edge(s); if it has
+				// none, the error aborts the run (matching the linear engine).
+				handled := rt.emitError(ctx, n, b)
+				if out != nil && out != b {
+					record.Put(out)
+				}
+				record.Put(b)
+				if !handled {
+					rt.fail(fmt.Errorf("transform %q: %w", n.id, err))
+					return
+				}
+				continue
+			}
 			// Per the transform contract the caller owns the input; recycle it
 			// once the stage produced a DISTINCT output (pass-through returns
 			// the same batch, which is forwarded instead).
 			if out != b {
 				record.Put(b)
-			}
-			if err != nil {
-				if out != nil && out != b {
-					record.Put(out)
-				}
-				rt.fail(fmt.Errorf("transform %q: %w", n.id, err))
-				return
 			}
 			if out == nil {
 				continue
@@ -202,50 +209,52 @@ func (rt *runtime) runSink(ctx context.Context, n *pnode) {
 	}
 }
 
-// emit routes an output batch to this node's outbound edges using FIRST-MATCH
-// semantics: each row is delivered to the first conditional edge whose predicate
-// matches; rows that match no condition fall through to every unconditional
-// (default) edge. This conserves rows — a row is never silently duplicated —
-// and mirrors the router's route/default model. A single unconditional edge is
-// the fast path: the batch is forwarded whole, without copying.
+// emit routes a batch of SUCCESSFULLY-processed rows to the node's outbound
+// edges using Flogo-style link semantics:
+//
+//   - every EdgeSuccess edge receives every row (tee);
+//   - each EdgeCondition edge receives the rows for which its predicate is true;
+//   - EdgeOtherwise edges receive the rows that matched no condition edge.
+//
+// Error edges are not touched here (they carry failed rows — see emitError). A
+// single success edge is the fast path: the batch is forwarded without copying.
 func (rt *runtime) emit(ctx context.Context, n *pnode, b *record.RecordBatch) bool {
 	if b == nil {
 		return true
 	}
-	if len(n.out) == 0 {
-		record.Put(b)
-		return true
-	}
-	if len(n.out) == 1 && n.out[0].pred == nil {
+	if len(n.out) == 1 && n.out[0].etype == EdgeSuccess {
 		return rt.send(ctx, n.out[0], b)
 	}
 	buckets := make([]*record.RecordBatch, len(n.out))
 	for ri := range b.Rows {
 		row := b.RowMap(ri)
 		matched := false
-		for ei, e := range n.out {
-			if e.pred != nil && e.pred(row) {
-				appendRow(&buckets[ei], b, ri)
-				matched = true
-				break
+		for i, e := range n.out {
+			switch e.etype {
+			case EdgeSuccess:
+				appendRow(&buckets[i], b, ri)
+			case EdgeCondition:
+				if e.pred(row) {
+					appendRow(&buckets[i], b, ri)
+					matched = true
+				}
 			}
 		}
-		if matched {
-			continue
-		}
-		for ei, e := range n.out {
-			if e.pred == nil {
-				appendRow(&buckets[ei], b, ri)
+		if !matched {
+			for i, e := range n.out {
+				if e.etype == EdgeOtherwise {
+					appendRow(&buckets[i], b, ri)
+				}
 			}
 		}
 	}
 	record.Put(b)
-	for ei, e := range n.out {
-		if buckets[ei] == nil {
+	for i, e := range n.out {
+		if buckets[i] == nil {
 			continue
 		}
-		if !rt.send(ctx, e, buckets[ei]) {
-			for k := ei + 1; k < len(buckets); k++ {
+		if !rt.send(ctx, e, buckets[i]) {
+			for k := i + 1; k < len(buckets); k++ {
 				if buckets[k] != nil {
 					record.Put(buckets[k])
 				}
@@ -254,6 +263,26 @@ func (rt *runtime) emit(ctx context.Context, n *pnode, b *record.RecordBatch) bo
 		}
 	}
 	return true
+}
+
+// emitError routes a failed batch to the node's error edge(s). It returns false
+// when the node declares no error edge, so the caller aborts the run (matching
+// the linear engine, which fails on an unhandled transform error).
+func (rt *runtime) emitError(ctx context.Context, n *pnode, b *record.RecordBatch) bool {
+	stat := rt.res.Nodes[n.id]
+	handled := false
+	for _, e := range n.out {
+		if e.etype != EdgeError {
+			continue
+		}
+		handled = true
+		cp := copyBatch(b)
+		atomic.AddInt64(&stat.RowsErrored, int64(cp.Len()))
+		if !rt.send(ctx, e, cp) {
+			return true // cancelled; the run is already tearing down
+		}
+	}
+	return handled
 }
 
 // send delivers a batch to an edge's consumer, honouring cancellation. On
@@ -282,4 +311,14 @@ func cloneRow(r []interface{}) []interface{} {
 	c := make([]interface{}, len(r))
 	copy(c, r)
 	return c
+}
+
+// copyBatch returns a copy of b with an independent Rows slice and copied row
+// slices, so the original can be recycled while the copy travels an edge.
+func copyBatch(b *record.RecordBatch) *record.RecordBatch {
+	out := b.Clone(b.Len())
+	for i := range b.Rows {
+		out.Rows = append(out.Rows, cloneRow(b.Rows[i]))
+	}
+	return out
 }

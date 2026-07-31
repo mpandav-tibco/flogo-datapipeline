@@ -70,12 +70,14 @@ func graphExecutable(def *Definition) bool {
 }
 
 // graphNonReducible reports whether the graph has structure the linear chain
-// cannot represent: a conditional edge, or any node with fan-out / fan-in ≥ 2.
+// cannot represent: a typed edge (condition / otherwise / error), or any node
+// with fan-out / fan-in ≥ 2.
 func graphNonReducible(g *GraphDef) bool {
 	outDeg := map[string]int{}
 	inDeg := map[string]int{}
 	for _, e := range g.Edges {
-		if e.Type == "expression" {
+		switch e.Type {
+		case "expression", "otherwise", "error":
 			return true
 		}
 		outDeg[graphEndpointNode(e.From)]++
@@ -135,7 +137,7 @@ func (a *DataPipelineAction) buildExecGraph(in *Input) (*graphexec.Graph, error)
 		eg.Nodes = append(eg.Nodes, node)
 	}
 	for _, e := range def.Graph.Edges {
-		edge := graphexec.Edge{From: e.From, To: e.To}
+		edge := graphexec.Edge{From: e.From, To: e.To, Type: graphexec.EdgeType(e.Type)}
 		if e.Type == "expression" {
 			edge.Cond = e.Value
 		}

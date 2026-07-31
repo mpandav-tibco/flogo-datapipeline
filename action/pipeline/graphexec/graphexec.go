@@ -47,14 +47,35 @@ type Node struct {
 	Cfg  map[string]interface{}
 }
 
+// EdgeType classifies an edge the way Flogo Flow classifies links between
+// activities. Applied to a stream of rows leaving a node:
+//
+//   - EdgeSuccess    — every successfully-processed row (the main continuation;
+//     tees when it coexists with condition edges).
+//   - EdgeCondition  — successful rows for which Cond evaluates true (additive:
+//     a matching row still takes any EdgeSuccess edge as well).
+//   - EdgeOtherwise  — successful rows that matched NONE of the node's condition
+//     edges (the "else" fallback).
+//   - EdgeError      — rows/batches that FAILED at the node (routed to an error
+//     sink / DLQ branch instead of aborting the run).
+type EdgeType string
+
+const (
+	EdgeSuccess   EdgeType = "success"
+	EdgeCondition EdgeType = "expression"
+	EdgeOtherwise EdgeType = "otherwise"
+	EdgeError     EdgeType = "error"
+)
+
 // Edge connects one node's output to another node's input. From and To may be
 // bare node ids or port-qualified ("node:port"); the executor routes by node id
 // (ports are retained for authoring/round-trip and future port-aware routing).
-// Cond, when non-empty, is a boolean row predicate: only rows for which it
-// evaluates true traverse this edge. An empty Cond is an unconditional edge.
+// Type selects the routing role; Cond holds the boolean row predicate for an
+// EdgeCondition edge. An empty Type is treated as EdgeSuccess.
 type Edge struct {
 	From string
 	To   string
+	Type EdgeType
 	Cond string
 }
 
@@ -130,6 +151,7 @@ type NodeStat struct {
 	RowsIn      int64
 	RowsOut     int64
 	RowsWritten int64
+	RowsErrored int64
 	ID          string
 	Kind        NodeKind
 }

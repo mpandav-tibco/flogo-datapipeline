@@ -87,7 +87,7 @@ func TestGraphRun_ConditionalSkip(t *testing.T) {
 				{ID: "sink", Kind: "sink", Type: "jsonlines"},
 			},
 			Edges: []GraphEdge{
-				{From: "source:rows", To: "t0:in"},
+				{From: "source:rows", To: "t0:in", Type: "otherwise"},
 				{From: "t0:out", To: "sink:in"},
 				{From: "source:rows", To: "sink:in", Type: "expression", Value: "amount > 100"},
 			},

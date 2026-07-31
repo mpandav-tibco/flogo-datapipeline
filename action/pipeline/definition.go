@@ -641,9 +641,14 @@ func (n GraphNodeDef) MarshalJSON() ([]byte, error) {
 //     {"from":...,"to":...,"type":"expression","value":"<bool expr>"} that is
 //     taken only when the expression is true.
 type GraphEdge struct {
-	From  string // source endpoint: "node" or "node:port"
-	To    string // target endpoint: "node" or "node:port"
-	Type  string // "" / "default" = unconditional; "expression" = conditional
+	From string // source endpoint: "node" or "node:port"
+	To   string // target endpoint: "node" or "node:port"
+	// Type selects the routing role, mirroring Flogo Flow link types:
+	//   "" / "default" — success: every successful row (the main continuation).
+	//   "expression"   — success with condition: rows for which Value is true.
+	//   "otherwise"    — no matching: rows that matched no sibling condition.
+	//   "error"        — failure: rows/batches that errored at the from-node.
+	Type  string
 	Value string // condition expression, when Type == "expression"
 }
 
@@ -736,9 +741,9 @@ func (g *GraphDef) validate() error {
 			return fmt.Errorf("pipeline definition: graph.edges[%d] must have from and to endpoints, got %q -> %q", i, e.From, e.To)
 		}
 		switch e.Type {
-		case "", "default", "expression":
+		case "", "default", "expression", "otherwise", "error":
 		default:
-			return fmt.Errorf("pipeline definition: graph.edges[%d] has invalid type %q (want \"default\" or \"expression\")", i, e.Type)
+			return fmt.Errorf("pipeline definition: graph.edges[%d] has invalid type %q (want \"default\", \"expression\", \"otherwise\" or \"error\")", i, e.Type)
 		}
 		if _, ok := indeg[from]; !ok {
 			return fmt.Errorf("pipeline definition: graph.edges[%d] references unknown source node %q", i, from)

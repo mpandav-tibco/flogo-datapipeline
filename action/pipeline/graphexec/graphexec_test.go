@@ -2,6 +2,7 @@ package graphexec
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"sort"
 	"sync"
@@ -79,6 +80,14 @@ type idTransform struct{}
 func (idTransform) Apply(in *record.RecordBatch) (*record.RecordBatch, error) { return in, nil }
 func (idTransform) Close() error                                              { return nil }
 
+// failTransform always errors, to exercise the error edge.
+type failTransform struct{}
+
+func (failTransform) Apply(in *record.RecordBatch) (*record.RecordBatch, error) {
+	return nil, fmt.Errorf("failTransform: boom")
+}
+func (failTransform) Close() error { return nil }
+
 // testBuilders wires each node's fake operator (stored under cfg["op"]) and uses
 // the real filter compiler for edge conditions.
 func testBuilders() Builders {
@@ -139,8 +148,8 @@ func TestRunConditionalFork(t *testing.T) {
 			{ID: "small", Kind: KindSink, Type: "mem", Cfg: map[string]interface{}{"op": small}},
 		},
 		Edges: []Edge{
-			{From: "source:rows", To: "big:in", Cond: "amount > 100"},
-			{From: "source:rows", To: "small:in", Cond: "amount <= 100"},
+			{From: "source:rows", To: "big:in", Type: EdgeCondition, Cond: "amount > 100"},
+			{From: "source:rows", To: "small:in", Type: EdgeCondition, Cond: "amount <= 100"},
 		},
 	}
 	plan, err := Compile(g, testBuilders())
@@ -196,12 +205,10 @@ func TestCompileRejectsUnknownEndpoint(t *testing.T) {
 	}
 }
 
-func TestFirstMatchRouting(t *testing.T) {
-	// source fans out to a conditional skip edge (amount > 100 → straight to
-	// sink) and an unconditional default edge (→ t0 → sink). First-match routing
-	// must divert matching rows to the skip edge and send the rest through the
-	// chain, so every row reaches the sink exactly once (no double-write), and
-	// the sink's two inbound edges (skip + chain) fan in.
+func TestSuccessTee(t *testing.T) {
+	// A success (default) edge carries ALL rows through the chain; a coexisting
+	// condition edge ADDITIONALLY tees matching rows straight to the sink. So the
+	// matching rows are written twice — the explicit Flogo "success + condition".
 	src := &memSource{cols: testCols, rows: [][]interface{}{{1, 50}, {2, 150}, {3, 250}, {4, 80}}}
 	snk := &memSink{}
 	g := &Graph{
@@ -211,8 +218,8 @@ func TestFirstMatchRouting(t *testing.T) {
 			{ID: "sink", Kind: KindSink, Type: "mem", Cfg: map[string]interface{}{"op": snk}},
 		},
 		Edges: []Edge{
-			{From: "source:rows", To: "t0:in"},                       // default / main chain
-			{From: "source:rows", To: "sink:in", Cond: "amount > 100"}, // conditional skip
+			{From: "source:rows", To: "t0:in"},                                              // success (all rows)
+			{From: "source:rows", To: "sink:in", Type: EdgeCondition, Cond: "amount > 100"}, // tee matching
 			{From: "t0:out", To: "sink:in"},
 		},
 	}
@@ -224,11 +231,88 @@ func TestFirstMatchRouting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if got := snk.amounts(); len(got) != 4 || got[0] != 50 || got[1] != 80 || got[2] != 150 || got[3] != 250 {
-		t.Fatalf("sink = %v, want [50 80 150 250] each exactly once (no double-write)", got)
+	// 4 rows via the chain + 2 matching rows teed directly = 6, with 150 and 250
+	// appearing twice.
+	if got := snk.amounts(); len(got) != 6 || got[0] != 50 || got[1] != 80 || got[2] != 150 || got[3] != 150 || got[4] != 250 || got[5] != 250 {
+		t.Fatalf("sink = %v, want [50 80 150 150 250 250] (matching rows teed)", got)
+	}
+	if res.RowsWritten != 6 {
+		t.Fatalf("RowsWritten=%d, want 6", res.RowsWritten)
+	}
+}
+
+func TestConditionDivert(t *testing.T) {
+	// A condition edge + an OTHERWISE edge partition the stream: matching rows go
+	// one way, everything else the other — each row exactly once (no tee, because
+	// there is no success edge).
+	src := &memSource{cols: testCols, rows: [][]interface{}{{1, 50}, {2, 150}, {3, 250}, {4, 80}}}
+	big := &memSink{}
+	rest := &memSink{}
+	g := &Graph{
+		Nodes: []Node{
+			{ID: "source", Kind: KindSource, Type: "mem", Cfg: map[string]interface{}{"op": src}},
+			{ID: "big", Kind: KindSink, Type: "mem", Cfg: map[string]interface{}{"op": big}},
+			{ID: "rest", Kind: KindSink, Type: "mem", Cfg: map[string]interface{}{"op": rest}},
+		},
+		Edges: []Edge{
+			{From: "source:rows", To: "big:in", Type: EdgeCondition, Cond: "amount > 100"},
+			{From: "source:rows", To: "rest:in", Type: EdgeOtherwise},
+		},
+	}
+	plan, err := Compile(g, testBuilders())
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	res, err := plan.Run(context.Background(), Options{BatchSize: 3})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if got := big.amounts(); len(got) != 2 || got[0] != 150 || got[1] != 250 {
+		t.Fatalf("big = %v, want [150 250]", got)
+	}
+	if got := rest.amounts(); len(got) != 2 || got[0] != 50 || got[1] != 80 {
+		t.Fatalf("rest = %v, want [50 80] (otherwise = unmatched)", got)
 	}
 	if res.RowsWritten != 4 {
-		t.Fatalf("RowsWritten=%d, want 4 (rows conserved, not duplicated)", res.RowsWritten)
+		t.Fatalf("RowsWritten=%d, want 4 (no duplication)", res.RowsWritten)
+	}
+}
+
+func TestErrorEdge(t *testing.T) {
+	// A transform that fails routes its failed batch to the error edge instead of
+	// aborting the run; the success edge to the main sink gets nothing.
+	src := &memSource{cols: testCols, rows: [][]interface{}{{1, 50}, {2, 150}, {3, 250}}}
+	snk := &memSink{}
+	errSink := &memSink{}
+	g := &Graph{
+		Nodes: []Node{
+			{ID: "source", Kind: KindSource, Type: "mem", Cfg: map[string]interface{}{"op": src}},
+			{ID: "t0", Kind: KindTransform, Type: "fail", Cfg: map[string]interface{}{"op": failTransform{}}},
+			{ID: "sink", Kind: KindSink, Type: "mem", Cfg: map[string]interface{}{"op": snk}},
+			{ID: "errors", Kind: KindSink, Type: "mem", Cfg: map[string]interface{}{"op": errSink}},
+		},
+		Edges: []Edge{
+			{From: "source:rows", To: "t0:in"},
+			{From: "t0:out", To: "sink:in"},
+			{From: "t0:out", To: "errors:in", Type: EdgeError},
+		},
+	}
+	plan, err := Compile(g, testBuilders())
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	res, err := plan.Run(context.Background(), Options{BatchSize: 5})
+	if err != nil {
+		t.Fatalf("run must NOT fail when an error edge handles the failure: %v", err)
+	}
+	if got := errSink.amounts(); len(got) != 3 {
+		t.Fatalf("error sink = %v, want 3 failed rows routed", got)
+	}
+	if got := snk.amounts(); len(got) != 0 {
+		t.Fatalf("main sink = %v, want 0 (all rows errored)", got)
+	}
+	if res.Nodes["t0"].RowsErrored != 3 {
+		t.Fatalf("t0 RowsErrored=%d, want 3", res.Nodes["t0"].RowsErrored)
 	}
 }
 
