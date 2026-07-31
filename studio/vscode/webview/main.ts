@@ -3560,7 +3560,8 @@ function renderGraphCanvas(cv: HTMLElement): void {
   const connectPort = (fromId: string, x: number, y: number, cls: string, label?: string, side?: 'in' | 'out') => {
     const port = el('span', 'gport gport-' + cls + ' io');
     port.style.left = (x - 6) + 'px'; port.style.top = (y - 6) + 'px';
-    port.title = 'Drag to connect this stage to another';
+    const cols = columnsOutOf(fromId);
+    port.title = (cols.length ? cols.length + ' cols: ' + cols.slice(0, 10).join(', ') + (cols.length > 10 ? '…' : '') + ' — ' : '') + 'drag to connect to another stage';
     port.addEventListener('mousedown', (ev) => startConnect(fromId, ev));
     wrap.appendChild(port);
     if (label) addPortLabel(wrap, x, y, label, side || 'out');
@@ -4148,7 +4149,7 @@ function renderCanvas(m: HTMLElement) {
   insp.appendChild(ih);
   const ib = el('div', 'ib');
   const tabs = el('div', 'tabs');
-  ['Config', 'Schema', 'Test'].forEach((tn) => {
+  ['Config', 'Ports', 'Schema', 'Test'].forEach((tn) => {
     const s = el('span', S.inspTab === tn ? 'on' : '', tn);
     s.onclick = () => { S.inspTab = tn; renderEditor(); };
     tabs.appendChild(s);
@@ -4339,6 +4340,8 @@ function renderCanvas(m: HTMLElement) {
       rm.onclick = () => removeDlq();
       ib.appendChild(rm);
     }
+  } else if (S.inspTab === 'Ports') {
+    renderPortsTab(ib, sn);
   } else if (S.inspTab === 'Schema') {
     renderSchemaTab(ib, sn);
   } else {
@@ -4350,6 +4353,66 @@ function renderCanvas(m: HTMLElement) {
   // Restore the previously-remembered scroll position now that the inspector
   // body is in the DOM (see renderEditor()).
   ib.scrollTop = inspScrollTop;
+}
+
+// The columns flowing OUT of a stage (into its downstream edge): source columns
+// walked forward through the transforms up to and including this stage.
+function columnsOutOf(nodeId: string): string[] {
+  const p = S.pipe;
+  if (!p) return [];
+  if (nodeId === 'source') return upstreamColumnsAt(0);
+  const idx = p.nodes.findIndex((n) => n.id === nodeId);
+  if (idx < 0) return [];
+  if (p.nodes[idx].kind === 'sink') return upstreamColumnsAt(Math.max(0, idx - 1));
+  return upstreamColumnsAt(idx);
+}
+
+// The typed ports a stage exposes (arity), for the inspector's Ports tab.
+function portsFor(n: Node): { ins: Array<{ name: string; note?: string }>; outs: Array<{ name: string; note?: string; err?: boolean }> } {
+  const t = n.type;
+  if (n.kind === 'source') return { ins: [], outs: [{ name: 'rows', note: 'emitted records' }] };
+  if (n.kind === 'sink' || n.kind === 'dlq') return { ins: [{ name: 'in' }], outs: [] };
+  if (t === 'validate' || t === 'dq') return { ins: [{ name: 'in' }], outs: [{ name: 'pass', note: 'rows that passed' }, { name: 'reject', note: 'rows that failed the rules', err: true }] };
+  if (t === 'join') return { ins: [{ name: 'left', note: 'main input' }, { name: 'right', note: 'reference input' }], outs: [{ name: 'out', note: 'enriched rows' }] };
+  if (t === 'router' || t === 'split') {
+    const routes = Array.isArray((n.cfg as any)?.routes) ? (n.cfg as any).routes : [];
+    const outs = routes.map((r: any) => ({ name: String(r.name || 'route'), note: r.when ? String(r.when) : undefined }));
+    outs.push({ name: 'default', note: 'unmatched rows' });
+    return { ins: [{ name: 'in' }], outs };
+  }
+  if (t === 'union') return { ins: [{ name: 'in', note: 'primary' }, { name: 'with', note: 'additional sources' }], outs: [{ name: 'out' }] };
+  return { ins: [{ name: 'in' }], outs: [{ name: 'out' }] };
+}
+
+// Ports tab: the stage's in/out arity + the columns flowing out of it.
+function renderPortsTab(ib: HTMLElement, sn: Node): void {
+  const { ins, outs } = portsFor(sn);
+  const sec = (title: string, ports: Array<{ name: string; note?: string; err?: boolean }>) => {
+    const f = el('div', 'fld');
+    f.appendChild(el('div', 'k', title));
+    if (!ports.length) { f.appendChild(el('div', 'hint', 'none')); ib.appendChild(f); return; }
+    ports.forEach((pp) => {
+      const row = el('div', 'portrow' + (pp.err ? ' err' : ''));
+      row.appendChild(el('span', 'pn', escapeHtml(pp.name)));
+      if (pp.note) row.appendChild(el('span', 'pnote', escapeHtml(pp.note)));
+      f.appendChild(row);
+    });
+    ib.appendChild(f);
+  };
+  sec('In ports', ins);
+  sec('Out ports', outs);
+  const cols = columnsOutOf(sn.id);
+  const cf = el('div', 'fld');
+  cf.appendChild(el('div', 'k', 'Output schema'));
+  if (cols.length) {
+    cf.appendChild(el('div', 'hint', cols.length + ' columns flow out of this stage'));
+    const chips = el('div', 'portcols');
+    cols.slice(0, 60).forEach((c) => chips.appendChild(el('span', 'portcol', escapeHtml(c))));
+    cf.appendChild(chips);
+  } else {
+    cf.appendChild(el('div', 'hint', 'Run a preview to see the columns flowing out of this stage.'));
+  }
+  ib.appendChild(cf);
 }
 
 // Infer the column schema visible at a given stage by walking the doc from the

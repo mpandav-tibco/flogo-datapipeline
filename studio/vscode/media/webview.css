@@ -231,6 +231,14 @@ button{font-family:inherit;color:inherit;background:none;border:none;cursor:poin
 select.v,.fld select.v{background-color:var(--input);border:1px solid var(--inputBorder);color:var(--text);border-radius:5px;padding:6px 9px;font:12px var(--mono);width:100%;appearance:none;cursor:pointer;background-image:linear-gradient(45deg,transparent 50%,var(--dim) 50%),linear-gradient(135deg,var(--dim) 50%,transparent 50%);background-position:calc(100% - 15px) 12px,calc(100% - 10px) 12px;background-size:5px 5px,5px 5px;background-repeat:no-repeat}
 select.v:focus,.fld select.v:focus{border-color:var(--blue);outline:none}
 .fld .hint{font-size:10.5px;color:var(--dim);margin-top:4px;line-height:1.4}
+/* inspector Ports tab */
+.portrow{display:flex;align-items:baseline;gap:8px;padding:4px 8px;border:1px solid var(--rowBorder);border-radius:6px;margin-bottom:4px;background:var(--sheen)}
+.portrow.err{border-color:#7a3a3a}
+.portrow .pn{font:600 12px var(--mono);color:var(--text);flex:none}
+.portrow.err .pn{color:var(--red)}
+.portrow .pnote{font-size:11px;color:var(--mute);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.portcols{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}
+.portcol{font:11px var(--mono);color:var(--text);background:var(--input);border:1px solid var(--inputBorder);border-radius:5px;padding:1px 6px}
 /* input + browse button row */
 .inputrow{display:flex;gap:6px;align-items:stretch}
 .inputrow .v{flex:1;min-width:0}
