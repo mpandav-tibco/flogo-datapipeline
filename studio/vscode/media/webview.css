@@ -60,7 +60,7 @@ button{font-family:inherit;color:inherit;background:none;border:none;cursor:poin
 .chip.warn{color:var(--yellow);background:var(--yellowA)}.chip.err{color:var(--red);background:var(--redA)}
 .chip.idle{color:var(--dim);background:var(--subtle)}.chip.plain{color:var(--mute);background:var(--subtle)}.chip.plain::before{display:none}
 
-.canvas{position:absolute;inset:0;overflow:auto;padding:22px 20px;background:radial-gradient(var(--gridDot) 1px,transparent 1px) 0 0/22px 22px,var(--editor);display:flex;flex-direction:column}
+.canvas{position:absolute;inset:0;overflow:auto;padding:22px 20px 76px;background:radial-gradient(var(--gridDot) 1px,transparent 1px) 0 0/22px 22px,var(--editor);display:flex;flex-direction:column}
 /* pipeline header (editable name + description, persisted in the file) */
 .pipehead{max-width:680px;margin:0 0 4px;padding-bottom:16px;border-bottom:1px solid var(--border);display:flex;flex-direction:column;gap:2px;flex:none}
 .pipehead .pipename{background:transparent;border:1px solid transparent;color:var(--text);font-size:17px;font-weight:700;padding:3px 6px;margin-left:-6px;border-radius:5px;outline:none}
@@ -150,7 +150,7 @@ button{font-family:inherit;color:inherit;background:none;border:none;cursor:poin
 .grunbadge.ok{color:var(--green);border-color:#3d6b4f}
 .grunbadge.err{color:var(--red);border-color:#7a3a3a}
 .grunbadge.in{color:var(--blueHi);border-color:#2d6da3}
-.canvas-hint{position:absolute;left:20px;bottom:14px;padding:5px 7px;background:var(--deep);border:1px solid var(--border);border-radius:9px;backdrop-filter:blur(3px)}
+.canvas-hint{position:absolute;left:20px;bottom:14px;z-index:6;padding:5px 7px;background:var(--deep);border:1px solid var(--border);border-radius:9px;box-shadow:0 6px 20px rgba(0,0,0,.35);backdrop-filter:blur(3px)}
 .canvas-hint .pill{cursor:pointer;border:1px solid transparent;transition:background .12s,border-color .12s,color .12s}
 .canvas-hint .pill:hover{background:var(--subtle);border-color:var(--nodeBorder);color:var(--text)}
 .canvas-hint .pilldiv{width:1px;align-self:stretch;background:var(--border);margin:1px 2px}
@@ -179,7 +179,8 @@ button{font-family:inherit;color:inherit;background:none;border:none;cursor:poin
 .fld .v{background:var(--input);border:1px solid var(--inputBorder);border-radius:5px;padding:6px 9px;font:12px var(--mono);color:var(--text);width:100%}
 .fld .v:focus{border-color:var(--blue);outline:none}
 .fld textarea.v{resize:vertical;min-height:54px;line-height:1.45}
-select.v{appearance:none;cursor:pointer;background-image:linear-gradient(45deg,transparent 50%,var(--dim) 50%),linear-gradient(135deg,var(--dim) 50%,transparent 50%);background-position:calc(100% - 15px) 12px,calc(100% - 10px) 12px;background-size:5px 5px,5px 5px;background-repeat:no-repeat}
+select.v,.fld select.v{background-color:var(--input);border:1px solid var(--inputBorder);color:var(--text);border-radius:5px;padding:6px 9px;font:12px var(--mono);width:100%;appearance:none;cursor:pointer;background-image:linear-gradient(45deg,transparent 50%,var(--dim) 50%),linear-gradient(135deg,var(--dim) 50%,transparent 50%);background-position:calc(100% - 15px) 12px,calc(100% - 10px) 12px;background-size:5px 5px,5px 5px;background-repeat:no-repeat}
+select.v:focus,.fld select.v:focus{border-color:var(--blue);outline:none}
 .fld .hint{font-size:10.5px;color:var(--dim);margin-top:4px;line-height:1.4}
 /* input + browse button row */
 .inputrow{display:flex;gap:6px;align-items:stretch}

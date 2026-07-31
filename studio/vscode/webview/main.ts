@@ -3560,6 +3560,28 @@ function applyZoom(z: number): void {
   if (lvl) lvl.textContent = Math.round(S.zoom * 100) + '%';
 }
 
+// Files whose canvas has already been auto-fitted once, so re-renders never
+// fight a zoom the user has since set.
+const autoFitted = new Set<string>();
+
+// autoFitCanvas shrinks the zoom on first open so a pipeline wider than the
+// viewport is fully visible (competitors open zoomed-to-fit). It never enlarges,
+// runs once per file, and bails when the user has already zoomed.
+function autoFitCanvas(): void {
+  if (autoFitted.has(S.fileName) || S.zoom !== 1) return;
+  autoFitted.add(S.fileName);
+  requestAnimationFrame(() => {
+    const cvEl = $('.canvas'); const gc = $('.gcanvas');
+    if (!cvEl || !gc) return;
+    const cw = parseFloat(gc.style.width) || gc.offsetWidth || 1;
+    const availW = Math.max(200, cvEl.clientWidth - 48);
+    if (cw <= availW) return; // already fits at 100%
+    const z = Math.max(0.5, Math.floor(Math.min(1, availW / cw) * 10) / 10);
+    if (z < 1) applyZoom(z);
+  });
+}
+
+
 function renderCanvas(m: HTMLElement) {
   const p = S.pipe!;
   const c = el('div', 'edcontent');
@@ -3668,6 +3690,9 @@ function renderCanvas(m: HTMLElement) {
   if (zoomReset) zoomReset.onclick = () => applyZoom(1);
   cv.appendChild(hint);
   m.appendChild(c);
+
+  // First open of a wide pipeline: zoom-to-fit once so the whole DAG is visible.
+  autoFitCanvas();
 
   // Inspector is dismissible; when closed, show a slim reopen tab instead.
   if (S.inspClosed) {
