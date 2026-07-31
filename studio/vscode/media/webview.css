@@ -163,6 +163,8 @@ button{font-family:inherit;color:inherit;background:none;border:none;cursor:poin
 .gport.branch{border-color:#8a929c;width:8px;height:8px}
 .gport.io{pointer-events:auto;cursor:crosshair;width:12px;height:12px;background:var(--editor);border-color:#8a929c;z-index:5}
 .gport.io:hover{border-color:var(--blue);box-shadow:0 0 0 3px rgba(0,120,212,.25)}
+.plabel{position:absolute;font:600 9px var(--mono);color:var(--mute);pointer-events:none;white-space:nowrap;z-index:3;opacity:.92;letter-spacing:.02em}
+.plabel.in{transform:translateX(-100%)}
 .gnode.linktarget{outline:2px dashed var(--blue);outline-offset:3px;border-radius:12px}
 .gedge.manual{stroke:var(--blueHi);stroke-dasharray:2 3}
 .gedge.manual.cond{stroke:#d9a13c;stroke-dasharray:5 3}
@@ -171,6 +173,8 @@ button{font-family:inherit;color:inherit;background:none;border:none;cursor:poin
 .gedgelabel{font:10px var(--mono);fill:#e0b060;pointer-events:none}
 .gedgelabel.otherwise{fill:#b98fe0}
 .gedgelabel.error{fill:#e88b7d}
+.gedgelabel.brlab{font-size:9px;opacity:.9;fill:var(--mute)}
+.gedgelabel.brlab.error{fill:#e88b7d}
 .edgepop{position:fixed;z-index:50;background:var(--pop);border:1px solid var(--inputBorder);border-radius:8px;padding:10px;box-shadow:0 6px 24px rgba(0,0,0,.5);width:280px}
 .edgepop .ephdr{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--dim);margin-bottom:6px}
 .edgepop .epinput{width:100%;box-sizing:border-box;background:var(--input);border:1px solid var(--inputBorder);border-radius:5px;padding:6px 8px;font:12px var(--mono);color:var(--text)}

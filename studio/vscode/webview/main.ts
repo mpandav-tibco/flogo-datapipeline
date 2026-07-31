@@ -3375,11 +3375,36 @@ function buildGraphDlqCard(dn: Node): HTMLElement {
   return nd;
 }
 
-function graphPort(wrap: HTMLElement, x: number, y: number, cls: string): void {
+// Short semantic labels for the derived branch wires, drawn at the wire's
+// midpoint so the graph documents itself (matches the wireframe's edge labels).
+const BR_LABEL: Record<string, string> = {
+  'br-reject': 'reject', 'br-source-error': 'on error', 'br-route': 'route',
+  'br-default-route': 'default', 'br-reference': 'ref', 'br-dlq': 'on fail',
+};
+// A small monospace label next to a port (rows / left / pass), so the graph's
+// fan-in / fan-out reads without opening the inspector.
+function addPortLabel(wrap: HTMLElement, x: number, y: number, label: string, side: 'in' | 'out'): void {
+  const l = el('span', 'plabel ' + side, label);
+  l.style.left = (side === 'in' ? x - 8 : x + 8) + 'px';
+  l.style.top = (y - 7) + 'px';
+  wrap.appendChild(l);
+}
+// Typed-port labels for the main-chain in/out ports (blank = unlabeled).
+function outPortLabel(n: Node): string {
+  if (n.kind === 'source') return 'rows';
+  if (n.type === 'validate' || n.type === 'dq') return 'pass';
+  return '';
+}
+function inPortLabel(n: Node): string {
+  return n.type === 'join' ? 'left' : '';
+}
+
+function graphPort(wrap: HTMLElement, x: number, y: number, cls: string, label?: string, side?: 'in' | 'out'): void {
   const port = el('span', 'gport gport-' + cls);
   port.style.left = (x - 5) + 'px';
   port.style.top = (y - 5) + 'px';
   wrap.appendChild(port);
+  if (label) addPortLabel(wrap, x, y, label, side || 'in');
 }
 
 function graphEdge(svg: SVGElement, x1: number, y1: number, x2: number, y2: number, cls: string, bow = 0): SVGPathElement {
@@ -3532,16 +3557,17 @@ function renderGraphCanvas(cv: HTMLElement): void {
     document.addEventListener('mousemove', move);
     document.addEventListener('mouseup', up);
   };
-  const connectPort = (fromId: string, x: number, y: number, cls: string) => {
+  const connectPort = (fromId: string, x: number, y: number, cls: string, label?: string, side?: 'in' | 'out') => {
     const port = el('span', 'gport gport-' + cls + ' io');
     port.style.left = (x - 6) + 'px'; port.style.top = (y - 6) + 'px';
     port.title = 'Drag to connect this stage to another';
     port.addEventListener('mousedown', (ev) => startConnect(fromId, ev));
     wrap.appendChild(port);
+    if (label) addPortLabel(wrap, x, y, label, side || 'out');
   };
   const redraw = () => {
     svg.querySelectorAll('.gedge, .gedgelabel, .gedgehit').forEach((e) => e.remove());
-    wrap.querySelectorAll('.gport').forEach((e) => e.remove());
+    wrap.querySelectorAll('.gport, .plabel').forEach((e) => e.remove());
     for (let i = 1; i < p.nodes.length; i++) {
       const pa = p.nodes[i - 1], pb = p.nodes[i];
       const a = cp(pa.id), b = cp(pb.id);
@@ -3579,8 +3605,8 @@ function renderGraphCanvas(cv: HTMLElement): void {
     }
     p.nodes.forEach((n) => {
       const q = cp(n.id);
-      if (n.kind !== 'source') graphPort(wrap, q.inX, q.inY, gKindCls(n.kind));
-      if (n.kind !== 'sink') connectPort(n.id, q.outX, q.outY, gKindCls(n.kind));
+      if (n.kind !== 'source') graphPort(wrap, q.inX, q.inY, gKindCls(n.kind), inPortLabel(n), 'in');
+      if (n.kind !== 'sink') connectPort(n.id, q.outX, q.outY, gKindCls(n.kind), outPortLabel(n), 'out');
     });
     p.extraNodes.forEach((n) => { const q = cp(n.id); graphPort(wrap, q.inX, q.inY, gKindCls('sink')); });
     branchList.forEach((b) => {
@@ -3604,6 +3630,17 @@ function renderGraphCanvas(cv: HTMLElement): void {
       bhit.addEventListener('click', () => { S.selNode = b.sel; S.inspTab = 'Config'; S.inspClosed = false; renderEditor(); });
       svg.appendChild(bhit);
       ep.style.pointerEvents = 'none';
+      const blab = BR_LABEL[b.cls];
+      if (blab) {
+        const t = document.createElementNS(GSVG_NS, 'text');
+        t.setAttribute('x', String((o.botX + nn.topX) / 2 + 7));
+        t.setAttribute('y', String((o.botY + nn.topY) / 2 + 3));
+        t.setAttribute('text-anchor', 'start');
+        const red = b.cls === 'br-reject' || b.cls === 'br-source-error' || b.cls === 'br-dlq';
+        t.setAttribute('class', 'gedgelabel brlab' + (red ? ' error' : ''));
+        t.textContent = blab;
+        svg.appendChild(t);
+      }
     });
     // Manual links (activity connections the user drew) — any doc.graph edge
     // that isn't part of the derived main-chain / branch structure. Plain links
