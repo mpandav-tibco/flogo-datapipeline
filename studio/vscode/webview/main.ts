@@ -107,6 +107,7 @@ const S = {
   showBranches: true,
   paletteOpen: true,
   paletteQ: '',
+  paletteCat: {} as Record<string, boolean>,
   setOpen: null as Record<string, boolean> | null,
   tabs: [{ id: 'canvas', type: 'canvas' as string }],
   active: 'canvas',
@@ -3664,7 +3665,14 @@ function renderPalette(): HTMLElement {
     cats.forEach((cat) => {
       const items = cat.items.filter((it) => !q || it.label.toLowerCase().includes(q) || it.type.includes(q));
       if (!items.length) return;
-      bodyEl.appendChild(el('div', 'complib-cat', cat.name));
+      const collapsed = !q && !!S.paletteCat[cat.name];
+      const chd = el('div', 'complib-cat' + (collapsed ? ' collapsed' : ''));
+      chd.innerHTML = `<span class="cc">▾</span><span class="ct"></span><span class="cn"></span>`;
+      (chd.querySelector('.ct') as HTMLElement).textContent = cat.name;
+      (chd.querySelector('.cn') as HTMLElement).textContent = String(items.length);
+      chd.onclick = () => { S.paletteCat[cat.name] = !S.paletteCat[cat.name]; rebuild(); };
+      bodyEl.appendChild(chd);
+      if (collapsed) return;
       items.forEach((it) => {
         const row = el('div', 'complib-item');
         row.title = 'Click or drag onto the canvas to add ' + it.label;

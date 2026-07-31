@@ -57,7 +57,12 @@ button{font-family:inherit;color:inherit;background:none;border:none;cursor:poin
 .complib-search{flex:none;margin:8px;width:calc(100% - 16px);background:var(--input);border:1px solid var(--inputBorder);border-radius:5px;padding:5px 8px;font-size:12px;color:var(--text);outline:none}
 .complib-search:focus{border-color:var(--blue)}
 .complib-body{flex:1;overflow:auto;padding:0 6px 10px}
-.complib-cat{font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--dim);padding:10px 6px 4px}
+.complib-cat{display:flex;align-items:center;gap:6px;font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--dim);padding:10px 6px 4px;cursor:pointer;user-select:none}
+.complib-cat:hover{color:var(--mute)}
+.complib-cat .cc{flex:none;width:9px;font-size:9px;line-height:1;transition:transform .12s}
+.complib-cat.collapsed .cc{transform:rotate(-90deg)}
+.complib-cat .ct{flex:1;min-width:0}
+.complib-cat .cn{flex:none;font-weight:600;background:var(--subtle);border-radius:8px;padding:0 6px;color:var(--mute)}
 .complib-item{display:flex;align-items:center;gap:8px;padding:5px 7px;border-radius:5px;cursor:grab;color:var(--text);font-size:12.5px;user-select:none}
 .complib-item:active{cursor:grabbing}
 .complib-item:hover{background:var(--hover)}
