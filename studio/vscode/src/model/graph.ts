@@ -194,7 +194,7 @@ export interface GraphNodeOut {
 }
 
 /** An edge in the explicit graph block: ["fromNode:port", "toNode:port"]. */
-export type GraphEdgeOut = [string, string];
+export type GraphEdgeOut = [string, string] | { from: string; to: string; type?: string; value?: string };
 
 /** The explicit graph block. */
 export interface PipeGraph {

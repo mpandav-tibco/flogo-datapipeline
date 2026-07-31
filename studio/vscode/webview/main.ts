@@ -2968,18 +2968,23 @@ let _gConnecting = false;
 // same engine-validated node/edge block the "Promote to graph" pill writes.
 // Drawing a link auto-promotes: if there is no explicit graph yet we derive one
 // first so the new edge joins a complete, valid graph.
-function graphEdgesOf(doc: any): string[][] {
+function graphEdgesOf(doc: any): any[] {
   const g = doc && doc.graph;
   return g && Array.isArray(g.edges) ? g.edges : [];
 }
-// A graph edge endpoint is "<nodeId>:<port>" (deriveGraph's convention). Strip
-// the port to get the node id for layout, cycle checks and de-duplication.
+// A graph edge is either the compact array ["from","to"] (a plain link) or the
+// object {from,to,type,value} (a conditional link, Flogo-style). These read
+// either form. Endpoints are "<nodeId>:<port>"; strip the port for the node id.
+function edgeFrom(e: any): string { return Array.isArray(e) ? (e[0] || '') : ((e && e.from) || ''); }
+function edgeTo(e: any): string { return Array.isArray(e) ? (e[1] || '') : ((e && e.to) || ''); }
+function edgeType(e: any): string { return Array.isArray(e) ? '' : ((e && e.type) || ''); }
+function edgeValue(e: any): string { return Array.isArray(e) ? '' : ((e && e.value) || ''); }
 function gEndpointNode(ep: string): string { const i = ep.indexOf(':'); return i < 0 ? ep : ep.slice(0, i); }
-function graphWouldCycle(edges: string[][], from: string, to: string): boolean {
+function graphWouldCycle(edges: any[], from: string, to: string): boolean {
   // Adding from→to makes a cycle iff `to` can already reach `from`. Work on NODE
   // ids (strip :port) so a stage's in/out ports count as the same node.
   const adj: Record<string, string[]> = {};
-  for (const e of edges) { const a = gEndpointNode(e[0]), b = gEndpointNode(e[1]); (adj[a] = adj[a] || []).push(b); }
+  for (const e of edges) { const a = gEndpointNode(edgeFrom(e)), b = gEndpointNode(edgeTo(e)); (adj[a] = adj[a] || []).push(b); }
   const seen = new Set<string>(); const stack = [to];
   while (stack.length) {
     const n = stack.pop() as string;
@@ -2993,15 +2998,62 @@ function addGraphLink(from: string, to: string): void {
   if (from === to) { toast('warn', 'Cannot connect a stage to itself'); return; }
   const doc = S.doc as any;
   if (!doc.graph) doc.graph = deriveGraph(S.doc);
-  const edges: string[][] = (doc.graph.edges = doc.graph.edges || []);
-  if (edges.some((e) => gEndpointNode(e[0]) === from && gEndpointNode(e[1]) === to)) { toast('warn', 'That link already exists'); return; }
+  const edges: any[] = (doc.graph.edges = doc.graph.edges || []);
+  if (edges.some((e) => gEndpointNode(edgeFrom(e)) === from && gEndpointNode(edgeTo(e)) === to)) { toast('warn', 'That link already exists'); return; }
   if (graphWouldCycle(edges, from, to)) { toast('err', 'That link would create a cycle'); return; }
   // Port-qualified endpoints, matching deriveGraph: source emits "rows", other
   // stages emit "out"; every stage receives on "in".
   const fromKind = ((S.pipe && S.pipe.nodes.find((n) => n.id === from)) || ({} as any)).kind;
   edges.push([from + ':' + (fromKind === 'source' ? 'rows' : 'out'), to + ':in']);
   persistAndRebuild();
-  toast('ok', 'Link added — recorded in the graph block');
+  toast('ok', 'Link added — click it to add a condition');
+}
+// Set (blank clears) the boolean condition on a manual link, converting it
+// between the plain array form and the conditional object form.
+function setEdgeCondition(fromEp: string, toEp: string, value: string): void {
+  const doc = S.doc as any;
+  const edges: any[] = (doc.graph && doc.graph.edges) || [];
+  const idx = edges.findIndex((e) => edgeFrom(e) === fromEp && edgeTo(e) === toEp);
+  if (idx < 0) return;
+  const v = value.trim();
+  edges[idx] = v ? { from: fromEp, to: toEp, type: 'expression', value: v } : [fromEp, toEp];
+  persistAndRebuild();
+  toast('ok', v ? 'Condition set — link taken only when true' : 'Condition cleared — link always taken');
+}
+function removeGraphLink(fromEp: string, toEp: string): void {
+  const doc = S.doc as any;
+  if (!doc.graph || !Array.isArray(doc.graph.edges)) return;
+  doc.graph.edges = doc.graph.edges.filter((e: any) => !(edgeFrom(e) === fromEp && edgeTo(e) === toEp));
+  persistAndRebuild();
+  toast('warn', 'Link removed');
+}
+function closeEdgeEditor(): void { const p = $('.edgepop'); if (p) p.remove(); document.removeEventListener('mousedown', edgePopAway); }
+function edgePopAway(e: MouseEvent): void { const p = $('.edgepop'); if (p && !p.contains(e.target as HTMLElement)) closeEdgeEditor(); }
+// Click a manual link → a small popover to set its condition or delete it.
+function openEdgeEditor(fromEp: string, toEp: string, ev: MouseEvent): void {
+  ev.stopPropagation();
+  closeEdgeEditor();
+  const cur = graphEdgesOf(S.doc).find((e) => edgeFrom(e) === fromEp && edgeTo(e) === toEp);
+  const pop = el('div', 'edgepop');
+  pop.style.left = Math.min(ev.clientX, window.innerWidth - 300) + 'px';
+  pop.style.top = ev.clientY + 'px';
+  pop.appendChild(el('div', 'ephdr', 'Link condition'));
+  const inp = document.createElement('input');
+  inp.className = 'epinput'; inp.value = cur ? edgeValue(cur) : '';
+  inp.placeholder = 'always — e.g. amount > 1000';
+  pop.appendChild(inp);
+  const row = el('div', 'eprow');
+  const apply = el('button', 'btn sm pri', 'Apply');
+  apply.onclick = () => { setEdgeCondition(fromEp, toEp, inp.value); closeEdgeEditor(); };
+  const del = el('button', 'btn sm', '✕ Delete link');
+  del.onclick = () => { removeGraphLink(fromEp, toEp); closeEdgeEditor(); };
+  row.appendChild(apply); row.appendChild(del);
+  pop.appendChild(row);
+  pop.appendChild(el('div', 'ephint', 'Rows follow this link only when the expression is true. Blank = always.'));
+  document.body.appendChild(pop);
+  inp.focus();
+  inp.onkeydown = (e) => { if (e.key === 'Enter') { setEdgeCondition(fromEp, toEp, inp.value); closeEdgeEditor(); } else if (e.key === 'Escape') { closeEdgeEditor(); } };
+  setTimeout(() => document.addEventListener('mousedown', edgePopAway), 0);
 }
 
 function gKindCls(kind: string): string {
@@ -3064,16 +3116,26 @@ function graphPort(wrap: HTMLElement, x: number, y: number, cls: string): void {
   wrap.appendChild(port);
 }
 
-function graphEdge(svg: SVGElement, x1: number, y1: number, x2: number, y2: number, cls: string): void {
+function graphEdge(svg: SVGElement, x1: number, y1: number, x2: number, y2: number, cls: string, bow = 0): SVGPathElement {
   const path = document.createElementNS(GSVG_NS, 'path');
   const dx = Math.abs(x2 - x1), dy = Math.abs(y2 - y1);
-  const d = dx >= dy
-    ? `M ${x1} ${y1} C ${(x1 + x2) / 2} ${y1}, ${(x1 + x2) / 2} ${y2}, ${x2} ${y2}`
-    : `M ${x1} ${y1} C ${x1} ${(y1 + y2) / 2}, ${x2} ${(y1 + y2) / 2}, ${x2} ${y2}`;
+  let d: string;
+  if (bow !== 0) {
+    // A skip-link that would otherwise lie flat on the main row: bow it clear so
+    // it stays visible and its stroke is clickable (apex ≈ midY + 0.75·bow).
+    const cy = (y1 + y2) / 2 + bow;
+    const c1x = x1 + (x2 - x1) * 0.25, c2x = x1 + (x2 - x1) * 0.75;
+    d = `M ${x1} ${y1} C ${c1x} ${cy}, ${c2x} ${cy}, ${x2} ${y2}`;
+  } else {
+    d = dx >= dy
+      ? `M ${x1} ${y1} C ${(x1 + x2) / 2} ${y1}, ${(x1 + x2) / 2} ${y2}, ${x2} ${y2}`
+      : `M ${x1} ${y1} C ${x1} ${(y1 + y2) / 2}, ${x2} ${(y1 + y2) / 2}, ${x2} ${y2}`;
+  }
   path.setAttribute('d', d);
   path.setAttribute('class', 'gedge ' + cls);
   path.setAttribute('marker-end', 'url(#gah)');
   svg.appendChild(path);
+  return path;
 }
 
 // Lay out the pipeline as a DAG: main chain across the top row, implicit branches
@@ -3192,7 +3254,7 @@ function renderGraphCanvas(cv: HTMLElement): void {
     wrap.appendChild(port);
   };
   const redraw = () => {
-    svg.querySelectorAll('.gedge').forEach((e) => e.remove());
+    svg.querySelectorAll('.gedge, .gedgelabel, .gedgehit').forEach((e) => e.remove());
     wrap.querySelectorAll('.gport').forEach((e) => e.remove());
     for (let i = 1; i < p.nodes.length; i++) {
       const a = cp(p.nodes[i - 1].id), b = cp(p.nodes[i].id);
@@ -3211,15 +3273,46 @@ function renderGraphCanvas(cv: HTMLElement): void {
       graphPort(wrap, nn.topX, nn.topY, 'branch');
     });
     // Manual links (activity connections the user drew) — any doc.graph edge
-    // that isn't part of the derived main-chain / branch structure, drawn dashed.
+    // that isn't part of the derived main-chain / branch structure. Plain links
+    // are dashed blue; conditional links are amber with the expression labelled.
+    // Clicking a link opens its condition/delete popover.
     const derived = new Set<string>();
     for (let i = 1; i < p.nodes.length; i++) derived.add(p.nodes[i - 1].id + '>' + p.nodes[i].id);
     branchList.forEach((b) => derived.add(b.flow === 'out' ? b.owner + '>' + b.id : b.id + '>' + b.owner));
     graphEdgesOf(S.doc).forEach((e) => {
-      const f = gEndpointNode(e[0]), t = gEndpointNode(e[1]);
+      const f = gEndpointNode(edgeFrom(e)), t = gEndpointNode(edgeTo(e));
       if (!pos[f] || !pos[t] || derived.has(f + '>' + t)) return;
       const a = cp(f), b = cp(t);
-      graphEdge(svg, a.outX, a.outY, b.inX, b.inY, 'manual');
+      const cond = edgeType(e) === 'expression';
+      // Bow the link below the row so a skip-link that would otherwise lie flat
+      // on the main chain stays visible and clear of the nodes it spans.
+      const span = Math.abs(b.inX - a.outX);
+      const flat = Math.abs(b.inY - a.outY) < 24;
+      const bow = flat ? Math.max(48, Math.min(72, span * 0.12)) : 0;
+      const path = graphEdge(svg, a.outX, a.outY, b.inX, b.inY, 'manual' + (cond ? ' cond' : ''), bow);
+      const fromEp = edgeFrom(e), toEp = edgeTo(e);
+      // A fat, transparent hit-path over the thin curve so the link is easy to
+      // click (the visible stroke alone is a 2px target and awkward to hit).
+      const hit = document.createElementNS(GSVG_NS, 'path');
+      hit.setAttribute('d', path.getAttribute('d') || '');
+      hit.setAttribute('class', 'gedgehit');
+      hit.setAttribute('fill', 'none');
+      hit.setAttribute('stroke', 'transparent');
+      hit.setAttribute('stroke-width', '14');
+      hit.style.pointerEvents = 'stroke';
+      hit.style.cursor = 'pointer';
+      hit.addEventListener('click', (ev) => openEdgeEditor(fromEp, toEp, ev as MouseEvent));
+      svg.appendChild(hit);
+      path.style.pointerEvents = 'none';
+      if (cond) {
+        const label = document.createElementNS(GSVG_NS, 'text');
+        label.setAttribute('x', String((a.outX + b.inX) / 2));
+        label.setAttribute('y', String((a.outY + b.inY) / 2 + bow * 0.75 - 5));
+        label.setAttribute('text-anchor', 'middle');
+        label.setAttribute('class', 'gedgelabel');
+        label.textContent = edgeValue(e).length > 28 ? edgeValue(e).slice(0, 27) + '…' : edgeValue(e);
+        svg.appendChild(label);
+      }
     });
   };
 

@@ -116,6 +116,14 @@ button{font-family:inherit;color:inherit;background:none;border:none;cursor:poin
 .gport.io:hover{border-color:var(--blue);box-shadow:0 0 0 3px rgba(0,120,212,.25)}
 .gnode.linktarget{outline:2px dashed var(--blue);outline-offset:3px;border-radius:12px}
 .gedge.manual{stroke:var(--blueHi);stroke-dasharray:2 3}
+.gedge.manual.cond{stroke:#d9a13c;stroke-dasharray:5 3}
+.gedgelabel{font:10px var(--mono);fill:#e0b060;pointer-events:none}
+.edgepop{position:fixed;z-index:50;background:#1f1f1f;border:1px solid var(--inputBorder);border-radius:8px;padding:10px;box-shadow:0 6px 24px rgba(0,0,0,.5);width:280px}
+.edgepop .ephdr{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--dim);margin-bottom:6px}
+.edgepop .epinput{width:100%;box-sizing:border-box;background:var(--input);border:1px solid var(--inputBorder);border-radius:5px;padding:6px 8px;font:12px var(--mono);color:var(--text)}
+.edgepop .epinput:focus{border-color:var(--blue);outline:none}
+.edgepop .eprow{display:flex;gap:6px;margin-top:8px}
+.edgepop .ephint{font-size:10.5px;color:var(--dim);margin-top:8px;line-height:1.4}
 .gedge.grubber{stroke:var(--blue);stroke-width:2;stroke-dasharray:5 4;pointer-events:none}
 .gedge.running{stroke-dasharray:7 6;animation:gflow .7s linear infinite}
 @keyframes gflow{to{stroke-dashoffset:-13}}
