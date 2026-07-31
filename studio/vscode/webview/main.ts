@@ -109,6 +109,8 @@ const S = {
   paletteQ: '',
   paletteCat: {} as Record<string, boolean>,
   panelOpen: false,
+  rateRps: 0,
+  ratePrev: null as { rows: number; at: number } | null,
   setOpen: null as Record<string, boolean> | null,
   tabs: [{ id: 'canvas', type: 'canvas' as string }],
   active: 'canvas',
@@ -3373,6 +3375,14 @@ function graphEdge(svg: SVGElement, x1: number, y1: number, x2: number, y2: numb
 
 // Lay out the pipeline as a DAG: main chain across the top row, implicit branches
 // stacked beneath each owner, wired with SVG paths and ports. Read-only for now.
+// A pipeline is "streaming" (unbounded) when its source never ends — Kafka or
+// Kubernetes pod logs. The run overlay then shows a live event rate instead of
+// a bounded read count, and the run is never "completed" until stopped.
+function isStreamingSource(): boolean {
+  const t = S.pipe && S.pipe.nodes[0] ? S.pipe.nodes[0].type : '';
+  return t === 'kafka' || t === 'podlog';
+}
+
 function renderGraphCanvas(cv: HTMLElement): void {
   const p = S.pipe!;
   const branchMap = branchesByOwner(p.branches);
@@ -3675,18 +3685,22 @@ function renderGraphCanvas(cv: HTMLElement): void {
       const host = els[id];
       if (host) host.appendChild(el('div', 'grunbadge ' + cls, text));
     };
+    const streaming = isStreamingSource();
+    const rate = (S.running && S.rateRps > 0) ? ' · ' + fmtK(S.rateRps) + '/s' : '';
+    const srcLabel = (n: number) => (streaming ? '≋ ' : '▶ ') + fmtK(n) + (streaming ? ' events' : ' read') + rate;
+    const streamCls = streaming && S.running ? 'in live' : 'in';
     const gs = r.graphStats;
     if (gs && gs.length) {
       // Graph (DAG) run: badge every node with its OWN counts — including extra
       // sink nodes and per-node error counts the linear overlay can't show.
       gs.forEach((s) => {
-        if (s.kind === 'source') { badge(s.id, '▶ ' + fmtK(s.rowsOut) + ' read', 'in'); return; }
+        if (s.kind === 'source') { badge(s.id, srcLabel(s.rowsOut), streamCls); return; }
         if (s.kind === 'sink') { badge(s.id, fmtK(s.rowsWritten) + ' written', 'ok'); return; }
         const txt = fmtK(s.rowsOut) + ' out' + (s.rowsErrored > 0 ? ' · ' + fmtK(s.rowsErrored) + ' err' : '');
         badge(s.id, txt, s.rowsErrored > 0 ? 'err' : 'in');
       });
     } else {
-      badge('source', '▶ ' + fmtK(r.rowsProcessed) + ' read', 'in');
+      badge('source', srcLabel(r.rowsProcessed), streamCls);
       badge('sink', fmtK(r.rowsWritten) + ' written', 'ok');
       if (p.hasDlq && r.rowsFailed > 0) badge('dlq', fmtK(r.rowsFailed) + ' failed', 'err');
       // Per-transform throughput when the engine reported per-stage counts and they
@@ -5635,11 +5649,22 @@ window.addEventListener('message', (ev: MessageEvent<HostToWebview>) => {
       renderStatus();
       renderEditor();
       break;
-    case 'runResult':
+    case 'runResult': {
+      // Track the live event rate (rows/sec) across successive progress updates
+      // so the streaming overlay can show throughput while the run is unbounded.
+      const now = Date.now();
+      const rows = (msg.result && msg.result.rowsProcessed) || 0;
+      if (S.ratePrev) {
+        const dt = (now - S.ratePrev.at) / 1000;
+        const dr = rows - S.ratePrev.rows;
+        if (dt >= 0.1 && dr >= 0) S.rateRps = dr / dt;
+      }
+      S.ratePrev = { rows, at: now };
       S.lastRun = msg.result;
       S.ran = true;
       if (msg.final) {
         S.running = false;
+        S.rateRps = 0; S.ratePrev = null;
         const r = msg.result;
         toast(
           r.status === 'failed' ? 'err' : r.status === 'partial' ? 'warn' : 'ok',
@@ -5650,8 +5675,11 @@ window.addEventListener('message', (ev: MessageEvent<HostToWebview>) => {
       }
       renderTabs();
       renderStatus();
-      if (cur()?.type === 'report' || cur()?.type === 'dlq') renderEditor();
+      // Re-render the canvas too, so the run overlay (per-edge counts + live rate)
+      // updates as progress arrives, not just at the end.
+      if (cur()?.type === 'canvas' || cur()?.type === 'report' || cur()?.type === 'dlq') renderEditor();
       break;
+    }
     case 'runError':
       S.running = false;
       renderTabs();

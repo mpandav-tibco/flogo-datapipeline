@@ -186,6 +186,8 @@ button{font-family:inherit;color:inherit;background:none;border:none;cursor:poin
 .grunbadge.ok{color:var(--green);border-color:#3d6b4f}
 .grunbadge.err{color:var(--red);border-color:#7a3a3a}
 .grunbadge.in{color:var(--blueHi);border-color:#2d6da3}
+.grunbadge.live{color:var(--green);border-color:#3d6b4f}
+.grunbadge.live::before{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--green);margin-right:5px;vertical-align:middle;animation:pulse 1.2s infinite}
 /* per-edge "follow the row" count pills (run overlay) */
 .gedgecount{position:absolute;transform:translate(-50%,-50%);font:600 10px var(--mono);padding:1px 6px;border-radius:8px;background:var(--deep);color:var(--text);border:1px solid var(--border);z-index:4;pointer-events:none;white-space:nowrap;box-shadow:0 1px 4px rgba(0,0,0,.35)}
 .gedgecount.err{color:var(--red);border-color:#7a3a3a}
