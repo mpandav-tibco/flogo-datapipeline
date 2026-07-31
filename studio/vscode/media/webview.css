@@ -204,6 +204,12 @@ button{font-family:inherit;color:inherit;background:none;border:none;cursor:poin
 .canvas-hint .pill:hover{background:var(--subtle);border-color:var(--nodeBorder);color:var(--text)}
 .canvas-hint .pilldiv{width:1px;align-self:stretch;background:var(--border);margin:1px 2px}
 .canvas-hint .zlvl{min-width:36px;text-align:center;font-variant-numeric:tabular-nums}
+/* minimap overview */
+.minimap{position:absolute;right:14px;bottom:14px;z-index:6;background:var(--deep);border:1px solid var(--border);border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,.45);overflow:hidden;cursor:pointer}
+.mmnode{position:absolute;border-radius:2px;background:var(--mute);opacity:.75}
+.mmnode.src{background:#4a90d9}.mmnode.sink{background:#4caf7d}.mmnode.tf{background:#a978d9}.mmnode.dlq{background:var(--yellow)}
+.mmnode.sel{outline:1px solid #fff;opacity:1}
+.mmviewport{position:absolute;border:1.5px solid var(--blueHi);background:rgba(77,170,252,.12);pointer-events:none;border-radius:2px}
 
 .inspector{width:360px;flex:none;border-left:1px solid var(--border);background:var(--deep);overflow:auto;position:relative}
 .inspgrip{position:absolute;left:0;top:0;bottom:0;width:6px;cursor:col-resize;z-index:6}

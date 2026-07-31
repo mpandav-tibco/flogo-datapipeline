@@ -3828,6 +3828,44 @@ function renderGraphCanvas(cv: HTMLElement): void {
 
   redraw();
   cv.appendChild(wrap);
+
+  // Minimap overview (toggle): a scaled map of the whole graph pinned to the
+  // corner, with a viewport box that tracks scroll; click to recenter.
+  if (S.minimapOpen) {
+    const MMW = 190, MMH = 130;
+    const scale = Math.min(MMW / Math.max(1, contentW), MMH / Math.max(1, contentH));
+    const mm = el('div', 'minimap');
+    mm.style.width = Math.max(60, Math.round(contentW * scale)) + 'px';
+    mm.style.height = Math.max(40, Math.round(contentH * scale)) + 'px';
+    mm.title = 'Minimap — click to jump';
+    Object.keys(pos).forEach((id) => {
+      const q = pos[id];
+      const nn = p.nodes.find((x) => x.id === id);
+      const kind = nn ? nn.kind : (id === 'dlq' ? 'dlq' : 'sink');
+      const r = el('div', 'mmnode ' + (kind === 'source' ? 'src' : kind === 'sink' ? 'sink' : kind === 'dlq' ? 'dlq' : 'tf') + (S.selNode === id ? ' sel' : ''));
+      r.style.left = (q.x * scale) + 'px'; r.style.top = (q.y * scale) + 'px';
+      r.style.width = Math.max(3, q.w * scale) + 'px'; r.style.height = Math.max(2, q.h * scale) + 'px';
+      mm.appendChild(r);
+    });
+    const vp = el('div', 'mmviewport');
+    const updateVp = () => {
+      const z = S.zoom || 1;
+      vp.style.left = (cv.scrollLeft / z * scale) + 'px';
+      vp.style.top = (cv.scrollTop / z * scale) + 'px';
+      vp.style.width = Math.min(MMW, cv.clientWidth / z * scale) + 'px';
+      vp.style.height = Math.min(MMH, cv.clientHeight / z * scale) + 'px';
+    };
+    mm.appendChild(vp);
+    mm.onclick = (e) => {
+      const rect = mm.getBoundingClientRect();
+      const z = S.zoom || 1;
+      const cx = (e.clientX - rect.left) / scale, cy = (e.clientY - rect.top) / scale;
+      cv.scrollTo({ left: cx * z - cv.clientWidth / 2, top: cy * z - cv.clientHeight / 2, behavior: 'smooth' });
+    };
+    cv.addEventListener('scroll', updateVp);
+    cv.appendChild(mm);
+    requestAnimationFrame(updateVp);
+  }
 }
 
 function applyZoom(z: number): void {
@@ -4057,11 +4095,13 @@ function renderCanvas(m: HTMLElement) {
   // the palette's job, so there are no ＋ pills here — only view actions + zoom.
   const brPill = p.branches.length ? `<span class="pill toggle${S.showBranches ? ' on' : ''}" data-h="branches" title="Show or hide the implicit router, join, reject and parse-error branches">⎇ Branches</span>` : '';
   const countsPill = S.ran ? `<span class="pill toggle${S.showCounts ? ' on' : ''}" data-h="counts" title="Show or hide the row counts from the last run">◔ Counts</span>` : '';
+  const tailPill = isStreamingSource() && !S.running ? '<span class="pill" data-h="tail" title="Start the stream and watch events flow through the graph live">≋ Live Tail</span>' : '';
   const zoomCluster = '<span class="pilldiv"></span><span class="pill zoomctl" data-h="zoomout" title="Zoom out (⌘−)">−</span><span class="pill zoomctl zlvl" data-h="zoomreset" title="Reset zoom to 100% (⌘0)">' + Math.round((S.zoom || 1) * 100) + '%</span><span class="pill zoomctl" data-h="zoomin" title="Zoom in (⌘+)">＋</span>';
   hint.innerHTML =
     '<span class="pill" data-h="fit" title="Zoom to fit the whole graph in view">⤢ Fit</span>'
     + '<span class="pill" data-h="auto" title="Re-run auto-layout (discards any manual node positions)">▦ Auto-layout</span>'
     + '<span class="pill" data-h="validate" title="Validate the pipeline configuration">✓ Validate</span>'
+    + tailPill
     + brPill + countsPill
     + `<span class="pill toggle${S.minimapOpen ? ' on' : ''}" data-h="minimap" title="Show or hide the minimap overview">◱ Minimap</span>`
     + zoomCluster;
@@ -4071,6 +4111,8 @@ function renderCanvas(m: HTMLElement) {
   if (countsBtn) countsBtn.onclick = () => { S.showCounts = !S.showCounts; renderEditor(); };
   const validateBtn = hint.querySelector('[data-h="validate"]') as HTMLElement | null;
   if (validateBtn) validateBtn.onclick = () => { post({ type: 'validate' }); toast('ok', 'Validating…'); };
+  const tailBtn = hint.querySelector('[data-h="tail"]') as HTMLElement | null;
+  if (tailBtn) tailBtn.onclick = () => doRun();
   const mmBtn = hint.querySelector('[data-h="minimap"]') as HTMLElement | null;
   if (mmBtn) mmBtn.onclick = () => { S.minimapOpen = !S.minimapOpen; renderEditor(); };
   const autoBtn = hint.querySelector('[data-h="auto"]') as HTMLElement | null;
