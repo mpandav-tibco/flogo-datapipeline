@@ -21,9 +21,9 @@ func mkGraphDef(nTransforms int, txType string, g *GraphDef) *Definition {
 
 func TestTransformIndex(t *testing.T) {
 	cases := []struct {
-		id   string
-		idx  int
-		ok   bool
+		id  string
+		idx int
+		ok  bool
 	}{
 		{"t0", 0, true}, {"t12", 12, true}, {"source", 0, false},
 		{"sink", 0, false}, {"t", 0, false}, {"tx", 0, false}, {"dlq", 0, false},
