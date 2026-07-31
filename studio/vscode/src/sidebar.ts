@@ -1,8 +1,9 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { extractPipelineData } from './model/pipeline';
+import { RunHistoryStore, RunRecord } from './runHistory';
 
-type NodeKind = 'pipeline' | 'running' | 'message';
+type NodeKind = 'pipeline' | 'running' | 'message' | 'run';
 
 export class PipelineTreeItem extends vscode.TreeItem {
   constructor(
@@ -26,10 +27,11 @@ export class SidebarProvider implements vscode.TreeDataProvider<PipelineTreeItem
   private buildTarget: string | null = null;
   private readonly watcher: vscode.FileSystemWatcher;
 
-  constructor() {
+  constructor(private readonly runHistory: RunHistoryStore) {
     this.watcher = vscode.workspace.createFileSystemWatcher('**/*.datapipeline');
     this.watcher.onDidCreate(() => this.refresh());
     this.watcher.onDidDelete(() => this.refresh());
+    runHistory.onDidChange(() => this.refresh());
   }
 
   dispose(): void {
@@ -68,7 +70,13 @@ export class SidebarProvider implements vscode.TreeDataProvider<PipelineTreeItem
   }
 
   async getChildren(element?: PipelineTreeItem): Promise<PipelineTreeItem[]> {
-    if (element) return [];
+    if (element) {
+      // Expanding a pipeline reveals its recent runs (the wireframe's RUN HISTORY).
+      if (element.kind === 'pipeline' && element.pipelineUri) {
+        return this.runHistory.list(element.pipelineUri.fsPath).map((r) => runItem(r));
+      }
+      return [];
+    }
 
     const items: PipelineTreeItem[] = [];
 
@@ -98,7 +106,13 @@ export class SidebarProvider implements vscode.TreeDataProvider<PipelineTreeItem
 
     for (const uri of visible) {
       const name = path.basename(uri.fsPath);
-      const item = new PipelineTreeItem(name, 'pipeline', vscode.TreeItemCollapsibleState.None, uri);
+      const runs = this.runHistory.list(uri.fsPath).length;
+      const item = new PipelineTreeItem(
+        name,
+        'pipeline',
+        runs ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None,
+        uri,
+      );
       item.resourceUri = uri;
       // Summarise the pipeline as source → sink (like the wireframe's list),
       // falling back to the folder path when the file can't be read/parsed.
@@ -123,4 +137,32 @@ export class SidebarProvider implements vscode.TreeDataProvider<PipelineTreeItem
     }
     return items;
   }
+}
+
+// Build a tree item for a single past run (child of its pipeline).
+function runItem(r: RunRecord): PipelineTreeItem {
+  const item = new PipelineTreeItem(timeAgo(r.at), 'run', vscode.TreeItemCollapsibleState.None);
+  item.description = `${fmtInt(r.rowsWritten)} written · ${(r.durationMs / 1000).toFixed(1)}s` +
+    (r.rowsFailed ? ` · ${fmtInt(r.rowsFailed)} failed` : '');
+  const ok = r.status === 'completed';
+  item.iconPath = new vscode.ThemeIcon(
+    ok ? 'pass' : r.status === 'partial' ? 'warning' : r.status === 'cancelled' ? 'circle-slash' : 'error',
+    new vscode.ThemeColor(ok ? 'charts.green' : r.status === 'failed' ? 'charts.red' : 'charts.yellow'),
+  );
+  item.tooltip = `${r.status} · ${new Date(r.at).toLocaleString()}\n${r.rowsWritten} written · ${r.rowsFailed} failed · ${r.durationMs}ms`;
+  return item;
+}
+
+function timeAgo(at: number): string {
+  const s = Math.max(0, Math.round((Date.now() - at) / 1000));
+  if (s < 60) return `${s}s ago`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.round(h / 24)}d ago`;
+}
+
+function fmtInt(n: number): string {
+  return n >= 1000 ? `${(n / 1000).toFixed(n >= 100000 ? 0 : 1).replace(/\.0$/, '')}k` : String(n);
 }

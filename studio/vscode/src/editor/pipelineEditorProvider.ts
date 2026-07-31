@@ -15,6 +15,7 @@ import { applyTriggerToApp } from '../model/triggers';
 import { ApiClient } from '../engine/apiClient';
 import { DataPreviewView } from '../panel/dataPreviewView';
 import { ConnectionStore } from '../connections/store';
+import { RunHistoryStore } from '../runHistory';
 import type { WebviewToHost } from '../protocol';
 
 export interface EngineHooks {
@@ -52,6 +53,7 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
     private readonly hooks: EngineHooks = {},
     private readonly dataPreview?: DataPreviewView,
     private readonly connections?: ConnectionStore,
+    private readonly runHistory?: RunHistoryStore,
   ) {
     this.diag = vscode.languages.createDiagnosticCollection('flogoDataPipeline');
     context.subscriptions.push(this.diag);
@@ -68,8 +70,9 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
     hooks: EngineHooks,
     dataPreview?: DataPreviewView,
     connections?: ConnectionStore,
+    runHistory?: RunHistoryStore,
   ): { provider: PipelineEditorProvider; disposable: vscode.Disposable } {
-    const provider = new PipelineEditorProvider(context, manager, hooks, dataPreview, connections);
+    const provider = new PipelineEditorProvider(context, manager, hooks, dataPreview, connections, runHistory);
     const disposable = vscode.window.registerCustomEditorProvider(
       PipelineEditorProvider.viewType,
       provider,
@@ -834,6 +837,14 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
           this.logRun(
             `[run] ${run.status} — processed=${run.rowsProcessed} written=${run.rowsWritten} failed=${run.rowsFailed} dropped=${run.rowsDropped ?? 0} (${run.durationMs}ms)`,
           );
+          void this.runHistory?.record(document.uri.fsPath, {
+            at: Date.now(),
+            status: run.status,
+            rowsWritten: run.rowsWritten || 0,
+            rowsFailed: run.rowsFailed || 0,
+            durationMs: run.durationMs || 0,
+            runId: run.runId,
+          });
           break;
         }
       }

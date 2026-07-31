@@ -5,6 +5,7 @@ import { BinaryManager } from './binaryManager';
 import { PipelineEditorProvider, EngineHooks } from './editor/pipelineEditorProvider';
 import { DataPreviewView } from './panel/dataPreviewView';
 import { SidebarProvider } from './sidebar';
+import { RunHistoryStore } from './runHistory';
 import { TEMPLATES } from './templates';
 import { ConnectionStore } from './connections/store';
 import { ConnectionsSidebarProvider, ConnectionTreeItem } from './connections/sidebar';
@@ -28,7 +29,9 @@ let extContext: vscode.ExtensionContext;
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   extContext = context;
   manager = new BinaryManager(context.extensionPath);
-  sidebar = new SidebarProvider();
+  const runHistory = new RunHistoryStore(context.workspaceState);
+  context.subscriptions.push(runHistory);
+  sidebar = new SidebarProvider(runHistory);
   connectionStore = new ConnectionStore(context.secrets);
   context.subscriptions.push(connectionStore);
   connectionsSidebar = new ConnectionsSidebarProvider(connectionStore);
@@ -62,7 +65,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.window.registerWebviewViewProvider(DataPreviewView.viewType, dataPreview),
   );
 
-  editor = PipelineEditorProvider.register(context, manager, hooks, dataPreview, connectionStore);
+  editor = PipelineEditorProvider.register(context, manager, hooks, dataPreview, connectionStore, runHistory);
   context.subscriptions.push(editor.disposable);
 
   manager.onCrash(() => {
