@@ -88,6 +88,25 @@ func (failTransform) Apply(in *record.RecordBatch) (*record.RecordBatch, error) 
 }
 func (failTransform) Close() error { return nil }
 
+// splitTransform partitions rows by amount>100 (pass) vs <=100 (reject) — a fake
+// Splitter for per-row error routing.
+type splitTransform struct{}
+
+func (splitTransform) Apply(in *record.RecordBatch) (*record.RecordBatch, error) { return in, nil }
+func (splitTransform) Close() error                                              { return nil }
+func (splitTransform) ApplySplit(in *record.RecordBatch) (*record.RecordBatch, *record.RecordBatch, error) {
+	pass := in.Clone(in.Len())
+	reject := in.Clone(in.Len())
+	for i := range in.Rows {
+		if in.Rows[i][1].(int) > 100 {
+			pass.Rows = append(pass.Rows, in.Rows[i])
+		} else {
+			reject.Rows = append(reject.Rows, in.Rows[i])
+		}
+	}
+	return pass, reject, nil
+}
+
 // testBuilders wires each node's fake operator (stored under cfg["op"]) and uses
 // the real filter compiler for edge conditions.
 func testBuilders() Builders {
@@ -313,6 +332,44 @@ func TestErrorEdge(t *testing.T) {
 	}
 	if res.Nodes["t0"].RowsErrored != 3 {
 		t.Fatalf("t0 RowsErrored=%d, want 3", res.Nodes["t0"].RowsErrored)
+	}
+}
+
+func TestSplitterErrorRouting(t *testing.T) {
+	// A Splitter transform + an error edge routes rejected rows down the error
+	// edge row-by-row, while passing rows continue on the success edge.
+	src := &memSource{cols: testCols, rows: [][]interface{}{{1, 50}, {2, 150}, {3, 250}, {4, 80}}}
+	snk := &memSink{}
+	errSink := &memSink{}
+	g := &Graph{
+		Nodes: []Node{
+			{ID: "source", Kind: KindSource, Type: "mem", Cfg: map[string]interface{}{"op": src}},
+			{ID: "t0", Kind: KindTransform, Type: "split", Cfg: map[string]interface{}{"op": splitTransform{}}},
+			{ID: "sink", Kind: KindSink, Type: "mem", Cfg: map[string]interface{}{"op": snk}},
+			{ID: "errors", Kind: KindSink, Type: "mem", Cfg: map[string]interface{}{"op": errSink}},
+		},
+		Edges: []Edge{
+			{From: "source:rows", To: "t0:in"},
+			{From: "t0:out", To: "sink:in"},
+			{From: "t0:out", To: "errors:in", Type: EdgeError},
+		},
+	}
+	plan, err := Compile(g, testBuilders())
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	res, err := plan.Run(context.Background(), Options{BatchSize: 3})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if got := snk.amounts(); len(got) != 2 || got[0] != 150 || got[1] != 250 {
+		t.Fatalf("pass sink = %v, want [150 250]", got)
+	}
+	if got := errSink.amounts(); len(got) != 2 || got[0] != 50 || got[1] != 80 {
+		t.Fatalf("error sink = %v, want [50 80] (rejected rows)", got)
+	}
+	if res.Nodes["t0"].RowsErrored != 2 {
+		t.Fatalf("t0 RowsErrored=%d, want 2", res.Nodes["t0"].RowsErrored)
 	}
 }
 

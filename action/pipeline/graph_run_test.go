@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"path/filepath"
 	"testing"
+
+	_ "github.com/mpandav-tibco/flogo-datapipeline/transform/validate"
 )
 
 func mkGraphDef(nTransforms int, txType string, g *GraphDef) *Definition {
@@ -197,5 +199,47 @@ func TestGraphRun_ExtraSinkJSON(t *testing.T) {
 	// go to the null sink (discarded).
 	if rows := readJSONL(t, xsinkPath); len(rows) != 2 {
 		t.Fatalf("extra sink = %d rows, want 2 (Carol, Eve)", len(rows))
+	}
+}
+
+// Per-row error routing: a validate node with an error edge sends its violating
+// rows down the edge to an error sink row-by-row (not its internal sink).
+func TestGraphRun_ValidateReject(t *testing.T) {
+	src := writeTemp(t, "in.csv", ordersCSV)
+	rejectPath := filepath.Join(t.TempDir(), "rejects.jsonl")
+	def := &Definition{
+		Source: csvSource(src),
+		Transforms: []TransformDef{
+			{Type: "validate", Extra: map[string]interface{}{
+				"type":        "validate",
+				"rules":       []interface{}{map[string]interface{}{"field": "amount", "min": 1}},
+				"onViolation": "drop",
+			}},
+		},
+		Sink: SinkDef{Type: "null"},
+		Graph: &GraphDef{
+			Nodes: []GraphNodeDef{
+				{ID: "source", Kind: "source", Type: "csv"},
+				{ID: "t0", Kind: "transform", Type: "validate"},
+				{ID: "sink", Kind: "sink", Type: "null"},
+				{ID: "xsink-1", Kind: "sink", Type: "jsonlines", Extra: map[string]interface{}{"config": map[string]interface{}{"path": rejectPath}}},
+			},
+			Edges: []GraphEdge{
+				{From: "source:rows", To: "t0:in"},
+				{From: "t0:out", To: "sink:in"},
+				{From: "t0:out", To: "xsink-1:in", Type: "error"},
+			},
+		},
+	}
+	out, err := runInline(t, def)
+	if err != nil {
+		t.Fatalf("RunDirect: %v", err)
+	}
+	if out.Status != "completed" {
+		t.Fatalf("status = %q, want completed (err=%s)", out.Status, out.Error)
+	}
+	// amount < 1 violates: Bob(-50) and Dave(0) → error edge; the other 3 pass.
+	if rej := readJSONL(t, rejectPath); len(rej) != 2 {
+		t.Fatalf("reject sink = %d rows, want 2 (Bob, Dave)", len(rej))
 	}
 }

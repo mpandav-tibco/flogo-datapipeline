@@ -102,6 +102,17 @@ type TransformOp interface {
 	Close() error
 }
 
+// Splitter is an OPTIONAL capability a transform may implement for per-row error
+// routing: it partitions a batch into the rows that PASSED and the rows that were
+// REJECTED, returning both as NEW batches (the caller owns the input). The graph
+// runner calls ApplySplit instead of Apply when the node has an error edge, and
+// routes the rejected rows down that edge — so e.g. a validate node emits its
+// violations to an error sink row-by-row instead of to its own internal sink.
+// Satisfied structurally (implementers do not import this package).
+type Splitter interface {
+	ApplySplit(in *record.RecordBatch) (pass *record.RecordBatch, reject *record.RecordBatch, err error)
+}
+
 // SinkOp writes batches to a destination. Satisfied structurally by sink.Sink.
 type SinkOp interface {
 	WriteBatch(b *record.RecordBatch) error

@@ -146,6 +146,40 @@ func (rt *runtime) runTransform(ctx context.Context, n *pnode) {
 				return
 			}
 			atomic.AddInt64(&stat.RowsIn, int64(b.Len()))
+			// Per-row error routing: when this node both can split and has an
+			// error edge, partition the batch and send the rejected rows down the
+			// error edge instead of failing the whole batch.
+			if sp, ok := n.tx.(Splitter); ok && n.hasErr {
+				pass, reject, serr := sp.ApplySplit(b)
+				record.Put(b)
+				if serr != nil {
+					if pass != nil {
+						record.Put(pass)
+					}
+					if reject != nil {
+						record.Put(reject)
+					}
+					rt.fail(fmt.Errorf("transform %q: %w", n.id, serr))
+					return
+				}
+				if reject != nil {
+					if reject.Len() > 0 {
+						rt.emitError(ctx, n, reject)
+					}
+					record.Put(reject)
+				}
+				if pass == nil || pass.Len() == 0 {
+					if pass != nil {
+						record.Put(pass)
+					}
+					continue
+				}
+				atomic.AddInt64(&stat.RowsOut, int64(pass.Len()))
+				if !rt.emit(ctx, n, pass) {
+					return
+				}
+				continue
+			}
 			out, err := n.tx.Apply(b)
 			if err != nil {
 				// Route the failed batch to the node's error edge(s); if it has

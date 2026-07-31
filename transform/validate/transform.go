@@ -158,6 +158,27 @@ func (v *validateTransform) Apply(in *record.RecordBatch) (*record.RecordBatch, 
 	return good, nil
 }
 
+// ApplySplit partitions the batch into rows that passed validation and rows that
+// were rejected, WITHOUT touching the internal error sink — the graph runner
+// routes the rejects down an error edge instead. This implements the graph
+// runner's Splitter capability, so a validate node in a DAG can emit its
+// violations to an error link row-by-row (the edge, not onViolation, decides
+// their fate). Returns two NEW batches; the caller owns the input.
+func (v *validateTransform) ApplySplit(in *record.RecordBatch) (*record.RecordBatch, *record.RecordBatch, error) {
+	pass := in.Clone(in.Len())
+	pass.Columns = in.Columns
+	reject := in.Clone(in.Len())
+	reject.Columns = in.Columns
+	for i := range in.Rows {
+		if len(v.check(in.RowMap(i))) == 0 {
+			pass.Rows = append(pass.Rows, in.Rows[i])
+		} else {
+			reject.Rows = append(reject.Rows, in.Rows[i])
+		}
+	}
+	return pass, reject, nil
+}
+
 func (v *validateTransform) Close() error {
 	if v.errorSink != nil {
 		_ = v.errorSink.Flush()

@@ -23,6 +23,7 @@ type pnode struct {
 	snk    SinkOp
 	out    []*pedge
 	inDeg  int
+	hasErr bool
 	closer interface{ Close() error }
 }
 
@@ -145,6 +146,9 @@ func Compile(g *Graph, b Builders) (*Plan, error) {
 			pe.pred = pred
 		case EdgeSuccess, EdgeOtherwise, EdgeError:
 			// no predicate
+			if pe.etype == EdgeError {
+				from.hasErr = true
+			}
 		default:
 			return fail("graphexec: edge %s→%s has unknown type %q", e.From, e.To, e.Type)
 		}
