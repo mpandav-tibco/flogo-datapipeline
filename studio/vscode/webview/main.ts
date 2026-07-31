@@ -108,6 +108,7 @@ const S = {
   paletteOpen: true,
   paletteQ: '',
   paletteCat: {} as Record<string, boolean>,
+  panelOpen: false,
   setOpen: null as Record<string, boolean> | null,
   tabs: [{ id: 'canvas', type: 'canvas' as string }],
   active: 'canvas',
@@ -2993,6 +2994,7 @@ function renderAll() {
   renderTabs();
   renderEditor();
   renderStatus();
+  renderPanel();
 }
 
 // ── tabs ──────────────────────────────────────────────────────────────────
@@ -5205,6 +5207,62 @@ function renderFleet(wv: HTMLElement) {
 }
 
 // ── status bar ───────────────────────────────────────────────────────────────
+// Bottom Problems panel — an inline, collapsible list of validation issues
+// (matching the wireframe's bottom panel). Clicking an issue jumps to the
+// offending stage on the canvas. The #panel host is created lazily so it works
+// in both the packaged editor HTML and the standalone test harness.
+function renderPanel() {
+  const win = $('.win');
+  if (!win) return;
+  let host = $('#panel');
+  if (!host) {
+    host = el('div', 'panel');
+    host.id = 'panel';
+    const sb = $('#statusbar');
+    if (sb) win.insertBefore(host, sb); else win.appendChild(host);
+  }
+  host.className = 'panel' + (S.panelOpen ? '' : ' collapsed');
+  host.innerHTML = '';
+  const errs = S.issues.filter((i) => i.sev === 'error').length;
+
+  const tabs = el('div', 'paneltabs');
+  const pt = el('div', 'pt on' + (errs ? ' err' : ''));
+  pt.innerHTML = 'Problems <span class="cnt"></span>';
+  (pt.querySelector('.cnt') as HTMLElement).textContent = String(S.issues.length);
+  pt.onclick = () => { S.panelOpen = !S.panelOpen; renderPanel(); };
+  tabs.appendChild(pt);
+  const acts = el('div', 'pacts');
+  const toggle = el('span', '', S.panelOpen ? '⌄' : '⌃');
+  toggle.title = S.panelOpen ? 'Collapse panel' : 'Expand panel';
+  toggle.onclick = () => { S.panelOpen = !S.panelOpen; renderPanel(); };
+  acts.appendChild(toggle);
+  tabs.appendChild(acts);
+  host.appendChild(tabs);
+
+  if (!S.panelOpen) return;
+  const body = el('div', 'panelbody');
+  if (!S.issues.length) {
+    body.appendChild(el('div', 'muted', '<div style="padding:6px 4px;font-size:12px">No problems — the pipeline validates cleanly.</div>'));
+  } else {
+    const known = new Set((S.pipe ? S.pipe.nodes.map((n) => n.id) : []).concat(['dlq', 'source', 'sink']));
+    S.issues.forEach((iss) => {
+      const sevCls = iss.sev === 'error' ? 'err' : iss.sev === 'warn' ? 'warn' : 'ok';
+      const icon = iss.sev === 'error' ? '⊗' : iss.sev === 'warn' ? '⚠' : '✓';
+      const row = el('div', 'prob');
+      row.innerHTML = '<span class="i ' + sevCls + '">' + icon + '</span><span class="msg"></span><span class="src"></span>';
+      (row.querySelector('.msg') as HTMLElement).textContent = iss.msg;
+      (row.querySelector('.src') as HTMLElement).textContent = iss.label || '';
+      if (iss.anchor && known.has(iss.anchor)) {
+        row.onclick = () => { S.selNode = iss.anchor!; S.inspTab = 'Config'; S.inspClosed = false; S.active = 'canvas'; renderAll(); };
+      } else {
+        row.onclick = () => post({ type: 'showProblems' });
+      }
+      body.appendChild(row);
+    });
+  }
+  host.appendChild(body);
+}
+
 function renderStatus() {
   const sb = $('#statusbar')!;
   sb.innerHTML = '';
@@ -5584,6 +5642,7 @@ window.addEventListener('message', (ev: MessageEvent<HostToWebview>) => {
     case 'validationResult':
       S.issues = msg.issues || [];
       renderStatus();
+      renderPanel();
       break;
     case 'previewResult':
       S.preview = msg.result;
