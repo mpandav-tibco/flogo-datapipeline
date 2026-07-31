@@ -3100,6 +3100,16 @@ function openEdgeEditor(fromEp: string, toEp: string, ev: MouseEvent): void {
   setTimeout(() => document.addEventListener('mousedown', edgePopAway), 0);
 }
 
+// A backbone (main-chain) link is derived, not stored. Clicking it materialises
+// the explicit graph first (so the edge exists as a real doc.graph entry to
+// edit) then opens the same type popover — letting the user turn the main path
+// into "no match" / condition for a clean divert.
+function editMainEdge(fromEp: string, toEp: string, ev: MouseEvent): void {
+  const doc = S.doc as any;
+  if (!doc.graph) doc.graph = deriveGraph(S.doc);
+  openEdgeEditor(fromEp, toEp, ev);
+}
+
 function gKindCls(kind: string): string {
   return kind === 'source' ? 's-source' : kind === 'sink' ? 's-sink' : 'tf';
 }
@@ -3301,8 +3311,39 @@ function renderGraphCanvas(cv: HTMLElement): void {
     svg.querySelectorAll('.gedge, .gedgelabel, .gedgehit').forEach((e) => e.remove());
     wrap.querySelectorAll('.gport').forEach((e) => e.remove());
     for (let i = 1; i < p.nodes.length; i++) {
-      const a = cp(p.nodes[i - 1].id), b = cp(p.nodes[i].id);
-      graphEdge(svg, a.outX, a.outY, b.inX, b.inY, 'main' + (S.running ? ' running' : ''));
+      const pa = p.nodes[i - 1], pb = p.nodes[i];
+      const a = cp(pa.id), b = cp(pb.id);
+      // The backbone edge is a success link by default, but the user can retype
+      // it (→ no match / condition) — a stored override in doc.graph wins.
+      const fromEp = pa.id + ':' + (pa.kind === 'source' ? 'rows' : 'out');
+      const toEp = pb.id + ':in';
+      const ov = graphEdgesOf(S.doc).find((e) => edgeFrom(e) === fromEp && edgeTo(e) === toEp);
+      const et = ov ? (edgeType(ov) || 'default') : 'default';
+      const etCls = et === 'expression' ? ' cond' : et === 'otherwise' ? ' otherwise' : et === 'error' ? ' error' : '';
+      const cls = etCls ? ('manual' + etCls) : ('main' + (S.running ? ' running' : ''));
+      const mp = graphEdge(svg, a.outX, a.outY, b.inX, b.inY, cls);
+      // Fat transparent hit-path so the backbone link is clickable to set its type.
+      const mhit = document.createElementNS(GSVG_NS, 'path');
+      mhit.setAttribute('d', mp.getAttribute('d') || '');
+      mhit.setAttribute('class', 'gedgehit');
+      mhit.setAttribute('fill', 'none');
+      mhit.setAttribute('stroke', 'transparent');
+      mhit.setAttribute('stroke-width', '14');
+      mhit.style.pointerEvents = 'stroke';
+      mhit.style.cursor = 'pointer';
+      mhit.addEventListener('click', (ev) => editMainEdge(fromEp, toEp, ev as MouseEvent));
+      svg.appendChild(mhit);
+      mp.style.pointerEvents = 'none';
+      const mlbl = et === 'expression' ? edgeValue(ov) : et === 'otherwise' ? 'no match' : et === 'error' ? 'error' : '';
+      if (mlbl) {
+        const label = document.createElementNS(GSVG_NS, 'text');
+        label.setAttribute('x', String((a.outX + b.inX) / 2));
+        label.setAttribute('y', String((a.outY + b.inY) / 2 - 6));
+        label.setAttribute('text-anchor', 'middle');
+        label.setAttribute('class', 'gedgelabel' + (et === 'otherwise' ? ' otherwise' : et === 'error' ? ' error' : ''));
+        label.textContent = mlbl.length > 28 ? mlbl.slice(0, 27) + '…' : mlbl;
+        svg.appendChild(label);
+      }
     }
     p.nodes.forEach((n) => {
       const q = cp(n.id);
