@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import { extractPipelineData } from './model/pipeline';
 
 type NodeKind = 'pipeline' | 'running' | 'message';
 
@@ -99,7 +100,18 @@ export class SidebarProvider implements vscode.TreeDataProvider<PipelineTreeItem
       const name = path.basename(uri.fsPath);
       const item = new PipelineTreeItem(name, 'pipeline', vscode.TreeItemCollapsibleState.None, uri);
       item.resourceUri = uri;
-      item.description = vscode.workspace.asRelativePath(path.dirname(uri.fsPath));
+      // Summarise the pipeline as source → sink (like the wireframe's list),
+      // falling back to the folder path when the file can't be read/parsed.
+      let summary = vscode.workspace.asRelativePath(path.dirname(uri.fsPath));
+      try {
+        const raw = await vscode.workspace.fs.readFile(uri);
+        const pd: any = extractPipelineData(JSON.parse(Buffer.from(raw).toString('utf8')));
+        const st = pd && pd.source && pd.source.type;
+        const sk = pd && pd.sink && pd.sink.type;
+        if (st || sk) summary = `${st || '?'} → ${sk || '?'}`;
+      } catch { /* keep the folder path */ }
+      item.description = summary;
+      item.tooltip = `${name}\n${vscode.workspace.asRelativePath(uri)}`;
       item.iconPath = new vscode.ThemeIcon('circuit-board');
       item.contextValue = 'pipelineAction';
       item.command = {
