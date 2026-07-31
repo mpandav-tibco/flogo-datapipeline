@@ -863,6 +863,67 @@ function renderBoundField(f: HTMLElement, node: Node, key: string, value: string
 }
 
 // Build one config field widget appropriate to its key/value type.
+// The source's parse-error branch (errorSink) — a typed sub-form instead of a
+// raw JSON field, so bad rows can be routed to a sink without hand-writing JSON.
+function renderErrorSinkEditor(sn: Node): HTMLElement {
+  const wrap = el('div', '');
+  wrap.appendChild(el('div', 'hr'));
+  const cfg = cfgTarget(sn) as any;
+  if (!cfg.errorSink || typeof cfg.errorSink !== 'object') cfg.errorSink = { type: 'jsonlines', path: './out/parse-errors.jsonl' };
+  const es = cfg.errorSink;
+  wrap.appendChild(el('div', 'ttl', 'Parse-error sink'));
+  wrap.appendChild(el('div', 'hint', 'Rows that fail to parse are routed here as a side branch — the main pipeline keeps running.'));
+
+  const tf = el('div', 'fld');
+  tf.appendChild(el('div', 'k', 'Sink type'));
+  const sel = el('select', 'v') as HTMLSelectElement;
+  const ESINK_TYPES = ['jsonlines', 'csv', 'parquet', 'kafka', 'null'];
+  const curType = es.type || es.innerType || 'jsonlines';
+  const list = ESINK_TYPES.includes(curType) ? ESINK_TYPES : [curType, ...ESINK_TYPES];
+  list.forEach((o) => {
+    const op = document.createElement('option');
+    op.value = o; op.textContent = typeLabel(o);
+    if (o === curType) op.selected = true;
+    sel.appendChild(op);
+  });
+  sel.onchange = () => {
+    delete es.innerType; delete es.innerOptions;
+    es.type = sel.value;
+    if (['jsonlines', 'csv', 'parquet'].includes(sel.value) && !es.path) {
+      es.path = './out/parse-errors.' + (sel.value === 'jsonlines' ? 'jsonl' : sel.value);
+    }
+    persistAndRebuild();
+  };
+  tf.appendChild(sel);
+  wrap.appendChild(tf);
+
+  if (['jsonlines', 'csv', 'parquet'].includes(curType)) {
+    const pf = el('div', 'fld');
+    pf.appendChild(el('div', 'k', 'Path'));
+    const pi = el('input', 'v') as HTMLInputElement;
+    pi.value = es.path || '';
+    pi.placeholder = 'e.g. ./out/parse-errors.jsonl';
+    pi.onchange = () => { const v = pi.value.trim(); if (v === '') delete es.path; else es.path = v; persistAndRebuild(); };
+    pf.appendChild(pi);
+    wrap.appendChild(pf);
+  } else if (curType === 'kafka') {
+    const kf = el('div', 'fld');
+    kf.appendChild(el('div', 'k', 'Topic'));
+    const ki = el('input', 'v') as HTMLInputElement;
+    ki.value = es.topic || '';
+    ki.placeholder = 'e.g. parse-errors';
+    ki.onchange = () => { const v = ki.value.trim(); if (v === '') delete es.topic; else es.topic = v; persistAndRebuild(); };
+    kf.appendChild(ki);
+    wrap.appendChild(kf);
+  }
+
+  const rm = el('button', 'btn sm', '✕ Remove error sink');
+  rm.style.marginTop = '4px';
+  rm.onclick = () => { delete cfg.errorSink; persistAndRebuild(); toast('warn', 'Parse errors will now fail the run instead of routing to a sink'); };
+  wrap.appendChild(rm);
+  return wrap;
+}
+
 function renderField(node: Node, key: string, value: string): HTMLElement {
   const f = el('div', 'fld');
   const kdiv = el('div', 'k');
@@ -4102,6 +4163,7 @@ function renderCanvas(m: HTMLElement) {
         else if (k === 'rules' && sn.type === 'validate') ib.appendChild(renderRulesEditor(sn));
         else if (k === 'expectations' && sn.type === 'dq') ib.appendChild(renderExpectationsEditor(sn));
         else if (k === 'expr' && sn.type === 'filter') ib.appendChild(renderFilterEditor(sn));
+        else if (k === 'errorSink' && sn.kind === 'source') ib.appendChild(renderErrorSinkEditor(sn));
         else ib.appendChild(renderField(sn, k, v));
       });
 
