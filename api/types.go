@@ -65,6 +65,9 @@ type PipelineRunResponse struct {
 	// StageStats holds per-transform row counters (RowsIn/RowsOut) for the graph
 	// run overlay, in transform order. Present for single-worker runs.
 	StageStats []StageRowStat `json:"stageStats,omitempty"`
+
+	// GraphStats holds per-node row counters for a DAG (graph-runner) run overlay.
+	GraphStats []GraphNodeStat `json:"graphStats,omitempty"`
 }
 
 // StageRowStat reports one transform stage's row throughput for a run.
@@ -72,6 +75,16 @@ type StageRowStat struct {
 	Name    string `json:"name"`
 	RowsIn  int64  `json:"rowsIn"`
 	RowsOut int64  `json:"rowsOut"`
+}
+
+// GraphNodeStat reports one graph node's row throughput for a DAG run.
+type GraphNodeStat struct {
+	ID          string `json:"id"`
+	Kind        string `json:"kind"`
+	RowsIn      int64  `json:"rowsIn"`
+	RowsOut     int64  `json:"rowsOut"`
+	RowsWritten int64  `json:"rowsWritten"`
+	RowsErrored int64  `json:"rowsErrored"`
 }
 
 // DQReport carries the data-quality expectation results for a single run.

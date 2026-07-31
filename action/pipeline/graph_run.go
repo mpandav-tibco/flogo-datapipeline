@@ -214,6 +214,13 @@ func (a *DataPipelineAction) runGraph(ctx context.Context, in *Input, runLog cor
 	res, runErr := plan.Run(ctx, opts)
 	out.RowsProcessed = res.RowsRead
 	out.RowsWritten = res.RowsWritten
+	// Surface per-node counters for the Studio graph run overlay (present even on
+	// a partial/failed run so the canvas can show how far it got).
+	gs := make([]graphexec.NodeStat, 0, len(res.Nodes))
+	for _, ns := range res.Nodes {
+		gs = append(gs, *ns)
+	}
+	out.Metadata = map[string]interface{}{"graphStats": gs}
 	if runErr != nil {
 		return out, runErr
 	}

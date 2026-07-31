@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mpandav-tibco/flogo-datapipeline/action/pipeline"
+	"github.com/mpandav-tibco/flogo-datapipeline/action/pipeline/graphexec"
 	"github.com/mpandav-tibco/flogo-datapipeline/transform"
 )
 
@@ -448,6 +449,12 @@ func mapOutputToRunResponse(runID string, startedAt time.Time, out *pipeline.Out
 			resp.StageStats = make([]StageRowStat, len(ss))
 			for i, s := range ss {
 				resp.StageStats[i] = StageRowStat{Name: s.Name, RowsIn: s.RowsIn, RowsOut: s.RowsOut}
+			}
+		}
+		if gs, ok := out.Metadata["graphStats"].([]graphexec.NodeStat); ok {
+			resp.GraphStats = make([]GraphNodeStat, len(gs))
+			for i, s := range gs {
+				resp.GraphStats[i] = GraphNodeStat{ID: s.ID, Kind: string(s.Kind), RowsIn: s.RowsIn, RowsOut: s.RowsOut, RowsWritten: s.RowsWritten, RowsErrored: s.RowsErrored}
 			}
 		}
 	}
