@@ -76,7 +76,9 @@ button{font-family:inherit;color:inherit;background:none;border:none;cursor:poin
 .complib-item .ci.src{color:#7cb6ec;background:rgba(74,144,217,.16)}
 .complib-item .ci.sink{color:#6fca9d;background:rgba(76,175,125,.16)}
 .complib-item .ci.tf{color:#c39ae8;background:rgba(169,120,217,.16)}
+.complib-item .ci.dlq{color:var(--yellow);background:var(--yellowA)}
 .complib-item .cl{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.complib-item .carity{flex:none;font:600 9.5px var(--mono);color:var(--mute);opacity:.85;letter-spacing:.02em}
 .complib-empty{padding:12px;color:var(--dim);font-size:11.5px}
 /* palette → canvas drag-and-drop target highlight */
 .canvas.dragover{outline:2px dashed var(--blue);outline-offset:-8px}

@@ -105,6 +105,8 @@ const S = {
   zoom: 1,
   mapMode: 'visual',
   showBranches: true,
+  showCounts: true,
+  minimapOpen: false,
   paletteOpen: true,
   paletteQ: '',
   paletteCat: {} as Record<string, boolean>,
@@ -604,6 +606,35 @@ const TF_LABELS: Record<string, string> = {
 function transformLabel(t: string): string {
   return TF_LABELS[t] || t;
 }
+
+// Per-type glyphs so a join, router, validate and filter are visually distinct
+// on the canvas and in the palette instead of a single generic "ƒ". Single
+// characters only, so they sit cleanly in the fixed-size icon box.
+const TF_ICON: Record<string, string> = {
+  filter: '▽', map: 'ƒ', mapper: 'ƒ', cast: '⇄', parse: '❮',
+  validate: '✓', dq: '◉', lookup: '⌕', hwm: '⇡', schemadrift: '⟳',
+  window: '⧖', join: '⨝', union: '⋃', explode: '✶', flatten: '≡',
+  router: '⋔', split: '⋔',
+};
+const SRC_ICON: Record<string, string> = {
+  csv: 'C', tsv: 'T', fixedwidth: '▦', sectioned: '▦', parquet: '◱',
+  xml: '⟨', jsonlines: '⌗', jdbc: 'J', kafka: 'K', objstore: '◇',
+  s3: '◇', podlog: '☰',
+};
+const SINK_ICON: Record<string, string> = {
+  jdbc: 'J', kafka: 'K', parquet: '◱', objstore: '◇', s3: '◇',
+  jsonlines: '⌗', csv: 'C', null: '∅', template: '❏',
+};
+function nodeIcon(kind: string, type: string): string {
+  if (kind === 'source') return SRC_ICON[type] || '⇥';
+  if (kind === 'sink') return SINK_ICON[type] || '⇤';
+  return TF_ICON[type] || 'ƒ';
+}
+// Fan-in / fan-out hint shown in the palette (blank for the 1→1 majority).
+const TF_ARITY: Record<string, string> = {
+  join: '2→1', union: 'N→1', router: '1→N', split: '1→N',
+  validate: '1→2', dq: '1→2', explode: '1→N',
+};
 
 // Fixed emitted schemas for sources whose columns are NOT declared in the
 // .datapipeline JSON (the engine knows them internally). Surfacing them here
@@ -3298,7 +3329,7 @@ function gKindCls(kind: string): string {
 function buildGraphNode(n: Node, i: number, x: number, y: number, w: number): HTMLElement {
   const nd = el('div', 'gnode node ' + (n.kind === 'source' ? 'src' : n.kind === 'sink' ? 'sink' : 'tf') + (S.selNode === n.id ? ' sel' : ''));
   nd.style.left = x + 'px'; nd.style.top = y + 'px'; nd.style.width = w + 'px';
-  const icon = n.kind === 'source' ? '⇥' : n.kind === 'sink' ? '⇤' : 'ƒ';
+  const icon = nodeIcon(n.kind, n.type);
   const label = typeLabel(n.type);
   const hasCustomName = n.nm && n.nm !== label && n.nm !== n.type;
   const title = hasCustomName ? n.nm : label;
@@ -3315,7 +3346,7 @@ function buildGraphNode(n: Node, i: number, x: number, y: number, w: number): HT
 
 function buildGraphBranchCard(b: DerivedBranch): HTMLElement {
   const nd = el('div', 'gnode node satellite s-' + b.nodeKind);
-  const icon = b.nodeKind === 'source' ? '⇥' : '⇤';
+  const icon = nodeIcon(b.nodeKind, b.type);
   const kindText =
     b.kind === 'reference' ? 'reference input'
       : b.kind === 'route' ? 'route → sink'
@@ -3848,12 +3879,16 @@ function renderPalette(): HTMLElement {
   hd.appendChild(col);
   pal.appendChild(hd);
   const bodyEl = el('div', 'complib-body');
+  const hasDlq = !!(S.pipe && S.pipe.hasDlq);
+  const sinkItems = SINK_TYPES.map((t) => ({ type: t, label: typeLabel(t) }));
+  // Dead-letter is a sink-family palette item (matches the wireframe) — clicking
+  // it adds the top-level DLQ catch. Only offered when none exists yet.
+  if (!hasDlq) sinkItems.push({ type: '__dlq__', label: 'Dead-letter (DLQ)' });
   const cats: Array<{ name: string; kind: string; items: Array<{ type: string; label: string }> }> = [
     { name: 'Sources', kind: 'source', items: SOURCE_TYPES.map((t) => ({ type: t, label: typeLabel(t) })) },
     { name: 'Transforms', kind: 'transform', items: TRANSFORMS.map((t) => ({ type: t.type, label: transformLabel(t.type) })) },
-    { name: 'Sinks', kind: 'sink', items: SINK_TYPES.map((t) => ({ type: t, label: typeLabel(t) })) },
+    { name: 'Sinks', kind: 'sink', items: sinkItems },
   ];
-  const glyph: Record<string, string> = { source: '⇥', transform: 'ƒ', sink: '⇤' };
   const kcls: Record<string, string> = { source: 'src', transform: 'tf', sink: 'sink' };
   const rebuild = () => {
     bodyEl.innerHTML = '';
@@ -3870,16 +3905,22 @@ function renderPalette(): HTMLElement {
       bodyEl.appendChild(chd);
       if (collapsed) return;
       items.forEach((it) => {
+        const isDlq = it.type === '__dlq__';
         const row = el('div', 'complib-item');
-        row.title = 'Click or drag onto the canvas to add ' + it.label;
-        row.innerHTML = `<span class="ci ${kcls[cat.kind]}">${glyph[cat.kind]}</span><span class="cl"></span>`;
+        row.title = isDlq ? 'Add a dead-letter catch for rows the sink rejects' : 'Click or drag onto the canvas to add ' + it.label;
+        const ico = isDlq ? '⚠' : nodeIcon(cat.kind, it.type);
+        const icoCls = isDlq ? 'dlq' : kcls[cat.kind];
+        const ar = cat.kind === 'transform' ? (TF_ARITY[it.type] || '') : '';
+        row.innerHTML = `<span class="ci ${icoCls}">${ico}</span><span class="cl"></span>` + (ar ? `<span class="carity">${escapeHtml(ar)}</span>` : '');
         (row.querySelector('.cl') as HTMLElement).textContent = it.label;
-        row.draggable = true;
-        row.ondragstart = (e: DragEvent) => {
-          e.dataTransfer!.setData('text/flogo-comp', JSON.stringify({ kind: cat.kind, type: it.type }));
-          e.dataTransfer!.effectAllowed = 'copy';
-        };
-        row.onclick = () => addFromPalette(cat.kind, it.type);
+        if (!isDlq) {
+          row.draggable = true;
+          row.ondragstart = (e: DragEvent) => {
+            e.dataTransfer!.setData('text/flogo-comp', JSON.stringify({ kind: cat.kind, type: it.type }));
+            e.dataTransfer!.effectAllowed = 'copy';
+          };
+        }
+        row.onclick = () => { if (isDlq) addDlq(); else addFromPalette(cat.kind, it.type); };
         bodyEl.appendChild(row);
       });
     });
@@ -3965,56 +4006,40 @@ function renderCanvas(m: HTMLElement) {
   renderGraphCanvas(cv);
 
   const hint = el('div', 'canvas-hint pillrow');
-  const dlqPill = p.hasDlq ? '' : '<span class="pill" data-h="dlq">＋ DLQ</span>';
+  // View-only canvas toolbar (the wireframe's canvas tools). Adding components is
+  // the palette's job, so there are no ＋ pills here — only view actions + zoom.
   const brPill = p.branches.length ? `<span class="pill toggle${S.showBranches ? ' on' : ''}" data-h="branches" title="Show or hide the implicit router, join, reject and parse-error branches">⎇ Branches</span>` : '';
-  const hasGraph = !!(S.doc as any).graph;
-  const promotePill = hasGraph
-    ? `<span class="pill toggle on" data-h="unpromote" title="Remove the explicit graph block from the file (the canvas keeps showing the derived DAG)">graph ✓ · reset</span>`
-    : `<span class="pill toggle" data-h="promote" title="Write an explicit graph block (nodes + edges) to the file from this pipeline">⇪ Promote to graph</span>`;
+  const countsPill = S.ran ? `<span class="pill toggle${S.showCounts ? ' on' : ''}" data-h="counts" title="Show or hide the row counts from the last run">◔ Counts</span>` : '';
   const zoomCluster = '<span class="pilldiv"></span><span class="pill zoomctl" data-h="zoomout" title="Zoom out (⌘−)">−</span><span class="pill zoomctl zlvl" data-h="zoomreset" title="Reset zoom to 100% (⌘0)">' + Math.round((S.zoom || 1) * 100) + '%</span><span class="pill zoomctl" data-h="zoomin" title="Zoom in (⌘+)">＋</span>';
-  hint.innerHTML = '<span class="pill" data-h="src">＋ Source</span><span class="pill" data-h="tf">＋ Transform</span><span class="pill" data-h="sink">＋ Sink</span><span class="pill" data-h="xsink" title="Add an error / reject / audit sink node to the graph">⊕ Sink node</span>' + dlqPill + brPill + promotePill + '<span class="pill" data-h="fit">⤢ Fit</span>' + zoomCluster;
-  (hint.querySelector('[data-h="tf"]') as HTMLElement).onclick = () => addTransform(p.nodes.length - 1);
-  (hint.querySelector('[data-h="src"]') as HTMLElement).onclick = () =>
-    quickPick('Change source type', SOURCE_TYPES, (v) => {
-      (S.doc.source as any) = { type: v, ...defaultConfigFor('source', v) };
-      persistAndRebuild();
-      toast('ok', `Source type → ${typeLabel(v)}`);
-    }, typeLabel);
-  (hint.querySelector('[data-h="sink"]') as HTMLElement).onclick = () =>
-    quickPick('Change sink type', SINK_TYPES, (v) => {
-      (S.doc.sink as any) = { type: v, ...defaultConfigFor('sink', v) };
-      persistAndRebuild();
-      toast('ok', `Sink type → ${typeLabel(v)}`);
-    }, typeLabel);
-  const dlqBtn = hint.querySelector('[data-h="dlq"]') as HTMLElement | null;
-  if (dlqBtn) dlqBtn.onclick = () => addDlq();
-  const xsBtn = hint.querySelector('[data-h="xsink"]') as HTMLElement | null;
-  if (xsBtn) xsBtn.onclick = () => addExtraSink();
+  hint.innerHTML =
+    '<span class="pill" data-h="fit" title="Zoom to fit the whole graph in view">⤢ Fit</span>'
+    + '<span class="pill" data-h="auto" title="Re-run auto-layout (discards any manual node positions)">▦ Auto-layout</span>'
+    + '<span class="pill" data-h="validate" title="Validate the pipeline configuration">✓ Validate</span>'
+    + brPill + countsPill
+    + `<span class="pill toggle${S.minimapOpen ? ' on' : ''}" data-h="minimap" title="Show or hide the minimap overview">◱ Minimap</span>`
+    + zoomCluster;
   const brBtn = hint.querySelector('[data-h="branches"]') as HTMLElement | null;
   if (brBtn) brBtn.onclick = () => { S.showBranches = !S.showBranches; renderEditor(); };
-  const prBtn = hint.querySelector('[data-h="promote"]') as HTMLElement | null;
-  if (prBtn) prBtn.onclick = () => {
-    const g = deriveGraph(S.doc);
-    (S.doc as any).graph = g;
-    persistAndRebuild();
-    toast('ok', `Wrote graph block — ${g.nodes.length} nodes, ${g.edges.length} edges`);
-  };
-  const unBtn = hint.querySelector('[data-h="unpromote"]') as HTMLElement | null;
-  if (unBtn) unBtn.onclick = () => {
-    delete (S.doc as any).graph;
-    persistAndRebuild();
-    toast('ok', 'Removed the explicit graph block');
+  const countsBtn = hint.querySelector('[data-h="counts"]') as HTMLElement | null;
+  if (countsBtn) countsBtn.onclick = () => { S.showCounts = !S.showCounts; renderEditor(); };
+  const validateBtn = hint.querySelector('[data-h="validate"]') as HTMLElement | null;
+  if (validateBtn) validateBtn.onclick = () => { post({ type: 'validate' }); toast('ok', 'Validating…'); };
+  const mmBtn = hint.querySelector('[data-h="minimap"]') as HTMLElement | null;
+  if (mmBtn) mmBtn.onclick = () => { S.minimapOpen = !S.minimapOpen; renderEditor(); };
+  const autoBtn = hint.querySelector('[data-h="auto"]') as HTMLElement | null;
+  if (autoBtn) autoBtn.onclick = () => {
+    const doc = S.doc as any;
+    if (doc.ui && doc.ui.positions) { delete doc.ui.positions; if (!Object.keys(doc.ui).length) delete doc.ui; post({ type: 'save', doc: S.doc }); }
+    S.zoom = 1;
+    renderEditor();
+    toast('ok', 'Reset to auto-layout');
   };
   const fitBtn = hint.querySelector('[data-h="fit"]') as HTMLElement | null;
   if (fitBtn) fitBtn.onclick = () => {
-    const doc = S.doc as any;
-    const hadPos = doc.ui && doc.ui.positions;
-    if (hadPos) { delete doc.ui.positions; if (!Object.keys(doc.ui).length) delete doc.ui; post({ type: 'save', doc: S.doc }); }
+    // Zoom to fit — respects the current (possibly hand-arranged) layout.
     S.zoom = 1;
     renderEditor();
-    // Zoom to fit: scale the freshly auto-laid-out graph down so the whole
-    // pipeline is visible in the viewport, then scroll back to the origin.
-    let msg = hadPos ? 'Reset to auto-layout' : '';
+    let msg = '';
     const cvEl = $('.canvas'); const gc = $('.gcanvas');
     if (cvEl && gc) {
       const cw = parseFloat(gc.style.width) || gc.offsetWidth || 1;
@@ -4022,7 +4047,7 @@ function renderCanvas(m: HTMLElement) {
       const availW = Math.max(200, cvEl.clientWidth - 48);
       const availH = Math.max(200, cvEl.clientHeight - gc.offsetTop - 24);
       const z = Math.max(0.4, Math.floor(Math.min(1, availW / cw, availH / ch) * 10) / 10);
-      if (z < 1) { applyZoom(z); msg = (hadPos ? 'Reset to auto-layout · ' : '') + 'fit to ' + Math.round(z * 100) + '%'; }
+      if (z < 1) { applyZoom(z); msg = 'Fit to ' + Math.round(z * 100) + '%'; }
       cvEl.scrollTo({ left: 0, top: 0 });
     }
     if (msg) toast('ok', msg);
