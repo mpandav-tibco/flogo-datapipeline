@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	_ "github.com/mpandav-tibco/flogo-datapipeline/transform/validate"
+	_ "github.com/mpandav-tibco/flogo-datapipeline/transform/window"
 )
 
 func mkGraphDef(nTransforms int, txType string, g *GraphDef) *Definition {
@@ -65,9 +66,14 @@ func TestGraphExecutable(t *testing.T) {
 		t.Fatal("graph with a non-standard node (dlq) must fall back to linear")
 	}
 
-	// An unsupported transform (window) with a conditional edge → fall back.
-	if graphExecutable(mkGraphDef(1, "window", &GraphDef{Nodes: stdNodes, Edges: condEdges})) {
-		t.Fatal("graph containing an unsupported transform (window) must fall back to linear")
+	// An unsupported transform (hwm) with a conditional edge → fall back.
+	if graphExecutable(mkGraphDef(1, "hwm", &GraphDef{Nodes: stdNodes, Edges: condEdges})) {
+		t.Fatal("graph containing an unsupported transform (hwm) must fall back to linear")
+	}
+
+	// A window transform IS supported (flushed at end-of-input) → run via graph.
+	if !graphExecutable(mkGraphDef(1, "window", &GraphDef{Nodes: stdNodes, Edges: condEdges})) {
+		t.Fatal("graph with a window transform must run via the graph runner")
 	}
 }
 
@@ -241,5 +247,61 @@ func TestGraphRun_ValidateReject(t *testing.T) {
 	// amount < 1 violates: Bob(-50) and Dave(0) → error edge; the other 3 pass.
 	if rej := readJSONL(t, rejectPath); len(rej) != 2 {
 		t.Fatalf("reject sink = %d rows, want 2 (Bob, Dave)", len(rej))
+	}
+}
+
+const windowCSV = `ts,sensor
+2020-01-01T00:00:00Z,A
+2020-01-01T00:00:10Z,A
+2020-01-01T00:00:20Z,A
+`
+
+// A window transform runs as a graph node: it buffers rows and the runner
+// flushes its open aggregates at end-of-input (the Flusher hook). Fan-out to two
+// sinks makes the graph non-reducible so the graph runner is used.
+func TestGraphRun_Window(t *testing.T) {
+	src := writeTemp(t, "win.csv", windowCSV)
+	out1 := filepath.Join(t.TempDir(), "agg1.jsonl")
+	out2 := filepath.Join(t.TempDir(), "agg2.jsonl")
+	def := &Definition{
+		Source: csvSource(src),
+		Transforms: []TransformDef{
+			{Type: "window", Extra: map[string]interface{}{
+				"type":         "window",
+				"eventTime":    map[string]interface{}{"column": "ts", "format": "RFC3339"},
+				"window":       map[string]interface{}{"kind": "tumbling", "sizeMs": float64(60000)},
+				"groupBy":      []interface{}{"sensor"},
+				"aggregations": []interface{}{map[string]interface{}{"as": "n", "fn": "count"}},
+			}},
+		},
+		Sink: jsonlSink(out1),
+		Graph: &GraphDef{
+			Nodes: []GraphNodeDef{
+				{ID: "source", Kind: "source", Type: "csv"},
+				{ID: "t0", Kind: "transform", Type: "window"},
+				{ID: "sink", Kind: "sink", Type: "jsonlines"},
+				{ID: "sink2", Kind: "sink", Type: "jsonlines", Extra: map[string]interface{}{"config": map[string]interface{}{"path": out2}}},
+			},
+			Edges: []GraphEdge{
+				{From: "source:rows", To: "t0:in"},
+				{From: "t0:out", To: "sink:in"},
+				{From: "t0:out", To: "sink2:in"},
+			},
+		},
+	}
+	out, err := runInline(t, def)
+	if err != nil {
+		t.Fatalf("RunDirect: %v", err)
+	}
+	if out.Status != "completed" {
+		t.Fatalf("status = %q, want completed (err=%s)", out.Status, out.Error)
+	}
+	// 3 rows in one 60s tumbling window for sensor A → 1 aggregate row (n=3),
+	// teed to both sinks by the fan-out (proves window flushed on the graph path).
+	if r1 := readJSONL(t, out1); len(r1) != 1 {
+		t.Fatalf("sink1 = %d rows, want 1 aggregate", len(r1))
+	}
+	if r2 := readJSONL(t, out2); len(r2) != 1 {
+		t.Fatalf("sink2 = %d rows, want 1 aggregate", len(r2))
 	}
 }

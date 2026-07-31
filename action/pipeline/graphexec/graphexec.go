@@ -113,6 +113,15 @@ type Splitter interface {
 	ApplySplit(in *record.RecordBatch) (pass *record.RecordBatch, reject *record.RecordBatch, err error)
 }
 
+// Flusher is an OPTIONAL capability a transform may implement to emit rows it has
+// buffered once its input is exhausted — e.g. a window operator emitting its
+// still-open aggregates at end-of-stream. The graph runner calls Flush after the
+// node's input channel closes and forwards the returned batch downstream.
+// Satisfied structurally by transform/window's WindowedOperator.Flush.
+type Flusher interface {
+	Flush() (*record.RecordBatch, error)
+}
+
 // SinkOp writes batches to a destination. Satisfied structurally by sink.Sink.
 type SinkOp interface {
 	WriteBatch(b *record.RecordBatch) error

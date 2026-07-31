@@ -143,6 +143,23 @@ func (rt *runtime) runTransform(ctx context.Context, n *pnode) {
 			return
 		case b, ok := <-ch:
 			if !ok {
+				// End-of-input: let the operator emit any rows it buffered (e.g. a
+				// window's still-open aggregates) before this node finishes.
+				if f, hasFlush := n.tx.(Flusher); hasFlush {
+					fb, ferr := f.Flush()
+					if ferr != nil {
+						rt.fail(fmt.Errorf("transform %q flush: %w", n.id, ferr))
+						return
+					}
+					if fb != nil {
+						if fb.Len() > 0 {
+							atomic.AddInt64(&stat.RowsOut, int64(fb.Len()))
+							rt.emit(ctx, n, fb)
+						} else {
+							record.Put(fb)
+						}
+					}
+				}
 				return
 			}
 			atomic.AddInt64(&stat.RowsIn, int64(b.Len()))

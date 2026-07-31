@@ -107,6 +107,28 @@ func (splitTransform) ApplySplit(in *record.RecordBatch) (*record.RecordBatch, *
 	return pass, reject, nil
 }
 
+// bufferTransform buffers every row and emits them only on Flush — a fake
+// stateful operator (like window) for the end-of-input flush hook.
+type bufferTransform struct {
+	buf  [][]interface{}
+	cols []record.Column
+}
+
+func (bt *bufferTransform) Apply(in *record.RecordBatch) (*record.RecordBatch, error) {
+	bt.cols = in.Columns
+	bt.buf = append(bt.buf, in.Rows...)
+	return nil, nil
+}
+func (bt *bufferTransform) Close() error { return nil }
+func (bt *bufferTransform) Flush() (*record.RecordBatch, error) {
+	if len(bt.buf) == 0 {
+		return nil, nil
+	}
+	out := &record.RecordBatch{Columns: bt.cols, Rows: bt.buf}
+	bt.buf = nil
+	return out, nil
+}
+
 // testBuilders wires each node's fake operator (stored under cfg["op"]) and uses
 // the real filter compiler for edge conditions.
 func testBuilders() Builders {
@@ -370,6 +392,35 @@ func TestSplitterErrorRouting(t *testing.T) {
 	}
 	if res.Nodes["t0"].RowsErrored != 2 {
 		t.Fatalf("t0 RowsErrored=%d, want 2", res.Nodes["t0"].RowsErrored)
+	}
+}
+
+func TestFlusher(t *testing.T) {
+	// A buffering transform emits nothing per-batch and flushes all rows at
+	// end-of-input; the flushed batch must reach the sink.
+	src := &memSource{cols: testCols, rows: [][]interface{}{{1, 50}, {2, 150}, {3, 250}}}
+	snk := &memSink{}
+	g := &Graph{
+		Nodes: []Node{
+			{ID: "source", Kind: KindSource, Type: "mem", Cfg: map[string]interface{}{"op": src}},
+			{ID: "t0", Kind: KindTransform, Type: "buffer", Cfg: map[string]interface{}{"op": &bufferTransform{}}},
+			{ID: "sink", Kind: KindSink, Type: "mem", Cfg: map[string]interface{}{"op": snk}},
+		},
+		Edges: []Edge{{From: "source:rows", To: "t0:in"}, {From: "t0:out", To: "sink:in"}},
+	}
+	plan, err := Compile(g, testBuilders())
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	res, err := plan.Run(context.Background(), Options{BatchSize: 2})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if got := snk.amounts(); len(got) != 3 || got[0] != 50 || got[2] != 250 {
+		t.Fatalf("sink = %v, want [50 150 250] (flushed at end)", got)
+	}
+	if res.RowsWritten != 3 {
+		t.Fatalf("RowsWritten=%d, want 3", res.RowsWritten)
 	}
 }
 

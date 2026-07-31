@@ -24,16 +24,16 @@ import (
 // untouched. This is the safe reading of "run the graph automatically".
 
 // unsupportedGraphTransforms are transform types the streaming runner cannot yet
-// execute with the same guarantees as the linear engine: they need end-of-input
-// flush (window), post-run watermark persistence (hwm), gate-report metadata
-// (dq), or secondary-stream buffering (join, union). A graph that uses one of
-// them falls back to the linear path.
+// execute with the same guarantees as the linear engine: they need post-run
+// watermark persistence (hwm), gate-report metadata (dq), or secondary-stream
+// buffering (join, union). A graph that uses one of them falls back to the
+// linear path. (window is supported — the runner flushes its open aggregates at
+// end-of-input via the Flusher hook.)
 var unsupportedGraphTransforms = map[string]bool{
-	"window": true,
-	"hwm":    true,
-	"dq":     true,
-	"join":   true,
-	"union":  true,
+	"hwm":   true,
+	"dq":    true,
+	"join":  true,
+	"union": true,
 }
 
 // graphExecutable reports whether the pipeline's graph both NEEDS the graph
