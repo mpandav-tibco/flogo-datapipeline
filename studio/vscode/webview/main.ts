@@ -3891,9 +3891,15 @@ function autoFitCanvas(): void {
     const cvEl = $('.canvas'); const gc = $('.gcanvas');
     if (!cvEl || !gc) return;
     const cw = parseFloat(gc.style.width) || gc.offsetWidth || 1;
+    const ch = parseFloat(gc.style.height) || gc.offsetHeight || 1;
     const availW = Math.max(200, cvEl.clientWidth - 48);
-    if (cw <= availW) return; // already fits at 100%
-    const z = Math.max(0.5, Math.floor(Math.min(1, availW / cw) * 10) / 10);
+    const availH = Math.max(200, cvEl.clientHeight - gc.offsetTop - 24);
+    if (cw <= availW && ch <= availH) return; // already fits at 100%
+    // Frame the graph, but keep it readable: never auto-shrink below 60% on open.
+    // A long pipeline stays legible and scrolls from its source rather than
+    // becoming a tiny, unreadable diagram lost in the canvas. Use the ⤢ Fit
+    // button for the zoomed-out whole-graph overview.
+    const z = Math.max(0.6, Math.floor(Math.min(1, availW / cw, availH / ch) * 10) / 10);
     if (z < 1) applyZoom(z);
   });
 }
