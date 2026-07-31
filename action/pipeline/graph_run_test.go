@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -157,5 +158,44 @@ func TestGraphRun_MultiSink(t *testing.T) {
 	}
 	if rest := readJSONL(t, restPath); len(rest) != 3 {
 		t.Fatalf("rest sink = %d rows, want 3 (Alice, Bob, Dave)", len(rest))
+	}
+}
+
+// The studio emits an extra sink node as {id,kind,type,ports,config} with a typed
+// edge. Parse that EXACT JSON shape and run it — proving studio output executes
+// on the engine end-to-end (GraphNodeDef.UnmarshalJSON → Extra["config"]).
+func TestGraphRun_ExtraSinkJSON(t *testing.T) {
+	src := writeTemp(t, "in.csv", ordersCSV)
+	xsinkPath := filepath.Join(t.TempDir(), "errors.jsonl")
+	raw := fmt.Sprintf(`{
+      "source": {"type":"csv","path":%q,"hasHeader":true},
+      "sink": {"type":"null"},
+      "graph": {
+        "nodes": [
+          {"id":"source","kind":"source","type":"csv"},
+          {"id":"sink","kind":"sink","type":"null"},
+          {"id":"xsink-1","kind":"sink","type":"jsonlines","ports":{"in":["in"]},"config":{"path":%q}}
+        ],
+        "edges": [
+          {"from":"source:rows","to":"xsink-1:in","type":"expression","value":"amount > 100"},
+          {"from":"source:rows","to":"sink:in","type":"otherwise"}
+        ]
+      }
+    }`, src, xsinkPath)
+	var def Definition
+	if err := json.Unmarshal([]byte(raw), &def); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	out, err := runInline(t, &def)
+	if err != nil {
+		t.Fatalf("RunDirect: %v", err)
+	}
+	if out.Status != "completed" {
+		t.Fatalf("status = %q, want completed (err=%s)", out.Status, out.Error)
+	}
+	// amount>100 → Carol(200), Eve(300) reach the extra jsonlines sink; the rest
+	// go to the null sink (discarded).
+	if rows := readJSONL(t, xsinkPath); len(rows) != 2 {
+		t.Fatalf("extra sink = %d rows, want 2 (Carol, Eve)", len(rows))
 	}
 }
