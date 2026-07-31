@@ -37,36 +37,55 @@ var unsupportedGraphTransforms = map[string]bool{
 }
 
 // graphExecutable reports whether the pipeline's graph both NEEDS the graph
-// runner (non-reducible) and CAN be run by this increment: every node must be a
-// standard, linearly-resolvable node (the single "source", a transform "t{i}"
-// in range, or the single "sink"), with no unsupported transform. Branch, DLQ
-// and multi-source graphs are deferred to a later increment and stay linear.
+// runner (non-reducible) and CAN be run: every node must be resolvable — either
+// self-contained (it carries its own "config" object) or a standard linear node
+// ("source", a transform "t{i}" in range, or "sink") — and no node may use a
+// transform type the runner does not yet support. Multiple sinks/sources are
+// allowed as long as the extra ones carry their own config.
 func graphExecutable(def *Definition) bool {
 	g := def.Graph
 	if g == nil || len(g.Nodes) == 0 {
 		return false
 	}
-	sources, sinks := 0, 0
 	for _, n := range g.Nodes {
-		switch {
-		case n.ID == "source":
-			sources++
-		case n.ID == "sink":
-			sinks++
-		default:
-			idx, ok := transformIndex(n.ID)
-			if !ok || idx >= len(def.Transforms) {
-				return false
-			}
-			if unsupportedGraphTransforms[strings.ToLower(def.Transforms[idx].Type)] {
-				return false
-			}
+		typ, ok := nodeResolveType(def, n)
+		if !ok {
+			return false
+		}
+		if n.Kind == "transform" && unsupportedGraphTransforms[strings.ToLower(typ)] {
+			return false
 		}
 	}
-	if sources != 1 || sinks != 1 {
-		return false
-	}
 	return graphNonReducible(g)
+}
+
+// selfContainedConfig returns a graph node's embedded config object, if any. A
+// self-contained node fully describes its own operator (no linear-model
+// fallback), which is what lets a graph declare extra sinks (error / reject) or
+// additional sources.
+func selfContainedConfig(n GraphNodeDef) (map[string]interface{}, bool) {
+	c, ok := n.Extra["config"].(map[string]interface{})
+	return c, ok
+}
+
+// nodeResolveType returns a node's effective operator type and whether the node
+// can be resolved (self-contained, or a standard linear node).
+func nodeResolveType(def *Definition, n GraphNodeDef) (string, bool) {
+	if _, ok := selfContainedConfig(n); ok {
+		return n.Type, true
+	}
+	switch {
+	case n.ID == "source":
+		return def.Source.Type, true
+	case n.ID == "sink":
+		return def.Sink.Type, true
+	default:
+		idx, ok := transformIndex(n.ID)
+		if ok && idx < len(def.Transforms) {
+			return def.Transforms[idx].Type, true
+		}
+		return "", false
+	}
 }
 
 // graphNonReducible reports whether the graph has structure the linear chain
@@ -108,31 +127,37 @@ func transformIndex(id string) (int, bool) {
 	return i, true
 }
 
-// buildExecGraph turns the on-disk GraphDef into the executor's neutral plan,
-// resolving each node's config from the linear model by id (source → def.Source,
-// t{i} → def.Transforms[i], sink → def.Sink) and carrying each edge's condition.
+// buildExecGraph turns the on-disk GraphDef into the executor's neutral plan. A
+// self-contained node (one carrying its own "config" object) is built from that
+// config; otherwise a standard node is resolved from the linear model by id
+// (source → def.Source, t{i} → def.Transforms[i], sink → def.Sink). Each edge's
+// type and condition are carried through.
 func (a *DataPipelineAction) buildExecGraph(in *Input) (*graphexec.Graph, error) {
 	def := a.def
 	eg := &graphexec.Graph{}
 	for _, n := range def.Graph.Nodes {
-		node := graphexec.Node{ID: n.ID}
-		switch {
-		case n.ID == "source":
-			node.Kind = graphexec.KindSource
-			node.Type = def.Source.Type
-			node.Cfg = a.buildSourceConfig(in)
-		case n.ID == "sink":
-			node.Kind = graphexec.KindSink
-			node.Type = def.Sink.Type
-			node.Cfg = def.Sink.Options
-		default:
-			idx, ok := transformIndex(n.ID)
-			if !ok || idx >= len(def.Transforms) {
-				return nil, fmt.Errorf("graph node %q cannot be resolved to a pipeline stage", n.ID)
+		node := graphexec.Node{ID: n.ID, Kind: graphexec.NodeKind(n.Kind), Type: n.Type}
+		if cfg, ok := selfContainedConfig(n); ok {
+			node.Cfg = cfg
+		} else {
+			switch {
+			case n.ID == "source":
+				node.Kind = graphexec.KindSource
+				node.Type = def.Source.Type
+				node.Cfg = a.buildSourceConfig(in)
+			case n.ID == "sink":
+				node.Kind = graphexec.KindSink
+				node.Type = def.Sink.Type
+				node.Cfg = def.Sink.Options
+			default:
+				idx, ok := transformIndex(n.ID)
+				if !ok || idx >= len(def.Transforms) {
+					return nil, fmt.Errorf("graph node %q cannot be resolved to a pipeline stage", n.ID)
+				}
+				node.Kind = graphexec.KindTransform
+				node.Type = def.Transforms[idx].Type
+				node.Cfg = def.Transforms[idx].Extra
 			}
-			node.Kind = graphexec.KindTransform
-			node.Type = def.Transforms[idx].Type
-			node.Cfg = def.Transforms[idx].Extra
 		}
 		eg.Nodes = append(eg.Nodes, node)
 	}

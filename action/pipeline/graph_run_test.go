@@ -116,3 +116,46 @@ func TestGraphRun_ConditionalSkip(t *testing.T) {
 		t.Fatalf("sink rows = %v, want exactly Carol + Eve", rows)
 	}
 }
+
+// End-to-end with a self-contained multi-sink graph: a condition edge and an
+// otherwise edge partition the source into two DISTINCT sinks that each carry
+// their own config (no linear "sink" node is involved).
+func TestGraphRun_MultiSink(t *testing.T) {
+	src := writeTemp(t, "in.csv", ordersCSV)
+	bigPath := filepath.Join(t.TempDir(), "big.jsonl")
+	restPath := filepath.Join(t.TempDir(), "rest.jsonl")
+
+	def := &Definition{
+		Source: csvSource(src),
+		Sink:   SinkDef{Type: "null"}, // required by the schema; unused by the graph
+		Graph: &GraphDef{
+			Nodes: []GraphNodeDef{
+				{ID: "source", Kind: "source", Type: "csv"},
+				{ID: "big", Kind: "sink", Type: "jsonlines", Extra: map[string]interface{}{"config": map[string]interface{}{"path": bigPath}}},
+				{ID: "rest", Kind: "sink", Type: "jsonlines", Extra: map[string]interface{}{"config": map[string]interface{}{"path": restPath}}},
+			},
+			Edges: []GraphEdge{
+				{From: "source:rows", To: "big:in", Type: "expression", Value: "amount > 100"},
+				{From: "source:rows", To: "rest:in", Type: "otherwise"},
+			},
+		},
+	}
+
+	out, err := runInline(t, def)
+	if err != nil {
+		t.Fatalf("RunDirect: %v", err)
+	}
+	if out.Status != "completed" {
+		t.Fatalf("status = %q, want completed (err=%s)", out.Status, out.Error)
+	}
+	if out.RowsProcessed != 5 || out.RowsWritten != 5 {
+		t.Fatalf("processed=%d written=%d, want 5/5", out.RowsProcessed, out.RowsWritten)
+	}
+	// amount>100 → Carol(200), Eve(300); otherwise → Alice(100), Bob(-50), Dave(0).
+	if big := readJSONL(t, bigPath); len(big) != 2 {
+		t.Fatalf("big sink = %d rows, want 2 (Carol, Eve)", len(big))
+	}
+	if rest := readJSONL(t, restPath); len(rest) != 3 {
+		t.Fatalf("rest sink = %d rows, want 3 (Alice, Bob, Dave)", len(rest))
+	}
+}
