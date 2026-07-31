@@ -3006,19 +3006,26 @@ function addGraphLink(from: string, to: string): void {
   const fromKind = ((S.pipe && S.pipe.nodes.find((n) => n.id === from)) || ({} as any)).kind;
   edges.push([from + ':' + (fromKind === 'source' ? 'rows' : 'out'), to + ':in']);
   persistAndRebuild();
-  toast('ok', 'Link added — click it to add a condition');
+  toast('ok', 'Link added — click it to set its type');
 }
-// Set (blank clears) the boolean condition on a manual link, converting it
-// between the plain array form and the conditional object form.
-function setEdgeCondition(fromEp: string, toEp: string, value: string): void {
+// Set a manual link's TYPE, mirroring Flogo Flow links. Success is the compact
+// array form; condition / no-match / error use the object form so they round-trip
+// and the engine can route on them.
+function setEdgeType(fromEp: string, toEp: string, type: string, value: string): void {
   const doc = S.doc as any;
   const edges: any[] = (doc.graph && doc.graph.edges) || [];
   const idx = edges.findIndex((e) => edgeFrom(e) === fromEp && edgeTo(e) === toEp);
   if (idx < 0) return;
-  const v = value.trim();
-  edges[idx] = v ? { from: fromEp, to: toEp, type: 'expression', value: v } : [fromEp, toEp];
+  const v = (value || '').trim();
+  let ne: any;
+  if (type === 'expression') ne = { from: fromEp, to: toEp, type: 'expression', value: v };
+  else if (type === 'otherwise') ne = { from: fromEp, to: toEp, type: 'otherwise' };
+  else if (type === 'error') ne = { from: fromEp, to: toEp, type: 'error' };
+  else ne = [fromEp, toEp]; // success / default
+  edges[idx] = ne;
   persistAndRebuild();
-  toast('ok', v ? 'Condition set — link taken only when true' : 'Condition cleared — link always taken');
+  const label = type === 'expression' ? 'Condition' : type === 'otherwise' ? 'No-match' : type === 'error' ? 'Error' : 'Success';
+  toast('ok', 'Link set to ' + label);
 }
 function removeGraphLink(fromEp: string, toEp: string): void {
   const doc = S.doc as any;
@@ -3029,30 +3036,67 @@ function removeGraphLink(fromEp: string, toEp: string): void {
 }
 function closeEdgeEditor(): void { const p = $('.edgepop'); if (p) p.remove(); document.removeEventListener('mousedown', edgePopAway); }
 function edgePopAway(e: MouseEvent): void { const p = $('.edgepop'); if (p && !p.contains(e.target as HTMLElement)) closeEdgeEditor(); }
-// Click a manual link → a small popover to set its condition or delete it.
+// Click a manual link → a popover to set its TYPE (Flogo-style: Success /
+// Condition / No match / Error) or delete it. The expression field shows only
+// for a Condition link.
 function openEdgeEditor(fromEp: string, toEp: string, ev: MouseEvent): void {
   ev.stopPropagation();
   closeEdgeEditor();
   const cur = graphEdgesOf(S.doc).find((e) => edgeFrom(e) === fromEp && edgeTo(e) === toEp);
+  let sel = cur ? (edgeType(cur) || 'default') : 'default';
+  if (sel === '') sel = 'default';
+  const HINTS: Record<string, string> = {
+    default: 'Success — every row continues along this link.',
+    expression: 'Rows follow this link only when the expression is true.',
+    otherwise: 'Rows from this stage that matched no Condition link.',
+    error: 'Rows that failed at this stage — routed here instead of stopping the run.',
+  };
   const pop = el('div', 'edgepop');
   pop.style.left = Math.min(ev.clientX, window.innerWidth - 300) + 'px';
-  pop.style.top = ev.clientY + 'px';
-  pop.appendChild(el('div', 'ephdr', 'Link condition'));
+  pop.style.top = Math.min(ev.clientY, window.innerHeight - 230) + 'px';
+  pop.appendChild(el('div', 'ephdr', 'Link type'));
+  const seg = el('div', 'epseg');
+  const types = [
+    { k: 'default', lbl: 'Success' },
+    { k: 'expression', lbl: 'Condition' },
+    { k: 'otherwise', lbl: 'No match' },
+    { k: 'error', lbl: 'Error' },
+  ];
+  const segBtns: Record<string, HTMLElement> = {};
+  const condWrap = el('div', 'epcond');
   const inp = document.createElement('input');
   inp.className = 'epinput'; inp.value = cur ? edgeValue(cur) : '';
-  inp.placeholder = 'always — e.g. amount > 1000';
-  pop.appendChild(inp);
-  const row = el('div', 'eprow');
+  inp.placeholder = 'e.g. amount > 1000';
+  condWrap.appendChild(inp);
+  const hint = el('div', 'ephint', '');
+  const sync = () => {
+    for (const t of types) segBtns[t.k].className = 'epsegb' + (sel === t.k ? ' on' : '');
+    condWrap.style.display = sel === 'expression' ? 'block' : 'none';
+    hint.textContent = HINTS[sel];
+  };
+  for (const t of types) {
+    const b = el('button', 'epsegb', t.lbl);
+    b.onclick = () => { sel = t.k; sync(); if (sel === 'expression') inp.focus(); };
+    segBtns[t.k] = b; seg.appendChild(b);
+  }
+  pop.appendChild(seg);
+  pop.appendChild(condWrap);
   const apply = el('button', 'btn sm pri', 'Apply');
-  apply.onclick = () => { setEdgeCondition(fromEp, toEp, inp.value); closeEdgeEditor(); };
+  const doApply = () => {
+    if (sel === 'expression' && !inp.value.trim()) { toast('warn', 'Enter a condition expression'); inp.focus(); return; }
+    setEdgeType(fromEp, toEp, sel, inp.value); closeEdgeEditor();
+  };
+  apply.onclick = doApply;
   const del = el('button', 'btn sm', '✕ Delete link');
   del.onclick = () => { removeGraphLink(fromEp, toEp); closeEdgeEditor(); };
+  const row = el('div', 'eprow');
   row.appendChild(apply); row.appendChild(del);
   pop.appendChild(row);
-  pop.appendChild(el('div', 'ephint', 'Rows follow this link only when the expression is true. Blank = always.'));
+  pop.appendChild(hint);
   document.body.appendChild(pop);
-  inp.focus();
-  inp.onkeydown = (e) => { if (e.key === 'Enter') { setEdgeCondition(fromEp, toEp, inp.value); closeEdgeEditor(); } else if (e.key === 'Escape') { closeEdgeEditor(); } };
+  sync();
+  if (sel === 'expression') inp.focus();
+  inp.onkeydown = (e) => { if (e.key === 'Enter') { doApply(); } else if (e.key === 'Escape') { closeEdgeEditor(); } };
   setTimeout(() => document.addEventListener('mousedown', edgePopAway), 0);
 }
 
@@ -3283,13 +3327,14 @@ function renderGraphCanvas(cv: HTMLElement): void {
       const f = gEndpointNode(edgeFrom(e)), t = gEndpointNode(edgeTo(e));
       if (!pos[f] || !pos[t] || derived.has(f + '>' + t)) return;
       const a = cp(f), b = cp(t);
-      const cond = edgeType(e) === 'expression';
+      const et = edgeType(e) || 'default';
+      const etCls = et === 'expression' ? ' cond' : et === 'otherwise' ? ' otherwise' : et === 'error' ? ' error' : '';
       // Bow the link below the row so a skip-link that would otherwise lie flat
       // on the main chain stays visible and clear of the nodes it spans.
       const span = Math.abs(b.inX - a.outX);
       const flat = Math.abs(b.inY - a.outY) < 24;
       const bow = flat ? Math.max(48, Math.min(72, span * 0.12)) : 0;
-      const path = graphEdge(svg, a.outX, a.outY, b.inX, b.inY, 'manual' + (cond ? ' cond' : ''), bow);
+      const path = graphEdge(svg, a.outX, a.outY, b.inX, b.inY, 'manual' + etCls, bow);
       const fromEp = edgeFrom(e), toEp = edgeTo(e);
       // A fat, transparent hit-path over the thin curve so the link is easy to
       // click (the visible stroke alone is a 2px target and awkward to hit).
@@ -3304,13 +3349,14 @@ function renderGraphCanvas(cv: HTMLElement): void {
       hit.addEventListener('click', (ev) => openEdgeEditor(fromEp, toEp, ev as MouseEvent));
       svg.appendChild(hit);
       path.style.pointerEvents = 'none';
-      if (cond) {
+      const lblText = et === 'expression' ? edgeValue(e) : et === 'otherwise' ? 'no match' : et === 'error' ? 'error' : '';
+      if (lblText) {
         const label = document.createElementNS(GSVG_NS, 'text');
         label.setAttribute('x', String((a.outX + b.inX) / 2));
         label.setAttribute('y', String((a.outY + b.inY) / 2 + bow * 0.75 - 5));
         label.setAttribute('text-anchor', 'middle');
-        label.setAttribute('class', 'gedgelabel');
-        label.textContent = edgeValue(e).length > 28 ? edgeValue(e).slice(0, 27) + '…' : edgeValue(e);
+        label.setAttribute('class', 'gedgelabel' + (et === 'otherwise' ? ' otherwise' : et === 'error' ? ' error' : ''));
+        label.textContent = lblText.length > 28 ? lblText.slice(0, 27) + '…' : lblText;
         svg.appendChild(label);
       }
     });
