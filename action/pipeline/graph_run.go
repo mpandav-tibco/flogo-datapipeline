@@ -207,6 +207,14 @@ func (a *DataPipelineAction) runGraph(ctx context.Context, in *Input, runLog cor
 	if err != nil {
 		return out, fmt.Errorf("graph compile: %w", err)
 	}
+	// Checkpoint/resume needs a consistent barrier across the streaming DAG
+	// (exactly-once dataflow), which the graph runner does not yet implement. The
+	// graph still runs correctly — it just isn't resumable. Reducible pipelines
+	// (no conditional/branch edges) keep full checkpoint support via the linear
+	// path, since graphExecutable returns false for them.
+	if ct := def.Checkpoint.Type; ct != "" && ct != "none" {
+		runLog.Warnf("graph runner: checkpoint/resume not yet supported for a branching graph — running without it (configured checkpoint=%s)", ct)
+	}
 	opts := graphexec.Options{
 		BatchSize:   def.Performance.BatchSize,
 		BufferDepth: def.Performance.SourceBufferBatches,
