@@ -3062,6 +3062,32 @@ function renderTabs() {
   bar.appendChild(acts);
 }
 
+// Workflow mode switcher (Design | Preview | Run | Deploy) — the wireframe's
+// canvas-header tabs. Design is the resting authoring state; Preview / Run /
+// Deploy trigger the corresponding action (reusing the existing handlers).
+function renderModeBar(): HTMLElement {
+  const bar = el('div', 'modebar');
+  const activeMode = S.running ? 'run' : 'design';
+  const modes: Array<{ id: string; label: string; title: string; fn: () => void }> = [
+    { id: 'design', label: 'Design', title: 'Author the pipeline graph', fn: () => { S.active = 'canvas'; renderAll(); } },
+    { id: 'preview', label: 'Preview', title: 'Dry-run: sample rows through the pipeline without writing to the sink', fn: () => doPreview() },
+    { id: 'run', label: 'Run', title: S.running ? 'Stop the running pipeline' : 'Run the pipeline on the engine', fn: () => (S.running ? doStop() : doRun()) },
+    { id: 'deploy', label: 'Deploy', title: 'Generate a Dockerfile + Kubernetes manifest', fn: () => doDeploy() },
+  ];
+  modes.forEach((mo) => {
+    const seg = el('span', 'modeseg-i' + (mo.id === activeMode ? ' on' : ''));
+    seg.textContent = mo.label;
+    seg.title = mo.title;
+    seg.onclick = mo.fn;
+    bar.appendChild(seg);
+  });
+  return bar;
+}
+
+function doDeploy(): void {
+  quickPick('Replicas (sharded StatefulSet)', ['1', '2', '4', '8'], (v) => post({ type: 'deploy', replicas: Number(v) }));
+}
+
 // ── editor / canvas ─────────────────────────────────────────────────────────
 // Remembered scroll offset of the inspector body (.ib), restored after each
 // renderEditor() so field edits don't jump the config panel back to the top.
@@ -3087,6 +3113,7 @@ function renderEditor() {
     const sn = findSelNode(S.pipe);
     const snLabel = sn ? (sn.nm && sn.nm !== typeLabel(sn.type) && sn.nm !== sn.type ? `${typeLabel(sn.type)}: ${sn.nm}` : typeLabel(sn.type)) : '';
     bc.innerHTML = `◈ ${escapeHtml(S.pipe.name)} <span class="sep">›</span> ${escapeHtml(snLabel)} <span class="sep">›</span> <span class="chip plain" style="padding:1px 7px">${escapeHtml(S.pipe.mode)}</span>`;
+    bc.appendChild(renderModeBar());
     renderCanvas(m);
   } else {
     bc.innerHTML = tabMeta(t).label;

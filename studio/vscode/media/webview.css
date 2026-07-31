@@ -43,6 +43,12 @@ button{font-family:inherit;color:inherit;background:none;border:none;cursor:poin
 .tabsbar .egacts{margin-left:auto;display:flex;align-items:center;gap:8px;padding:0 10px;flex:none}
 .breadcrumb{height:26px;display:flex;align-items:center;gap:6px;padding:0 14px;font-size:12px;color:var(--dim);border-bottom:1px solid var(--border);flex:none}
 .breadcrumb .sep{color:var(--dim)}
+/* workflow mode switcher (Design | Preview | Run | Deploy) */
+.modebar{display:inline-flex;margin-left:auto;border:1px solid var(--inputBorder);border-radius:6px;overflow:hidden;flex:none}
+.modebar .modeseg-i{padding:2px 12px;font-size:11.5px;color:var(--dim);cursor:pointer;border-right:1px solid var(--inputBorder);user-select:none;transition:background .1s,color .1s}
+.modebar .modeseg-i:last-child{border-right:none}
+.modebar .modeseg-i:hover{color:var(--text);background:var(--hover)}
+.modebar .modeseg-i.on{background:var(--blue);color:#fff}
 .edmain{flex:1;min-height:0;display:flex;flex-direction:row}
 .edcontent{flex:1;min-width:0;min-height:0;position:relative;overflow:auto}
 
