@@ -3670,6 +3670,39 @@ function renderGraphCanvas(cv: HTMLElement): void {
         }
       }
     }
+
+    // Per-edge "follow the row" counts: label each wire with the rows that
+    // crossed it. A main-chain edge A→B carries A's output rows; reject / parse-
+    // error branches carry the owner's errored rows. Derived from the same node
+    // stats as the badges, so no engine change is needed.
+    const rowsOut: Record<string, number> = {};
+    const rowsErr: Record<string, number> = {};
+    if (gs && gs.length) {
+      gs.forEach((s) => { rowsOut[s.id] = s.rowsOut || 0; rowsErr[s.id] = s.rowsErrored || 0; });
+    } else {
+      rowsOut['source'] = r.rowsProcessed || 0;
+      const ss2 = r.stageStats;
+      const txNodes2 = p.nodes.filter((n) => n.kind === 'transform');
+      if (ss2 && ss2.length === txNodes2.length) txNodes2.forEach((n, i) => { rowsOut[n.id] = ss2[i].rowsOut; });
+    }
+    const edgeCount = (mx: number, my: number, n: number, cls: string) => {
+      const lab = el('div', 'gedgecount' + (cls ? ' ' + cls : ''), fmtK(n));
+      lab.style.left = mx + 'px'; lab.style.top = my + 'px';
+      wrap.appendChild(lab);
+    };
+    for (let i = 1; i < p.nodes.length; i++) {
+      const from = p.nodes[i - 1], to = p.nodes[i];
+      if (!(from.id in rowsOut)) continue;
+      const a = cp(from.id), b = cp(to.id);
+      edgeCount((a.outX + b.inX) / 2, (a.outY + b.inY) / 2 - 11, rowsOut[from.id], '');
+    }
+    branchList.forEach((br) => {
+      if (br.cls !== 'br-reject' && br.cls !== 'br-source-error') return;
+      const err = rowsErr[br.sel] || rowsErr[br.owner] || 0;
+      if (!err) return;
+      const o = cp(br.owner), nn = cp(br.id);
+      edgeCount((o.botX + nn.topX) / 2, (o.botY + nn.topY) / 2, err, 'err');
+    });
   }
 
   redraw();
