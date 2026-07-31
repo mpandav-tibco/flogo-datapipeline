@@ -631,16 +631,66 @@ func (n GraphNodeDef) MarshalJSON() ([]byte, error) {
 	return json.Marshal(m)
 }
 
-// GraphEdge connects an output of one node to an input of another, encoded as a
-// 2-element array ["fromNode:port", "toNode:port"]. The ":port" suffix is
-// optional — a bare "node" refers to its default port.
-type GraphEdge [2]string
+// GraphEdge connects an output of one node to an input of another. The ":port"
+// suffix on an endpoint is optional — a bare "node" refers to its default port.
+//
+// It serializes in two interchangeable forms (Flogo-style links):
+//   - a plain, unconditional link is a compact 2-element array
+//     ["fromNode:port","toNode:port"] (the historical form), and
+//   - a conditional link is an object
+//     {"from":...,"to":...,"type":"expression","value":"<bool expr>"} that is
+//     taken only when the expression is true.
+type GraphEdge struct {
+	From  string // source endpoint: "node" or "node:port"
+	To    string // target endpoint: "node" or "node:port"
+	Type  string // "" / "default" = unconditional; "expression" = conditional
+	Value string // condition expression, when Type == "expression"
+}
 
-// From returns the edge's source endpoint ("node" or "node:port").
-func (e GraphEdge) From() string { return e[0] }
+// UnmarshalJSON accepts BOTH the legacy 2-element array form and the object
+// form, so existing promoted graphs (all array edges) keep loading unchanged.
+func (e *GraphEdge) UnmarshalJSON(data []byte) error {
+	k := 0
+	for k < len(data) && (data[k] == ' ' || data[k] == '\t' || data[k] == '\n' || data[k] == '\r') {
+		k++
+	}
+	if k < len(data) && data[k] == '[' {
+		var pair []string
+		if err := json.Unmarshal(data, &pair); err != nil {
+			return err
+		}
+		if len(pair) != 2 {
+			return fmt.Errorf("pipeline definition: a graph edge array must have exactly 2 elements [from, to], got %d", len(pair))
+		}
+		e.From, e.To, e.Type, e.Value = pair[0], pair[1], "", ""
+		return nil
+	}
+	var obj struct {
+		From  string `json:"from"`
+		To    string `json:"to"`
+		Type  string `json:"type"`
+		Value string `json:"value"`
+	}
+	if err := json.Unmarshal(data, &obj); err != nil {
+		return err
+	}
+	e.From, e.To, e.Type, e.Value = obj.From, obj.To, obj.Type, obj.Value
+	return nil
+}
 
-// To returns the edge's target endpoint ("node" or "node:port").
-func (e GraphEdge) To() string { return e[1] }
+// MarshalJSON emits the compact array form for a plain link (clean + back-compat)
+// and the object form for a conditional link.
+func (e GraphEdge) MarshalJSON() ([]byte, error) {
+	if e.Type == "" || e.Type == "default" {
+		return json.Marshal([2]string{e.From, e.To})
+	}
+	return json.Marshal(struct {
+		From  string `json:"from"`
+		To    string `json:"to"`
+		Type  string `json:"type"`
+		Value string `json:"value,omitempty"`
+	}{e.From, e.To, e.Type, e.Value})
+}
 
 // graphEndpointNode returns the node-id part of an edge endpoint
 // ("node:port" -> "node"), without importing strings.
@@ -680,10 +730,15 @@ func (g *GraphDef) validate() error {
 	}
 	adj := make(map[string][]string, len(g.Nodes))
 	for i, e := range g.Edges {
-		from := graphEndpointNode(e[0])
-		to := graphEndpointNode(e[1])
+		from := graphEndpointNode(e.From)
+		to := graphEndpointNode(e.To)
 		if from == "" || to == "" {
-			return fmt.Errorf("pipeline definition: graph.edges[%d] must be a [from, to] pair, got %q -> %q", i, e[0], e[1])
+			return fmt.Errorf("pipeline definition: graph.edges[%d] must have from and to endpoints, got %q -> %q", i, e.From, e.To)
+		}
+		switch e.Type {
+		case "", "default", "expression":
+		default:
+			return fmt.Errorf("pipeline definition: graph.edges[%d] has invalid type %q (want \"default\" or \"expression\")", i, e.Type)
 		}
 		if _, ok := indeg[from]; !ok {
 			return fmt.Errorf("pipeline definition: graph.edges[%d] references unknown source node %q", i, from)

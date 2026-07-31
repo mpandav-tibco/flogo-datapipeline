@@ -6,6 +6,9 @@ import (
 	"testing"
 )
 
+// ge builds a plain (unconditional) graph edge for tests.
+func ge(from, to string) GraphEdge { return GraphEdge{From: from, To: to} }
+
 // TestGraphValidate exercises the topology rules of the optional `graph` block:
 // unique non-empty ids, known kinds, edge endpoints that reference declared
 // nodes, and acyclicity.
@@ -18,27 +21,27 @@ func TestGraphValidate(t *testing.T) {
 	}{
 		{"linear ok", GraphDef{
 			Nodes: []GraphNodeDef{n("s", "source"), n("t", "transform"), n("k", "sink")},
-			Edges: []GraphEdge{{"s:rows", "t:in"}, {"t:out", "k:in"}},
+			Edges: []GraphEdge{ge("s:rows", "t:in"), ge("t:out", "k:in")},
 		}, false},
 		{"fan-out + fan-in ok", GraphDef{
 			Nodes: []GraphNodeDef{n("s", "source"), n("r", "transform"), n("a", "sink"), n("b", "sink")},
-			Edges: []GraphEdge{{"s", "r"}, {"r:eu", "a"}, {"r:us", "b"}},
+			Edges: []GraphEdge{ge("s", "r"), ge("r:eu", "a"), ge("r:us", "b")},
 		}, false},
-		{"empty nodes rejected", GraphDef{Edges: []GraphEdge{{"a", "b"}}}, true},
+		{"empty nodes rejected", GraphDef{Edges: []GraphEdge{ge("a", "b")}}, true},
 		{"missing id rejected", GraphDef{Nodes: []GraphNodeDef{{Kind: "source"}}}, true},
 		{"duplicate id rejected", GraphDef{Nodes: []GraphNodeDef{n("x", "source"), n("x", "sink")}}, true},
 		{"bad kind rejected", GraphDef{Nodes: []GraphNodeDef{n("x", "widget")}}, true},
 		{"edge to unknown node rejected", GraphDef{
 			Nodes: []GraphNodeDef{n("s", "source")},
-			Edges: []GraphEdge{{"s", "ghost"}},
+			Edges: []GraphEdge{ge("s", "ghost")},
 		}, true},
 		{"self-loop rejected", GraphDef{
 			Nodes: []GraphNodeDef{n("s", "source")},
-			Edges: []GraphEdge{{"s:out", "s:in"}},
+			Edges: []GraphEdge{ge("s:out", "s:in")},
 		}, true},
 		{"cycle rejected", GraphDef{
 			Nodes: []GraphNodeDef{n("a", "transform"), n("b", "transform"), n("c", "transform")},
-			Edges: []GraphEdge{{"a", "b"}, {"b", "c"}, {"c", "a"}},
+			Edges: []GraphEdge{ge("a", "b"), ge("b", "c"), ge("c", "a")},
 		}, true},
 	}
 	for _, c := range cases {
@@ -70,7 +73,7 @@ func TestDefinitionGraphIntegration(t *testing.T) {
 	ok := base()
 	ok.Graph = &GraphDef{
 		Nodes: []GraphNodeDef{{ID: "s", Kind: "source"}, {ID: "k", Kind: "sink"}},
-		Edges: []GraphEdge{{"s", "k"}},
+		Edges: []GraphEdge{ge("s", "k")},
 	}
 	if err := ok.Validate(); err != nil {
 		t.Fatalf("a definition with a valid graph should be valid: %v", err)
@@ -79,10 +82,51 @@ func TestDefinitionGraphIntegration(t *testing.T) {
 	bad := base()
 	bad.Graph = &GraphDef{
 		Nodes: []GraphNodeDef{{ID: "a", Kind: "transform"}, {ID: "b", Kind: "transform"}},
-		Edges: []GraphEdge{{"a", "b"}, {"b", "a"}},
+		Edges: []GraphEdge{ge("a", "b"), ge("b", "a")},
 	}
 	if err := bad.Validate(); err == nil {
 		t.Fatalf("a definition with a cyclic graph should be rejected by Validate")
+	}
+}
+
+// TestGraphEdgeConditional confirms the conditional (object) edge form parses,
+// validates and round-trips, while a plain array edge stays unconditional.
+func TestGraphEdgeConditional(t *testing.T) {
+	src := []byte(`{"nodes":[{"id":"r","kind":"transform"},{"id":"a","kind":"sink"},{"id":"b","kind":"sink"}],` +
+		`"edges":[["r:out","a:in"],{"from":"r:out","to":"b:in","type":"expression","value":"amount > 1000"}]}`)
+	var g GraphDef
+	if err := json.Unmarshal(src, &g); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(g.Edges) != 2 {
+		t.Fatalf("want 2 edges, got %d", len(g.Edges))
+	}
+	if g.Edges[0].Type != "" || g.Edges[0].From != "r:out" || g.Edges[0].To != "a:in" {
+		t.Fatalf("plain edge parsed wrong: %+v", g.Edges[0])
+	}
+	if g.Edges[1].Type != "expression" || g.Edges[1].Value != "amount > 1000" || g.Edges[1].To != "b:in" {
+		t.Fatalf("conditional edge parsed wrong: %+v", g.Edges[1])
+	}
+	if err := g.validate(); err != nil {
+		t.Fatalf("conditional graph should validate: %v", err)
+	}
+	out, err := json.Marshal(g)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(out), `["r:out","a:in"]`) {
+		t.Fatalf("plain edge should marshal to the array form: %s", out)
+	}
+	var g2 GraphDef
+	if err := json.Unmarshal(out, &g2); err != nil {
+		t.Fatalf("re-unmarshal: %v", err)
+	}
+	if g2.Edges[0].Type != "" || g2.Edges[1].Type != "expression" || g2.Edges[1].Value != "amount > 1000" {
+		t.Fatalf("edge types did not round-trip: %+v", g2.Edges)
+	}
+	bad := GraphDef{Nodes: []GraphNodeDef{{ID: "a", Kind: "source"}, {ID: "b", Kind: "sink"}}, Edges: []GraphEdge{{From: "a", To: "b", Type: "bogus"}}}
+	if err := bad.validate(); err == nil {
+		t.Fatalf("unknown edge type should be rejected")
 	}
 }
 
@@ -101,7 +145,7 @@ func TestGraphJSONRoundTrip(t *testing.T) {
 	if g.Nodes[0].Extra["path"] != "a.csv" {
 		t.Fatalf("node Extra config not preserved: %+v", g.Nodes[0].Extra)
 	}
-	if len(g.Edges) != 1 || g.Edges[0].From() != "s:rows" || g.Edges[0].To() != "k:in" {
+	if len(g.Edges) != 1 || g.Edges[0].From != "s:rows" || g.Edges[0].To != "k:in" {
 		t.Fatalf("edges not parsed: %+v", g.Edges)
 	}
 	out, err := json.Marshal(g)
