@@ -46,6 +46,27 @@ button{font-family:inherit;color:inherit;background:none;border:none;cursor:poin
 .edmain{flex:1;min-height:0;display:flex;flex-direction:row}
 .edcontent{flex:1;min-width:0;min-height:0;position:relative;overflow:auto}
 
+/* component palette (left rail) — searchable, categorised source/transform/sink library */
+.complib{width:212px;flex:none;border-right:1px solid var(--border);background:var(--chrome);display:flex;flex-direction:column;overflow:hidden}
+.complib.collapsed{width:34px;align-items:center}
+.complib-expand{width:34px;height:38px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--mute);font-size:15px}
+.complib-expand:hover{color:var(--text);background:var(--hover)}
+.complib-hd{height:35px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 6px 0 12px;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--mute);border-bottom:1px solid var(--border)}
+.complib-collapse{cursor:pointer;color:var(--dim);font-size:15px;line-height:1;padding:2px 7px;border-radius:4px}
+.complib-collapse:hover{color:var(--text);background:var(--hover)}
+.complib-search{flex:none;margin:8px;width:calc(100% - 16px);background:var(--input);border:1px solid var(--inputBorder);border-radius:5px;padding:5px 8px;font-size:12px;color:var(--text);outline:none}
+.complib-search:focus{border-color:var(--blue)}
+.complib-body{flex:1;overflow:auto;padding:0 6px 10px}
+.complib-cat{font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--dim);padding:10px 6px 4px}
+.complib-item{display:flex;align-items:center;gap:8px;padding:5px 7px;border-radius:5px;cursor:pointer;color:var(--text);font-size:12.5px;user-select:none}
+.complib-item:hover{background:var(--hover)}
+.complib-item .ci{flex:none;width:20px;height:20px;border-radius:5px;display:flex;align-items:center;justify-content:center;font-size:11px;background:var(--sheen);color:var(--text)}
+.complib-item .ci.src{color:#7cb6ec;background:rgba(74,144,217,.16)}
+.complib-item .ci.sink{color:#6fca9d;background:rgba(76,175,125,.16)}
+.complib-item .ci.tf{color:#c39ae8;background:rgba(169,120,217,.16)}
+.complib-item .cl{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.complib-empty{padding:12px;color:var(--dim);font-size:11.5px}
+
 .btn{display:inline-flex;align-items:center;gap:6px;background:var(--input);border:1px solid var(--inputBorder);color:var(--text);border-radius:5px;padding:4px 10px;font-size:12px;font-weight:600;transition:background .12s,border-color .12s}
 .btn:hover{background:var(--hover);border-color:var(--nodeBorder)}
 .btn.pri{background:var(--blue);border-color:var(--blue);color:#fff;box-shadow:0 1px 6px rgba(0,120,212,.35)}

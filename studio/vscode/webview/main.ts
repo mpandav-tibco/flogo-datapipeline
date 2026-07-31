@@ -105,6 +105,8 @@ const S = {
   zoom: 1,
   mapMode: 'visual',
   showBranches: true,
+  paletteOpen: true,
+  paletteQ: '',
   setOpen: null as Record<string, boolean> | null,
   tabs: [{ id: 'canvas', type: 'canvas' as string }],
   active: 'canvas',
@@ -3583,6 +3585,102 @@ function autoFitCanvas(): void {
 }
 
 
+// ── component palette (left rail) ───────────────────────────────────────────
+// The wireframe's authoring model: a searchable, categorised library of
+// Sources / Transforms / Sinks. Clicking an item adds a node of that type
+// (reusing the same add logic the toolbar pills use). Collapsible to a strip.
+function addFromPalette(kind: string, type: string): void {
+  if (kind === 'source') {
+    (S.doc.source as any) = { type, ...defaultConfigFor('source', type) };
+    S.selNode = 'source'; S.inspTab = 'Config'; S.inspClosed = false;
+    persistAndRebuild();
+    toast('ok', `Source → ${typeLabel(type)}`);
+    return;
+  }
+  if (kind === 'sink') {
+    const doc = S.doc as any;
+    if (!doc.graph) doc.graph = deriveGraph(S.doc);
+    doc.graph.nodes = Array.isArray(doc.graph.nodes) ? doc.graph.nodes : [];
+    let n = 1; while (doc.graph.nodes.some((g: any) => g && g.id === 'xsink-' + n)) n++;
+    const id = 'xsink-' + n;
+    doc.graph.nodes.push({ id, kind: 'sink', type, ports: { in: ['in'] }, config: defaultConfigFor('sink', type) });
+    S.pipe = buildPipe(S.doc);
+    S.selNode = id; S.inspTab = 'Config'; S.inspClosed = false;
+    post({ type: 'save', doc: S.doc });
+    renderEditor();
+    toast('ok', `Added sink node → ${typeLabel(type)}. Drag a link to it.`);
+    return;
+  }
+  // transform: append before the sink, seeding a valid default config.
+  const doc: any = S.doc;
+  doc.transforms = Array.isArray(doc.transforms) ? doc.transforms : [];
+  const cat = TRANSFORMS.find((x) => x.type === type);
+  const cfg = cat ? JSON.parse(JSON.stringify(cat.cfg)) : {};
+  const tfInsert = doc.transforms.length;
+  if (type === 'map') {
+    const cols = upstreamColumnsAt(tfInsert);
+    if (cols.length) { const f: Record<string, string> = {}; cols.forEach((c) => { f[c] = '=$' + c; }); cfg.fields = f; }
+  }
+  doc.transforms.splice(tfInsert, 0, { type, ...cfg });
+  S.pipe = buildPipe(S.doc);
+  S.selNode = 't' + tfInsert; S.inspTab = 'Config'; S.inspClosed = false;
+  post({ type: 'save', doc: S.doc });
+  renderEditor();
+  toast('ok', `Added ${transformLabel(type)} — configure it in the Inspector →`);
+}
+
+function renderPalette(): HTMLElement {
+  if (!S.paletteOpen) {
+    const strip = el('div', 'complib collapsed');
+    const btn = el('div', 'complib-expand', '⊞');
+    btn.title = 'Show component palette';
+    btn.onclick = () => { S.paletteOpen = true; renderEditor(); };
+    strip.appendChild(btn);
+    return strip;
+  }
+  const pal = el('div', 'complib');
+  const hd = el('div', 'complib-hd', '<span>Components</span>');
+  const col = el('span', 'complib-collapse', '‹');
+  col.title = 'Hide palette';
+  col.onclick = () => { S.paletteOpen = false; renderEditor(); };
+  hd.appendChild(col);
+  pal.appendChild(hd);
+  const bodyEl = el('div', 'complib-body');
+  const cats: Array<{ name: string; kind: string; items: Array<{ type: string; label: string }> }> = [
+    { name: 'Sources', kind: 'source', items: SOURCE_TYPES.map((t) => ({ type: t, label: typeLabel(t) })) },
+    { name: 'Transforms', kind: 'transform', items: TRANSFORMS.map((t) => ({ type: t.type, label: transformLabel(t.type) })) },
+    { name: 'Sinks', kind: 'sink', items: SINK_TYPES.map((t) => ({ type: t, label: typeLabel(t) })) },
+  ];
+  const glyph: Record<string, string> = { source: '⇥', transform: 'ƒ', sink: '⇤' };
+  const kcls: Record<string, string> = { source: 'src', transform: 'tf', sink: 'sink' };
+  const rebuild = () => {
+    bodyEl.innerHTML = '';
+    const q = (S.paletteQ || '').toLowerCase().trim();
+    cats.forEach((cat) => {
+      const items = cat.items.filter((it) => !q || it.label.toLowerCase().includes(q) || it.type.includes(q));
+      if (!items.length) return;
+      bodyEl.appendChild(el('div', 'complib-cat', cat.name));
+      items.forEach((it) => {
+        const row = el('div', 'complib-item');
+        row.title = 'Add ' + it.label;
+        row.innerHTML = `<span class="ci ${kcls[cat.kind]}">${glyph[cat.kind]}</span><span class="cl"></span>`;
+        (row.querySelector('.cl') as HTMLElement).textContent = it.label;
+        row.onclick = () => addFromPalette(cat.kind, it.type);
+        bodyEl.appendChild(row);
+      });
+    });
+    if (!bodyEl.children.length) bodyEl.appendChild(el('div', 'complib-empty', 'No components match'));
+  };
+  const search = el('input', 'complib-search') as HTMLInputElement;
+  search.placeholder = 'Search components…';
+  search.value = S.paletteQ || '';
+  search.oninput = () => { S.paletteQ = search.value; rebuild(); };
+  pal.appendChild(search);
+  pal.appendChild(bodyEl);
+  rebuild();
+  return pal;
+}
+
 function renderCanvas(m: HTMLElement) {
   const p = S.pipe!;
   const c = el('div', 'edcontent');
@@ -3690,6 +3788,7 @@ function renderCanvas(m: HTMLElement) {
   const zoomReset = hint.querySelector('[data-h="zoomreset"]') as HTMLElement | null;
   if (zoomReset) zoomReset.onclick = () => applyZoom(1);
   cv.appendChild(hint);
+  m.appendChild(renderPalette());
   m.appendChild(c);
 
   // First open of a wide pipeline: zoom-to-fit once so the whole DAG is visible.
