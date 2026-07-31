@@ -3745,14 +3745,22 @@ function renderGraphCanvas(cv: HTMLElement): void {
     wrap.appendChild(nd);
   });
 
+  // Design-time validation: ring any node that has an error in the Problems panel
+  // (mirrors the wireframe's "node gets an error badge + appears in Validation").
+  S.issues.forEach((iss) => {
+    if (iss.sev === 'error' && iss.anchor && els[iss.anchor]) els[iss.anchor].classList.add('state-err');
+  });
+
   // 6) Run overlay — after a run, badge the nodes with the real row counts the
   // engine reported: read at the source, written at the sink, failed at the DLQ.
-  if (S.ran && S.lastRun) {
+  // Gated on the Counts toggle so the graph can be viewed clean.
+  if (S.ran && S.lastRun && S.showCounts) {
     const r = S.lastRun;
     const badge = (id: string, text: string, cls: string) => {
       const host = els[id];
       if (host) host.appendChild(el('div', 'grunbadge ' + cls, text));
     };
+    const stateRing = (id: string, cls: string) => { const h = els[id]; if (h) h.classList.add(cls); };
     const streaming = isStreamingSource();
     const rate = (S.running && S.rateRps > 0) ? ' · ' + fmtK(S.rateRps) + '/s' : '';
     const srcLabel = (n: number) => (streaming ? '≋ ' : '▶ ') + fmtK(n) + (streaming ? ' events' : ' read') + rate;
@@ -3762,6 +3770,7 @@ function renderGraphCanvas(cv: HTMLElement): void {
       // Graph (DAG) run: badge every node with its OWN counts — including extra
       // sink nodes and per-node error counts the linear overlay can't show.
       gs.forEach((s) => {
+        if (s.rowsErrored > 0) stateRing(s.id, 'state-warn');
         if (s.kind === 'source') { badge(s.id, srcLabel(s.rowsOut), streamCls); return; }
         if (s.kind === 'sink') { badge(s.id, fmtK(s.rowsWritten) + ' written', 'ok'); return; }
         const txt = fmtK(s.rowsOut) + ' out' + (s.rowsErrored > 0 ? ' · ' + fmtK(s.rowsErrored) + ' err' : '');
@@ -3770,7 +3779,7 @@ function renderGraphCanvas(cv: HTMLElement): void {
     } else {
       badge('source', srcLabel(r.rowsProcessed), streamCls);
       badge('sink', fmtK(r.rowsWritten) + ' written', 'ok');
-      if (p.hasDlq && r.rowsFailed > 0) badge('dlq', fmtK(r.rowsFailed) + ' failed', 'err');
+      if (p.hasDlq && r.rowsFailed > 0) { badge('dlq', fmtK(r.rowsFailed) + ' failed', 'err'); stateRing('dlq', 'state-warn'); }
       // Per-transform throughput when the engine reported per-stage counts and they
       // align 1:1 with the transform nodes (i.e. no auto-injected schemadrift/hwm).
       const ss = r.stageStats;
@@ -5760,6 +5769,8 @@ window.addEventListener('message', (ev: MessageEvent<HostToWebview>) => {
       S.issues = msg.issues || [];
       renderStatus();
       renderPanel();
+      // Re-render the canvas so error rings on the affected nodes update.
+      if (cur()?.type === 'canvas') renderEditor();
       break;
     case 'previewResult':
       S.preview = msg.result;

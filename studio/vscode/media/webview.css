@@ -126,6 +126,8 @@ button{font-family:inherit;color:inherit;background:none;border:none;cursor:poin
 .node:hover{border-color:var(--nodeHoverBorder);transform:translateY(-1px);box-shadow:0 4px 14px rgba(0,0,0,.28)}
 .node.src{border-top:3px solid #4a90d9}.node.sink{border-top:3px solid #4caf7d}.node.tf{border-top:3px solid #a978d9}.node.dlq{border-style:dashed}
 .node.sel{border-color:var(--blue);box-shadow:0 0 0 2px rgba(0,120,212,.4)}
+.node.state-warn{border-color:var(--yellow);box-shadow:0 0 0 2px var(--yellow)}
+.node.state-err{border-color:var(--red);box-shadow:0 0 0 2px var(--red)}
 .node .kind{font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--dim);display:flex;align-items:center;gap:6px}
 .node .kind .kico{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:5px;font-size:11px;line-height:1;color:#cdd3da;background:rgba(255,255,255,.06)}
 .node.src .kind .kico{color:#7cb6ec;background:rgba(74,144,217,.16)}
