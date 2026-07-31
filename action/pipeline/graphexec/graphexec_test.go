@@ -196,16 +196,52 @@ func TestCompileRejectsUnknownEndpoint(t *testing.T) {
 	}
 }
 
-func TestSubset(t *testing.T) {
-	b := &record.RecordBatch{Columns: testCols, Rows: [][]interface{}{{1, 50}, {2, 150}}}
-	pred := func(row map[string]interface{}) bool { return row["amount"].(int) > 100 }
-	out := subset(b, pred)
-	if out.Len() != 1 || out.Rows[0][0].(int) != 2 {
-		t.Fatalf("subset = %v, want single row id=2", out.Rows)
+func TestFirstMatchRouting(t *testing.T) {
+	// source fans out to a conditional skip edge (amount > 100 → straight to
+	// sink) and an unconditional default edge (→ t0 → sink). First-match routing
+	// must divert matching rows to the skip edge and send the rest through the
+	// chain, so every row reaches the sink exactly once (no double-write), and
+	// the sink's two inbound edges (skip + chain) fan in.
+	src := &memSource{cols: testCols, rows: [][]interface{}{{1, 50}, {2, 150}, {3, 250}, {4, 80}}}
+	snk := &memSink{}
+	g := &Graph{
+		Nodes: []Node{
+			{ID: "source", Kind: KindSource, Type: "mem", Cfg: map[string]interface{}{"op": src}},
+			{ID: "t0", Kind: KindTransform, Type: "id", Cfg: map[string]interface{}{"op": idTransform{}}},
+			{ID: "sink", Kind: KindSink, Type: "mem", Cfg: map[string]interface{}{"op": snk}},
+		},
+		Edges: []Edge{
+			{From: "source:rows", To: "t0:in"},                       // default / main chain
+			{From: "source:rows", To: "sink:in", Cond: "amount > 100"}, // conditional skip
+			{From: "t0:out", To: "sink:in"},
+		},
 	}
-	// Copied rows must be independent of the source batch.
-	out.Rows[0][1] = 999
+	plan, err := Compile(g, testBuilders())
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	res, err := plan.Run(context.Background(), Options{BatchSize: 3})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if got := snk.amounts(); len(got) != 4 || got[0] != 50 || got[1] != 80 || got[2] != 150 || got[3] != 250 {
+		t.Fatalf("sink = %v, want [50 80 150 250] each exactly once (no double-write)", got)
+	}
+	if res.RowsWritten != 4 {
+		t.Fatalf("RowsWritten=%d, want 4 (rows conserved, not duplicated)", res.RowsWritten)
+	}
+}
+
+func TestSubsetRowIsolation(t *testing.T) {
+	// appendRow must copy rows so a fan-out branch never aliases the source.
+	b := &record.RecordBatch{Columns: testCols, Rows: [][]interface{}{{1, 50}, {2, 150}}}
+	var bucket *record.RecordBatch
+	appendRow(&bucket, b, 1)
+	if bucket.Len() != 1 || bucket.Rows[0][0].(int) != 2 {
+		t.Fatalf("appendRow = %v, want single row id=2", bucket.Rows)
+	}
+	bucket.Rows[0][1] = 999
 	if b.Rows[1][1].(int) != 150 {
-		t.Fatal("subset must not alias source rows")
+		t.Fatal("appendRow must not alias source rows")
 	}
 }

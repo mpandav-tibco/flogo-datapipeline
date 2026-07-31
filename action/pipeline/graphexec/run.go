@@ -202,9 +202,12 @@ func (rt *runtime) runSink(ctx context.Context, n *pnode) {
 	}
 }
 
-// emit fans an output batch out to every outbound edge. A single unconditional
-// edge transfers ownership directly (no copy); otherwise each edge receives its
-// own batch of the rows matching its predicate.
+// emit routes an output batch to this node's outbound edges using FIRST-MATCH
+// semantics: each row is delivered to the first conditional edge whose predicate
+// matches; rows that match no condition fall through to every unconditional
+// (default) edge. This conserves rows — a row is never silently duplicated —
+// and mirrors the router's route/default model. A single unconditional edge is
+// the fast path: the batch is forwarded whole, without copying.
 func (rt *runtime) emit(ctx context.Context, n *pnode, b *record.RecordBatch) bool {
 	if b == nil {
 		return true
@@ -216,18 +219,40 @@ func (rt *runtime) emit(ctx context.Context, n *pnode, b *record.RecordBatch) bo
 	if len(n.out) == 1 && n.out[0].pred == nil {
 		return rt.send(ctx, n.out[0], b)
 	}
-	for _, e := range n.out {
-		sub := subset(b, e.pred)
-		if sub.Len() == 0 {
-			record.Put(sub)
+	buckets := make([]*record.RecordBatch, len(n.out))
+	for ri := range b.Rows {
+		row := b.RowMap(ri)
+		matched := false
+		for ei, e := range n.out {
+			if e.pred != nil && e.pred(row) {
+				appendRow(&buckets[ei], b, ri)
+				matched = true
+				break
+			}
+		}
+		if matched {
 			continue
 		}
-		if !rt.send(ctx, e, sub) {
-			record.Put(b)
-			return false
+		for ei, e := range n.out {
+			if e.pred == nil {
+				appendRow(&buckets[ei], b, ri)
+			}
 		}
 	}
 	record.Put(b)
+	for ei, e := range n.out {
+		if buckets[ei] == nil {
+			continue
+		}
+		if !rt.send(ctx, e, buckets[ei]) {
+			for k := ei + 1; k < len(buckets); k++ {
+				if buckets[k] != nil {
+					record.Put(buckets[k])
+				}
+			}
+			return false
+		}
+	}
 	return true
 }
 
@@ -243,22 +268,14 @@ func (rt *runtime) send(ctx context.Context, e *pedge, b *record.RecordBatch) bo
 	}
 }
 
-// subset builds a new batch containing the rows of b that satisfy pred (all rows
-// when pred is nil). Rows are copied so each fan-out branch owns its data.
-func subset(b *record.RecordBatch, pred Pred) *record.RecordBatch {
-	out := b.Clone(b.Len())
-	if pred == nil {
-		for _, row := range b.Rows {
-			out.Rows = append(out.Rows, cloneRow(row))
-		}
-		return out
+// appendRow lazily allocates the per-edge bucket (a pooled batch that shares the
+// source schema) and appends a COPY of row i, so each downstream branch owns its
+// rows independently of the source batch and of sibling branches.
+func appendRow(bucket **record.RecordBatch, src *record.RecordBatch, i int) {
+	if *bucket == nil {
+		*bucket = src.Clone(src.Len())
 	}
-	for i := range b.Rows {
-		if pred(b.RowMap(i)) {
-			out.Rows = append(out.Rows, cloneRow(b.Rows[i]))
-		}
-	}
-	return out
+	(*bucket).Rows = append((*bucket).Rows, cloneRow(src.Rows[i]))
 }
 
 func cloneRow(r []interface{}) []interface{} {

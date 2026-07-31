@@ -388,6 +388,18 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 		return out, err
 	}
 
+	// Graph runner: when the pipeline carries a NON-REDUCIBLE DAG — conditional
+	// edges or true fan-out/fan-in that the linear source→transforms→sink chain
+	// cannot express — execute it with the streaming graph runner. A pure linear
+	// chain, even one promoted to an explicit graph block, is NOT diverted here:
+	// it stays on the linear path below and keeps checkpoint, HWM, DQ and
+	// parallel-worker behaviour untouched (graphExecutable returns false for it).
+	if graphExecutable(def) {
+		runLog.Infof("executing via graph runner — non-reducible DAG (%d nodes, %d edges)",
+			len(def.Graph.Nodes), len(def.Graph.Edges))
+		return a.runGraph(ctx, in, runLog)
+	}
+
 	// Echo the effective run configuration so operators can confirm from the run
 	// log which settings were honored (many settings have no other visible
 	// side-effect). Kept to a single line to avoid log noise.

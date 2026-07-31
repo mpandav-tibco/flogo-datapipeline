@@ -1,0 +1,118 @@
+package pipeline
+
+import (
+	"fmt"
+	"path/filepath"
+	"testing"
+)
+
+func mkGraphDef(nTransforms int, txType string, g *GraphDef) *Definition {
+	tr := make([]TransformDef, nTransforms)
+	for i := range tr {
+		tr[i] = TransformDef{Type: txType, Extra: map[string]interface{}{"type": txType, "expr": "amount > 0"}}
+	}
+	return &Definition{
+		Source:     SourceDef{Type: "csv"},
+		Transforms: tr,
+		Sink:       SinkDef{Type: "null"},
+		Graph:      g,
+	}
+}
+
+func TestTransformIndex(t *testing.T) {
+	cases := []struct {
+		id   string
+		idx  int
+		ok   bool
+	}{
+		{"t0", 0, true}, {"t12", 12, true}, {"source", 0, false},
+		{"sink", 0, false}, {"t", 0, false}, {"tx", 0, false}, {"dlq", 0, false},
+	}
+	for _, c := range cases {
+		idx, ok := transformIndex(c.id)
+		if ok != c.ok || (ok && idx != c.idx) {
+			t.Fatalf("transformIndex(%q) = (%d,%v), want (%d,%v)", c.id, idx, ok, c.idx, c.ok)
+		}
+	}
+}
+
+func TestGraphExecutable(t *testing.T) {
+	stdNodes := []GraphNodeDef{
+		{ID: "source", Kind: "source"}, {ID: "t0", Kind: "transform"}, {ID: "sink", Kind: "sink"},
+	}
+	chain := []GraphEdge{{From: "source:rows", To: "t0:in"}, {From: "t0:out", To: "sink:in"}}
+
+	// A pure linear chain graph is reducible → must stay on the linear path.
+	if graphExecutable(mkGraphDef(1, "filter", &GraphDef{Nodes: stdNodes, Edges: chain})) {
+		t.Fatal("linear chain graph must NOT trigger the graph runner")
+	}
+
+	// A conditional edge makes it non-reducible → run via the graph.
+	condEdges := append(append([]GraphEdge{}, chain...),
+		GraphEdge{From: "source:rows", To: "sink:in", Type: "expression", Value: "amount > 100"})
+	if !graphExecutable(mkGraphDef(1, "filter", &GraphDef{Nodes: stdNodes, Edges: condEdges})) {
+		t.Fatal("conditional-edge graph must trigger the graph runner")
+	}
+
+	// A non-standard node (dlq branch) is deferred → fall back to linear.
+	branchNodes := append(append([]GraphNodeDef{}, stdNodes...), GraphNodeDef{ID: "dlq", Kind: "sink"})
+	branchEdges := append(append([]GraphEdge{}, chain...),
+		GraphEdge{From: "source:rows", To: "dlq:in", Type: "expression", Value: "amount > 100"})
+	if graphExecutable(mkGraphDef(1, "filter", &GraphDef{Nodes: branchNodes, Edges: branchEdges})) {
+		t.Fatal("graph with a non-standard node (dlq) must fall back to linear")
+	}
+
+	// An unsupported transform (window) with a conditional edge → fall back.
+	if graphExecutable(mkGraphDef(1, "window", &GraphDef{Nodes: stdNodes, Edges: condEdges})) {
+		t.Fatal("graph containing an unsupported transform (window) must fall back to linear")
+	}
+}
+
+// End-to-end through the real orchestration path: a conditional edge lets high
+// value rows skip the filter and reach the sink, changing the observable output.
+func TestGraphRun_ConditionalSkip(t *testing.T) {
+	src := writeTemp(t, "in.csv", ordersCSV)
+	outPath := filepath.Join(t.TempDir(), "out.jsonl")
+
+	def := &Definition{
+		Source: csvSource(src),
+		Transforms: []TransformDef{
+			{Type: "filter", Extra: map[string]interface{}{"type": "filter", "expr": "amount > 200"}},
+		},
+		Sink: jsonlSink(outPath),
+		Graph: &GraphDef{
+			Nodes: []GraphNodeDef{
+				{ID: "source", Kind: "source", Type: "csv"},
+				{ID: "t0", Kind: "transform", Type: "filter"},
+				{ID: "sink", Kind: "sink", Type: "jsonlines"},
+			},
+			Edges: []GraphEdge{
+				{From: "source:rows", To: "t0:in"},
+				{From: "t0:out", To: "sink:in"},
+				{From: "source:rows", To: "sink:in", Type: "expression", Value: "amount > 100"},
+			},
+		},
+	}
+
+	out, err := runInline(t, def)
+	if err != nil {
+		t.Fatalf("RunDirect: %v", err)
+	}
+	if out.Status != "completed" {
+		t.Fatalf("status = %q, want completed (err=%s)", out.Status, out.Error)
+	}
+	// amount>100 rows (Carol 200, Eve 300) skip straight to the sink; the rest
+	// fall through the filter(amount>200), which drops them all — so the sink
+	// receives exactly those 2. (Linear would keep only Eve/300.)
+	if out.RowsProcessed != 5 || out.RowsWritten != 2 {
+		t.Fatalf("processed=%d written=%d, want 5/2", out.RowsProcessed, out.RowsWritten)
+	}
+	rows := readJSONL(t, outPath)
+	names := map[string]bool{}
+	for _, r := range rows {
+		names[fmt.Sprint(r["name"])] = true
+	}
+	if len(rows) != 2 || !names["Carol"] || !names["Eve"] {
+		t.Fatalf("sink rows = %v, want exactly Carol + Eve", rows)
+	}
+}
