@@ -2961,6 +2961,48 @@ const GSVG_NS = 'http://www.w3.org/2000/svg' as const;
 // Set while a node is being dragged so the trailing mouseup click doesn't also
 // select it (and open the inspector).
 let _gDragged = false;
+// Set while a link-drag (activity → activity connection) is in progress.
+let _gConnecting = false;
+
+// Manual links (activity connections the user draws) live in doc.graph — the
+// same engine-validated node/edge block the "Promote to graph" pill writes.
+// Drawing a link auto-promotes: if there is no explicit graph yet we derive one
+// first so the new edge joins a complete, valid graph.
+function graphEdgesOf(doc: any): string[][] {
+  const g = doc && doc.graph;
+  return g && Array.isArray(g.edges) ? g.edges : [];
+}
+// A graph edge endpoint is "<nodeId>:<port>" (deriveGraph's convention). Strip
+// the port to get the node id for layout, cycle checks and de-duplication.
+function gEndpointNode(ep: string): string { const i = ep.indexOf(':'); return i < 0 ? ep : ep.slice(0, i); }
+function graphWouldCycle(edges: string[][], from: string, to: string): boolean {
+  // Adding from→to makes a cycle iff `to` can already reach `from`. Work on NODE
+  // ids (strip :port) so a stage's in/out ports count as the same node.
+  const adj: Record<string, string[]> = {};
+  for (const e of edges) { const a = gEndpointNode(e[0]), b = gEndpointNode(e[1]); (adj[a] = adj[a] || []).push(b); }
+  const seen = new Set<string>(); const stack = [to];
+  while (stack.length) {
+    const n = stack.pop() as string;
+    if (n === from) return true;
+    if (seen.has(n)) continue; seen.add(n);
+    for (const m of adj[n] || []) stack.push(m);
+  }
+  return false;
+}
+function addGraphLink(from: string, to: string): void {
+  if (from === to) { toast('warn', 'Cannot connect a stage to itself'); return; }
+  const doc = S.doc as any;
+  if (!doc.graph) doc.graph = deriveGraph(S.doc);
+  const edges: string[][] = (doc.graph.edges = doc.graph.edges || []);
+  if (edges.some((e) => gEndpointNode(e[0]) === from && gEndpointNode(e[1]) === to)) { toast('warn', 'That link already exists'); return; }
+  if (graphWouldCycle(edges, from, to)) { toast('err', 'That link would create a cycle'); return; }
+  // Port-qualified endpoints, matching deriveGraph: source emits "rows", other
+  // stages emit "out"; every stage receives on "in".
+  const fromKind = ((S.pipe && S.pipe.nodes.find((n) => n.id === from)) || ({} as any)).kind;
+  edges.push([from + ':' + (fromKind === 'source' ? 'rows' : 'out'), to + ':in']);
+  persistAndRebuild();
+  toast('ok', 'Link added — recorded in the graph block');
+}
 
 function gKindCls(kind: string): string {
   return kind === 'source' ? 's-source' : kind === 'sink' ? 's-sink' : 'tf';
@@ -2978,6 +3020,7 @@ function buildGraphNode(n: Node, i: number, x: number, y: number, w: number): HT
     + `<div class='nm'>${escapeHtml(title)}</div>`
     + (showMeta ? `<div class='meta'>${escapeHtml(n.meta)}</div>` : '');
   nd.tabIndex = 0;
+  nd.dataset.gid = n.id;
   nd.onclick = () => { if (_gDragged) { _gDragged = false; return; } S.selNode = n.id; S.inspTab = 'Config'; S.inspClosed = false; renderEditor(); };
   nd.oncontextmenu = (e) => nodeMenu(n, i, e);
   return nd;
@@ -3103,6 +3146,51 @@ function renderGraphCanvas(cv: HTMLElement): void {
     const q = pos[id];
     return { inX: q.x, inY: q.y + q.h / 2, outX: q.x + q.w, outY: q.y + q.h / 2, botX: q.x + q.w / 2, botY: q.y + q.h, topX: q.x + q.w / 2, topY: q.y };
   };
+  // Link-drag (Flogo-style activity connection): press a stage's OUT-port and
+  // drag to another stage; on release we record the edge in doc.graph. A dashed
+  // rubber band tracks the cursor and the hovered target stage is highlighted.
+  const startConnect = (fromId: string, ev: MouseEvent) => {
+    if (ev.button !== 0) return;
+    ev.preventDefault(); ev.stopPropagation();
+    _gConnecting = true;
+    document.body.style.userSelect = 'none';
+    const z = S.zoom || 1;
+    const wrapRect = wrap.getBoundingClientRect();
+    const a = cp(fromId);
+    const rub = document.createElementNS(GSVG_NS, 'path');
+    rub.setAttribute('class', 'gedge grubber');
+    svg.appendChild(rub);
+    let hov: HTMLElement | null = null;
+    const clearHov = () => { if (hov) hov.classList.remove('linktarget'); hov = null; };
+    const targetAt = (cx: number, cy: number): HTMLElement | null => {
+      const el0 = document.elementFromPoint(cx, cy) as HTMLElement | null;
+      const node = el0 ? (el0.closest('.gnode[data-gid]') as HTMLElement | null) : null;
+      return node && node.dataset.gid !== fromId ? node : null;
+    };
+    const move = (m: MouseEvent) => {
+      const lx = (m.clientX - wrapRect.left) / z, ly = (m.clientY - wrapRect.top) / z;
+      rub.setAttribute('d', `M ${a.outX} ${a.outY} C ${(a.outX + lx) / 2} ${a.outY}, ${(a.outX + lx) / 2} ${ly}, ${lx} ${ly}`);
+      const node = targetAt(m.clientX, m.clientY);
+      if (node !== hov) { clearHov(); if (node) { hov = node; node.classList.add('linktarget'); } }
+    };
+    const up = (m: MouseEvent) => {
+      document.removeEventListener('mousemove', move);
+      document.removeEventListener('mouseup', up);
+      document.body.style.userSelect = '';
+      rub.remove(); clearHov(); _gConnecting = false; _gDragged = true;
+      const node = targetAt(m.clientX, m.clientY);
+      if (node && node.dataset.gid) addGraphLink(fromId, node.dataset.gid);
+    };
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', up);
+  };
+  const connectPort = (fromId: string, x: number, y: number, cls: string) => {
+    const port = el('span', 'gport gport-' + cls + ' io');
+    port.style.left = (x - 6) + 'px'; port.style.top = (y - 6) + 'px';
+    port.title = 'Drag to connect this stage to another';
+    port.addEventListener('mousedown', (ev) => startConnect(fromId, ev));
+    wrap.appendChild(port);
+  };
   const redraw = () => {
     svg.querySelectorAll('.gedge').forEach((e) => e.remove());
     wrap.querySelectorAll('.gport').forEach((e) => e.remove());
@@ -3113,7 +3201,7 @@ function renderGraphCanvas(cv: HTMLElement): void {
     p.nodes.forEach((n) => {
       const q = cp(n.id);
       if (n.kind !== 'source') graphPort(wrap, q.inX, q.inY, gKindCls(n.kind));
-      if (n.kind !== 'sink') graphPort(wrap, q.outX, q.outY, gKindCls(n.kind));
+      if (n.kind !== 'sink') connectPort(n.id, q.outX, q.outY, gKindCls(n.kind));
     });
     branchList.forEach((b) => {
       const o = cp(b.owner), nn = cp(b.id);
@@ -3121,6 +3209,17 @@ function renderGraphCanvas(cv: HTMLElement): void {
       else graphEdge(svg, nn.topX, nn.topY, o.botX, o.botY, b.cls);
       graphPort(wrap, o.botX, o.botY, 'branch');
       graphPort(wrap, nn.topX, nn.topY, 'branch');
+    });
+    // Manual links (activity connections the user drew) — any doc.graph edge
+    // that isn't part of the derived main-chain / branch structure, drawn dashed.
+    const derived = new Set<string>();
+    for (let i = 1; i < p.nodes.length; i++) derived.add(p.nodes[i - 1].id + '>' + p.nodes[i].id);
+    branchList.forEach((b) => derived.add(b.flow === 'out' ? b.owner + '>' + b.id : b.id + '>' + b.owner));
+    graphEdgesOf(S.doc).forEach((e) => {
+      const f = gEndpointNode(e[0]), t = gEndpointNode(e[1]);
+      if (!pos[f] || !pos[t] || derived.has(f + '>' + t)) return;
+      const a = cp(f), b = cp(t);
+      graphEdge(svg, a.outX, a.outY, b.inX, b.inY, 'manual');
     });
   };
 
