@@ -256,6 +256,17 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
         vscode.commands.executeCommand('workbench.actions.view.problems');
         break;
 
+      case 'showDataPreview':
+        this.dataPreview?.reveal();
+        break;
+
+      case 'showTerminal': {
+        const term = vscode.window.terminals.find((t) => t.name === 'Flogo Data Pipeline')
+          || vscode.window.createTerminal('Flogo Data Pipeline');
+        term.show();
+        break;
+      }
+
       case 'definition': {
         const port = this.manager.port;
         if (!port) {

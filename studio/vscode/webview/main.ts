@@ -111,6 +111,7 @@ const S = {
   paletteQ: '',
   paletteCat: {} as Record<string, boolean>,
   panelOpen: false,
+  panelTab: 'problems',
   rateRps: 0,
   ratePrev: null as { rows: number; at: number } | null,
   setOpen: null as Record<string, boolean> | null,
@@ -5442,12 +5443,41 @@ function renderPanel() {
   host.innerHTML = '';
   const errs = S.issues.filter((i) => i.sev === 'error').length;
 
+  // The bottom strip is a launcher for VS Code's NATIVE panels: Problems, Data
+  // Preview, Output and Terminal all live in real VS Code surfaces (Problems is
+  // populated via diagnostics), so the webview reveals them rather than
+  // re-implementing them. DQ Report is the one view with no native home.
+  const PANELS: Array<{ id: string; label: string; native?: 'problems' | 'preview' | 'output' | 'terminal' }> = [
+    { id: 'problems', label: 'Problems', native: 'problems' },
+    { id: 'preview', label: 'Data Preview', native: 'preview' },
+    { id: 'dq', label: 'DQ Report' },
+    { id: 'output', label: 'Output', native: 'output' },
+    { id: 'terminal', label: 'Terminal', native: 'terminal' },
+  ];
   const tabs = el('div', 'paneltabs');
-  const pt = el('div', 'pt on' + (errs ? ' err' : ''));
-  pt.innerHTML = 'Problems <span class="cnt"></span>';
-  (pt.querySelector('.cnt') as HTMLElement).textContent = String(S.issues.length);
-  pt.onclick = () => { S.panelOpen = !S.panelOpen; renderPanel(); };
-  tabs.appendChild(pt);
+  PANELS.forEach((tb) => {
+    const active = S.panelOpen && S.panelTab === tb.id;
+    const pt = el('div', 'pt' + (active ? ' on' : '') + (tb.id === 'problems' && errs ? ' err' : ''));
+    if (tb.id === 'problems') {
+      pt.innerHTML = 'Problems <span class="cnt"></span>';
+      (pt.querySelector('.cnt') as HTMLElement).textContent = String(S.issues.length);
+    } else {
+      pt.textContent = tb.label;
+    }
+    pt.onclick = () => {
+      // Clicking the already-active tab collapses the panel (old feel).
+      if (tb.id === S.panelTab && S.panelOpen) { S.panelOpen = false; renderPanel(); return; }
+      S.panelTab = tb.id;
+      S.panelOpen = true;
+      // Native-backed tabs reveal the matching VS Code surface.
+      if (tb.native === 'problems') post({ type: 'showProblems' });
+      else if (tb.native === 'preview') post({ type: 'showDataPreview' });
+      else if (tb.native === 'output') post({ type: 'showOutput' });
+      else if (tb.native === 'terminal') post({ type: 'showTerminal' });
+      renderPanel();
+    };
+    tabs.appendChild(pt);
+  });
   const acts = el('div', 'pacts');
   const toggle = el('span', '', S.panelOpen ? '⌄' : '⌃');
   toggle.title = S.panelOpen ? 'Collapse panel' : 'Expand panel';
@@ -5458,26 +5488,69 @@ function renderPanel() {
 
   if (!S.panelOpen) return;
   const body = el('div', 'panelbody');
-  if (!S.issues.length) {
-    body.appendChild(el('div', 'muted', '<div style="padding:6px 4px;font-size:12px">No problems — the pipeline validates cleanly.</div>'));
-  } else {
-    const known = new Set((S.pipe ? S.pipe.nodes.map((n) => n.id) : []).concat(['dlq', 'source', 'sink']));
-    S.issues.forEach((iss) => {
-      const sevCls = iss.sev === 'error' ? 'err' : iss.sev === 'warn' ? 'warn' : 'ok';
-      const icon = iss.sev === 'error' ? '⊗' : iss.sev === 'warn' ? '⚠' : '✓';
-      const row = el('div', 'prob');
-      row.innerHTML = '<span class="i ' + sevCls + '">' + icon + '</span><span class="msg"></span><span class="src"></span>';
-      (row.querySelector('.msg') as HTMLElement).textContent = iss.msg;
-      (row.querySelector('.src') as HTMLElement).textContent = iss.label || '';
-      if (iss.anchor && known.has(iss.anchor)) {
-        row.onclick = () => { S.selNode = iss.anchor!; S.inspTab = 'Config'; S.inspClosed = false; S.active = 'canvas'; renderAll(); };
-      } else {
-        row.onclick = () => post({ type: 'showProblems' });
-      }
-      body.appendChild(row);
-    });
+  if (S.panelTab === 'dq') renderDqBody(body);
+  else if (S.panelTab === 'preview') renderNativeLaunchBody(body, 'the Data Preview panel', 'Sampled rows from a dry-run open in the native Data Preview panel beside the editor.', () => post({ type: 'showDataPreview' }));
+  else if (S.panelTab === 'output') renderNativeLaunchBody(body, 'the engine Output', 'The engine boot / run log streams to the “Flogo Data Pipeline” output channel.', () => post({ type: 'showOutput' }));
+  else if (S.panelTab === 'terminal') renderNativeLaunchBody(body, 'the Terminal', 'Run the built pipeline binary or CLI commands in the integrated terminal.', () => post({ type: 'showTerminal' }));
+  else {
+    // Problems live in VS Code's native Problems panel (populated via diagnostics);
+    // the webview summarises the count and re-opens it. Errored stages are also
+    // ringed on the canvas, so you rarely need to leave the graph.
+    const warns = S.issues.length - errs;
+    const desc = S.issues.length
+      ? `${errs} error${errs === 1 ? '' : 's'} and ${warns} warning${warns === 1 ? '' : 's'} — listed in VS Code's Problems panel, with the errored stages ringed on the canvas.`
+      : 'No problems — the pipeline validates cleanly.';
+    renderNativeLaunchBody(body, 'the Problems panel', desc, () => post({ type: 'showProblems' }));
   }
   host.appendChild(body);
+}
+
+// DQ Report: a data-quality summary of the last run — rows read/written/rejected
+// overall, plus per-stage reject counts from the graph run's per-node stats.
+function renderDqBody(body: HTMLElement): void {
+  const r = S.lastRun;
+  if (!r) {
+    body.appendChild(el('div', 'muted', '<div style="padding:6px 4px;font-size:12px">Run the pipeline to see a data-quality report — rows read, written and rejected, per stage.</div>'));
+    return;
+  }
+  const read = r.rowsProcessed || 0, wrote = r.rowsWritten || 0, failed = r.rowsFailed || 0;
+  const passRate = read ? Math.round((wrote / read) * 1000) / 10 : 0;
+  const sum = el('div', 'dqsum');
+  sum.innerHTML =
+    `<span class="dqm"><b>${fmtK(read)}</b> read</span>`
+    + `<span class="dqm ok"><b>${fmtK(wrote)}</b> written</span>`
+    + `<span class="dqm err"><b>${fmtK(failed)}</b> rejected</span>`
+    + `<span class="dqm"><b>${passRate}%</b> pass rate</span>`;
+  body.appendChild(sum);
+  const gs = r.graphStats;
+  const rejects = gs ? gs.filter((s) => s.rowsErrored > 0) : [];
+  if (rejects.length && S.pipe) {
+    const tbl = el('div', 'dqtbl');
+    rejects.forEach((s) => {
+      const n = S.pipe!.nodes.find((x) => x.id === s.id);
+      const nm = n ? (n.nm && n.nm !== n.type ? n.nm : transformLabel(n.type)) : s.id;
+      const row = el('div', 'dqrow');
+      row.innerHTML = '<span class="dqn"></span><span class="dqv"></span>';
+      (row.querySelector('.dqn') as HTMLElement).textContent = nm;
+      (row.querySelector('.dqv') as HTMLElement).innerHTML = `${fmtK(s.rowsOut)} passed · <span class="err">${fmtK(s.rowsErrored)} rejected</span>`;
+      row.onclick = () => { S.selNode = s.id; S.inspTab = 'Config'; S.inspClosed = false; S.active = 'canvas'; renderAll(); };
+      tbl.appendChild(row);
+    });
+    body.appendChild(tbl);
+  } else if (!failed) {
+    body.appendChild(el('div', 'muted', '<div style="padding:6px 4px;font-size:12px">No rows were rejected in the last run — clean data.</div>'));
+  }
+}
+
+// A body for the native-backed tabs (Data Preview / Output / Terminal): the
+// webview can't embed these, so it explains where they live and re-opens them.
+function renderNativeLaunchBody(body: HTMLElement, where: string, desc: string, open: () => void): void {
+  const wrap = el('div', 'nativelaunch');
+  wrap.appendChild(el('div', 'nldesc', escapeHtml(desc)));
+  const btn = el('button', 'btn', 'Open ' + where + ' ↗');
+  btn.onclick = open;
+  wrap.appendChild(btn);
+  body.appendChild(wrap);
 }
 
 function renderStatus() {
