@@ -3299,17 +3299,17 @@ function renderGraphCanvas(cv: HTMLElement): void {
   for (let i = 0; i < p.nodes.length; i++) { xs.push(x); x += W + GX; }
   p.nodes.forEach((n, i) => { pos[n.id] = { x: xs[i], y: TOP, w: W, h: H }; });
 
-  const branchList: Array<{ id: string; owner: string; cls: string; flow: 'in' | 'out'; card: HTMLElement }> = [];
+  const branchList: Array<{ id: string; owner: string; cls: string; flow: 'in' | 'out'; card: HTMLElement; sel: string }> = [];
   p.nodes.forEach((n) => {
     if (!S.showBranches) return;
     let row = 0;
-    const add = (id: string, card: HTMLElement, cls: string, flow: 'in' | 'out') => {
+    const add = (id: string, card: HTMLElement, cls: string, flow: 'in' | 'out', sel: string) => {
       pos[id] = { x: pos[n.id].x + W / 2 - BW / 2, y: branchTop + row * (BH + BGY), w: BW, h: BH };
-      branchList.push({ id, owner: n.id, cls, flow, card });
+      branchList.push({ id, owner: n.id, cls, flow, card, sel });
       row++;
     };
-    (branchMap[n.id] || []).forEach((b) => add(b.id, buildGraphBranchCard(b), 'br-' + b.kind, b.flow));
-    if (n.id === 'sink' && p.hasDlq && p.dlqNode) add('dlq', buildGraphDlqCard(p.dlqNode), 'br-dlq', 'out');
+    (branchMap[n.id] || []).forEach((b) => add(b.id, buildGraphBranchCard(b), 'br-' + b.kind, b.flow, b.ownerId));
+    if (n.id === 'sink' && p.hasDlq && p.dlqNode) add('dlq', buildGraphDlqCard(p.dlqNode), 'br-dlq', 'out', 'dlq');
   });
 
   // Extra sink nodes (self-contained graph sinks): lay them out in a lane just
@@ -3454,10 +3454,25 @@ function renderGraphCanvas(cv: HTMLElement): void {
     p.extraNodes.forEach((n) => { const q = cp(n.id); graphPort(wrap, q.inX, q.inY, gKindCls('sink')); });
     branchList.forEach((b) => {
       const o = cp(b.owner), nn = cp(b.id);
-      if (b.flow === 'out') graphEdge(svg, o.botX, o.botY, nn.topX, nn.topY, b.cls);
-      else graphEdge(svg, nn.topX, nn.topY, o.botX, o.botY, b.cls);
+      const ep = b.flow === 'out'
+        ? graphEdge(svg, o.botX, o.botY, nn.topX, nn.topY, b.cls)
+        : graphEdge(svg, nn.topX, nn.topY, o.botX, o.botY, b.cls);
       graphPort(wrap, o.botX, o.botY, 'branch');
       graphPort(wrap, nn.topX, nn.topY, 'branch');
+      // Branch links are derived from the owner's config; clicking one selects
+      // the owning stage and opens its config (where the reference / reject /
+      // route / parse-error branch is edited) — mirrors clicking the branch card.
+      const bhit = document.createElementNS(GSVG_NS, 'path');
+      bhit.setAttribute('d', ep.getAttribute('d') || '');
+      bhit.setAttribute('class', 'gedgehit');
+      bhit.setAttribute('fill', 'none');
+      bhit.setAttribute('stroke', 'transparent');
+      bhit.setAttribute('stroke-width', '14');
+      bhit.style.pointerEvents = 'stroke';
+      bhit.style.cursor = 'pointer';
+      bhit.addEventListener('click', () => { S.selNode = b.sel; S.inspTab = 'Config'; S.inspClosed = false; renderEditor(); });
+      svg.appendChild(bhit);
+      ep.style.pointerEvents = 'none';
     });
     // Manual links (activity connections the user drew) — any doc.graph edge
     // that isn't part of the derived main-chain / branch structure. Plain links
