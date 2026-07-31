@@ -19,6 +19,13 @@
 //   - Correct fan-out ownership: when a batch feeds more than one successor,
 //     each successor receives its OWN batch (a copy of the rows that satisfy its
 //     edge predicate), so the single-owner batch-pool contract still holds.
+//   - No-loss checkpointing (stateless graphs): the source can emit a drain
+//     barrier every N rows — it pauses, the barrier flows through every edge,
+//     fan-in nodes forward it once seen on all inputs, and each sink flushes and
+//     acks. Only after every sink is durable does the coordinator persist the
+//     source position, so a crash resumes from there with no committed rows lost
+//     (see Options.CheckpointRows / OnCheckpoint / ResumeFrom). Stateful graphs
+//     (a Flusher node) opt out via Plan.HasStateful until state snapshots land.
 //
 // The executor is gated behind an explicit graph: the linear path remains the
 // default and is untouched.
@@ -87,9 +94,11 @@ type Graph struct {
 }
 
 // SourceOp reads batches until it returns io.EOF. Satisfied structurally by
-// source.Source (which additionally exposes Schema/Skip).
+// source.Source (which additionally exposes Schema). Skip advances past already-
+// processed rows when resuming from a checkpoint.
 type SourceOp interface {
 	ReadBatch(size int) (*record.RecordBatch, error)
+	Skip(n int64) error
 	Close() error
 }
 
@@ -149,6 +158,16 @@ type Options struct {
 	BatchSize int
 	// BufferDepth is the per-node input channel capacity (backpressure window).
 	BufferDepth int
+	// CheckpointRows, when > 0, makes the source emit a drain barrier every N
+	// rows: it pauses, the barrier flushes every sink, and OnCheckpoint persists
+	// the source position — so a crash resumes from there with no data loss.
+	CheckpointRows int
+	// OnCheckpoint persists the source row position once every sink has flushed
+	// at a barrier. Required for checkpointing; ignored when CheckpointRows == 0.
+	OnCheckpoint func(rowsProcessed int64) error
+	// ResumeFrom, when > 0, skips the source that many rows before the first read
+	// (resuming from a saved checkpoint).
+	ResumeFrom int64
 }
 
 func (o Options) batchSize() int {

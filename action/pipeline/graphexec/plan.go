@@ -195,6 +195,33 @@ func (p *Plan) checkAcyclic() error {
 	return nil
 }
 
+// HasStateful reports whether any transform node buffers state across batches
+// (implements Flusher) — e.g. a window operator. Such a node needs a state
+// snapshot to resume correctly, which the barrier checkpoint does not yet
+// provide, so callers must not enable checkpointing for a plan with one.
+func (p *Plan) HasStateful() bool {
+	for _, n := range p.nodes {
+		if n.tx == nil {
+			continue
+		}
+		if _, ok := n.tx.(Flusher); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// sinkCount returns the number of sink nodes (barriers the coordinator awaits).
+func (p *Plan) sinkCount() int {
+	c := 0
+	for _, n := range p.nodes {
+		if n.kind == KindSink {
+			c++
+		}
+	}
+	return c
+}
+
 // Close releases every operator in the plan (used when a plan is compiled but
 // not run, or to clean up after Run).
 func (p *Plan) Close() error {

@@ -9,6 +9,7 @@ import (
 	corelog "github.com/project-flogo/core/support/log"
 
 	"github.com/mpandav-tibco/flogo-datapipeline/action/pipeline/graphexec"
+	"github.com/mpandav-tibco/flogo-datapipeline/checkpoint"
 	"github.com/mpandav-tibco/flogo-datapipeline/sink"
 	"github.com/mpandav-tibco/flogo-datapipeline/source"
 	"github.com/mpandav-tibco/flogo-datapipeline/transform"
@@ -196,7 +197,7 @@ func graphBuilders() graphexec.Builders {
 // runGraph builds, compiles and runs the graph, returning the run's row counts.
 // The caller (RunDirect / Run) sets Status, DurationMs and lineage, exactly as
 // it does for the linear path.
-func (a *DataPipelineAction) runGraph(ctx context.Context, in *Input, runLog corelog.Logger) (*Output, error) {
+func (a *DataPipelineAction) runGraph(ctx context.Context, in *Input, runLog corelog.Logger, runID string) (*Output, error) {
 	def := a.def
 	out := &Output{}
 	eg, err := a.buildExecGraph(in)
@@ -207,20 +208,71 @@ func (a *DataPipelineAction) runGraph(ctx context.Context, in *Input, runLog cor
 	if err != nil {
 		return out, fmt.Errorf("graph compile: %w", err)
 	}
-	// Checkpoint/resume needs a consistent barrier across the streaming DAG
-	// (exactly-once dataflow), which the graph runner does not yet implement. The
-	// graph still runs correctly — it just isn't resumable. Reducible pipelines
-	// (no conditional/branch edges) keep full checkpoint support via the linear
-	// path, since graphExecutable returns false for them.
-	if ct := def.Checkpoint.Type; ct != "" && ct != "none" {
-		runLog.Warnf("graph runner: checkpoint/resume not yet supported for a branching graph — running without it (configured checkpoint=%s)", ct)
-	}
 	opts := graphexec.Options{
 		BatchSize:   def.Performance.BatchSize,
 		BufferDepth: def.Performance.SourceBufferBatches,
 	}
+
+	// checkpoint key mirrors the linear path: per-run id, or a stable configured
+	// key so a streaming graph resumes across restarts.
+	ckptKey := runID
+	if def.Checkpoint.Key != "" {
+		ckptKey = def.Checkpoint.Key
+	}
+
+	// Checkpoint/resume for the streaming DAG. STATELESS graphs get full no-loss
+	// checkpointing via drain barriers: the source pauses at each interval, the
+	// barrier flushes every sink, and the source position is persisted only once
+	// ALL sinks are durable — so a crash resumes from the last saved position with
+	// no committed rows lost (at-least-once for the in-flight tail). A STATEFUL
+	// graph (a window operator) needs a coordinated state snapshot the barrier
+	// does not yet capture, so it keeps running WITHOUT checkpoint (with a warn).
+	var ckpt checkpoint.Checkpoint
+	if ct := def.Checkpoint.Type; ct != "" && ct != "none" {
+		if plan.HasStateful() {
+			runLog.Warnf("graph runner: checkpoint/resume not yet supported for a windowed (stateful) graph — running without it (configured checkpoint=%s)", ct)
+		} else {
+			c, cerr := openCheckpoint(def)
+			if cerr != nil {
+				_ = plan.Close()
+				return out, fmt.Errorf("checkpoint open: %w", cerr)
+			}
+			ckpt = c
+			defer ckpt.Close()
+
+			// Resume: skip rows already durable before the last saved checkpoint.
+			tok, lErr := ckpt.Load(ckptKey)
+			if lErr != nil {
+				_ = plan.Close()
+				return out, fmt.Errorf("checkpoint load: %w", lErr)
+			}
+			if tok != nil && tok.RowsProcessed > 0 {
+				runLog.Infof("resuming graph %q — skipping %d already-processed rows", ckptKey, tok.RowsProcessed)
+				opts.ResumeFrom = tok.RowsProcessed
+			}
+			// Enable barriers only when an interval is configured; otherwise the
+			// checkpoint is written just once at end-of-run (below).
+			if def.Checkpoint.IntervalRows > 0 {
+				opts.CheckpointRows = def.Checkpoint.IntervalRows
+				opts.OnCheckpoint = func(pos int64) error {
+					if serr := ckpt.Save(ckptKey, checkpoint.NewToken(def.Source.Type, pos, nil)); serr != nil {
+						// Match the linear path: warn and keep running rather than
+						// aborting a healthy load on a checkpoint-backend hiccup.
+						runLog.Warnf("graph checkpoint save failed (continuing): %v", serr)
+						return nil
+					}
+					a.recorder.CheckpointSaved(a.ref)
+					runLog.Infof("graph checkpoint saved — %d rows processed", pos)
+					return nil
+				}
+			}
+		}
+	}
+
 	res, runErr := plan.Run(ctx, opts)
-	out.RowsProcessed = res.RowsRead
+	// Include any resumed rows so the reported processed count is the absolute
+	// source position (RowsWritten stays this-run only, as on the linear path).
+	out.RowsProcessed = res.RowsRead + opts.ResumeFrom
 	out.RowsWritten = res.RowsWritten
 	// Surface per-node counters for the Studio graph run overlay (present even on
 	// a partial/failed run so the canvas can show how far it got).
@@ -232,6 +284,23 @@ func (a *DataPipelineAction) runGraph(ctx context.Context, in *Input, runLog cor
 	if runErr != nil {
 		return out, runErr
 	}
+
+	// Clean completion: finalize the checkpoint. The tail after the last barrier
+	// was flushed by the sink-close path but not acked, so persist the FINAL
+	// position now — a restart after a clean run then resumes at EOF (a no-op)
+	// instead of reprocessing the tail. DeleteOnSuccess clears it for a fresh run.
+	if ckpt != nil {
+		if def.Checkpoint.DeleteOnSuccess {
+			_ = ckpt.Delete(ckptKey)
+		} else {
+			if serr := ckpt.Save(ckptKey, checkpoint.NewToken(def.Source.Type, out.RowsProcessed, nil)); serr != nil {
+				runLog.Warnf("final graph checkpoint save failed: %v", serr)
+			} else {
+				a.recorder.CheckpointSaved(a.ref)
+			}
+		}
+	}
+
 	runLog.Infof("graph run complete — nodes=%d edges=%d read=%d written=%d",
 		len(eg.Nodes), len(eg.Edges), res.RowsRead, res.RowsWritten)
 	return out, nil

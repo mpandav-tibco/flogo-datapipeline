@@ -397,7 +397,7 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 	if graphExecutable(def) {
 		runLog.Infof("executing via graph runner — non-reducible DAG (%d nodes, %d edges)",
 			len(def.Graph.Nodes), len(def.Graph.Edges))
-		return a.runGraph(ctx, in, runLog)
+		return a.runGraph(ctx, in, runLog, runID)
 	}
 
 	// Echo the effective run configuration so operators can confirm from the run

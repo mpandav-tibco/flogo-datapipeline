@@ -43,7 +43,8 @@ func (m *memSource) ReadBatch(size int) (*record.RecordBatch, error) {
 	}
 	return b, nil
 }
-func (m *memSource) Close() error { return nil }
+func (m *memSource) Skip(n int64) error { m.pos += int(n); return nil }
+func (m *memSource) Close() error       { return nil }
 
 type memSink struct {
 	mu      sync.Mutex
@@ -62,6 +63,8 @@ func (s *memSink) WriteBatch(b *record.RecordBatch) error {
 }
 func (s *memSink) Flush() error { s.mu.Lock(); s.flushed = true; s.mu.Unlock(); return nil }
 func (s *memSink) Close() error { s.mu.Lock(); s.closed = true; s.mu.Unlock(); return nil }
+
+func (s *memSink) rowCount() int { s.mu.Lock(); defer s.mu.Unlock(); return len(s.rows) }
 
 func (s *memSink) amounts() []int {
 	s.mu.Lock()
@@ -436,4 +439,179 @@ func TestSubsetRowIsolation(t *testing.T) {
 	if b.Rows[1][1].(int) != 150 {
 		t.Fatal("appendRow must not alias source rows")
 	}
+}
+
+// seqRows builds n rows {i, i*10} for checkpoint tests.
+func seqRows(n int) [][]interface{} {
+	rows := make([][]interface{}, 0, n)
+	for i := 1; i <= n; i++ {
+		rows = append(rows, []interface{}{i, i * 10})
+	}
+	return rows
+}
+
+func linearGraph(src *memSource, snk *memSink) *Graph {
+	return &Graph{
+		Nodes: []Node{
+			{ID: "source", Kind: KindSource, Type: "mem", Cfg: map[string]interface{}{"op": src}},
+			{ID: "t0", Kind: KindTransform, Type: "id", Cfg: map[string]interface{}{"op": idTransform{}}},
+			{ID: "sink", Kind: KindSink, Type: "mem", Cfg: map[string]interface{}{"op": snk}},
+		},
+		Edges: []Edge{{From: "source:rows", To: "t0:in"}, {From: "t0:out", To: "sink:in"}},
+	}
+}
+
+// TestCheckpointBarrierNoLoss verifies the core no-loss invariant: whenever the
+// coordinator persists a source position, every row up to that position is
+// already durably written (the sink flushed at the barrier before the save).
+func TestCheckpointBarrierNoLoss(t *testing.T) {
+	src := &memSource{cols: testCols, rows: seqRows(20)}
+	snk := &memSink{}
+	plan, err := Compile(linearGraph(src, snk), testBuilders())
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	var mu sync.Mutex
+	var saved []int64
+	opts := Options{
+		BatchSize:      3,
+		CheckpointRows: 5,
+		OnCheckpoint: func(pos int64) error {
+			if got := int64(snk.rowCount()); got < pos {
+				t.Errorf("checkpoint pos=%d but only %d rows durable (data loss window)", pos, got)
+			}
+			mu.Lock()
+			saved = append(saved, pos)
+			mu.Unlock()
+			return nil
+		},
+	}
+	res, err := plan.Run(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if res.RowsRead != 20 || res.RowsWritten != 20 {
+		t.Fatalf("RowsRead=%d RowsWritten=%d, want 20/20", res.RowsRead, res.RowsWritten)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(saved) == 0 {
+		t.Fatal("expected at least one checkpoint to be saved")
+	}
+	// Barriers fire at the batch boundary that first crosses each interval, so a
+	// position is >= its interval multiple (not exactly it), and strictly rising.
+	for i, p := range saved {
+		if p < int64(5*(i+1)) {
+			t.Errorf("checkpoint %d pos=%d, want >= %d", i, p, 5*(i+1))
+		}
+		if i > 0 && p <= saved[i-1] {
+			t.Fatalf("checkpoint positions not strictly increasing: %v", saved)
+		}
+	}
+}
+
+// TestCheckpointResume verifies the source skips already-processed rows on
+// resume, so only the remaining rows are re-emitted (at-least-once, no loss).
+func TestCheckpointResume(t *testing.T) {
+	src := &memSource{cols: testCols, rows: seqRows(10)}
+	snk := &memSink{}
+	plan, err := Compile(linearGraph(src, snk), testBuilders())
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	res, err := plan.Run(context.Background(), Options{BatchSize: 3, ResumeFrom: 4})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if res.RowsRead != 6 || res.RowsWritten != 6 {
+		t.Fatalf("RowsRead=%d RowsWritten=%d, want 6/6 after ResumeFrom=4", res.RowsRead, res.RowsWritten)
+	}
+	got := snk.amounts()
+	want := []int{50, 60, 70, 80, 90, 100}
+	if len(got) != len(want) {
+		t.Fatalf("sink = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("sink = %v, want %v", got, want)
+		}
+	}
+}
+
+// TestCheckpointForkNoLoss verifies the coordinator waits for EVERY sink of a
+// fan-out to flush at a barrier before persisting the position — so the no-loss
+// invariant holds across all branches, not just one.
+func TestCheckpointForkNoLoss(t *testing.T) {
+	src := &memSource{cols: testCols, rows: seqRows(20)} // amount = i*10; >100 for i>10
+	big := &memSink{}
+	small := &memSink{}
+	g := &Graph{
+		Nodes: []Node{
+			{ID: "source", Kind: KindSource, Type: "mem", Cfg: map[string]interface{}{"op": src}},
+			{ID: "big", Kind: KindSink, Type: "mem", Cfg: map[string]interface{}{"op": big}},
+			{ID: "small", Kind: KindSink, Type: "mem", Cfg: map[string]interface{}{"op": small}},
+		},
+		Edges: []Edge{
+			{From: "source:rows", To: "big:in", Type: EdgeCondition, Cond: "amount > 100"},
+			{From: "source:rows", To: "small:in", Type: EdgeCondition, Cond: "amount <= 100"},
+		},
+	}
+	plan, err := Compile(g, testBuilders())
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	opts := Options{
+		BatchSize:      3,
+		CheckpointRows: 4,
+		OnCheckpoint: func(pos int64) error {
+			// Every row before the barrier lands in exactly one branch; both must
+			// have drained+flushed before the coordinator saves.
+			if got := int64(big.rowCount() + small.rowCount()); got < pos {
+				t.Errorf("checkpoint pos=%d but only %d rows durable across branches", pos, got)
+			}
+			return nil
+		},
+	}
+	res, err := plan.Run(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if res.RowsWritten != 20 {
+		t.Fatalf("RowsWritten=%d, want 20", res.RowsWritten)
+	}
+	if big.rowCount() != 10 || small.rowCount() != 10 {
+		t.Fatalf("branch counts big=%d small=%d, want 10/10", big.rowCount(), small.rowCount())
+	}
+}
+
+// TestHasStateful confirms a Flusher node marks the plan stateful (so callers
+// disable checkpointing for it) while a stateless plan does not.
+func TestHasStateful(t *testing.T) {
+	stateless := &memSource{cols: testCols, rows: seqRows(3)}
+	plan, err := Compile(linearGraph(stateless, &memSink{}), testBuilders())
+	if err != nil {
+		t.Fatalf("compile stateless: %v", err)
+	}
+	if plan.HasStateful() {
+		t.Fatal("stateless plan reported HasStateful=true")
+	}
+	_ = plan.Close()
+
+	src := &memSource{cols: testCols, rows: seqRows(3)}
+	g := &Graph{
+		Nodes: []Node{
+			{ID: "source", Kind: KindSource, Type: "mem", Cfg: map[string]interface{}{"op": src}},
+			{ID: "t0", Kind: KindTransform, Type: "buf", Cfg: map[string]interface{}{"op": &bufferTransform{}}},
+			{ID: "sink", Kind: KindSink, Type: "mem", Cfg: map[string]interface{}{"op": &memSink{}}},
+		},
+		Edges: []Edge{{From: "source:rows", To: "t0:in"}, {From: "t0:out", To: "sink:in"}},
+	}
+	plan2, err := Compile(g, testBuilders())
+	if err != nil {
+		t.Fatalf("compile stateful: %v", err)
+	}
+	if !plan2.HasStateful() {
+		t.Fatal("plan with a Flusher node reported HasStateful=false")
+	}
+	_ = plan2.Close()
 }

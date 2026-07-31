@@ -43,25 +43,38 @@ func (p *Plan) Run(ctx context.Context, opts Options) (*Result, error) {
 
 	// One input channel per non-source node; a WaitGroup counting its inbound
 	// producers so the channel is closed exactly once they have all finished.
-	inCh := make(map[string]chan *record.RecordBatch, len(p.nodes))
+	inCh := make(map[string]chan pmsg, len(p.nodes))
 	inWG := make(map[string]*sync.WaitGroup, len(p.nodes))
 	for _, n := range p.nodes {
 		if n.kind == KindSource {
 			continue
 		}
-		inCh[n.id] = make(chan *record.RecordBatch, opts.bufferDepth())
+		inCh[n.id] = make(chan pmsg, opts.bufferDepth())
 		wg := &sync.WaitGroup{}
 		wg.Add(n.inDeg)
 		inWG[n.id] = wg
 	}
 	for id, ch := range inCh {
-		go func(ch chan *record.RecordBatch, wg *sync.WaitGroup) {
+		go func(ch chan pmsg, wg *sync.WaitGroup) {
 			wg.Wait()
 			close(ch)
 		}(ch, inWG[id])
 	}
 
 	rt := &runtime{res: res, opts: opts, inCh: inCh, inWG: inWG, fail: fail}
+
+	// Checkpoint coordinator: active only when an interval + callback are set.
+	// The source emits a drain barrier every CheckpointRows rows; the coordinator
+	// waits for every sink to flush at the barrier, persists the source position,
+	// then releases the source to continue — so a crash resumes with no data loss.
+	if opts.CheckpointRows > 0 && opts.OnCheckpoint != nil {
+		rt.cpOn = true
+		rt.cpSinks = p.sinkCount()
+		rt.cpBarrierCh = make(chan int64)
+		rt.cpAckCh = make(chan struct{}, rt.cpSinks)
+		rt.cpResumeCh = make(chan struct{})
+		go rt.runCheckpointCoord(rctx)
+	}
 
 	var nodes sync.WaitGroup
 	for _, n := range p.nodes {
@@ -87,9 +100,71 @@ func (p *Plan) Run(ctx context.Context, opts Options) (*Result, error) {
 type runtime struct {
 	res  *Result
 	opts Options
-	inCh map[string]chan *record.RecordBatch
+	inCh map[string]chan pmsg
 	inWG map[string]*sync.WaitGroup
 	fail func(error)
+
+	// Checkpoint coordination (active only when opts.CheckpointRows > 0).
+	cpOn        bool
+	cpBarrierCh chan int64    // source → coordinator: barrier emitted at this position
+	cpAckCh     chan struct{} // sink → coordinator: flushed at the barrier
+	cpResumeCh  chan struct{} // coordinator → source: checkpoint saved, resume
+	cpSinks     int
+}
+
+// pmsg is what flows on a node's input channel: a data batch, or a checkpoint
+// barrier (batch == nil, barrier holds the epoch number > 0).
+type pmsg struct {
+	batch   *record.RecordBatch
+	barrier int64
+}
+
+// runCheckpointCoord drives one checkpoint round at a time: it reads the source
+// position a barrier was emitted at, waits for every sink to flush at that
+// barrier (so all rows before it are durable), persists the position, then
+// releases the source to resume.
+func (rt *runtime) runCheckpointCoord(ctx context.Context) {
+	for {
+		var pos int64
+		select {
+		case p, ok := <-rt.cpBarrierCh:
+			if !ok {
+				return
+			}
+			pos = p
+		case <-ctx.Done():
+			return
+		}
+		for i := 0; i < rt.cpSinks; i++ {
+			select {
+			case <-rt.cpAckCh:
+			case <-ctx.Done():
+				return
+			}
+		}
+		if err := rt.opts.OnCheckpoint(pos); err != nil {
+			rt.fail(fmt.Errorf("checkpoint save: %w", err))
+			return
+		}
+		select {
+		case rt.cpResumeCh <- struct{}{}:
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+// emitBarrier forwards a checkpoint barrier to EVERY outbound edge. Barriers are
+// control signals — they ignore edge conditions so every downstream path drains.
+func (rt *runtime) emitBarrier(ctx context.Context, n *pnode, epoch int64) bool {
+	for _, e := range n.out {
+		select {
+		case rt.inCh[e.to.id] <- pmsg{barrier: epoch}:
+		case <-ctx.Done():
+			return false
+		}
+	}
+	return true
 }
 
 // finishProducers signals, for every outbound edge of n, that this producer has
@@ -105,8 +180,26 @@ func (rt *runtime) finishProducers(n *pnode) {
 
 func (rt *runtime) runSource(ctx context.Context, n *pnode) {
 	defer rt.finishProducers(n)
+	// Let the coordinator exit once the source is done producing barriers.
+	if rt.cpOn {
+		defer close(rt.cpBarrierCh)
+	}
 	stat := rt.res.Nodes[n.id]
 	size := rt.opts.batchSize()
+
+	// Resume: skip rows already durable before the last saved checkpoint.
+	if rt.opts.ResumeFrom > 0 {
+		if err := n.src.Skip(rt.opts.ResumeFrom); err != nil {
+			rt.fail(fmt.Errorf("source %q resume skip: %w", n.id, err))
+			return
+		}
+	}
+
+	var rows, nextBarrier int64
+	var epoch int64
+	if rt.cpOn {
+		nextBarrier = int64(rt.opts.CheckpointRows)
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -115,6 +208,7 @@ func (rt *runtime) runSource(ctx context.Context, n *pnode) {
 		}
 		b, err := n.src.ReadBatch(size)
 		if b != nil && b.Len() > 0 {
+			rows += int64(b.Len())
 			atomic.AddInt64(&stat.RowsOut, int64(b.Len()))
 			atomic.AddInt64(&rt.res.RowsRead, int64(b.Len()))
 			if !rt.emit(ctx, n, b) {
@@ -122,6 +216,28 @@ func (rt *runtime) runSource(ctx context.Context, n *pnode) {
 			}
 		} else if b != nil {
 			record.Put(b)
+		}
+		// Drain barrier: once we cross a checkpoint boundary, hand the coordinator
+		// our position, broadcast the barrier, then PAUSE until it has flushed every
+		// sink and persisted the position. Pausing means fan-in nodes never have to
+		// buffer to align barriers — no more rows are in flight behind this one.
+		if rt.cpOn && err == nil && rows >= nextBarrier {
+			nextBarrier += int64(rt.opts.CheckpointRows)
+			epoch++
+			pos := rt.opts.ResumeFrom + rows
+			select {
+			case rt.cpBarrierCh <- pos:
+			case <-ctx.Done():
+				return
+			}
+			if !rt.emitBarrier(ctx, n, epoch) {
+				return
+			}
+			select {
+			case <-rt.cpResumeCh:
+			case <-ctx.Done():
+				return
+			}
 		}
 		if err == io.EOF {
 			return
@@ -137,11 +253,12 @@ func (rt *runtime) runTransform(ctx context.Context, n *pnode) {
 	defer rt.finishProducers(n)
 	stat := rt.res.Nodes[n.id]
 	ch := rt.inCh[n.id]
+	var barrierSeen int64 // barriers of the current epoch seen across inbound edges
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case b, ok := <-ch:
+		case m, ok := <-ch:
 			if !ok {
 				// End-of-input: let the operator emit any rows it buffered (e.g. a
 				// window's still-open aggregates) before this node finishes.
@@ -162,6 +279,19 @@ func (rt *runtime) runTransform(ctx context.Context, n *pnode) {
 				}
 				return
 			}
+			// Checkpoint barrier: forward it once this node has seen it on every
+			// inbound edge (the source paused, so no data rows trail the barrier).
+			if m.barrier > 0 {
+				barrierSeen++
+				if barrierSeen >= int64(n.inDeg) {
+					barrierSeen = 0
+					if !rt.emitBarrier(ctx, n, m.barrier) {
+						return
+					}
+				}
+				continue
+			}
+			b := m.batch
 			atomic.AddInt64(&stat.RowsIn, int64(b.Len()))
 			// Per-row error routing: when this node both can split and has an
 			// error edge, partition the batch and send the rejected rows down the
@@ -236,17 +366,38 @@ func (rt *runtime) runTransform(ctx context.Context, n *pnode) {
 func (rt *runtime) runSink(ctx context.Context, n *pnode) {
 	stat := rt.res.Nodes[n.id]
 	ch := rt.inCh[n.id]
+	var barrierSeen int64 // barriers of the current epoch seen across inbound edges
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case b, ok := <-ch:
+		case m, ok := <-ch:
 			if !ok {
 				if err := n.snk.Flush(); err != nil {
 					rt.fail(fmt.Errorf("sink %q flush: %w", n.id, err))
 				}
 				return
 			}
+			// Checkpoint barrier: once seen on every inbound edge, flush everything
+			// written before it durable, then ack the coordinator so it can persist
+			// the source position for this epoch.
+			if m.barrier > 0 {
+				barrierSeen++
+				if barrierSeen >= int64(n.inDeg) {
+					barrierSeen = 0
+					if err := n.snk.Flush(); err != nil {
+						rt.fail(fmt.Errorf("sink %q flush: %w", n.id, err))
+						return
+					}
+					select {
+					case rt.cpAckCh <- struct{}{}:
+					case <-ctx.Done():
+						return
+					}
+				}
+				continue
+			}
+			b := m.batch
 			atomic.AddInt64(&stat.RowsIn, int64(b.Len()))
 			if err := n.snk.WriteBatch(b); err != nil {
 				record.Put(b)
@@ -340,7 +491,7 @@ func (rt *runtime) emitError(ctx context.Context, n *pnode, b *record.RecordBatc
 // cancellation it recycles the batch it was handed.
 func (rt *runtime) send(ctx context.Context, e *pedge, b *record.RecordBatch) bool {
 	select {
-	case rt.inCh[e.to.id] <- b:
+	case rt.inCh[e.to.id] <- pmsg{batch: b}:
 		return true
 	case <-ctx.Done():
 		record.Put(b)

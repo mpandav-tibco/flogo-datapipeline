@@ -305,3 +305,112 @@ func TestGraphRun_Window(t *testing.T) {
 		t.Fatalf("sink2 = %d rows, want 1 aggregate", len(r2))
 	}
 }
+
+// ─── checkpoint / resume on the graph path ──────────────────────────────────
+
+// A non-reducible (branching) graph gets full no-loss checkpointing: the source
+// pauses at each interval, a barrier flushes every sink, and the position is
+// persisted only once all sinks are durable. This mirrors the linear
+// TestRunDirect_Checkpoint_SaveAndResume but exercises the graph runner: run 1
+// processes everything and persists the checkpoint; run 2 (same key) resumes,
+// skips the already-processed rows, and writes nothing.
+func TestGraphRun_CheckpointSaveAndResume(t *testing.T) {
+	src := writeTemp(t, "in.csv", ordersCSV)
+	ckptDir := t.TempDir()
+
+	mkDef := func() *Definition {
+		bigPath := filepath.Join(t.TempDir(), "big.jsonl")
+		restPath := filepath.Join(t.TempDir(), "rest.jsonl")
+		return &Definition{
+			Source: csvSource(src),
+			Sink:   SinkDef{Type: "null"}, // required by the schema; unused by the graph
+			Checkpoint: CheckpointDef{
+				Type:            "file",
+				Path:            ckptDir,
+				Key:             "graph-resume-key",
+				IntervalRows:    1, // checkpoint aggressively
+				DeleteOnSuccess: false,
+			},
+			Graph: &GraphDef{
+				Nodes: []GraphNodeDef{
+					{ID: "source", Kind: "source", Type: "csv"},
+					{ID: "big", Kind: "sink", Type: "jsonlines", Extra: map[string]interface{}{"config": map[string]interface{}{"path": bigPath}}},
+					{ID: "rest", Kind: "sink", Type: "jsonlines", Extra: map[string]interface{}{"config": map[string]interface{}{"path": restPath}}},
+				},
+				Edges: []GraphEdge{
+					{From: "source:rows", To: "big:in", Type: "expression", Value: "amount > 100"},
+					{From: "source:rows", To: "rest:in", Type: "otherwise"},
+				},
+			},
+		}
+	}
+
+	// Run 1: processes all 5 via the graph runner and persists a checkpoint.
+	out1, err := runInline(t, mkDef())
+	if err != nil {
+		t.Fatalf("run1: %v", err)
+	}
+	if out1.Status != "completed" {
+		t.Fatalf("run1 status=%q, want completed (err=%s)", out1.Status, out1.Error)
+	}
+	if out1.RowsProcessed != 5 || out1.RowsWritten != 5 {
+		t.Fatalf("run1 processed=%d written=%d, want 5/5", out1.RowsProcessed, out1.RowsWritten)
+	}
+
+	// Run 2 (same key): the graph runner must resume, skip the 5 processed rows,
+	// and write nothing — proving checkpoint load→skip is wired on the graph path.
+	out2, err := runInline(t, mkDef())
+	if err != nil {
+		t.Fatalf("run2: %v", err)
+	}
+	if out2.RowsWritten != 0 {
+		t.Fatalf("run2 written=%d, want 0 (all rows already checkpointed → skipped)", out2.RowsWritten)
+	}
+}
+
+// A windowed (stateful) graph with checkpoint configured must still run
+// correctly: the runner detects the Flusher node and SKIPS barrier checkpointing
+// (with a warning) rather than persisting a source position without the matching
+// window-state snapshot. The window aggregate stays correct.
+func TestGraphRun_CheckpointStatefulGuard(t *testing.T) {
+	src := writeTemp(t, "win.csv", windowCSV)
+	outp := filepath.Join(t.TempDir(), "agg.jsonl")
+	out2 := filepath.Join(t.TempDir(), "agg2.jsonl")
+	def := &Definition{
+		Source: csvSource(src),
+		Transforms: []TransformDef{
+			{Type: "window", Extra: map[string]interface{}{
+				"type":         "window",
+				"eventTime":    map[string]interface{}{"column": "ts", "format": "RFC3339"},
+				"window":       map[string]interface{}{"kind": "tumbling", "sizeMs": float64(60000)},
+				"groupBy":      []interface{}{"sensor"},
+				"aggregations": []interface{}{map[string]interface{}{"as": "n", "fn": "count"}},
+			}},
+		},
+		Sink:       jsonlSink(outp),
+		Checkpoint: CheckpointDef{Type: "file", Path: t.TempDir(), Key: "win-key", IntervalRows: 1},
+		Graph: &GraphDef{
+			Nodes: []GraphNodeDef{
+				{ID: "source", Kind: "source", Type: "csv"},
+				{ID: "t0", Kind: "transform", Type: "window"},
+				{ID: "sink", Kind: "sink", Type: "jsonlines"},
+				{ID: "sink2", Kind: "sink", Type: "jsonlines", Extra: map[string]interface{}{"config": map[string]interface{}{"path": out2}}},
+			},
+			Edges: []GraphEdge{
+				{From: "source:rows", To: "t0:in"},
+				{From: "t0:out", To: "sink:in"},
+				{From: "t0:out", To: "sink2:in"},
+			},
+		},
+	}
+	out, err := runInline(t, def)
+	if err != nil {
+		t.Fatalf("RunDirect: %v", err)
+	}
+	if out.Status != "completed" {
+		t.Fatalf("status=%q, want completed (err=%s)", out.Status, out.Error)
+	}
+	if r := readJSONL(t, outp); len(r) != 1 {
+		t.Fatalf("sink = %d rows, want 1 aggregate (window stays correct without checkpoint)", len(r))
+	}
+}
