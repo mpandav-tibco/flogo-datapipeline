@@ -620,11 +620,11 @@ const TF_ICON: Record<string, string> = {
 const SRC_ICON: Record<string, string> = {
   csv: 'C', tsv: 'T', fixedwidth: '▦', sectioned: '▦', parquet: '◱',
   xml: '⟨', jsonlines: '⌗', jdbc: 'J', kafka: 'K', objstore: '◇',
-  s3: '◇', podlog: '☰',
+  s3: '◇', gcs: '◇', adls: '◇', podlog: '☰',
 };
 const SINK_ICON: Record<string, string> = {
   jdbc: 'J', kafka: 'K', parquet: '◱', objstore: '◇', s3: '◇',
-  jsonlines: '⌗', csv: 'C', null: '∅', template: '❏',
+  gcs: '◇', adls: '◇', jsonlines: '⌗', csv: 'C', null: '∅', template: '❏',
 };
 function nodeIcon(kind: string, type: string): string {
   if (kind === 'source') return SRC_ICON[type] || '⇥';
@@ -957,6 +957,58 @@ function renderErrorSinkEditor(sn: Node): HTMLElement {
   rm.onclick = () => { delete cfg.errorSink; persistAndRebuild(); toast('warn', 'Parse errors will now fail the run instead of routing to a sink'); };
   wrap.appendChild(rm);
   return wrap;
+}
+
+// Typed editor for the union transform's `with` list (was a raw-JSON blob):
+// each additional source is a card with a type dropdown + one location field.
+function renderUnionSourcesEditor(node: Node): HTMLElement {
+  const f = el('div', 'fld');
+  f.appendChild(el('div', 'k', 'Additional sources (UNION ALL)'));
+  f.appendChild(el('div', 'hint', 'Bounded, same-schema sources appended to the primary input — each is read fully, then the union emits.'));
+  const target = cfgTarget(node) as any;
+  const withArr: any[] = Array.isArray(target.with) ? target.with : [];
+  const save = () => setCfgValue(node, 'with', withArr);
+  const UNION_SRC = ['csv', 'tsv', 'jsonlines', 'parquet', 'xml', 'jdbc', 's3', 'gcs', 'adls'];
+  const locKey = (t: string) => (t === 'jdbc' ? 'table' : ['s3', 'gcs', 'adls'].includes(t) ? 'key' : 'path');
+
+  const box = el('div', 'rcards');
+  withArr.forEach((src, i) => {
+    const card = el('div', 'rcard');
+    const head = el('div', 'rhead');
+    head.appendChild(el('span', 'muted', '<span style="font-size:11px">Type</span>'));
+    const sel = document.createElement('select');
+    const cur = src.type || 'csv';
+    (UNION_SRC.includes(cur) ? UNION_SRC : [cur, ...UNION_SRC]).forEach((o) => {
+      const op = document.createElement('option'); op.value = o; op.textContent = typeLabel(o);
+      if (o === cur) op.selected = true; sel.appendChild(op);
+    });
+    sel.onchange = () => {
+      const old = locKey(src.type || 'csv'); const neu = locKey(sel.value);
+      if (old !== neu && src[old] != null) { src[neu] = src[old]; delete src[old]; }
+      src.type = sel.value; save(); renderEditor();
+    };
+    const del = el('span', 'del', '✕'); del.title = 'Remove source';
+    del.onclick = () => { withArr.splice(i, 1); save(); renderEditor(); };
+    head.appendChild(sel);
+    head.appendChild(del);
+    card.appendChild(head);
+
+    const lk = locKey(src.type || 'csv');
+    const row = el('div', 'rrow');
+    row.appendChild(el('label', undefined, lk === 'table' ? 'Table' : lk === 'key' ? 'Object' : 'Path'));
+    const inp = document.createElement('input');
+    inp.placeholder = lk === 'table' ? 'e.g. archive_orders' : lk === 'key' ? 'e.g. archive/orders.parquet' : 'e.g. more-orders.csv';
+    inp.value = src[lk] != null ? String(src[lk]) : '';
+    inp.onchange = () => { const v = inp.value.trim(); if (v === '') delete src[lk]; else src[lk] = v; save(); };
+    row.appendChild(inp);
+    card.appendChild(row);
+    box.appendChild(card);
+  });
+  const add = el('button', 'addcard', '＋ Add source');
+  add.onclick = () => { withArr.push({ type: 'csv', path: '' }); setCfgValue(node, 'with', withArr); renderEditor(); };
+  box.appendChild(add);
+  f.appendChild(box);
+  return f;
 }
 
 function renderField(node: Node, key: string, value: string): HTMLElement {
@@ -4361,6 +4413,7 @@ function renderCanvas(m: HTMLElement) {
         else if (k === 'expectations' && sn.type === 'dq') ib.appendChild(renderExpectationsEditor(sn));
         else if (k === 'expr' && sn.type === 'filter') ib.appendChild(renderFilterEditor(sn));
         else if (k === 'errorSink' && sn.kind === 'source') ib.appendChild(renderErrorSinkEditor(sn));
+        else if (k === 'with' && sn.type === 'union') ib.appendChild(renderUnionSourcesEditor(sn));
         else ib.appendChild(renderField(sn, k, v));
       });
 
