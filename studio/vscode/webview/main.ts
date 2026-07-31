@@ -32,28 +32,29 @@ function post(msg: WebviewToHost) {
   vscode.postMessage(msg);
 }
 
-// Make the config dock resizable: applies the remembered height and adds a
-// top-edge drag grip that updates S.inspHeight live (clamped to a sane range).
+// Make the config dock resizable: applies the remembered width and adds a
+// left-edge drag grip that updates S.inspWidth live (clamped to a sane range).
 function attachResize(insp: HTMLElement): void {
-  // Mappers need more vertical room than a simple form, so give map/mapper nodes
-  // a taller default dock — until the user drags it to a height of their own.
+  // Mappers need more room than a simple form, so give map/mapper nodes a wider
+  // default dock — until the user drags it to a width of their own.
   const sn = S.pipe && S.pipe.nodes ? S.pipe.nodes.find((n) => n.id === S.selNode) : null;
   const tall = !!(sn && (sn.type === 'map' || sn.type === 'mapper'));
-  const def = tall ? Math.min(580, Math.round(window.innerHeight * 0.6)) : 340;
-  insp.style.height = (S.inspHeightSet ? (S.inspHeight || def) : def) + 'px';
+  const def = tall ? Math.min(560, Math.round(window.innerWidth * 0.5)) : 360;
+  insp.style.width = (S.inspWidthSet ? (S.inspWidth || def) : def) + 'px';
   const grip = el('div', 'inspgrip');
   grip.title = 'Drag to resize the config panel';
   grip.onmousedown = (e: MouseEvent) => {
     e.preventDefault();
-    const startY = e.clientY;
-    const startH = insp.getBoundingClientRect().height;
-    document.body.style.cursor = 'row-resize';
+    const startX = e.clientX;
+    const startW = insp.getBoundingClientRect().width;
+    document.body.style.cursor = 'col-resize';
     document.body.style.userSelect = 'none';
     const move = (ev: MouseEvent) => {
-      const h = Math.max(160, Math.min(Math.round(window.innerHeight * 0.78), startH + (startY - ev.clientY)));
-      insp.style.height = h + 'px';
-      S.inspHeight = h;
-      S.inspHeightSet = true;
+      // Grip sits on the LEFT edge of the right-docked panel: dragging left widens.
+      const w = Math.max(300, Math.min(Math.round(window.innerWidth * 0.6), startW + (startX - ev.clientX)));
+      insp.style.width = w + 'px';
+      S.inspWidth = w;
+      S.inspWidthSet = true;
     };
     const up = () => {
       document.removeEventListener('mousemove', move);
@@ -99,8 +100,8 @@ const S = {
   selNode: null as string | null,
   inspTab: 'Config',
   inspClosed: false,
-  inspHeight: 340,
-  inspHeightSet: false,
+  inspWidth: 360,
+  inspWidthSet: false,
   zoom: 1,
   mapMode: 'visual',
   showBranches: true,
@@ -3698,7 +3699,7 @@ function renderCanvas(m: HTMLElement) {
   if (S.inspClosed) {
     const reopen = el('div', 'inspreopen');
     reopen.title = 'Show config panel';
-    reopen.innerHTML = '<span>⚙ Configuration</span>';
+    reopen.innerHTML = '⚙';
     reopen.onclick = () => { S.inspClosed = false; renderEditor(); };
     m.appendChild(reopen);
     return;

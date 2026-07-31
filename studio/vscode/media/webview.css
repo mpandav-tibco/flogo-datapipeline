@@ -43,7 +43,7 @@ button{font-family:inherit;color:inherit;background:none;border:none;cursor:poin
 .tabsbar .egacts{margin-left:auto;display:flex;align-items:center;gap:8px;padding:0 10px;flex:none}
 .breadcrumb{height:26px;display:flex;align-items:center;gap:6px;padding:0 14px;font-size:12px;color:var(--dim);border-bottom:1px solid var(--border);flex:none}
 .breadcrumb .sep{color:var(--dim)}
-.edmain{flex:1;min-height:0;display:flex;flex-direction:column}
+.edmain{flex:1;min-height:0;display:flex;flex-direction:row}
 .edcontent{flex:1;min-width:0;min-height:0;position:relative;overflow:auto}
 
 .btn{display:inline-flex;align-items:center;gap:6px;background:var(--input);border:1px solid var(--inputBorder);color:var(--text);border-radius:5px;padding:4px 10px;font-size:12px;font-weight:600;transition:background .12s,border-color .12s}
@@ -156,10 +156,10 @@ button{font-family:inherit;color:inherit;background:none;border:none;cursor:poin
 .canvas-hint .pilldiv{width:1px;align-self:stretch;background:var(--border);margin:1px 2px}
 .canvas-hint .zlvl{min-width:36px;text-align:center;font-variant-numeric:tabular-nums}
 
-.inspector{height:340px;flex:none;border-top:1px solid var(--border);background:var(--deep);overflow:auto;position:relative}
-.inspgrip{position:absolute;left:0;right:0;top:0;height:6px;cursor:row-resize;z-index:6}
+.inspector{width:360px;flex:none;border-left:1px solid var(--border);background:var(--deep);overflow:auto;position:relative}
+.inspgrip{position:absolute;left:0;top:0;bottom:0;width:6px;cursor:col-resize;z-index:6}
 .inspgrip:hover,.inspgrip:active{background:var(--blue)}
-.inspector .ih{height:38px;display:flex;align-items:center;gap:8px;padding:0 12px;border-bottom:1px solid var(--border);font-size:14px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--text)}
+.inspector .ih{height:38px;position:sticky;top:0;z-index:2;display:flex;align-items:center;gap:8px;padding:0 12px;border-bottom:1px solid var(--border);background:var(--deep);font-size:14px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--text)}
 .inspector .ih .ihname{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .inspector .ih .ihkind{flex:none;font-size:9.5px;font-weight:700;letter-spacing:.05em;padding:2px 7px;border-radius:4px;text-transform:uppercase;border:1px solid transparent}
 .inspector .ih .ihkind.src{color:#7cb6ec;background:rgba(74,144,217,.16);border-color:rgba(74,144,217,.35)}
@@ -168,7 +168,7 @@ button{font-family:inherit;color:inherit;background:none;border:none;cursor:poin
 .inspector .ih .ihkind.dlq{color:#e0a13c;background:rgba(224,161,60,.16);border-color:rgba(224,161,60,.35)}
 .inspector .ih .ihx{flex:none;cursor:pointer;color:var(--mute);font-size:13px;font-weight:400;line-height:1;padding:4px 6px;border-radius:4px}
 .inspector .ih .ihx:hover{background:var(--sel);color:var(--text)}
-.inspreopen{height:28px;flex:none;border-top:1px solid var(--border);background:var(--deep);display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--mute);font-size:14px}
+.inspreopen{width:32px;flex:none;border-left:1px solid var(--border);background:var(--deep);display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--mute);font-size:15px}
 .inspreopen:hover{color:var(--text);background:var(--sel)}
 .inspector .ib{padding:12px}
 .tabs{display:flex;gap:2px;border-bottom:1px solid var(--border);margin-bottom:12px}
@@ -284,7 +284,7 @@ select.v:focus,.fld select.v:focus{border-color:var(--blue);outline:none}
 .mhelp .focushint{font-size:10.5px;color:var(--dim);margin-top:6px}
 /* ── classic three-pane mapper (Source | Target field | Mapping) ───────── */
 .mapallbtn{margin:0 0 8px;width:100%}
-.mapper2{display:grid;grid-template-columns:1fr 1fr 1.15fr;gap:6px;align-items:start}
+.mapper2{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) minmax(0,1.15fr);gap:6px;align-items:start}
 .mapper2 .mpane{border:1px solid var(--inputBorder);border-radius:6px;overflow:hidden;background:var(--deep);min-width:0}
 .mapper2 .mphead{display:flex;justify-content:space-between;align-items:center;gap:4px;padding:5px 8px;background:var(--subtle);border-bottom:1px solid var(--inputBorder);font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--dim)}
 .mapper2 .mphead .cnt{background:var(--subtle);border-radius:8px;padding:0 6px;color:var(--text);font-family:var(--mono);text-transform:none;letter-spacing:0;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
