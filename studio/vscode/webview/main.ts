@@ -194,12 +194,56 @@ const statusColor: Record<string, string> = { running: 'b', completed: 'g', part
 
 // ── build a Pipe from the real doc ────────────────────────────────────────
 function metaFor(kind: string, type: string, cfg: any): string {
-  // Show the friendly display label (e.g. "Text Document" for the sectioned
-  // source), falling back to the raw engine id for types without a label.
+  cfg = cfg || {};
+  // Transform stages show a semantic one-liner (like the wireframe node
+  // subtitles) so the graph documents itself at a glance.
+  if (kind === 'transform') {
+    const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? '' : 's'}`;
+    switch (type) {
+      case 'join':
+        return `${cfg.joinType || 'inner'} · ${cfg.leftKey || 'key'} = ${cfg.rightKey || 'key'}`;
+      case 'validate':
+        return plural(Array.isArray(cfg.rules) ? cfg.rules.length : 0, 'rule') + (cfg.onViolation ? ' · ' + cfg.onViolation : '');
+      case 'router': case 'split':
+        return plural(Array.isArray(cfg.routes) ? cfg.routes.length : 0, 'route') + ' · first-match';
+      case 'dq':
+        return plural(Array.isArray(cfg.expectations) ? cfg.expectations.length : 0, 'expectation') + (cfg.onFail ? ' · ' + cfg.onFail : '');
+      case 'window': {
+        const wk = (cfg.window && cfg.window.kind) || 'tumbling';
+        return `${wk} · ` + plural(Array.isArray(cfg.aggregations) ? cfg.aggregations.length : 0, 'agg');
+      }
+      case 'map': case 'mapper':
+        return plural(cfg.fields && typeof cfg.fields === 'object' ? Object.keys(cfg.fields).length : 0, 'field');
+      case 'cast':
+        return plural(Array.isArray(cfg.columns) ? cfg.columns.length : 0, 'column');
+      case 'lookup': {
+        const host = cfg.url ? String(cfg.url).replace(/^https?:\/\//, '').split('/')[0] : '';
+        return (cfg.keyField || 'key') + (host ? ' → ' + host : '');
+      }
+      case 'filter':
+        return cfg.expr ? String(cfg.expr).slice(0, 30) : 'filter';
+      case 'parse':
+        return `${cfg.mode || 'regex'}` + (cfg.source ? ' · ' + cfg.source : '');
+      case 'union':
+        return 'union +' + (Array.isArray(cfg.with) ? cfg.with.length : 0);
+      case 'schemadrift':
+        return `${cfg.policy || 'additive'}` + (cfg.onDrift ? ' · ' + cfg.onDrift : '');
+      case 'explode':
+        return cfg.column ? 'explode ' + cfg.column : 'explode';
+      case 'flatten':
+        return 'flatten' + (cfg.separator ? ' · "' + cfg.separator + '"' : '');
+      case 'hwm':
+        return cfg.column ? 'hwm ' + cfg.column : 'high-water mark';
+    }
+    return transformLabel(type);
+  }
+  // Source / sink / dlq: friendly label + the salient destination detail.
   const bits: string[] = [typeLabel(type)];
   if (cfg.path) bits.push(String(cfg.path).split(/[\\/]/).pop() || '');
   if (cfg.table) bits.push(cfg.table);
   if (cfg.topic) bits.push(cfg.topic);
+  if (cfg.bucket) bits.push(cfg.bucket);
+  if (cfg.index) bits.push(cfg.index);
   if (cfg.dsn) bits.push('dsn');
   if (cfg.expr) bits.push(String(cfg.expr).slice(0, 24));
   return bits.filter(Boolean).join(' · ');
