@@ -14,13 +14,14 @@ dead-letter branch) as one self-contained binary — no JVM, no cluster, no SaaS
 - [Getting started](getting-started.md) — install, build, and run your first pipeline
 - [Architecture](ARCHITECTURE.md) — the engine model, registries, and streaming execution
 - [Pipeline file](pipeline-file.md) — the `.datapipeline` schema, section by section
+- [Graph (DAG) execution](graph.md) — conditional routing and multi-source / multi-sink topologies
 - [Configuration](configuration.md) — CLI flags, environment variables, performance tuning
 
 ## Build pipelines
 
 - [Sources](sources.md) — 10 source families (CSV, Parquet, JDBC, Kafka, XML, object store, …)
 - [Sinks](sinks.md) — 8 sink families plus the Dead-Letter Queue
-- [Transforms](transforms.md) — filter, map, validate, lookup, parse, DQ, schema drift, HWM, cast, explode, flatten, router/split, join, and event-time windowing — plus the expression language
+- [Transforms](transforms.md) — filter, map, validate, lookup, parse, DQ, schema drift, HWM, cast, explode, flatten, router/split, join, union, and event-time windowing — plus the expression language
 - [Connections](connections.md) — reusable `*.fgconn` credentials with secrets in Secret Storage
 - [Go SDK](sdk.md) — pipeline-as-code with the fluent builder
 

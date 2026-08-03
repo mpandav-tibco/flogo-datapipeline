@@ -20,6 +20,7 @@ composes with Flogo triggers and runs on the stock engine.
         "source":     { "type": "csv",  "options": { /* … */ } },
         "transforms": [ { "type": "filter", "options": { /* … */ } } ],
         "sink":       { "type": "jdbc", "options": { /* … */ } },
+        "graph":         { /* optional: DAG nodes + edges (non-linear topologies) */ },
         "checkpoint":    { /* … */ },
         "incremental":   { /* … */ },
         "performance":   { /* … */ },
@@ -78,6 +79,37 @@ rows.
 ```
 
 Full per-sink keys: [Sinks](sinks.md).
+
+## `graph` (optional)
+
+Beyond the single-source → chain → single-sink shape, a pipeline can declare an
+explicit **graph** of nodes + edges for non-linear topologies — multiple sources,
+multiple sinks, or conditional routing. The `source`, `transforms[]`, and `sink`
+above still supply the standard nodes (`source`, `t{i}`, `sink`); any extra node
+carries its own `config`. When the graph is **non-reducible** (a typed edge, or
+fan-out / fan-in ≥ 2) a streaming graph runner executes it directly; a purely
+linear graph is ignored and the linear path runs.
+
+```json
+"graph": {
+  "nodes": [
+    { "id": "source", "kind": "source", "type": "csv",      "ports": { "out": ["rows"] } },
+    { "id": "t0",     "kind": "transform", "type": "validate", "ports": { "in": ["in"], "out": ["out"] } },
+    { "id": "sink",   "kind": "sink", "type": "parquet",    "ports": { "in": ["in"] } },
+    { "id": "reject", "kind": "sink", "type": "parquet",    "ports": { "in": ["in"] },
+      "config": { "path": "./out/reject.parquet" } }
+  ],
+  "edges": [
+    ["source:rows", "t0:in"],
+    ["t0:out", "sink:in"],
+    { "from": "t0:out", "to": "reject:in", "type": "error" }
+  ]
+}
+```
+
+Edge `type`: `success` (the default / array short form) · `expression` (+ a `value`
+predicate) · `otherwise` · `error`. Full reference:
+[Graph (DAG) execution](graph.md).
 
 ## `checkpoint`
 

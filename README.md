@@ -43,6 +43,11 @@ Source  →  [ Transform₁ → Transform₂ → … ]  →  Sink
 
 The binary exposes an optional REST API (`/v1/…`) for health checks, triggering runs, and reading run history. It can be embedded in a larger Flogo application or run standalone.
 
+Pipelines are not limited to this single chain: when a `.datapipeline` declares a
+non-linear **graph** — multiple sources, multiple sinks, or conditional routing — a
+streaming [graph (DAG) runner](docs/graph.md) executes it directly, with every
+transform supported.
+
 ### The VS Code extension
 
 A custom editor for `.datapipeline` files that gives you:
@@ -126,10 +131,11 @@ flowchart TB
 
     subgraph binary["flogo-datapipeline binary (Go, single static binary)"]
         direction TB
-        engine["Flogo engine to action/pipeline"]
-        engine --> source["Source"]
+        engine["Flogo engine → action/pipeline<br/>(linear or graph runner)"]
+        engine --> source["Source(s)"]
         source --> transforms["Transform chain"]
         transforms --> sink["Sink"]
+        transforms -.->|conditional route / fan-out| sink2["Sink…"]
         transforms -.->|rejected records| dlq["DLQ Sink"]
 
         subgraph state["State and observability"]
@@ -146,6 +152,11 @@ flowchart TB
 
     binary -->|REST API optional| api["/v1/health<br/>/v1/pipelines<br/>/v1/pipelines/{ref}/run"]
 ```
+
+The `Source → Transform chain → Sink` spine above is the common **linear** case. A
+pipeline can also declare a non-linear **graph** — multiple sources, multiple sinks,
+or conditional routing — executed by the streaming
+[graph (DAG) runner](docs/graph.md).
 
 ---
 

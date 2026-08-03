@@ -149,8 +149,8 @@ One config, both modes.
 ## 6. How it fits the existing engine
 
 The engine already streams `RecordBatch`es Source → transform chain → Sink with
-checkpointing and backpressure (see [docs/FEATURES.md](docs/FEATURES.md),
-[action/pipeline/action.go](action/pipeline/action.go)). Stream processing plugs
+checkpointing and backpressure (see [FEATURES.md](FEATURES.md),
+[action/pipeline/action.go](../action/pipeline/action.go)). Stream processing plugs
 into that spine and **reuses**:
 
 | Existing asset | Reused for streaming as |

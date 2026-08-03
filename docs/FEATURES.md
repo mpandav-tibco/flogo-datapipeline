@@ -7,7 +7,7 @@
 > metrics, scaling, pipeline definition). Everything is code-derived from the
 > `init()`/`Register(...)` calls and config structs.
 
-**At a glance:** 10 source families · 9 sink families (incl. DLQ) · 14 transforms ·
+**At a glance:** 10 source families · 9 sink families (incl. DLQ) · 15 transforms ·
 2 checkpoint backends · 3 watermark backends · 2 metrics backends · 3 scaling modes.
 
 ## Sources → [index](sources.md)
@@ -43,6 +43,7 @@
 | [`router`, `split`](transforms/router.md) | N-way route rows to different sinks by predicate (conditional split) |
 | [`join`](transforms/join.md) | keyed stream-table join against a source-loaded reference dataset |
 | [`window`](transforms/window.md) | event-time windowed aggregation (tumbling / sliding / session / global) |
+| [`union`](transforms/union.md) | append bounded secondary datasets (N→1, `UNION ALL`) |
 
 Plus the shared [expression-language reference](transforms/expression-language.md).
 
@@ -83,6 +84,11 @@ ETL/ELT/EL switch — the *mode* is emergent from which transforms you declare:
 | **ETL** | Source → transforms → Sink | filter/map/validate/dq before load |
 | **ELT** | Source → minimal transform → Sink, logic in DB | load raw, transform in-database |
 | **EL** | Source → Sink (no transforms) | bulk copy, format conversion |
+
+For **non-linear** topologies — multiple sources, multiple sinks, or conditional
+routing — a pipeline can also declare an explicit **graph**; a streaming
+[graph (DAG) runner](graph.md) executes it directly, and every transform is
+supported. See [Graph (DAG) execution](graph.md).
 
 ---
 
