@@ -66,14 +66,14 @@ func TestGraphExecutable(t *testing.T) {
 		t.Fatal("graph with a non-standard node (dlq) must fall back to linear")
 	}
 
-	// An unsupported transform (hwm) with a conditional edge → fall back.
-	if graphExecutable(mkGraphDef(1, "hwm", &GraphDef{Nodes: stdNodes, Edges: condEdges})) {
-		t.Fatal("graph containing an unsupported transform (hwm) must fall back to linear")
-	}
-
-	// A window transform IS supported (flushed at end-of-input) → run via graph.
-	if !graphExecutable(mkGraphDef(1, "window", &GraphDef{Nodes: stdNodes, Edges: condEdges})) {
-		t.Fatal("graph with a window transform must run via the graph runner")
+	// An unsupported transform type would fall back to linear — but the set is
+	// now empty. hwm / dq / join / union (and window) are ALL supported by the
+	// graph runner, so a non-reducible graph using any of them must run via the
+	// graph, not fall back.
+	for _, txType := range []string{"hwm", "dq", "join", "union", "window"} {
+		if !graphExecutable(mkGraphDef(1, txType, &GraphDef{Nodes: stdNodes, Edges: condEdges})) {
+			t.Fatalf("graph with a %q transform must run via the graph runner", txType)
+		}
 	}
 }
 

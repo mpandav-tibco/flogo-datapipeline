@@ -42,6 +42,7 @@ type parquetSink struct {
 	compression  compress.Codec
 	rowGroupSize int
 	rowsWritten  int
+	rowsInGroup  int
 	schema       []record.Column
 	initialized  bool
 }
@@ -112,9 +113,15 @@ func (s *parquetSink) initWriter(columns []record.Column) error {
 	schema := parquetgo.NewSchema("schema", group)
 
 	// Collect WriterOptions; only add Compression when a codec is set.
+	//
+	// NOTE: we deliberately do NOT set parquetgo.MaxRowsPerRowGroup. Its internal
+	// row-group boundary handling mis-tracks the writer's row count when fed the
+	// variable batch sizes the graph runner produces, driving numRows past maxRows
+	// and panicking with an inverted slice bound inside writeRows. We manage row
+	// groups ourselves in WriteBatch via Flush() (see there), which is
+	// deterministic for both the linear and graph execution paths.
 	opts := []parquetgo.WriterOption{
 		schema,
-		parquetgo.MaxRowsPerRowGroup(int64(s.rowGroupSize)),
 	}
 	if s.compression != nil {
 		opts = append(opts, parquetgo.Compression(s.compression))
@@ -143,11 +150,22 @@ func (s *parquetSink) WriteBatch(batch *record.RecordBatch) error {
 		rows[i] = m
 	}
 
-	_, err := s.writer.Write(rows)
-	if err != nil {
+	if _, err := s.writer.Write(rows); err != nil {
 		return fmt.Errorf("parquet sink: write: %w", err)
 	}
 	s.rowsWritten += batch.Len()
+
+	// Close the current row group once it reaches the configured size. We drive
+	// this ourselves rather than via parquetgo.MaxRowsPerRowGroup (see initWriter)
+	// so a batch that would span a boundary never corrupts parquet-go's writer
+	// state — the cause of the graph-runner fan-out panic.
+	s.rowsInGroup += batch.Len()
+	if s.rowGroupSize > 0 && s.rowsInGroup >= s.rowGroupSize {
+		if err := s.writer.Flush(); err != nil {
+			return fmt.Errorf("parquet sink: flush row group: %w", err)
+		}
+		s.rowsInGroup = 0
+	}
 	return nil
 }
 

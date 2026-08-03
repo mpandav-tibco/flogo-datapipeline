@@ -408,12 +408,13 @@ type Definition struct {
 	// failed rows are counted in RowsFailed but not forwarded anywhere.
 	DLQ DLQDef `json:"dlq,omitempty"`
 
-	// Graph is the OPTIONAL explicit DAG topology authored in Studio (nodes +
-	// edges). It is ADDITIVE metadata: validated when present (unique node ids,
-	// edges reference declared nodes, acyclic), but the engine still EXECUTES the
-	// linear Source -> Transforms -> Sink model. A nil Graph means the pre-graph
-	// behaviour, so every existing pipeline is unaffected. A future graph runner
-	// will execute this topology directly.
+	// Graph is the OPTIONAL explicit DAG topology (nodes + edges), authored in
+	// Studio (or written by hand). It is ADDITIVE: validated when present (unique
+	// node ids, edges reference declared nodes, acyclic). When the graph is
+	// NON-REDUCIBLE (a typed edge, or fan-out/fan-in >= 2) the streaming graph
+	// runner (action/pipeline/graphexec) executes it directly; a reducible or
+	// absent graph runs the linear Source -> Transforms -> Sink model, so every
+	// existing pipeline is unaffected. See graph_run.go (graphExecutable).
 	Graph *GraphDef `json:"graph,omitempty"`
 }
 
@@ -571,7 +572,8 @@ func (d *Definition) validate() error {
 
 // GraphDef is the OPTIONAL explicit node/edge topology for a pipeline — the DAG
 // authored in Studio. See the Definition.Graph field for how it relates to
-// execution (additive metadata that is validated but not yet run).
+// execution (validated when present, and run by the streaming graph runner when
+// the topology is non-reducible).
 type GraphDef struct {
 	Nodes []GraphNodeDef `json:"nodes,omitempty"`
 	Edges []GraphEdge    `json:"edges,omitempty"`
@@ -586,7 +588,7 @@ type GraphPorts struct {
 
 // GraphNodeDef is one node in the topology. Beyond the typed id/kind/type/ports,
 // the full node object is preserved verbatim in Extra (like TransformDef) so
-// canvas-authored node config round-trips and is available to a future runner.
+// canvas-authored node config round-trips and is available to the graph runner.
 type GraphNodeDef struct {
 	ID    string                 `json:"id"`
 	Kind  string                 `json:"kind"` // source | transform | sink

@@ -211,6 +211,20 @@ func (p *Plan) HasStateful() bool {
 	return false
 }
 
+// Transforms returns every transform operator in the plan, in node order. The
+// caller can type-assert them to capability interfaces it owns (e.g. an HWM or
+// DQ provider) to harvest post-run state, without this package importing those
+// transform types — the same decoupling the Builders injection gives Compile.
+func (p *Plan) Transforms() []TransformOp {
+	ops := make([]TransformOp, 0, len(p.nodes))
+	for _, n := range p.nodes {
+		if n.tx != nil {
+			ops = append(ops, n.tx)
+		}
+	}
+	return ops
+}
+
 // sinkCount returns the number of sink nodes (barriers the coordinator awaits).
 func (p *Plan) sinkCount() int {
 	c := 0

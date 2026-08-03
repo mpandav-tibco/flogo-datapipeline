@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	corelog "github.com/project-flogo/core/support/log"
 
@@ -13,7 +14,10 @@ import (
 	"github.com/mpandav-tibco/flogo-datapipeline/sink"
 	"github.com/mpandav-tibco/flogo-datapipeline/source"
 	"github.com/mpandav-tibco/flogo-datapipeline/transform"
+	dqtransform "github.com/mpandav-tibco/flogo-datapipeline/transform/dq"
 	"github.com/mpandav-tibco/flogo-datapipeline/transform/filter"
+	hwmtransform "github.com/mpandav-tibco/flogo-datapipeline/transform/hwm"
+	"github.com/mpandav-tibco/flogo-datapipeline/watermark"
 )
 
 // This file wires the streaming graph runner (action/pipeline/graphexec) into
@@ -24,18 +28,20 @@ import (
 // the linear path, so its checkpoint/HWM/DQ/parallel-worker behaviour is
 // untouched. This is the safe reading of "run the graph automatically".
 
-// unsupportedGraphTransforms are transform types the streaming runner cannot yet
-// execute with the same guarantees as the linear engine: they need post-run
-// watermark persistence (hwm), gate-report metadata (dq), or secondary-stream
-// buffering (join, union). A graph that uses one of them falls back to the
-// linear path. (window is supported — the runner flushes its open aggregates at
-// end-of-input via the Flusher hook.)
-var unsupportedGraphTransforms = map[string]bool{
-	"hwm":   true,
-	"dq":    true,
-	"join":  true,
-	"union": true,
-}
+// unsupportedGraphTransforms lists transform types the streaming runner cannot
+// run with the same guarantees as the linear engine. It is now EMPTY — every
+// transform is supported by the graph runner:
+//   - window: the runner flushes still-open aggregates at end-of-input (Flusher).
+//   - hwm:    runGraph injects the prior mark into the primary source and, after
+//     a clean run, harvests MaxSeen() and persists the watermark (mirrors linear).
+//   - dq:     runGraph surfaces the DQ gate report in Output.Metadata after the run.
+//   - join/union: single-input transforms that self-load their bounded secondary
+//     side, so they run as ordinary operators. (True multi-source consolidation
+//     uses the graph's native fan-in, not these.)
+//
+// The map and the gate check in graphExecutable are kept so a future transform
+// that needs extra wiring can be gated again without reworking the gate.
+var unsupportedGraphTransforms = map[string]bool{}
 
 // graphExecutable reports whether the pipeline's graph both NEEDS the graph
 // runner (non-reducible) and CAN be run: every node must be resolvable — either
@@ -200,14 +206,80 @@ func graphBuilders() graphexec.Builders {
 func (a *DataPipelineAction) runGraph(ctx context.Context, in *Input, runLog corelog.Logger, runID string) (*Output, error) {
 	def := a.def
 	out := &Output{}
+
+	// --- watermark store + prior mark (incremental HWM) — mirrors the linear path.
+	// The store is a no-op unless incremental.mode == "hwm". A prior mark is
+	// injected into the primary source config so an HWM-aware source (jdbc) can
+	// append its WHERE predicate; the hwm transform's observed max is persisted
+	// after a clean run (see saveWatermark below).
+	wmStore, werr := openWatermarkStore(def)
+	if werr != nil {
+		return out, fmt.Errorf("watermark store open: %w", werr)
+	}
+	defer wmStore.Close()
+	var priorMark *watermark.Mark
+	if def.Incremental.Mode == "hwm" {
+		priorMark, werr = wmStore.Load(a.ref)
+		if werr != nil {
+			return out, fmt.Errorf("watermark load: %w", werr)
+		}
+		if priorMark == nil && def.Incremental.InitialValue != "" {
+			priorMark = &watermark.Mark{
+				Column:    def.Incremental.Column,
+				Value:     def.Incremental.InitialValue,
+				ValueType: def.Incremental.ValueType,
+				SavedAt:   time.Now().UTC(),
+			}
+		}
+		if priorMark != nil {
+			runLog.Infof("graph incremental load — %s > %s (type: %s)",
+				priorMark.Column, priorMark.Value, priorMark.ValueType)
+		} else {
+			runLog.Infof("graph incremental load — no prior mark, performing full load")
+		}
+	}
+
 	eg, err := a.buildExecGraph(in)
 	if err != nil {
 		return out, fmt.Errorf("graph build: %w", err)
 	}
+	// Inject the high-water mark into the PRIMARY source node ("source"); extra
+	// fan-in feeds are not the incremental cursor. Same keys the linear path adds.
+	if priorMark != nil {
+		for i := range eg.Nodes {
+			if eg.Nodes[i].ID == "source" && eg.Nodes[i].Kind == graphexec.KindSource && eg.Nodes[i].Cfg != nil {
+				eg.Nodes[i].Cfg["hwmColumn"] = priorMark.Column
+				eg.Nodes[i].Cfg["hwmValue"] = priorMark.Value
+				eg.Nodes[i].Cfg["hwmValueType"] = priorMark.ValueType
+			}
+		}
+	}
+
 	plan, err := graphexec.Compile(eg, graphBuilders())
 	if err != nil {
 		return out, fmt.Errorf("graph compile: %w", err)
 	}
+
+	// Locate the hwm / dq transforms among the plan's operators so the runner can
+	// persist the watermark and surface the DQ gate report after the run — the
+	// same post-run harvest the linear engine does (findHWMTransform /
+	// findDQGateProvider). The plan hands back its operators; we own the
+	// capability-interface assertions so graphexec stays decoupled.
+	var hwmProvider hwmtransform.HWMProvider
+	var dqProvider dqtransform.DQGateProvider
+	for _, tx := range plan.Transforms() {
+		if hwmProvider == nil {
+			if h, ok := tx.(hwmtransform.HWMProvider); ok {
+				hwmProvider = h
+			}
+		}
+		if dqProvider == nil {
+			if d, ok := tx.(dqtransform.DQGateProvider); ok {
+				dqProvider = d
+			}
+		}
+	}
+
 	opts := graphexec.Options{
 		BatchSize:   def.Performance.BatchSize,
 		BufferDepth: def.Performance.SourceBufferBatches,
@@ -298,6 +370,21 @@ func (a *DataPipelineAction) runGraph(ctx context.Context, in *Input, runLog cor
 			} else {
 				a.recorder.CheckpointSaved(a.ref)
 			}
+		}
+	}
+
+	// Post-run harvest — mirrors the linear engine. Persist the high-water mark
+	// (a no-op unless incremental.mode == "hwm" and an hwm transform was present),
+	// then surface the DQ gate report in Output.Metadata so downstream flows can
+	// inspect quality scores without parsing logs.
+	saveWatermark(runLog, wmStore, hwmProvider, def, a.ref)
+	if dqProvider != nil {
+		if report := dqProvider.LastRunReport(); report != nil {
+			if out.Metadata == nil {
+				out.Metadata = make(map[string]interface{})
+			}
+			report.PipelineRef = a.ref
+			out.Metadata["dqReport"] = report
 		}
 	}
 
