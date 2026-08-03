@@ -35,7 +35,7 @@ var (
 	sinkPkg = map[string]string{
 		"null": "sink/null", "parquet": "sink/parquet", "jdbc": "sink/jdbc", "kafka": "sink/kafka",
 		"avro": "sink/avro",
-		"csv": "sink/csv", "jsonlines": "sink/jsonlines", "template": "sink/template", "dlq": "sink/dlq",
+		"csv":  "sink/csv", "jsonlines": "sink/jsonlines", "template": "sink/template", "dlq": "sink/dlq",
 		"s3-sink": "sink/objstore", "gcs-sink": "sink/objstore", "adls-sink": "sink/objstore",
 		"s3": "sink/objstore", "gcs": "sink/objstore", "adls": "sink/objstore",
 	}

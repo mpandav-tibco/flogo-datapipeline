@@ -60,7 +60,9 @@ import (
 	_ "github.com/mpandav-tibco/flogo-datapipeline/source/csv"  // CSV with optional header row
 	_ "github.com/mpandav-tibco/flogo-datapipeline/source/jdbc" // JDBC query source (chunked fetch)
 
-	// Additional file formats (gap-08)		_ "github.com/mpandav-tibco/flogo-datapipeline/source/avro"       // Avro Object Container File (OCF)	_ "github.com/mpandav-tibco/flogo-datapipeline/source/fixedwidth" // Fixed-width / mainframe flat files
+	// Additional file formats (gap-08)
+	_ "github.com/mpandav-tibco/flogo-datapipeline/source/avro"       // Avro Object Container File (OCF)
+	_ "github.com/mpandav-tibco/flogo-datapipeline/source/fixedwidth" // Fixed-width / mainframe flat files
 	_ "github.com/mpandav-tibco/flogo-datapipeline/source/jsonlines"  // JSON-lines (NDJSON)
 	_ "github.com/mpandav-tibco/flogo-datapipeline/source/parquet"    // Parquet with row-group parallelism
 	_ "github.com/mpandav-tibco/flogo-datapipeline/source/sectioned"  // Text document: key/value header + delimited body table
@@ -82,9 +84,10 @@ import (
 	_ "github.com/mpandav-tibco/flogo-datapipeline/sink/jdbc" // JDBC upsert / insert sink
 	_ "github.com/mpandav-tibco/flogo-datapipeline/sink/null" // Null sink (benchmarking / dry-run)
 
-		// Columnar / binary file sinks (gap-08)
-		_ "github.com/mpandav-tibco/flogo-datapipeline/sink/avro"    // Avro Object Container File (OCF) sink
+	// Columnar / binary file sinks (gap-08)
+	_ "github.com/mpandav-tibco/flogo-datapipeline/sink/avro"    // Avro Object Container File (OCF) sink
 	_ "github.com/mpandav-tibco/flogo-datapipeline/sink/parquet" // Parquet row-group-aligned file sink
+
 	// Text file sinks — used directly and as object-store inner formats (csv/jsonlines).
 	_ "github.com/mpandav-tibco/flogo-datapipeline/sink/csv"       // CSV / TSV delimited-text file sink
 	_ "github.com/mpandav-tibco/flogo-datapipeline/sink/jsonlines" // JSON-lines (NDJSON) file sink
