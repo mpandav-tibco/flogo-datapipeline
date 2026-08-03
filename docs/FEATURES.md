@@ -7,7 +7,7 @@
 > metrics, scaling, pipeline definition). Everything is code-derived from the
 > `init()`/`Register(...)` calls and config structs.
 
-**At a glance:** 10 source families · 9 sink families (incl. DLQ) · 15 transforms ·
+**At a glance:** 11 source families · 10 sink families (incl. DLQ) · 15 transforms ·
 2 checkpoint backends · 3 watermark backends · 2 metrics backends · 3 scaling modes.
 
 ## Sources → [index](sources.md)
@@ -20,6 +20,7 @@
 | [`fixedwidth`, `flatfile`](sources/fixedwidth.md) | positional / EBCDIC | — |
 | [`sectioned`](sources/sectioned.md) | header block + delimited body | — |
 | [`parquet`](sources/parquet.md) | columnar Parquet | ✅ |
+| [`avro`](sources/avro.md) | row-oriented Avro OCF | — |
 | [`jdbc`](sources/jdbc.md) | PostgreSQL / MySQL / SQLite | ✅ |
 | [`kafka`](sources/kafka.md) | consumer-group topic | — |
 | [`s3`, `gcs`, `adls`](sources/objstore.md) | cloud object storage | ✅ |
@@ -54,6 +55,7 @@ Plus the shared [expression-language reference](transforms/expression-language.m
 | [`csv`, `tsv`](sinks/csv.md) | delimited text |
 | [`jsonlines`, `ndjson`](sinks/jsonlines.md) | one JSON object per line |
 | [`parquet`](sinks/parquet.md) | typed, row-group-aligned Parquet |
+| [`avro`](sinks/avro.md) | row-oriented Avro OCF (nullable-union schema) |
 | [`jdbc`](sinks/jdbc.md) | insert / upsert into SQL |
 | [`kafka`](sinks/kafka.md) | producer with acks & serialization |
 | [`template`](sinks/template.md) | Go text/template (fixed-width / legacy) |
@@ -200,9 +202,9 @@ Components may emit custom metrics via the `Counter`/`Gauge` escape hatch.
 | `distributed` | dynamic work-queue: leader enqueues partitions, workers claim/heartbeat/complete |
 
 `ScalingConfig`: `mode`, `instanceIndex`, `instanceCount`, `partitionStrategy`
-(`rowgroup` | `file` | `byterange`), `partitionsPerClaim`; distributed adds
-`coordinatorType` (`redis` | `memory` | 🚧 `postgres`), `coordinatorDSN`/`Addr`/
-`KeyPrefix`, `leaseSeconds`, `heartbeatSeconds`, `maxRetries`.
+(`rowgroup` | `file` | `byterange`), `partitionsPerClaim`; distributed adds a nested
+`coordinator` object — `type` (`redis` | `postgres`), `addr` (redis) / `dsn`
+(postgres), `passwordEnv`, `leaseSeconds`, `heartbeatSeconds`, `maxRetries`.
 
 Work-queue implementations: **MemoryQueue** (in-process dev/test), **RedisQueue**
 (multi-instance; items HASH + pending LIST + inprogress ZSET, Lua CAS claim),

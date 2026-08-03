@@ -15,6 +15,7 @@ into the transform chain. Sources are registered with `source.Register(name, …
 |---|---|:--:|
 | [`csv`, `tsv`](sources/csv.md) | delimited text, optional header | — |
 | [`parquet`](sources/parquet.md) | columnar Parquet, row-group parallel | ✅ |
+| [`avro`](sources/avro.md) | row-oriented Avro OCF (schema-on-read) | — |
 | [`jdbc`](sources/jdbc.md) | SQL query over PostgreSQL / MySQL / SQLite | ✅ |
 | [`kafka`](sources/kafka.md) | consumer-group topic consumption | — |
 | [`fixedwidth`, `flatfile`](sources/fixedwidth.md) | positional / EBCDIC mainframe files | — |

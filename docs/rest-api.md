@@ -22,6 +22,8 @@ in-memory ring buffer.
 | `POST` | `/v1/pipelines/{ref}/run` | run a pipeline (synchronous) |
 | `GET` | `/v1/pipelines/{ref}/status` | last N run records (ring buffer) |
 | `DELETE` | `/v1/pipelines/{ref}/run/{runId}` | cancel an in-flight run |
+| `GET` | `/v1/pipelines/{ref}/definition` | the parsed definition the engine loaded |
+| `PUT` | `/v1/pipelines/{ref}` | create or replace a pipeline definition at runtime |
 
 `{ref}` is the Flogo resource reference, e.g. `res://pipeline:daily-tx` (URL-encode
 the `:` and `/`).
@@ -90,6 +92,31 @@ Returns the live `PipelineInfo` plus a `runs[]` array of the most recent runs.
 curl -X DELETE 'localhost:9080/v1/pipelines/res%3A%2F%2Fpipeline%3Adaily-tx/run/9f3c…'
 ```
 Cancels the in-flight run with that `runId`; it finishes with `status: cancelled`.
+
+## Create or update a pipeline (runtime)
+
+`PUT /v1/pipelines/{ref}` hot-swaps a pipeline's definition without restarting the
+engine. The body is a pipeline definition — the same `data` object a `.datapipeline`
+resource carries (`source` / `transforms` / `sink` / `observability` / `graph` …). It is
+parsed, defaulted and validated before the swap. When `{ref}` is not yet registered the
+pipeline is **created** (`201 Created`); otherwise it is **replaced** (`200 OK`). In-flight
+runs finish on the previous definition; subsequent runs use the new one.
+
+```bash
+curl -X PUT 'localhost:9080/v1/pipelines/daily-tx' \
+  -H 'content-type: application/json' \
+  -d '{
+        "source": { "type": "csv", "options": { "path": "/data/tx.csv" } },
+        "transforms": [ { "type": "filter", "expr": "amount > 0" } ],
+        "sink": { "type": "jdbc", "dsn": "…", "table": "tx" }
+      }'
+```
+
+The response is the loaded definition summary (identical to
+`GET /v1/pipelines/{ref}/definition`). A malformed body returns `400 bad_request`; a
+well-formed but invalid definition returns `400 invalid_definition` and leaves any
+existing pipeline unchanged. Observability config that is unchanged across the update
+keeps the live metrics backend bound (no port churn).
 
 ## Introspection (Studio)
 

@@ -204,7 +204,7 @@ Production data feeds change over time without notice. The schema drift transfor
 
 ## What is available today
 
-### Sources (10)
+### Sources (11)
 
 | Source | What it reads |
 |---|---|
@@ -212,6 +212,7 @@ Production data feeds change over time without notice. The schema drift transfor
 | TSV | Tab-separated variant of CSV |
 | Fixed-Width (EBCDIC) | Positional flat files from mainframe systems; EBCDIC-037/500 encoding, implied decimal support |
 | Parquet | Columnar Parquet files with row-group parallelism and column/predicate pushdown |
+| Avro | Row-oriented Avro Object Container Files (OCF); schema-on-read, header codec auto-detect |
 | XML | Streaming SAX-style XML; one record per named element |
 | JSON Lines / NDJSON | Newline-delimited JSON, one object per row |
 | JDBC | SQL query over PostgreSQL, MySQL, or SQLite with keyset-pagination chunking and high-water-mark predicate injection |
@@ -219,7 +220,7 @@ Production data feeds change over time without notice. The schema drift transfor
 | Cloud Object Store | Files from S3, Google Cloud Storage, or Azure ADLS Gen2 |
 | Text Document (sectioned) | Flat files with a key/value header block plus a delimited body table |
 
-### Sinks (8 + DLQ)
+### Sinks (9 + DLQ)
 
 | Sink | What it writes |
 |---|---|
@@ -227,6 +228,7 @@ Production data feeds change over time without notice. The schema drift transfor
 | JSON Lines / NDJSON | One JSON object per line |
 | JDBC | Bulk insert / upsert into PostgreSQL, MySQL, or SQLite; configurable conflict strategy, optional auto-migrate |
 | Parquet | Row-group-aligned Parquet output; snappy / gzip / zstd compression |
+| Avro | Row-oriented Avro OCF output; snappy / deflate / zstandard / null, nullable-union schema |
 | Kafka | SyncProducer with configurable acks, compression, and JSON / AVRO serialization |
 | Cloud Object Store | S3, GCS, or Azure Blob; output key supports date/uuid macros |
 | Template | Go `text/template` rendering for fixed-width and legacy layouts |
@@ -320,10 +322,8 @@ These are honest work items — not committed roadmap, but the next things we in
 ### Engine
 
 - [ ] **Parquet source column pushdown to remote stores** — currently reads all columns when source is S3/GCS-backed Parquet; predicate and column pruning before download
-- [ ] **REST-API `/v1/pipelines/{ref}` PUT (runtime update)** — currently stubbed as 501; needed for runtime pipeline update without restart
 - [ ] **MSSQL and Oracle JDBC drivers** — PostgreSQL, MySQL, SQLite are current; these are the next priority enterprise databases
 - [ ] **SFTP and local directory watch sources** — file-arrival triggered ingestion without cron
-- [ ] **Avro source and sink** — Avro is common in Kafka-based enterprise architectures
 
 ### VS Code extension
 

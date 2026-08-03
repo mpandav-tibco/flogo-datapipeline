@@ -89,8 +89,8 @@ Three enterprise-governance gaps shipped this cycle. Each obeys the doctrine
 
 ## 5. Track A — Transforms
 
-Current set (14): `filter`, `map`, `validate`, `lookup/enrich` (HTTP), `parse`,
-`hwm`, `schemadrift`, `dq`, `cast`, `explode`, `flatten`, `join`, `window`,
+Current set (15): `filter`, `map`, `validate`, `lookup/enrich` (HTTP), `parse`,
+`hwm`, `schemadrift`, `dq`, `cast`, `explode`, `flatten`, `join`, `union`, `window`,
 `router/split`.
 
 ### Tier 1 — highest value, pure map

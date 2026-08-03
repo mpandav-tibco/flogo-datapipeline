@@ -44,24 +44,33 @@ strand its share — another worker re-claims after the lease expires.
 ```json
 "scaling": {
   "mode": "distributed",
-  "coordinatorType": "redis",
-  "coordinatorAddr": "localhost:6379",
-  "coordinatorKeyPrefix": "flogo:pipeline:wq",
-  "partitionsPerClaim": 4,
-  "leaseSeconds": 60,
-  "heartbeatSeconds": 15,
-  "maxRetries": 3
+  "coordinator": {
+    "type": "redis",
+    "addr": "localhost:6379",
+    "passwordEnv": "REDIS_PASSWORD",
+    "leaseSeconds": 60,
+    "heartbeatSeconds": 15,
+    "maxRetries": 3
+  },
+  "partitionStrategy": "rowgroup",
+  "partitionsPerClaim": 4
 }
 ```
 
+The coordinator settings live in a **nested `coordinator` object**; `partitionStrategy`
+and `partitionsPerClaim` sit at the `scaling` top level.
+
 | Key | Notes |
 |---|---|
-| `coordinatorType` | `redis`, `memory` (dev/test), 🚧 `postgres` |
-| `coordinatorDSN` / `coordinatorAddr` / `coordinatorKeyPrefix` | backend location |
+| `coordinator.type` | `redis` or `postgres` |
+| `coordinator.addr` | **redis**: host:port |
+| `coordinator.dsn` | **postgres**: connection string |
+| `coordinator.passwordEnv` | **redis**: env var holding the password |
+| `coordinator.leaseSeconds` | claim lease before another worker may steal it (default 120) |
+| `coordinator.heartbeatSeconds` | how often a worker renews its lease (default 30) |
+| `coordinator.maxRetries` | attempts before a partition is marked failed (default 3) |
 | `partitionsPerClaim` | how many partitions a worker leases at once |
-| `leaseSeconds` | claim lease before another worker may steal it |
-| `heartbeatSeconds` | how often a worker renews its lease |
-| `maxRetries` | attempts before a partition is marked failed |
+| `partitionStrategy` | `rowgroup` \| `file` \| `byterange` |
 
 ### Work-queue backends
 

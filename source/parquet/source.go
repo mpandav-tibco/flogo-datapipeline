@@ -24,6 +24,8 @@ import (
 	"io"
 	"math/big"
 	"os"
+	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/mpandav-tibco/flogo-datapipeline/record"
@@ -39,28 +41,33 @@ type parquetSource struct {
 	file       *os.File
 	pqFile     *parquetgo.File
 	schema     []record.Column
-	colIndices []int   // mapping from output column position to parquet leaf column index
+	colIndices []int   // output column position → parquet leaf column index
 	decScales  []int32 // per output column: DECIMAL scale, or -1 when not a decimal
 	rowGroups  []parquetgo.RowGroup
-	rgIdx      int // current row group index (single-instance mode)
-	// seqReader is the persistent reader for the current row group in sequential
-	// mode. Keeping it open across ReadBatch calls is critical:
-	// NewGenericRowGroupReader is stateless — creating a new one for the same row
-	// group always starts from row 0, which causes duplicate rows whenever a row
-	// group is larger than the requested batch size.
-	seqReader *parquetgo.GenericReader[any]
-	rowBuf    []parquetgo.Row
-	rowBufIdx int
-	rowsRead  int64
-	// parBuf holds rows decoded by readParallel that exceed the requested batch
-	// size; they are served in size-bounded chunks on subsequent ReadBatch calls
-	// so a single call never returns whole row groups (which blows up memory when
-	// the downstream sink is slower than the parallel decoders).
-	parBuf      [][]interface{}
-	parBufIdx   int
+	rgIdx      int // next row group to decode
+
+	// readLeaves is the set of leaf column indices actually read from storage —
+	// the projected output columns plus the filter column when it is not itself
+	// projected. Only these column chunks' pages are touched, so unselected
+	// columns are never read from disk (true column pushdown). leafScale maps a
+	// read leaf to its DECIMAL scale, or -1 when it is not a decimal.
+	readLeaves []int
+	leafScale  map[int]int32
+
+	// filter, when non-nil, is a single-comparison predicate used to (1) skip
+	// whole row groups whose column statistics prove no row can match
+	// (predicate pushdown) and (2) drop non-matching rows exactly.
+	filter *parquetPredicate
+
+	// buf holds decoded, projected, filtered rows pending emission; served in
+	// size-bounded batches so a slow sink applies backpressure instead of the
+	// source materialising whole row groups downstream.
+	buf    [][]interface{}
+	bufIdx int
+
+	rowsRead    int64
 	parallelism int
 	closed      bool
-	mu          sync.Mutex
 }
 
 func newParquetSource(cfg map[string]interface{}) (source.Source, error) {
@@ -111,6 +118,35 @@ func newParquetSource(cfg map[string]interface{}) (source.Source, error) {
 
 	rowGroups := pf.RowGroups()
 
+	// Build the set of leaf column indices to read (the projected outputs) and
+	// their decimal scales. Only these column chunks are touched on disk.
+	leafScale := make(map[int]int32, len(colIndices)+1)
+	readLeaves := make([]int, 0, len(colIndices)+1)
+	seen := make(map[int]bool, len(colIndices)+1)
+	for k, leaf := range colIndices {
+		if !seen[leaf] {
+			seen[leaf] = true
+			readLeaves = append(readLeaves, leaf)
+			leafScale[leaf] = decScales[k]
+		}
+	}
+
+	// Parse the optional predicate. The filter column is read even when it is not
+	// part of the projection, so row-level filtering stays exact.
+	var pred *parquetPredicate
+	if fexpr, _ := cfg["filter"].(string); fexpr != "" {
+		pred, err = parseParquetPredicate(fexpr, pf.Schema())
+		if err != nil {
+			f.Close()
+			return nil, err
+		}
+		if !seen[pred.leafIndex] {
+			seen[pred.leafIndex] = true
+			readLeaves = append(readLeaves, pred.leafIndex)
+			leafScale[pred.leafIndex] = pred.decScale
+		}
+	}
+
 	return &parquetSource{
 		file:        f,
 		pqFile:      pf,
@@ -118,225 +154,71 @@ func newParquetSource(cfg map[string]interface{}) (source.Source, error) {
 		colIndices:  colIndices,
 		decScales:   decScales,
 		rowGroups:   rowGroups,
+		readLeaves:  readLeaves,
+		leafScale:   leafScale,
+		filter:      pred,
 		parallelism: parallelism,
 	}, nil
 }
 
 func (s *parquetSource) Schema() []record.Column { return s.schema }
 
-// Skip advances past n rows by scanning row groups without emitting.
-// Bug 5 fix: tail rows of a partial row group are saved into s.rowBuf so
-// readSequential can drain them rather than silently dropping them.
-// Bug 1 fix: use NewGenericRowGroupReader (accepts RowGroup) not NewGenericReader (io.ReaderAt).
-// Bug 6 fix: close reader after use to release page iterators/goroutines.
+// Skip advances past n emitted (post-filter) rows so a checkpoint can resume.
+// When no filter is set, whole row groups are skipped by their row count without
+// decoding. With a filter, a partially-consumed row group is decoded once and
+// its surviving tail buffered for the next ReadBatch.
 func (s *parquetSource) Skip(n int64) error {
 	var skipped int64
-	for s.rgIdx < len(s.rowGroups) && skipped < n {
+	for skipped < n && s.rgIdx < len(s.rowGroups) {
 		rg := s.rowGroups[s.rgIdx]
-		rgRows := rg.NumRows()
-		if skipped+rgRows <= n {
-			skipped += rgRows
-			s.rgIdx++
-		} else {
-			// Partial row group: read all rows, skip the first `remaining`,
-			// and save the tail into s.rowBuf for the next ReadBatch call.
-			remaining := n - skipped
-			reader := parquetgo.NewGenericRowGroupReader[any](rg) // Bug 1 fix
-			fullBuf := make([]parquetgo.Row, rgRows)
-			n2, err2 := reader.ReadRows(fullBuf)
-			reader.Close() // Bug 6 fix
-			if err2 != nil && err2 != io.EOF {
-				return err2
+		if s.filter == nil {
+			rgRows := rg.NumRows()
+			if skipped+rgRows <= n {
+				skipped += rgRows
+				s.rgIdx++
+				continue
 			}
-			// Keep only the rows that follow the skip boundary.
-			kept := make([]parquetgo.Row, n2-int(remaining))
-			copy(kept, fullBuf[remaining:n2])
-			s.rowBuf = kept
-			s.rowBufIdx = 0
-			s.rgIdx++ // advance past this partially-read row group
-			skipped = n
 		}
+		rows, err := s.decodeRowGroup(rg)
+		if err != nil {
+			return err
+		}
+		s.rgIdx++
+		emitted := int64(len(rows))
+		if skipped+emitted <= n {
+			skipped += emitted
+			continue
+		}
+		// Partial row group: keep the tail that follows the skip boundary.
+		keepFrom := n - skipped
+		s.buf = append(s.buf[:0], rows[keepFrom:]...)
+		s.bufIdx = 0
+		skipped = n
 	}
 	s.rowsRead = n
 	return nil
 }
 
-// ReadBatch reads up to size rows using row-group parallelism when available.
-// For multi-row-group files with parallelism > 1, multiple row groups are
-// decoded concurrently and merged into the returned batch.
+// ReadBatch returns up to size rows. Rows are decoded from row groups into an
+// internal buffer (one row group in sequential mode, up to `parallelism`
+// concurrently otherwise), projected to the selected columns and filtered by the
+// optional predicate; the buffer is then served in size-bounded slices so a slow
+// sink applies backpressure. Returns io.EOF once every row group is drained.
 func (s *parquetSource) ReadBatch(size int) (*record.RecordBatch, error) {
 	if s.closed {
 		return nil, io.EOF
 	}
 
-	// Serve any rows left over from a prior parallel decode first, so each batch
-	// stays bounded by `size` even though a row group holds far more rows.
-	if s.parBufIdx < len(s.parBuf) {
-		return s.serveParBuf(size)
-	}
-
-	if s.parallelism <= 1 || len(s.rowGroups)-s.rgIdx <= 1 {
-		return s.readSequential(size)
-	}
-	return s.readParallel(size)
-}
-
-// readSequential processes row groups one at a time (single-instance, or
-// when only one row group remains).
-//
-// Key correctness invariant: s.seqReader is kept open across calls so that
-// successive ReadBatch invocations continue from where the previous one stopped
-// within the same row group. NewGenericRowGroupReader is stateless — creating a
-// new reader for the same row group always restarts from row 0, causing duplicate
-// rows whenever a row group is larger than the requested batch size.
-//
-// Bug 5 fix: drains s.rowBuf (tail rows saved by Skip) before opening new readers.
-// Bug 1 fix: use NewGenericRowGroupReader not NewGenericReader.
-// Bug 6/7 fix: close reader only when the row group is exhausted (not after
-// every ReadRows call) to preserve reader position across batch boundaries.
-func (s *parquetSource) readSequential(size int) (*record.RecordBatch, error) {
-	batch := record.Get()
-	batch.Columns = s.schema
-	batch.Rows = make([][]interface{}, 0, size)
-
-	for len(batch.Rows) < size && (s.rowBufIdx < len(s.rowBuf) || s.rgIdx < len(s.rowGroups)) {
-		// Drain any buffered tail rows saved by a prior partial-skip before
-		// opening the next row group.
-		for s.rowBufIdx < len(s.rowBuf) && len(batch.Rows) < size {
-			batch.Rows = append(batch.Rows, s.extractRow(s.rowBuf[s.rowBufIdx]))
-			s.rowBufIdx++
-			s.rowsRead++
-		}
-		if s.rowBufIdx >= len(s.rowBuf) {
-			s.rowBuf = nil
-			s.rowBufIdx = 0
-		}
-		if len(batch.Rows) >= size || s.rgIdx >= len(s.rowGroups) {
-			break
-		}
-
-		// Open a persistent reader for the current row group if none is active.
-		if s.seqReader == nil {
-			s.seqReader = parquetgo.NewGenericRowGroupReader[any](s.rowGroups[s.rgIdx])
-		}
-
-		buf := make([]parquetgo.Row, size-len(batch.Rows))
-		n, err := s.seqReader.ReadRows(buf)
-		for i := 0; i < n; i++ {
-			batch.Rows = append(batch.Rows, s.extractRow(buf[i]))
-		}
-		s.rowsRead += int64(n)
-
-		if err == io.EOF || (err == nil && n == 0) {
-			// Row group exhausted: close the reader and advance to the next group.
-			// NOTE: a short read (n < len(buf)) with err==nil is a page boundary, NOT
-			// end-of-group — keep the persistent reader open and continue on the next
-			// call, or rows past the first page of the group are silently dropped.
-			s.seqReader.Close()
-			s.seqReader = nil
-			s.rgIdx++
-		}
-		if err != nil && err != io.EOF {
-			return batch, err
+	if s.bufIdx >= len(s.buf) {
+		if err := s.fill(); err != nil {
+			return nil, err
 		}
 	}
-
-	if len(batch.Rows) == 0 {
-		record.Put(batch)
+	if s.bufIdx >= len(s.buf) {
 		return nil, io.EOF
 	}
-	if s.rgIdx >= len(s.rowGroups) && s.seqReader == nil {
-		return batch, io.EOF
-	}
-	return batch, nil
-}
 
-// readParallel reads up to `parallelism` row groups concurrently and merges.
-// Bug 1 fix: use NewGenericRowGroupReader not NewGenericReader.
-// Bug 6/7 fix: defer reader.Close() inside goroutine to release resources on all paths.
-func (s *parquetSource) readParallel(size int) (*record.RecordBatch, error) {
-	type rgResult struct {
-		rows [][]interface{}
-		err  error
-	}
-
-	// Loop so that a chunk of entirely-empty row groups (pathological) advances
-	// to the next chunk rather than returning a spurious empty batch.
-	for {
-		s.mu.Lock()
-		start := s.rgIdx
-		end := start + s.parallelism
-		if end > len(s.rowGroups) {
-			end = len(s.rowGroups)
-		}
-		s.rgIdx = end
-		s.mu.Unlock()
-
-		if start >= len(s.rowGroups) {
-			return nil, io.EOF
-		}
-
-		results := make([]rgResult, end-start)
-		var wg sync.WaitGroup
-		for i := start; i < end; i++ {
-			wg.Add(1)
-			go func(idx, slot int) {
-				defer wg.Done()
-				rg := s.rowGroups[idx]
-				reader := parquetgo.NewGenericRowGroupReader[any](rg) // Bug 1 fix
-				defer reader.Close()                                  // Bug 6/7 fix: release on all exit paths
-				// Drain the whole row group: ReadRows may return a partial page
-				// (n < len(buf)) with err==nil, so loop until io.EOF instead of reading
-				// once, or rows past the first page of each group are silently dropped.
-				var rows [][]interface{}
-				buf := make([]parquetgo.Row, 4096)
-				for {
-					n, err := reader.ReadRows(buf)
-					for r := 0; r < n; r++ {
-						rows = append(rows, s.extractRow(buf[r]))
-					}
-					if err == io.EOF || (err == nil && n == 0) {
-						break
-					}
-					if err != nil {
-						results[slot] = rgResult{rows: rows, err: err}
-						return
-					}
-				}
-				results[slot] = rgResult{rows: rows, err: nil}
-			}(i, i-start)
-		}
-		wg.Wait()
-
-		// Collect all decoded rows into the overflow buffer, then serve only
-		// `size` of them now; the remainder is handed out by later ReadBatch
-		// calls. This keeps batch memory bounded no matter how large a row group
-		// is, which is what lets a slow sink (e.g. JDBC) apply backpressure
-		// instead of the source flooding the pipeline with whole row groups.
-		s.parBuf = s.parBuf[:0]
-		s.parBufIdx = 0
-		for _, r := range results {
-			if r.err != nil && r.err != io.EOF {
-				return nil, r.err
-			}
-			s.parBuf = append(s.parBuf, r.rows...)
-		}
-		if len(s.parBuf) > 0 {
-			return s.serveParBuf(size)
-		}
-		// All groups in this chunk were empty; continue to the next chunk.
-	}
-}
-
-// serveParBuf returns up to `size` rows from the parallel overflow buffer,
-// copying the row slice into a fresh batch so the buffer's backing array can be
-// reused by the next parallel decode. It reports io.EOF once the buffer is fully
-// drained and no row groups remain.
-func (s *parquetSource) serveParBuf(size int) (*record.RecordBatch, error) {
-	avail := len(s.parBuf) - s.parBufIdx
-	if avail <= 0 {
-		return nil, io.EOF
-	}
+	avail := len(s.buf) - s.bufIdx
 	n := size
 	if avail < n {
 		n = avail
@@ -344,14 +226,391 @@ func (s *parquetSource) serveParBuf(size int) (*record.RecordBatch, error) {
 	batch := record.Get()
 	batch.Columns = s.schema
 	batch.Rows = make([][]interface{}, n)
-	copy(batch.Rows, s.parBuf[s.parBufIdx:s.parBufIdx+n])
-	s.parBufIdx += n
+	copy(batch.Rows, s.buf[s.bufIdx:s.bufIdx+n])
+	s.bufIdx += n
 	s.rowsRead += int64(n)
 
-	if s.parBufIdx >= len(s.parBuf) && s.rgIdx >= len(s.rowGroups) {
+	if s.bufIdx >= len(s.buf) && s.rgIdx >= len(s.rowGroups) {
 		return batch, io.EOF
 	}
 	return batch, nil
+}
+
+// fill decodes the next chunk of row groups into s.buf. In sequential mode one
+// row group is decoded per call; otherwise up to `parallelism` groups are
+// decoded concurrently and appended in row-group order. It loops so a run of
+// entirely-pruned/empty row groups advances rather than returning empty.
+func (s *parquetSource) fill() error {
+	s.buf = s.buf[:0]
+	s.bufIdx = 0
+	for len(s.buf) == 0 && s.rgIdx < len(s.rowGroups) {
+		start := s.rgIdx
+		end := start + 1
+		if s.parallelism > 1 {
+			end = start + s.parallelism
+		}
+		if end > len(s.rowGroups) {
+			end = len(s.rowGroups)
+		}
+
+		if end-start == 1 {
+			rows, err := s.decodeRowGroup(s.rowGroups[start])
+			if err != nil {
+				return err
+			}
+			s.buf = append(s.buf, rows...)
+		} else {
+			results := make([][][]interface{}, end-start)
+			errs := make([]error, end-start)
+			var wg sync.WaitGroup
+			for i := start; i < end; i++ {
+				wg.Add(1)
+				go func(idx, slot int) {
+					defer wg.Done()
+					results[slot], errs[slot] = s.decodeRowGroup(s.rowGroups[idx])
+				}(i, i-start)
+			}
+			wg.Wait()
+			for _, e := range errs {
+				if e != nil {
+					return e
+				}
+			}
+			for _, r := range results {
+				s.buf = append(s.buf, r...)
+			}
+		}
+		s.rgIdx = end
+	}
+	return nil
+}
+
+// decodeRowGroup reads the selected column chunks of a single row group (only
+// those columns' pages are touched — true column pushdown), applies the optional
+// predicate (skipping the whole group when its statistics prove no row can
+// match), and returns the surviving rows projected to the output schema.
+func (s *parquetSource) decodeRowGroup(rg parquetgo.RowGroup) ([][]interface{}, error) {
+	if s.filter != nil && !s.filter.rowGroupMayMatch(rg) {
+		return nil, nil // pruned: no row in this group can match
+	}
+
+	numRows := int(rg.NumRows())
+	chunks := rg.ColumnChunks()
+
+	colData := make(map[int][]interface{}, len(s.readLeaves))
+	for _, leaf := range s.readLeaves {
+		if leaf < 0 || leaf >= len(chunks) {
+			return nil, fmt.Errorf("parquet source: leaf column %d out of range (%d chunks)", leaf, len(chunks))
+		}
+		vals, err := readColumnGo(chunks[leaf], numRows, s.leafScale[leaf])
+		if err != nil {
+			return nil, err
+		}
+		colData[leaf] = vals
+	}
+
+	out := make([][]interface{}, 0, numRows)
+	for r := 0; r < numRows; r++ {
+		if s.filter != nil && !s.filter.matchGo(valueAt(colData[s.filter.leafIndex], r)) {
+			continue
+		}
+		row := make([]interface{}, len(s.colIndices))
+		for k, leaf := range s.colIndices {
+			row[k] = valueAt(colData[leaf], r)
+		}
+		out = append(out, row)
+	}
+	return out, nil
+}
+
+// valueAt returns vals[i] or nil when i is out of range (defensive against a
+// column chunk that yields fewer values than the row group's row count).
+func valueAt(vals []interface{}, i int) interface{} {
+	if i < 0 || i >= len(vals) {
+		return nil
+	}
+	return vals[i]
+}
+
+// readColumnGo reads every value of a single column chunk (draining all its
+// pages) and converts each to its Go representation, decoding DECIMAL columns
+// (scale >= 0) into an exact record.Decimal. Only this column chunk's pages are
+// read from storage, which is what makes column projection a genuine
+// storage-level pushdown rather than a post-decode filter.
+func readColumnGo(cc parquetgo.ColumnChunk, numRows int, scale int32) ([]interface{}, error) {
+	out := make([]interface{}, 0, numRows)
+	pages := cc.Pages()
+	defer pages.Close()
+
+	buf := make([]parquetgo.Value, 512)
+	for {
+		pg, err := pages.ReadPage()
+		if pg != nil {
+			vr := pg.Values()
+			for {
+				n, verr := vr.ReadValues(buf)
+				// Convert within the page's lifetime (before Release) so the
+				// byte-array-backed values are copied into Go strings/decimals.
+				for i := 0; i < n; i++ {
+					if scale >= 0 {
+						out = append(out, parquetDecimalToGo(buf[i], scale))
+					} else {
+						out = append(out, parquetValueToGo(buf[i]))
+					}
+				}
+				if verr == io.EOF {
+					break
+				}
+				if verr != nil {
+					parquetgo.Release(pg)
+					return nil, verr
+				}
+			}
+			parquetgo.Release(pg)
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+// parquetPredicate is a single-comparison filter (column OP literal) used for
+// both row-group statistics pruning and exact row-level filtering. Compound
+// predicates (AND/OR) are not supported here — use a `filter` transform for those.
+type parquetPredicate struct {
+	colName   string
+	leafIndex int    // leaf column index in the parquet schema
+	op        string // one of = != > >= < <=
+	litIsStr  bool
+	litStr    string
+	litNum    float64
+	decScale  int32 // filter column's DECIMAL scale, or -1
+}
+
+// parseParquetPredicate parses "column OP value" where OP is one of =,!=,>,>=,<,<=
+// and value is a number or a single-quoted string, resolving the column to its
+// leaf index in the file schema.
+func parseParquetPredicate(expr string, schema *parquetgo.Schema) (*parquetPredicate, error) {
+	col, op, lit, err := splitComparison(expr)
+	if err != nil {
+		return nil, err
+	}
+	lc, ok := schema.Lookup(col)
+	if !ok {
+		return nil, fmt.Errorf("parquet source: filter column %q not found in schema", col)
+	}
+	p := &parquetPredicate{colName: col, leafIndex: lc.ColumnIndex, op: op, decScale: -1}
+	for _, f := range schema.Fields() {
+		if f.Name() == col {
+			p.decScale = parquetDecimalScaleOf(f)
+			break
+		}
+	}
+	if len(lit) >= 2 && lit[0] == '\'' && lit[len(lit)-1] == '\'' {
+		p.litStr = lit[1 : len(lit)-1]
+		p.litIsStr = true
+	} else if num, e := strconv.ParseFloat(lit, 64); e == nil {
+		p.litNum = num
+	} else {
+		return nil, fmt.Errorf("parquet source: filter literal %q must be a number or a single-quoted string", lit)
+	}
+	return p, nil
+}
+
+// splitComparison finds the comparison operator in expr and splits it into the
+// column name and literal. Two-character operators are tested before their
+// single-character prefixes so ">=", "<=" and "!=" are matched whole.
+func splitComparison(expr string) (col, op, lit string, err error) {
+	for _, o := range []string{">=", "<=", "!=", "=", ">", "<"} {
+		if i := strings.Index(expr, o); i >= 0 {
+			col = strings.TrimSpace(expr[:i])
+			lit = strings.TrimSpace(expr[i+len(o):])
+			if col == "" || lit == "" {
+				return "", "", "", fmt.Errorf("parquet source: malformed filter %q (want 'column OP value')", expr)
+			}
+			return col, o, lit, nil
+		}
+	}
+	return "", "", "", fmt.Errorf("parquet source: filter %q must be a single comparison (column =|!=|>|>=|<|<= value)", expr)
+}
+
+// matchGo evaluates the predicate against a decoded Go value. A null value never
+// satisfies a comparison.
+func (p *parquetPredicate) matchGo(v interface{}) bool {
+	if v == nil {
+		return false
+	}
+	if p.litIsStr {
+		return cmpOrdered(toStr(v), p.litStr, p.op)
+	}
+	f, ok := toFloat64(v)
+	if !ok {
+		return false
+	}
+	return cmpOrdered(f, p.litNum, p.op)
+}
+
+// rowGroupMayMatch reports whether any row in rg could satisfy the predicate,
+// using the column's page-index min/max statistics. It is conservative: it
+// returns true whenever statistics are missing or unusable, so pruning never
+// drops a matching row. DECIMAL columns are never pruned (their scaled physical
+// statistics are not directly comparable to a plain literal); row-level
+// filtering still applies to them exactly.
+func (p *parquetPredicate) rowGroupMayMatch(rg parquetgo.RowGroup) bool {
+	if p.decScale >= 0 {
+		return true
+	}
+	chunks := rg.ColumnChunks()
+	if p.leafIndex < 0 || p.leafIndex >= len(chunks) {
+		return true
+	}
+	ci, err := chunks[p.leafIndex].ColumnIndex()
+	if err != nil {
+		return true // no page index → cannot prune
+	}
+	have := false
+	var minF, maxF float64
+	var minS, maxS string
+	for i := 0; i < ci.NumPages(); i++ {
+		if ci.NullPage(i) {
+			continue
+		}
+		mnv, mxv := ci.MinValue(i), ci.MaxValue(i)
+		if mnv.IsNull() || mxv.IsNull() {
+			continue
+		}
+		if p.litIsStr {
+			mn, mx := parquetValueToStr(mnv), parquetValueToStr(mxv)
+			if !have {
+				minS, maxS, have = mn, mx, true
+			} else {
+				if mn < minS {
+					minS = mn
+				}
+				if mx > maxS {
+					maxS = mx
+				}
+			}
+		} else {
+			mn, ok1 := parquetValueToFloat(mnv)
+			mx, ok2 := parquetValueToFloat(mxv)
+			if !ok1 || !ok2 {
+				return true
+			}
+			if !have {
+				minF, maxF, have = mn, mx, true
+			} else {
+				if mn < minF {
+					minF = mn
+				}
+				if mx > maxF {
+					maxF = mx
+				}
+			}
+		}
+	}
+	if !have {
+		return true
+	}
+	if p.litIsStr {
+		return rangeMayMatch(minS, maxS, p.litStr, p.op)
+	}
+	return rangeMayMatch(minF, maxF, p.litNum, p.op)
+}
+
+// cmpOrdered evaluates `a OP b` for any ordered type.
+func cmpOrdered[T int64 | float64 | string](a, b T, op string) bool {
+	switch op {
+	case ">":
+		return a > b
+	case ">=":
+		return a >= b
+	case "<":
+		return a < b
+	case "<=":
+		return a <= b
+	case "=":
+		return a == b
+	case "!=":
+		return a != b
+	}
+	return false
+}
+
+// rangeMayMatch reports whether the closed interval [min,max] could contain a
+// value satisfying `x OP lit`.
+func rangeMayMatch[T int64 | float64 | string](min, max, lit T, op string) bool {
+	switch op {
+	case ">":
+		return max > lit
+	case ">=":
+		return max >= lit
+	case "<":
+		return min < lit
+	case "<=":
+		return min <= lit
+	case "=":
+		return min <= lit && lit <= max
+	case "!=":
+		return !(min == max && min == lit)
+	}
+	return true
+}
+
+func toFloat64(v interface{}) (float64, bool) {
+	switch n := v.(type) {
+	case int64:
+		return float64(n), true
+	case int:
+		return float64(n), true
+	case int32:
+		return float64(n), true
+	case float64:
+		return n, true
+	case float32:
+		return float64(n), true
+	case record.Decimal:
+		f, err := strconv.ParseFloat(n.String(), 64)
+		return f, err == nil
+	case string:
+		f, err := strconv.ParseFloat(strings.TrimSpace(n), 64)
+		return f, err == nil
+	default:
+		return 0, false
+	}
+}
+
+func toStr(v interface{}) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return fmt.Sprintf("%v", v)
+}
+
+func parquetValueToFloat(v parquetgo.Value) (float64, bool) {
+	switch v.Kind() {
+	case parquetgo.Int32:
+		return float64(v.Int32()), true
+	case parquetgo.Int64:
+		return float64(v.Int64()), true
+	case parquetgo.Float:
+		return float64(v.Float()), true
+	case parquetgo.Double:
+		return v.Double(), true
+	default:
+		return 0, false
+	}
+}
+
+func parquetValueToStr(v parquetgo.Value) string {
+	if v.Kind() == parquetgo.ByteArray || v.Kind() == parquetgo.FixedLenByteArray {
+		return string(v.ByteArray())
+	}
+	return v.String()
 }
 
 func (s *parquetSource) Close() error {
@@ -359,11 +618,6 @@ func (s *parquetSource) Close() error {
 		return nil
 	}
 	s.closed = true
-	// Close the persistent sequential reader if it is still open mid-stream.
-	if s.seqReader != nil {
-		s.seqReader.Close()
-		s.seqReader = nil
-	}
 	return s.file.Close()
 }
 
@@ -439,26 +693,6 @@ func parquetTypeToRecord(f parquetgo.Field) record.ColumnType {
 		// it as TypeInt via Int64() would silently truncate the high 32 bits.
 		return record.TypeString
 	}
-}
-
-// extractRow converts a parquet Row (leaf-column-ordered values) into an
-// interface{} slice using the declared leaf column index mapping.
-// colIndices[i] is the leaf column index obtained from pfSchema.Lookup(),
-// which correctly indexes into the flat []Value that ReadRows returns. Decimal
-// columns (decScales[i] >= 0) decode into an exact record.Decimal.
-func (s *parquetSource) extractRow(row parquetgo.Row) []interface{} {
-	out := make([]interface{}, len(s.colIndices))
-	for i, colIdx := range s.colIndices {
-		if colIdx < len(row) {
-			v := row[colIdx]
-			if i < len(s.decScales) && s.decScales[i] >= 0 {
-				out[i] = parquetDecimalToGo(v, s.decScales[i])
-			} else {
-				out[i] = parquetValueToGo(v)
-			}
-		}
-	}
-	return out
 }
 
 // parquetValueToGo converts a parquet Value to a Go native type.

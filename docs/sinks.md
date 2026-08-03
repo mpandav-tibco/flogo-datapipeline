@@ -15,6 +15,7 @@ registered with `sink.Register(name, …)` ([`sink/sink.go`](../sink/sink.go)); 
 | [`csv`, `tsv`](sinks/csv.md) | delimited text, optional header |
 | [`jdbc`](sinks/jdbc.md) | bulk insert / upsert into PostgreSQL / MySQL / SQLite |
 | [`parquet`](sinks/parquet.md) | row-group-aligned Parquet, snappy/gzip/zstd |
+| [`avro`](sinks/avro.md) | row-oriented Avro OCF, snappy/deflate/zstandard/null |
 | [`jsonlines`, `ndjson`](sinks/jsonlines.md) | one JSON object per line |
 | [`kafka`](sinks/kafka.md) | producer with configurable acks & serialization |
 | [`s3`, `gcs`, `adls`](sinks/objstore.md) (+ `-sink`) | cloud object storage with key macros |

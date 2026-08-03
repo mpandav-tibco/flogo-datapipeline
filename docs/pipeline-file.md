@@ -121,6 +121,12 @@ Resume an interrupted run from the last saved source position.
 | `intervalRows` | `10000` | checkpoint every N rows |
 | `intervalSeconds` | `30` | …or every N seconds |
 | `deleteOnSuccess` | — | remove the checkpoint after a clean finish |
+| `key` | per-run id | stable key for single-instance streaming resume |
+| `path` | temp dir | **file** backend: directory for checkpoint files |
+| `addr` | `localhost:6379` | **redis** backend: host:port |
+| `passwordEnv` | — | **redis** backend: env var holding the password |
+| `keyPrefix` | `flogo:pipeline:ckpt` | **redis** backend: key namespace |
+| `ttlSeconds` | `604800` | **redis** backend: token expiry in seconds (7 days) |
 
 See [Reliability](reliability.md).
 
