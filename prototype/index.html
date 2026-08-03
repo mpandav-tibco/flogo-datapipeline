@@ -1,0 +1,1543 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Flogo Data Pipeline Studio — Prototype</title>
+<style>
+  :root{
+    --bg:#1e1e1e; --chrome:#252526; --chrome2:#2d2d2d; --abar:#333333; --tibco:#0081cb; --tibco2:#106cc8;
+    --edit:#f7f8fa; --line:#3a3d41; --lineL:#d7dbe0; --ink:#23272b; --body:#5b6169; --mute:#8a9099;
+    --sel:#094771; --accent:#2f6db3; --accent-soft:#e7f0fe; --focus:#0081cb;
+    --src:#2e7d46; --src-bg:#e6f4ea; --tf:#2f6db3; --tf-bg:#e7f0fe; --snk:#7a4fb0; --snk-bg:#f0e9fa;
+    --ctrl:#b06f00; --ctrl-bg:#fbf1dd; --dlq:#c1362f; --dlq-bg:#fbe9e7;
+    --ok:#2e7d46; --ok-bg:#e6f4ea; --run:#1f6feb; --run-bg:#e7f0fe; --warn:#b06f00; --warn-bg:#fbf1dd; --err:#c1362f; --err-bg:#fbe9e7;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{font-family:var(--sans);font-size:13px;color:#cccccc;background:var(--bg);overflow:hidden}
+  .app{display:grid;grid-template-rows:32px 1fr 22px;height:100vh}
+
+  /* title bar */
+  .titlebar{background:#323233;display:flex;align-items:center;gap:10px;padding:0 12px;color:#cfd2d6;font-size:12px;-webkit-user-select:none}
+  .titlebar .lights{display:flex;gap:8px}
+  .titlebar .lights i{width:12px;height:12px;border-radius:50%;display:inline-block}
+  .titlebar .tt{flex:1;text-align:center;color:#b7bcc2}
+  .titlebar .cmd{background:#3c3c3c;border:1px solid #4a4a4a;border-radius:6px;padding:3px 26px;color:#a9adb3;font-size:11px;cursor:pointer;min-width:340px;text-align:center}
+  .titlebar .cmd:hover{background:#454545}
+
+  .body{display:grid;grid-template-columns:48px 250px 1fr;min-height:0}
+  /* activity bar */
+  .abar{background:var(--abar);display:flex;flex-direction:column;align-items:center;gap:4px;padding:8px 0}
+  .abar .ai{width:48px;height:44px;display:grid;place-items:center;font-size:19px;color:#8b8f94;position:relative;cursor:pointer}
+  .abar .ai:hover{color:#e6e6e6}
+  .abar .ai.on{color:#fff}
+  .abar .ai.on::before{content:"";position:absolute;left:0;top:6px;bottom:6px;width:2px;background:#fff}
+  .abar .ai.flogo.on{color:#fc7e1b}.abar .ai.flogo.on::before{background:#fc7e1b}
+  .abar .sp{flex:1}
+
+  /* sidebar */
+  .side{background:var(--chrome);color:#cccccc;overflow:auto;border-right:1px solid #1b1b1b;display:flex;flex-direction:column}
+  .side .sh{padding:10px 16px 6px;font-size:11px;letter-spacing:.1em;color:#9da2a8;display:flex;justify-content:space-between;text-transform:uppercase}
+  .side .grp{padding:6px 12px 3px;font-size:11px;font-weight:700;color:#c9cdd2;display:flex;align-items:center;gap:6px;cursor:pointer;text-transform:uppercase;letter-spacing:.03em}
+  .side .grp .tw{color:#8a8f94;font-size:9px;width:10px}
+  .ti{display:flex;align-items:center;gap:7px;padding:4px 12px 4px 26px;color:#d0d3d7;cursor:pointer;font-size:13px}
+  .ti:hover{background:#2a2d2e}
+  .ti.on{background:var(--sel);color:#fff}
+  .ti .tc{width:15px;text-align:center;color:#8a8f94;flex:none;font-size:12px}
+  .ti.on .tc{color:#cfe6ff}
+  .ti .sub{margin-left:auto;font-size:10px;color:#7d828a}
+  .ti .dot{width:8px;height:8px;border-radius:50%;flex:none}
+
+  /* editor area */
+  .editor{display:flex;flex-direction:column;min-height:0;min-width:0;background:var(--edit);color:var(--ink)}
+  .etabs{display:flex;background:#ececec;border-bottom:1px solid var(--lineL);align-items:stretch;height:35px;flex:none}
+  .etab{padding:0 14px;display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--body);background:#f3f3f3;border-right:1px solid var(--lineL);cursor:pointer}
+  .etab.on{background:var(--edit);color:var(--ink);box-shadow:inset 0 2px 0 var(--tibco)}
+  .etab .md{width:8px;height:8px;border-radius:50%;background:#c9ccd1}
+  .etab .x{color:var(--mute);margin-left:4px}
+  .etoolbar{display:flex;align-items:center;gap:10px;padding:0 12px;border-bottom:1px solid var(--lineL);background:#fafbfc;height:42px;flex:none}
+  .vtabs{display:inline-flex;border:1px solid var(--lineL);border-radius:8px;overflow:hidden;background:#fff}
+  .vtabs span{padding:5px 12px;font-size:12px;color:var(--body);border-right:1px solid var(--lineL);cursor:pointer}
+  .vtabs span:last-child{border-right:none}
+  .vtabs span.on{background:var(--accent);color:#fff}
+  .grow{flex:1}
+  .badge{font-size:11px;font-weight:600;border-radius:20px;padding:2px 10px;display:inline-flex;align-items:center;gap:6px}
+  .badge::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor}
+  .badge.bounded{color:var(--ok);background:var(--ok-bg)} .badge.unbounded{color:var(--run);background:var(--run-bg)}
+  .badge.no::before{display:none}
+  .btn{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--lineL);background:#fff;color:var(--body);border-radius:7px;padding:5px 11px;font-size:12px;font-weight:600;cursor:pointer}
+  .btn:hover{border-color:var(--accent);color:var(--ink)}
+  .btn.run{background:var(--ok);border-color:var(--ok);color:#fff}
+  .btn.pri{background:var(--accent);border-color:var(--accent);color:#fff}
+  .chip{font-size:11px;font-weight:600;border-radius:20px;padding:2px 9px;display:inline-flex;align-items:center;gap:5px}
+  .chip::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor}
+  .chip.no::before{display:none}
+  .chip.ok{color:var(--ok);background:var(--ok-bg)} .chip.run{color:var(--run);background:var(--run-bg)}
+  .chip.warn{color:var(--warn);background:var(--warn-bg)} .chip.err{color:var(--err);background:var(--err-bg)} .chip.idle{color:var(--mute);background:#e9ebee}
+
+  /* editor main (palette | canvas | inspector) */
+  .emain{display:grid;grid-template-columns:172px 1fr 290px;flex:1;min-height:0;overflow:hidden}
+  .palette{background:#f3f4f6;border-right:1px solid var(--lineL);overflow:auto;padding:10px}
+  .palette .psearch{display:flex;align-items:center;gap:7px;background:#fff;border:1px solid var(--lineL);border-radius:7px;padding:5px 9px;margin-bottom:10px}
+  .palette .psearch:focus-within{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft)}
+  .palette .psearch .psi{color:var(--mute);font-size:12px}
+  .palette .psearch input{flex:1;min-width:0;border:none;outline:none;background:transparent;font-size:12px;color:var(--body);font-family:inherit}
+  .palette .psearch input::placeholder{color:var(--mute)}
+  .palette .psearch .pkb{font-family:var(--mono);font-size:10px;color:var(--mute);background:#f1f3f5;border-radius:4px;padding:1px 5px}
+  .palette .pg{font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--mute);margin:12px 2px 6px}
+  .pitem{display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px solid var(--lineL);border-radius:7px;background:#fff;margin-bottom:5px;font-size:12px;color:var(--body);cursor:grab}
+  .pitem:hover{border-color:var(--accent);color:var(--ink)}
+  .pico{width:19px;height:19px;border-radius:5px;flex:none;display:grid;place-items:center;color:#fff;font-size:10px;font-weight:700}
+  .pico.s{background:var(--src)}.pico.t{background:var(--tf)}.pico.c{background:var(--ctrl)}.pico.k{background:var(--snk)}.pico.d{background:var(--dlq)}
+
+  .canvaswrap{position:relative;overflow:auto;background:radial-gradient(circle at 1px 1px,#e2e5e9 1px,transparent 0) 0 0/20px 20px,#f7f8fa}
+  .ctool{position:absolute;top:10px;left:10px;right:10px;display:flex;gap:8px;z-index:6;pointer-events:none}
+  .ctool .mb{pointer-events:auto;background:#fff;border:1px solid var(--lineL);border-radius:7px;padding:4px 9px;font-size:11.5px;color:var(--body);font-weight:600;cursor:pointer}
+  .ctool .zlvl{pointer-events:auto;background:#fff;border:1px solid var(--lineL);border-radius:7px;padding:4px 8px;font-size:11px;color:var(--body);font-weight:600;cursor:pointer;min-width:42px;text-align:center;font-family:var(--mono)}
+  .canvas{position:relative;margin:44px auto 20px}
+  .wirehit{cursor:pointer}
+  .wirechip{position:absolute;transform:translate(-50%,-50%);background:var(--accent);color:#fff;font-size:10px;font-weight:600;padding:2px 7px;border-radius:9px;white-space:nowrap;pointer-events:none;box-shadow:0 1px 4px rgba(0,0,0,.22);z-index:5}
+  .node.off{opacity:.46}
+  .ctxmenu{position:fixed;z-index:100;background:#fff;border:1px solid var(--lineL);border-radius:9px;box-shadow:0 8px 28px rgba(0,0,0,.18);padding:5px;min-width:176px;font-size:12.5px}
+  .ctxitem{display:flex;align-items:center;gap:9px;padding:6px 9px;border-radius:6px;cursor:pointer;color:var(--body)}
+  .ctxitem:hover{background:var(--accent-soft)}
+  .ctxitem.danger{color:var(--err)} .ctxitem.danger:hover{background:var(--err-bg)}
+  .ctxitem .ci{width:16px;text-align:center;opacity:.8}
+  .ctxsep{height:1px;background:var(--lineL);margin:4px 2px}
+  /* board-04 config panel: faithful 3-column mapper (ported from wireframe) */
+  .mapedit{display:flex;flex-direction:column;height:100%;min-height:430px;background:#fff;overflow:hidden}
+  .mapbar{display:flex;align-items:center;gap:10px;padding:9px 12px;border-bottom:1px solid var(--lineL);flex-wrap:wrap;flex:none}
+  .mtabs2{display:inline-flex;border:1px solid var(--lineL);border-radius:8px;overflow:hidden;background:#fff}
+  .mtabs2 span{padding:6px 13px;font-size:12px;color:var(--body);border-right:1px solid var(--lineL);cursor:pointer}
+  .mtabs2 span:last-child{border-right:none} .mtabs2 span.on{background:var(--accent);color:#fff}
+  .modeseg{display:inline-flex;border:1px solid var(--lineL);border-radius:8px;overflow:hidden;background:#fff}
+  .modeseg span{padding:5px 11px;font-size:11.5px;color:var(--body);border-right:1px solid var(--lineL);display:inline-flex;align-items:center;gap:5px;cursor:pointer}
+  .modeseg span:last-child{border-right:none} .modeseg span.on{background:var(--accent-soft);color:var(--accent);font-weight:600}
+  .mapper3{display:grid;grid-template-columns:250px 1fr 250px;flex:1;min-height:0}
+  .mapper2{display:grid;grid-template-columns:250px 1fr;flex:1;min-height:0}
+  .mcol{border-right:1px solid var(--lineL);display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden}
+  .mcol:last-child{border-right:none}
+  .mcolh{font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute);padding:9px 12px;border-bottom:1px solid var(--lineL);background:#fafbfc;display:flex;justify-content:space-between;flex:none}
+  .mcb{padding:8px;overflow:auto}
+  .tree .tnode{font-size:12.5px;color:var(--ink);padding:5px 6px;font-weight:600;display:flex;align-items:center;gap:6px}
+  .tree .tnode .tk{font-size:9px;color:#fff;background:var(--src);border-radius:4px;padding:1px 5px;font-weight:700;margin-left:auto}
+  .tree .tnode .tk.j{background:var(--tf)} .tree .tnode .tk.p{background:var(--mute)}
+  .tree .tleaf{font-size:11.5px;color:var(--body);padding:4px 6px 4px 22px;font-family:var(--mono);display:flex;gap:8px;border-radius:6px;cursor:grab}
+  .tree .tleaf:hover{background:var(--accent-soft);color:var(--ink)}
+  .tree .tleaf .ty{margin-left:auto;font-size:9.5px;color:var(--mute);font-family:var(--sans)}
+  .aggrid{width:100%;border-collapse:collapse}
+  .aggrid th{font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--mute);text-align:left;padding:7px 10px;border-bottom:1px solid var(--lineL);background:#fafbfc}
+  .aggrid td{padding:6px 10px;border-bottom:1px solid var(--lineL);font-size:12px;vertical-align:middle}
+  .aggrid tr{cursor:pointer} .aggrid tr.sel td{background:var(--accent-soft)}
+  .aggrid .agfld{font-weight:600;color:var(--ink)} .aggrid .agty{color:var(--mute);font-size:11px}
+  .direct{font-family:var(--mono);font-size:11px;color:#1f6a3d;border:1px solid #cfe6d6;background:var(--src-bg);border-radius:6px;padding:4px 8px;display:inline-flex;align-items:center;gap:6px;max-width:100%;overflow:hidden;white-space:nowrap}
+  .direct .lk{color:var(--src);font-weight:700;flex:none}
+  .autob{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--src);background:var(--src-bg);border-radius:5px;padding:1px 5px;margin-left:6px}
+  .exprc{font-family:var(--mono);font-size:11px;color:#33415a;border:1px solid var(--lineL);border-radius:6px;padding:4px 8px;background:#fff;display:inline-flex;align-items:center;gap:6px;max-width:100%;overflow:hidden;white-space:nowrap}
+  .exprc.empty{color:var(--mute);border-style:dashed}
+  .exprc .fx{color:var(--accent);font-weight:700;font-style:italic;flex:none}
+  .exprbox{border:1px solid var(--accent);border-radius:8px;background:#fff;font-family:var(--mono);font-size:12px;padding:9px;color:#33415a;min-height:60px;margin-bottom:10px;line-height:1.5;white-space:pre-wrap;word-break:break-word}
+  .fncat{font-size:11.5px;color:var(--body);padding:6px 9px;border:1px solid var(--lineL);border-radius:7px;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;cursor:pointer}
+  .fncat .cnt{font-size:10px;color:var(--mute)}
+  .fnchip{display:inline-block;font-family:var(--mono);font-size:10.5px;color:#334;background:#eef0f2;border-radius:5px;padding:2px 7px;margin:2px 3px 0 0;cursor:pointer}
+  svg.wires{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+  .node{position:absolute;width:152px;background:#fff;border:1px solid var(--lineL);border-radius:10px;box-shadow:0 1px 2px rgba(20,25,30,.06),0 6px 16px rgba(20,25,30,.08);cursor:pointer;z-index:3}
+  .node.sel{outline:2px solid var(--accent);outline-offset:1px}
+  .node .nh{display:flex;align-items:center;gap:7px;padding:6px 9px;border-bottom:1px solid var(--lineL);border-radius:10px 10px 0 0}
+  .node .nico{width:18px;height:18px;border-radius:5px;display:grid;place-items:center;color:#fff;font-size:10px;font-weight:700;flex:none}
+  .node .nk{font-size:9px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute)}
+  .node .nst{margin-left:auto;width:9px;height:9px;border-radius:50%;background:#c4c9cf}
+  .node .nst.ok{background:var(--ok)} .node .nst.run{background:var(--run);animation:pulse .5s infinite} .node .nst.warn{background:var(--warn)} .node .nst.err{background:var(--err)}
+  .node .nb{padding:6px 9px}
+  .node .nnm{font-size:12.5px;font-weight:600;color:var(--ink);line-height:1.2}
+  .node .nmeta{font-size:10px;color:var(--mute);font-family:var(--mono);margin-top:2px}
+  .node .ncount{position:absolute;top:-9px;right:-9px;background:#1c2126;color:#fff;border-radius:20px;font:600 10px var(--mono);padding:1px 7px}
+  .node.src .nh{background:var(--src-bg)}.node.src .nico{background:var(--src)}.node.src{border-color:#bfe0c9}
+  .node.transform .nh{background:var(--tf-bg)}.node.transform .nico{background:var(--tf)}
+  .node.control .nh{background:var(--ctrl-bg)}.node.control .nico{background:var(--ctrl)}.node.control{border-color:#ecd9a8}
+  .node.sink .nh{background:var(--snk-bg)}.node.sink .nico{background:var(--snk)}.node.sink{border-color:#dcc9f0}
+  .node.dlq .nh{background:var(--dlq-bg)}.node.dlq .nico{background:var(--dlq)}.node.dlq{border-color:#f0c9c6}
+  .port{position:absolute;width:11px;height:11px;border-radius:50%;background:#fff;border:2px solid #9aa4b0;z-index:4}
+  .port.err{border-color:var(--dlq)}
+  .port .pl{position:absolute;font:600 9px var(--sans);color:var(--body);white-space:nowrap;top:-3px;left:15px}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+
+  /* code view */
+  .codeview{grid-column:1 / -1;background:#fbfcfd;overflow:auto;padding:14px 18px;font-family:var(--mono);font-size:12px;line-height:1.6;color:#33415a;white-space:pre}
+
+  /* inspector */
+  .insp{background:#fff;border-left:1px solid var(--lineL);overflow:auto;display:flex;flex-direction:column}
+  .insp .ih{display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid var(--lineL)}
+  .insp .ik{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;border-radius:6px;padding:2px 7px}
+  .insp .inm{font-weight:600;font-size:13px}
+  .insp .itabs{display:flex;gap:2px;padding:8px 10px 0;border-bottom:1px solid var(--lineL)}
+  .insp .itabs span{font-size:12px;padding:5px 9px;color:var(--body);border-bottom:2px solid transparent;cursor:pointer}
+  .insp .itabs span.on{color:var(--accent);border-bottom-color:var(--accent);font-weight:600}
+  .insp .ib{padding:12px;overflow:auto}
+  .insp .empty{color:var(--mute);text-align:center;padding:40px 16px;font-size:12.5px}
+  .fld{margin-bottom:11px}
+  .fld .k{font-size:11px;color:var(--mute);text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px}
+  .fld .v{border:1px solid var(--lineL);border-radius:7px;padding:7px 9px;font-size:12.5px;color:var(--ink);background:#fff}
+  .fld .v.mono{font-family:var(--mono);font-size:11.5px}
+  .rcard{border:1px solid var(--lineL);border-radius:7px;padding:7px 9px;margin-bottom:6px;background:#fafbfc;font-size:12px}
+  .addrow{border:1px dashed var(--lineL);border-radius:7px;padding:6px;text-align:center;font-size:12px;color:var(--accent);font-weight:600;cursor:pointer}
+
+  /* panel */
+  .panel{height:210px;border-top:1px solid var(--lineL);background:#fff;display:flex;flex-direction:column;min-height:0;position:relative;flex:none}
+  .panel.cfg{height:48vh}
+  .pbody.cfgbody{padding:0;display:flex;flex-direction:column;min-height:0}
+  .cfgbody .mcb{min-height:0}
+  .mcol .mcb{flex:1}
+  .presize{position:absolute;top:0;left:0;right:0;height:6px;cursor:ns-resize;z-index:9}
+  .presize::after{content:"";position:absolute;top:2px;left:50%;transform:translateX(-50%);width:34px;height:3px;border-radius:3px;background:var(--lineL);opacity:0;transition:opacity .12s}
+  .presize:hover::after{opacity:1}
+  .panel.termh{height:40vh}
+  .pbody.termbody{padding:0}
+  .term{display:flex;flex-direction:column;height:100%;background:#1e1e1e;font-family:var(--mono);font-size:12px;color:#d4d4d4}
+  .termout{flex:1;overflow:auto;padding:8px 10px;min-height:0}
+  .term .tl{white-space:pre-wrap;line-height:1.55;word-break:break-word}
+  .termin{display:flex;align-items:center;gap:7px;padding:5px 10px;border-top:1px solid #333;flex:none}
+  .termps{color:#4ec9b0;white-space:nowrap;flex:none}
+  .termin input{flex:1;min-width:0;background:transparent;border:none;outline:none;color:#d4d4d4;font-family:var(--mono);font-size:12px}
+  .term .ok{color:#4ec36b} .term .err{color:#f48771} .term .mut{color:#8a8a8a} .term .warn{color:#e0a63a} .term b{color:#fff;font-weight:700}
+  .ptabs{display:flex;align-items:center;gap:0;border-bottom:1px solid var(--lineL);background:#fafbfc;padding:0 8px}
+  .ptab{padding:8px 12px;font-size:11.5px;text-transform:uppercase;letter-spacing:.03em;color:var(--body);border-bottom:2px solid transparent;cursor:pointer}
+  .ptab.on{color:var(--ink);border-bottom-color:var(--tibco);font-weight:700}
+  .ptab .cnt{color:var(--mute);font-weight:400;margin-left:4px}
+  .pbody{flex:1;overflow:auto;padding:10px 12px}
+  .grid{width:100%;border-collapse:collapse;font-size:12px}
+  .grid th{text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--mute);padding:5px 9px;border-bottom:1px solid var(--lineL);background:#fafbfc;position:sticky;top:0}
+  .grid td{padding:5px 9px;border-bottom:1px solid #eef0f2}
+  .grid td.mono,.grid td.num{font-family:var(--mono);font-size:11px;color:#33415a}
+  .grid td.num{text-align:right}
+  .grid .fld0{font-weight:600;color:var(--ink)}
+  .rlog{font-family:var(--mono);font-size:11.5px;line-height:1.6;color:#3a4048}
+  .rlog .t{color:var(--mute)} .rlog .ok{color:var(--ok)} .rlog .w{color:var(--warn)} .rlog .e{color:var(--err)} .rlog .i{color:var(--run)}
+  .reason{font-size:10.5px;font-weight:600;color:var(--err);background:var(--err-bg);border-radius:6px;padding:2px 7px}
+  .subtab{display:inline-flex;border:1px solid var(--lineL);border-radius:7px;overflow:hidden;margin-bottom:10px}
+  .subtab span{padding:4px 10px;font-size:11px;color:var(--body);border-right:1px solid var(--lineL);cursor:pointer}
+  .subtab span:last-child{border-right:none}.subtab span.on{background:var(--accent-soft);color:var(--accent);font-weight:600}
+  .keyrow{display:flex;align-items:center;gap:6px;margin-bottom:6px}
+  .keyrow .kc{flex:1;min-width:0;background:#fff;border:1px solid var(--lineL);border-radius:6px;padding:5px 8px;font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .keyrow .keq{color:var(--mute);font-weight:700}
+  .keyrow .kx{color:var(--mute);cursor:pointer;font-size:11px}
+  .keyrow .kx:hover{color:var(--err)}
+  .routerow{display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px solid var(--lineL);border-radius:7px;background:#fff;margin-bottom:5px}
+  .routerow.def{background:var(--panel2,#f7f8fa);border-style:dashed}
+  .routerow .rnum{width:15px;text-align:center;font-size:11px;color:var(--mute);font-family:var(--mono);flex:none}
+  .routerow .rcond{flex:1;min-width:0;font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .routerow .rto{font-size:10.5px;white-space:nowrap;flex:none}
+  .trow{display:flex;align-items:center;gap:10px;padding:7px 4px;border-bottom:1px solid #eef0f2;font-family:var(--mono);font-size:11.5px}
+  .trow .td{width:10px;height:10px;border-radius:50%;background:#c4c9cf;flex:none}
+  .trow.run .td{background:var(--run);animation:pulse .5s infinite}.trow.pass .td{background:var(--ok)}.trow.fail .td{background:var(--err)}
+  .trow .ts{margin-left:auto;font-size:10.5px;font-weight:700;color:var(--mute)} .trow.pass .ts{color:var(--ok)}.trow.fail .ts{color:var(--err)}
+
+  /* status bar */
+  .statusbar{background:var(--tibco);color:#fff;display:flex;align-items:center;gap:16px;padding:0 12px;font-size:11.5px}
+  .statusbar .s{display:flex;align-items:center;gap:5px;cursor:default}
+  .statusbar .grow{flex:1}
+
+  /* command palette + modal */
+  .scrim{position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:100;display:none}
+  .scrim.on{display:block}
+  .cmdp{position:fixed;top:64px;left:50%;transform:translateX(-50%);width:620px;max-width:92vw;background:#252526;border:1px solid #454545;border-radius:8px;box-shadow:0 16px 50px rgba(0,0,0,.5);z-index:101;overflow:hidden;display:none}
+  .cmdp.on{display:block}
+  .cmdp input{width:100%;background:#3c3c3c;border:none;border-bottom:1px solid #4a4a4a;color:#e6e6e6;padding:11px 14px;font-size:13px;outline:none}
+  .cmdp .list{max-height:300px;overflow:auto}
+  .cmdp .ci{padding:8px 14px;color:#cccccc;font-size:13px;cursor:pointer;display:flex;gap:10px;align-items:center}
+  .cmdp .ci:hover,.cmdp .ci.on{background:#04395e}
+  .cmdp .ci .ico{color:#8a9099;width:16px;text-align:center}
+  .cmdp .ci .kb{margin-left:auto;font-size:10.5px;color:#8a9099;font-family:var(--mono)}
+  .modal{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:640px;max-width:94vw;max-height:82vh;overflow:auto;background:var(--edit);color:var(--ink);border-radius:10px;box-shadow:0 20px 60px rgba(0,0,0,.5);z-index:101;display:none}
+  .modal.on{display:block}
+  .modal .mh{display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid var(--lineL);font-weight:700;font-size:15px}
+  .modal .mh .x{margin-left:auto;color:var(--mute);cursor:pointer;font-size:16px}
+  .modal .mc{padding:16px 18px}
+  .tmpl{border:1px solid var(--lineL);border-radius:9px;padding:11px 13px;margin-bottom:9px;cursor:pointer;background:#fff}
+  .tmpl:hover{border-color:var(--accent)}
+  .tmpl b{font-size:13px} .tmpl .fl{font-size:10.5px;color:var(--mute);font-family:var(--mono);margin-top:4px}
+  .card{border:1px solid var(--lineL);border-radius:9px;padding:12px;background:#fff;margin-bottom:10px}
+  .card h4{margin:0 0 7px;font-size:13px}
+  .card p{margin:0;color:var(--body);font-size:12.5px}
+  .metric{border:1px solid var(--lineL);border-radius:9px;padding:10px 12px;background:#fff}
+  .metric .ml{font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--mute)}
+  .metric .mv{font:700 20px var(--sans);color:var(--ink);margin:2px 0}
+  .g3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+  .g2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .toast{position:fixed;bottom:34px;right:16px;background:#252526;color:#e6e6e6;border:1px solid #454545;border-radius:8px;padding:10px 14px;font-size:12.5px;z-index:120;box-shadow:0 8px 24px rgba(0,0,0,.4);display:none}
+  .toast.on{display:block;animation:tin .25s}
+  @keyframes tin{from{opacity:0;transform:translateY(8px)}to{opacity:1}}
+  .muted{color:var(--mute)}
+
+  /* doc views */
+  .panel.hidden{display:none}
+  .docview{grid-column:1 / -1;overflow:auto;padding:18px 22px 44px;background:var(--edit);color:var(--ink)}
+  .docview .dtitle{font-size:16px;font-weight:800;margin:0 0 3px}
+  .docview .dsub{color:var(--body);font-size:12.5px;margin:0 0 16px}
+  .docview .sec{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute);margin:18px 0 8px;font-weight:800}
+  .docview .card h4{display:flex;align-items:center;gap:6px}
+  .kbd{font:600 11px var(--mono);border:1px solid var(--lineL);border-bottom-width:2px;border-radius:5px;padding:2px 7px;background:#fff;min-width:34px;text-align:center;display:inline-block}
+  .diff{border:1px solid var(--lineL);border-radius:8px;overflow:hidden;margin:2px 0}
+  .diff .ln{padding:1px 12px;white-space:pre;font-family:var(--mono);font-size:12px;line-height:1.65}
+  .diff .add{background:var(--ok-bg);color:#1c6b39}.diff .del{background:var(--err-bg);color:#a3302a}.diff .ctx{color:var(--body)}
+  .chat{display:flex;flex-direction:column;gap:9px}
+  .chat .msg{max-width:82%;padding:9px 12px;border-radius:11px;font-size:12.5px;line-height:1.5}
+  .chat .msg.u{align-self:flex-end;background:var(--accent);color:#fff;border-bottom-right-radius:3px}
+  .chat .msg.a{align-self:flex-start;background:#fff;border:1px solid var(--lineL);border-bottom-left-radius:3px}
+  .tl{display:flex;gap:6px;align-items:flex-end}
+  .tl .win{flex:1;height:58px;background:var(--tf-bg);border:1px solid #bcd0ea;border-radius:8px;display:flex;flex-direction:column;justify-content:center;align-items:center;color:var(--tf);font-weight:700;font-size:12px}
+  .tl .win small{color:var(--body);font-weight:400;font-family:var(--mono);font-size:10px}
+  .tl .late{align-self:center;background:var(--warn-bg);color:var(--warn);border-radius:8px;padding:6px 9px;font-size:11px;font-weight:700;white-space:nowrap}
+  .ik{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;border-radius:6px;padding:2px 7px;display:inline-block}
+  .mgraph{display:flex;align-items:center;gap:5px;flex-wrap:wrap;justify-content:center;padding:8px 0}
+  .mnode{border:1px solid var(--lineL);border-radius:9px;padding:6px 10px;background:#fff;min-width:74px;text-align:center}
+  .mnode .mk{font-size:9px;text-transform:uppercase;letter-spacing:.05em;color:var(--mute)}
+  .mnode .mn{font-size:12px;font-weight:700;color:var(--ink);margin-top:1px}
+  .mnode.add{border-color:var(--ok);box-shadow:0 0 0 2px var(--ok-bg)}.mnode.add .mk{color:var(--ok)}
+  .mnode.chg{border-color:var(--warn);box-shadow:0 0 0 2px var(--warn-bg)}.mnode.chg .mk{color:var(--warn)}
+  .mnode.del{border-color:var(--err);box-shadow:0 0 0 2px var(--err-bg);opacity:.65}.mnode.del .mk{color:var(--err)}
+  .marrow{width:18px;height:2px;background:#c4ccd4;position:relative;flex:none}
+  .marrow::after{content:"";position:absolute;right:-1px;top:-3px;border:4px solid transparent;border-left-color:#c4ccd4}
+  .difframe{border:1px solid var(--lineL);border-radius:9px;overflow:hidden}
+  .difframe .dfh{display:flex;align-items:center;gap:8px;padding:8px 11px;border-bottom:1px solid var(--lineL);background:#fafbfc;font-size:12px;font-weight:600}
+  .dl{display:flex;font-family:var(--mono);font-size:11.5px;line-height:1.7}
+  .dl .g{width:22px;text-align:center;color:var(--mute);flex:none;-webkit-user-select:none;user-select:none}
+  .dl .tx{flex:1;white-space:pre;padding-right:8px}
+  .dl.add{background:var(--ok-bg)}.dl.add .g{color:var(--ok);font-weight:700}
+  .dl.del{background:var(--err-bg)}.dl.del .g{color:var(--err);font-weight:700}
+  .lgnd{display:flex;gap:14px;font-size:11px;color:var(--body);margin-top:10px}
+  .lgnd b{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:4px;vertical-align:middle}
+  .node.drag{opacity:.9;box-shadow:0 10px 26px rgba(20,25,30,.2);z-index:9;cursor:grabbing}
+  .maprow{display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid #eef0f2;font-size:11.5px}
+  .maprow .mf{font-family:var(--mono);color:var(--body);min-width:98px}
+  .maprow .ma{color:var(--tf);font-weight:700}
+  .maprow .mt{font-family:var(--mono);font-weight:600;color:var(--ink)}
+  .maprow.un .mt{color:var(--mute);font-weight:400}
+  .srcwrap{display:flex;flex-wrap:wrap;gap:5px;padding:8px;border:1px dashed var(--lineL);border-radius:8px;background:#f7f8fa}
+  .srcchip{background:#fff;border:1px solid var(--lineL);border-radius:6px;padding:3px 8px;font-size:11px;color:var(--body);cursor:grab}
+  .srcchip:hover{border-color:var(--accent);color:var(--accent)}
+  /* usability: collapse / rails / panel tools */
+  .grp{-webkit-user-select:none;user-select:none}
+  .grp .tw{display:inline-block;width:10px}
+  .side .sh{-webkit-user-select:none;user-select:none}
+  .insp.rail{width:34px;min-width:34px;align-items:stretch;padding:0}
+  .railbtn{writing-mode:vertical-rl;cursor:pointer;color:var(--body);font-size:11px;font-weight:700;letter-spacing:.03em;display:flex;align-items:center;justify-content:center;gap:6px;width:100%}
+  .railbtn:hover{color:var(--accent);background:#f4f6f8}
+  .insp .itools{margin-left:auto;display:flex;align-items:center;gap:1px}
+  .insp .itool{color:var(--mute);cursor:pointer;font-size:13px;padding:2px 6px;border-radius:5px;line-height:1}
+  .insp .itool:hover{background:#eef0f2;color:var(--ink)}
+  .pt-tools{margin-left:auto;display:flex;align-items:center;gap:1px;padding-right:4px}
+  .pt-tools .ptool{padding:4px 7px;color:var(--mute);cursor:pointer;border-radius:5px;font-size:13px;line-height:1}
+  .pt-tools .ptool:hover{background:#eef0f2;color:var(--ink)}
+  .panel.collapsed{height:auto}
+  .panel.collapsed .pbody{display:none}
+  .panel.max{height:58vh}
+  /* composability + design-time problems (Flogo-3.x adoption) */
+  .fld .k{display:flex;align-items:center;gap:6px}
+  .wt{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--mute);background:#eef0f2;border-radius:5px;padding:1px 6px;margin-left:auto}
+  .wt.sec{background:var(--err-bg);color:var(--err)}
+  .slot{border:1px dashed var(--accent);border-radius:7px;padding:5px 7px;background:var(--accent-soft)}
+  .linkchip{display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);font-size:11px;border-radius:20px;padding:2px 9px;font-weight:600}
+  .linkchip.conn{color:var(--snk);background:var(--snk-bg)}
+  .linkchip.secret{color:var(--err);background:var(--err-bg)}
+  .linkchip.prop{color:var(--accent);background:var(--accent-soft)}
+  .linkchip.schema{color:#106cc8;background:var(--tf-bg)}
+  .rcard .rh{display:flex;align-items:center;gap:6px}
+  .prob{display:flex;align-items:flex-start;gap:8px;padding:7px 6px;border-bottom:1px solid #eef0f2;font-size:12px;cursor:pointer}
+  .prob:hover{background:#f6f8fa}
+  .prob .pi{width:14px;flex:none;font-weight:700;text-align:center}
+  .prob.err .pi{color:var(--err)} .prob.warn .pi{color:var(--warn)}
+  .prob .pl{color:var(--body)} .prob .pl b{color:var(--ink)}
+  .prob .pw{margin-left:auto;font-size:10px;color:var(--mute);font-family:var(--mono);white-space:nowrap}
+  .node .nbadge{position:absolute;top:-9px;left:-9px;width:18px;height:18px;border-radius:50%;display:grid;place-items:center;color:#fff;font-size:11px;font-weight:700;box-shadow:0 2px 5px rgba(0,0,0,.22);z-index:6}
+  .node .nbadge.err{background:var(--err)} .node .nbadge.warn{background:var(--warn)}
+  .node.nprob.err{border-color:var(--err);box-shadow:0 0 0 2px var(--err-bg),0 6px 16px rgba(20,25,30,.08)}
+  .node.nprob.warn{border-color:var(--warn)}
+  .reg td.grp{background:#eef0f2;font-weight:700;color:var(--ink)}
+  .cver{font:700 9.5px var(--mono);color:#fff;background:var(--tf);border-radius:5px;padding:1px 6px}
+  .linkbtn{flex:none;width:22px;height:22px;border-radius:6px;display:inline-grid;place-items:center;border:1px solid var(--lineL);background:#fff;color:var(--mute);font-size:11px;cursor:pointer}
+  .linkbtn:hover{border-color:var(--accent);color:var(--accent)}
+  .picker{border:1px solid var(--lineL);border-radius:9px;background:#fff;box-shadow:0 12px 28px rgba(20,25,30,.18);overflow:hidden}
+  .picker .ph{padding:7px 10px;font-size:11px;color:var(--mute);border-bottom:1px solid var(--lineL);background:#f6f7f9}
+  .picker .pi{display:flex;align-items:center;gap:8px;padding:7px 10px;font-size:12px;color:var(--ink);border-bottom:1px solid #eef0f2;cursor:pointer}
+  .picker .pi:last-child{border-bottom:none}
+  .picker .pi:hover{background:var(--accent-soft)}
+  .picker .pi .pt{font-family:var(--mono);font-size:11px}
+  .picker .pi .pty{margin-left:auto;font-size:9.5px;color:var(--mute);font-family:var(--mono)}
+  .picker .pi.new{color:var(--accent);font-weight:600}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="titlebar">
+    <span class="lights"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></span>
+    <span class="tt">Data Pipeline Studio — <b id="ttname">enrich-route-load.datapipeline</b></span>
+    <span class="cmd" id="cmdopen">⌘⇧P&nbsp;&nbsp;Data Pipeline: run a command…</span>
+    <span class="tt"></span>
+  </div>
+
+  <div class="body">
+    <div class="abar" id="abar">
+      <span class="ai" data-view="explorer" title="Explorer">☰</span>
+      <span class="ai" data-view="search" title="Search">⌕</span>
+      <span class="ai" data-view="scm" title="Source Control">⑂</span>
+      <span class="ai" data-view="run" title="Run">▷</span>
+      <span class="ai flogo on" data-view="pipeline" title="Data Pipeline">◈</span>
+      <span class="ai" data-view="ai" title="AI Copilot">✨</span>
+      <span class="sp"></span>
+      <span class="ai" data-view="settings" title="Settings">⚙</span>
+    </div>
+    <div class="side" id="side"></div>
+    <div class="editor" id="editor">
+      <div class="etabs" id="etabs"></div>
+      <div class="etoolbar" id="etoolbar"></div>
+      <div class="emain" id="emain"></div>
+      <div class="panel" id="panel"></div>
+    </div>
+  </div>
+
+  <div class="statusbar" id="statusbar"></div>
+</div>
+
+<div class="scrim" id="scrim"></div>
+<div class="cmdp" id="cmdp"><input id="cmdinput" placeholder="Type a command…" /><div class="list" id="cmdlist"></div></div>
+<div class="modal" id="modal"></div>
+<div class="toast" id="toast"></div>
+
+<script>
+/* ============================ MOCK BACKEND ============================ */
+const DB = {
+  connections:[
+    {id:'pg-warehouse',type:'jdbc',icon:'▣',color:'#2f6db3',meta:'jdbc · postgres · warehouse.internal:5432',tested:true},
+    {id:'kafka-prod',type:'kafka',icon:'K',color:'#7a4fb0',meta:'kafka · SASL_SSL · 3 brokers',tested:true},
+    {id:'s3-lake',type:'s3',icon:'◇',color:'#2e7d46',meta:'s3 · eu-west-1 · curated/',tested:true},
+  ],
+  runs:[
+    {t:'10:42',pipe:'enrich-route-load',status:'completed',dur:'4m 12s',rows:'2.0M',dq:'99.2%'},
+    {t:'09:15',pipe:'daily-cdc-load',status:'partial',dur:'11m',rows:'480k',dq:'97.1%'},
+    {t:'08:00',pipe:'orders-quality',status:'completed',dur:'40s',rows:'120k',dq:'100%'},
+  ],
+  pipelines:{
+    'enrich-route-load':{
+      id:'enrich-route-load', shape:'bounded', mode:'etl',
+      nodes:[
+        {id:'src_orders',kind:'src',type:'csv',ico:'C',name:'orders.csv',x:16,y:60,meta:'csv · header · 12 cols',out:['rows'],count:'2.0M'},
+        {id:'src_cust',kind:'src',type:'jdbc',ico:'J',name:'customers',x:16,y:420,meta:'jdbc · pg · ref',out:['rows'],count:'48k'},
+        {id:'join',kind:'transform',type:'join',ico:'⨝',name:'enrich customer',x:210,y:210,meta:'left.cust_id = right.id',in:['left','right'],out:['rows'],count:'2.0M'},
+        {id:'validate',kind:'transform',type:'validate',ico:'✓',name:'Validate · DQ',x:410,y:250,meta:'route rejects → DLQ',in:['in'],out:['pass','reject'],count:'1.98M'},
+        {id:'router',kind:'control',type:'router',ico:'⋔',name:'Router · by region',x:610,y:180,meta:'3 routes · first-match',in:['in'],out:['eu','us','rest']},
+        {id:'snk_eu',kind:'sink',type:'s3',ico:'◇',name:'lake / EU',x:790,y:60,meta:'s3 · parquet',in:['in'],count:'610k'},
+        {id:'snk_us',kind:'sink',type:'jdbc',ico:'▣',name:'warehouse / US',x:790,y:190,meta:'jdbc · upsert',in:['in'],count:'1.1M'},
+        {id:'snk_kafka',kind:'sink',type:'kafka',ico:'K',name:'events / rest',x:790,y:320,meta:'kafka · enriched',in:['in'],count:'270k'},
+        {id:'dlq',kind:'dlq',type:'jdbc',ico:'⚠',name:'orders_dlq',x:610,y:440,meta:'jdbc · +reason',in:['in'],count:'18k',st:'warn'},
+      ],
+      edges:[
+        ['src_orders','rows','join','left'],['src_cust','rows','join','right'],
+        ['join','rows','validate','in'],['validate','pass','router','in'],['validate','reject','dlq','in','err'],
+        ['router','eu','snk_eu','in'],['router','us','snk_us','in'],['router','rest','snk_kafka','in'],
+      ],
+    },
+    'orders-quality':{
+      id:'orders-quality', shape:'bounded', mode:'etl',
+      nodes:[
+        {id:'src',kind:'src',type:'csv',ico:'C',name:'orders.csv',x:40,y:150,meta:'csv · 10 rows',out:['rows'],count:'10'},
+        {id:'cast',kind:'transform',type:'cast',ico:'ƒ',name:'cast',x:250,y:150,meta:'amount→decimal(2)',in:['in'],out:['rows'],count:'10'},
+        {id:'val',kind:'transform',type:'validate',ico:'✓',name:'Validate · 5 rules',x:460,y:170,meta:'onViolation: route',in:['in'],out:['pass','reject'],count:'4'},
+        {id:'snk',kind:'sink',type:'jsonl',ico:'▤',name:'curated.jsonl',x:680,y:110,meta:'jsonlines',in:['in'],count:'3'},
+        {id:'rej',kind:'dlq',type:'csv',ico:'⚠',name:'rejected.csv',x:680,y:280,meta:'csv · +reason',in:['in'],count:'6',st:'warn'},
+      ],
+      edges:[['src','rows','cast','in'],['cast','rows','val','in'],['val','pass','snk','in'],['val','reject','rej','in','err']],
+    },
+    'daily-cdc-load':{
+      id:'daily-cdc-load', shape:'unbounded', mode:'etl',
+      nodes:[
+        {id:'src',kind:'src',type:'kafka',ico:'K',name:'orders-topic',x:40,y:150,meta:'kafka · mode:streaming',out:['rows'],count:'∞'},
+        {id:'win',kind:'transform',type:'window',ico:'⧖',name:'window · 5min',x:250,y:150,meta:'tumbling · region',in:['in'],out:['rows'],count:'—'},
+        {id:'map',kind:'transform',type:'mapper',ico:'ƒ',name:'map · rollup',x:460,y:150,meta:'sum(amount)',in:['in'],out:['rows'],count:'—'},
+        {id:'snk',kind:'sink',type:'jdbc',ico:'▣',name:'metrics table',x:680,y:150,meta:'jdbc · upsert',in:['in'],count:'—'},
+      ],
+      edges:[['src','rows','win','in'],['win','rows','map','in'],['map','rows','snk','in']],
+    },
+  },
+};
+// node config (per-node inspector body)
+const PROB = { 'enrich-route-load':[
+  {node:'join',sev:'err',msg:'right input port is <b>required but unconnected</b>',loc:'join #2'},
+  {node:'snk_us',sev:'err',msg:'<code>conflict key</code> is required for <code>upsert</code> mode',loc:'sink.mode'},
+  {node:'validate',sev:'warn',msg:'<code>$property["dq.threshold"]</code> has no value in <b>dev</b>',loc:'prop'} ] };
+const probsFor = ()=> PROB[S.open]||[];
+const probOf = (id)=> probsFor().find(p=>p.node===id);
+// app properties registry (per-environment values) + linking helpers
+const APPPROPS = [
+  {name:'batch.size',type:'number',dev:'1,000',stg:'5,000',prod:'10,000'},
+  {name:'db.schema',type:'string',dev:'dev',stg:'staging',prod:'public'},
+  {name:'dq.threshold',type:'number',dev:'0.90',stg:'0.95',prod:'0.98'},
+  {name:'s3.prefix',type:'string',dev:'dev/',stg:'stg/',prod:'curated/'},
+  {name:'CONNECTION.pg-warehouse.host',type:'string',cat:'conn',dev:'localhost',stg:'pg-stg',prod:'warehouse.internal'},
+  {name:'CONNECTION.pg-warehouse.password',type:'password',cat:'conn',dev:'secret',stg:'secret',prod:'secret'},
+  {name:'CONNECTION.kafka-prod.brokers',type:'string',cat:'conn',dev:'localhost:9092',stg:'stg-kafka:9092',prod:'prod-kafka:9092'},
+];
+const propByName=(nm)=>APPPROPS.find(p=>p.name===nm);
+const propVal=(p)=>p?p[S.env]:'';
+// per-node OUTPUT schema (a node's input schema = its upstream node's output), validate rules, shared schemas
+const NSCHEMA = {
+  src_orders:[['order_id','string'],['cust_id','string'],['qty','int'],['price','decimal'],['region','string']],
+  src_cust:[['id','string'],['name','string'],['tier','string'],['segment','string']],
+  join:[['order_id','string'],['cust_id','string'],['qty','int'],['price','decimal'],['region','string'],['name','string'],['tier','string'],['segment','string']],
+  validate:[['order_id','string'],['net_amount','decimal(12,2)'],['region','string'],['full_name','string'],['loaded_at','datetime']],
+  router:[['order_id','string'],['net_amount','decimal(12,2)'],['region','string'],['full_name','string']],
+};
+const VRULES = {
+  validate:[['amount','not null'],['amount','≥ 0'],['status','in [PENDING, SHIPPED, DELIVERED]'],['region','in [EU, US, APAC]'],['order_id','matches ^ORD-\\d+$']],
+  val:[['amount','not null'],['amount','decimal(2)'],['status','in […]'],['order_id','unique'],['region','not null']],
+};
+const SHSCHEMAS = [{name:'orders',ver:'v3'},{name:'customer',ver:'v2'}];
+// board-04 config panel — 3-tier mapper model (available data · target grid · fx expression)
+const MAP3={
+  avail:[
+    {g:'orders',k:'source',leaves:[['order_id','string'],['qty','int'],['price','decimal'],['region','string']]},
+    {g:'customers',k:'join',leaves:[['name','string'],['tier','string'],['segment','string']]},
+    {g:'$pipeline',k:'ctx',leaves:[['runId','string'],['now()','datetime']]},
+  ],
+  fields:[
+    {t:'region',ty:'string',auto:true,kind:'direct',src:'orders.region',expr:'=$orders.region',live:'"EU"'},
+    {t:'customer_id',ty:'string',kind:'direct',src:'orders.order_id',expr:'=$orders.order_id',live:'"ORD-000001"'},
+    {t:'full_name',ty:'string',kind:'expr',expr:'=string.concat($customers.name," (",$customers.tier,")")',live:'"Ada Lovelace (gold)"'},
+    {t:'net_amount',ty:'decimal',kind:'expr',expr:'=multiply($orders.qty,$orders.price)',live:'299.98'},
+    {t:'loaded_at',ty:'datetime',kind:'expr',expr:'=now()',live:'"2026-07-29T10:42:01Z"'},
+    {t:'notes',ty:'string',kind:'empty'},
+  ],
+};
+const MAPMODELS={
+  cast:{ avail:[{g:'orders.csv',k:'source',leaves:[['order_id','string'],['amount','string'],['status','string'],['region','string']]},{g:'$pipeline',k:'ctx',leaves:[['runId','string'],['now()','datetime']]}],
+    fields:[{t:'order_id',ty:'string',auto:true,kind:'direct',src:'orders.order_id',expr:'=$orders.order_id',live:'"ORD-000001"'},{t:'amount',ty:'decimal(2)',kind:'expr',expr:'=toDecimal($orders.amount, 2)',live:'299.98'},{t:'status',ty:'string',kind:'expr',expr:'=upper(trim($orders.status))',live:'"SHIPPED"'},{t:'region',ty:'string',auto:true,kind:'direct',src:'orders.region',expr:'=$orders.region',live:'"EU"'},{t:'loaded_at',ty:'datetime',kind:'expr',expr:'=now()',live:'"2026-07-29T10:42:01Z"'},{t:'notes',ty:'string',kind:'empty'}] },
+  map:{ avail:[{g:'window · 5min',k:'derived',leaves:[['region','string'],['amount','decimal'],['event_time','datetime']]},{g:'$pipeline',k:'ctx',leaves:[['runId','string'],['now()','datetime']]}],
+    fields:[{t:'region',ty:'string',auto:true,kind:'direct',src:'window.region',expr:'=$window.region',live:'"EU"'},{t:'total_amount',ty:'decimal',kind:'expr',expr:'=sum($window.amount)',live:'48210.55'},{t:'order_count',ty:'int',kind:'expr',expr:'=count()',live:'1284'},{t:'window_start',ty:'datetime',kind:'direct',src:'window.event_time',expr:'=$window.event_time',live:'"10:40:00Z"'},{t:'notes',ty:'string',kind:'empty'}] },
+};
+function mapModel(n){ return (n&&MAPMODELS[n.id]) || {avail:MAP3.avail, fields:MAP3.fields}; }
+function scrollNodeIntoView(id){ requestAnimationFrame(()=>{ const el=document.querySelector('.node[data-node="'+id+'"]'); const wrap=document.querySelector('.canvaswrap'); if(!el||!wrap)return; const er=el.getBoundingClientRect(), wr=wrap.getBoundingClientRect(), pad=44; let dx=0,dy=0; if(er.left<wr.left+pad)dx=er.left-(wr.left+pad); else if(er.right>wr.right-pad)dx=er.right-(wr.right-pad); if(er.top<wr.top+pad)dy=er.top-(wr.top+pad); else if(er.bottom>wr.bottom-pad)dy=er.bottom-(wr.bottom-pad); if(dx||dy)wrap.scrollBy({left:dx,top:dy,behavior:'smooth'}); }); }
+const schemaOf=(nid)=> NSCHEMA[nid] || [['order_id','string'],['net_amount','decimal(12,2)'],['region','string']];
+function upOf(nid,port){ const p=PIPE(), e=(p.edges||[]).find(x=>x[2]===nid&&x[3]===port); return e?p.nodes.find(n=>n.id===e[0]):null; }
+function downOf(nid,port){ const p=PIPE(); return (p.edges||[]).filter(x=>x[0]===nid&&x[1]===port).map(x=>({node:p.nodes.find(n=>n.id===x[2]),err:x[4]})); }
+function pickerHTML(k,v,lk){
+  const items=APPPROPS.map(p=>`<div class="pi" data-pick="${lk}~~${p.name}"><span class="pt">${p.name}</span><span class="pty">${p.type} · ${S.env}=${esc(String(p[S.env]))}</span></div>`).join('');
+  return `<div class="picker" style="margin-top:7px"><div class="ph">🔗 Link “${esc(k)}” to an app property</div>${items}<div class="pi new" data-pick="${lk}~~__new">＋ New property from “${esc(String(v)).slice(0,16)}”…</div></div>`;
+}
+const CFG = {
+  src_orders:[['Type','CSV · header row'],['Path','data/orders.csv'],['Columns','12 · ✨ infer from file'],['Encoding','utf-8']],
+  src_cust:[['Connection','pg-warehouse ▾'],['Query','SELECT id,name,tier,segment FROM customers'],['Password','pg$ecret2024'],['Role','Join reference table']],
+  join:[['Type','inner join'],['Keys','orders.cust_id = customers.id'],['Emit right','name · tier · segment']],
+  validate:[['Rules','5 · amount not null, status in […]'],['On violation','route to reject port →'],['Reject target','⚠ orders_dlq (wired)']],
+  router:[['Routes','3 · EU / US / rest'],['EU','region == \'EU\''],['US','region == \'US\''],['Match','first-match · default → rest']],
+  snk_eu:[['Connection','s3-lake ▾'],['Format','Parquet · snappy'],['Object key','curated/eu/{date}/part-{n}.parquet']],
+  snk_us:[['Connection','pg-warehouse ▾'],['Mode','Upsert · conflict key = order_id'],['Table','warehouse.orders_us']],
+  snk_kafka:[['Connection','kafka-prod ▾'],['Topic','orders.enriched'],['Serialization','JSON · acks=all']],
+  dlq:[['Sink','jdbc · +error envelope'],['Table','pipeline_dlq'],['On full','block · maxRowsPerBatch 1000']],
+};
+// preview sample per pipeline
+const PREVIEW = {
+  'enrich-route-load':{
+    cols:['order_id','full_name','net_amount','region','loaded_at'],
+    output:[['ORD-000001','Ada Lovelace (gold)','299.98','EU','10:42:01Z'],['ORD-000002','Alan Turing (silver)','89.50','US','10:42:01Z'],['ORD-000006','Grace Hopper (gold)','1280.00','EU','10:42:01Z'],['ORD-000009','Katherine Johnson (gold)','2500.00','APAC','10:42:01Z']],
+    rejected:[['ORD-000004','amount ≤ 0','-12.00'],['ORD-000007','status unknown','"RETURND"'],['ORD-000011','not a number','"N/A"']],
+    dropped:[['ORD-000002','filter · amount ≥ 100','89.50']],
+    profile:[['order_id','0%','104','ORD-000001 … 118999'],['full_name','0%','96','text · avg 17 chars'],['net_amount','0%','98','12.00 – 2500.00'],['region','0%','4','EU 41% · US 33% …'],['notes','62%','18','mostly null ⚠']],
+  },
+};
+const CODE = {
+  'enrich-route-load':`{
+  "name": "enrich-route-load",
+  "mode": "etl",
+  "source": { "type": "csv", "path": "orders.csv" },
+  "transforms": [
+    { "type": "join", "with": "customers", "on": "cust_id = id" },
+    { "type": "validate", "rules": 5, "onViolation": "route" },
+    { "type": "router", "routes": ["EU","US","rest"] }
+  ],
+  "sinks": {
+    "eu":   { "type": "s3",    "format": "parquet" },
+    "us":   { "type": "jdbc",  "mode": "upsert", "key": "order_id" },
+    "rest": { "type": "kafka", "topic": "orders.enriched" }
+  },
+  "dlq": { "type": "jdbc", "table": "pipeline_dlq" }
+}`,
+};
+
+/* ============================ STATE ============================ */
+const S = { open:'enrich-route-load', tabs:['enrich-route-load'], sel:'validate', view:'design', panel:'preview', pv:'output', abar:'pipeline', running:false, itab:'Config', inspOpen:true, panelOpen:true, panelMax:false, sideOpen:true, grpc:{}, env:'dev', links:{}, linking:null, schemaLinks:{validate:'orders'}, schlinking:null, palQ:'', joinType:'inner', zoom:1, selEdge:null, mapEdit:null, cfgTab:'Input', mapTab:'Input', mapMode:'visual', mapField:'full_name', panelH:null, term:[], termHist:[], termHistIdx:0 };
+const PIPE = ()=>DB.pipelines[S.open]||DB.pipelines['enrich-route-load'];
+const isDoc = ()=> typeof S.open==='string' && S.open[0]==='@';
+const DOCKEY = ()=> S.open.slice(1);
+const lastPipe = ()=> S.tabs.find(t=>t[0]!=='@')||'enrich-route-load';
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function toast(m){const t=document.getElementById('toast');t.textContent=m;t.classList.add('on');clearTimeout(t._h);t._h=setTimeout(()=>t.classList.remove('on'),2200);}
+
+/* ============================ RENDER ============================ */
+function render(){ clearInterval(S._striv); applyChrome(); renderSide(); renderTabs(); renderToolbar(); renderMain(); renderPanel(); renderStatus(); }
+function applyChrome(){ const b=document.querySelector('.body'); if(b)b.style.gridTemplateColumns=S.sideOpen===false?'48px 0 1fr':'48px 250px 1fr'; }
+
+function renderSide(){
+  const el=document.getElementById('side'); const gc=S.grpc||{};
+  const pipes=Object.values(DB.pipelines).map(p=>
+    `<div class="ti ${p.id===S.open?'on':''}" data-open="${p.id}"><span class="tc">◈</span>${p.id}<span class="sub">${p.shape==='unbounded'?'stream':'batch'}</span></div>`).join('');
+  const conns=DB.connections.map(c=>`<div class="ti" data-conn="${c.id}"><span class="tc" style="color:${c.color}">${c.icon}</span>${c.id}<span class="dot" style="background:var(--ok);margin-left:auto"></span></div>`).join('');
+  const runs=DB.runs.map(r=>`<div class="ti" data-run="${r.t}"><span class="tc"><span class="dot" style="background:${r.status==='completed'?'#4ec36b':'#e0a63a'}"></span></span>${r.t} · ${r.status}<span class="sub">${r.rows}</span></div>`).join('');
+  const gov=`<div class="ti" data-doc="appprops"><span class="tc">◆</span>App properties</div>
+    <div class="ti" data-doc="contracts"><span class="tc">▤</span>Schemas &amp; contracts</div>
+    <div class="ti" data-doc="ops"><span class="tc">📊</span>Operations</div>
+    <div class="ti" data-doc="lineage"><span class="tc">⧉</span>Lineage &amp; impact</div>
+    <div class="ti" data-doc="security"><span class="tc">🛡</span>Security</div>
+    <div class="ti" data-doc="environments"><span class="tc">⚙</span>Environments</div>
+    <div class="ti" data-doc="schedule"><span class="tc">⏰</span>Schedule</div>
+    <div class="ti" data-doc="recover"><span class="tc">↩</span>Recovery &amp; DLQ</div>
+    <div class="ti" data-doc="deploy"><span class="tc">▲</span>Build &amp; deploy</div>`;
+  const grp=(name,items,extra='')=>`<div class="grp" data-grp="${name}"><span class="tw">${gc[name]?'▸':'▾'}</span>${name}${extra}</div>${gc[name]?'':items}`;
+  el.innerHTML=`<div class="sh">Data Pipeline <span>⋯</span></div>`
+    + grp('Pipelines', pipes, `<span style="margin-left:auto;color:var(--tibco);cursor:pointer" data-cmd="new">＋</span>`)
+    + grp('Connections', conns)
+    + grp('Runs', runs)
+    + grp('Operate & Govern', gov);
+}
+function renderTabs(){
+  document.getElementById('etabs').innerHTML=S.tabs.map(t=>{
+    if(t[0]==='@'){ const d=DOCS[t.slice(1)]; return `<div class="etab ${t===S.open?'on':''}" data-open="${t}"><span style="opacity:.75">${d.icon}</span>${d.title}<span class="x" data-close="${t}">✕</span></div>`; }
+    return `<div class="etab ${t===S.open?'on':''}" data-open="${t}"><span class="md"></span>${t}.datapipeline<span class="x" data-close="${t}">✕</span></div>`;
+  }).join('');
+  document.getElementById('ttname').textContent=!S.tabs.length?'Welcome':isDoc()?DOCS[DOCKEY()].title:S.open+'.datapipeline';
+}
+function renderToolbar(){
+  if(!S.tabs.length){ document.getElementById('etoolbar').innerHTML=''; return; }
+  if(isDoc()){ const d=DOCS[DOCKEY()]; document.getElementById('etoolbar').innerHTML=`<span class="badge no" style="background:#eef0f2;color:var(--ink)">${d.icon} ${d.title}</span><span class="grow"></span><span class="muted" style="font-size:11.5px">mock data · read-only preview</span>`; return; }
+  const p=PIPE();
+  document.getElementById('etoolbar').innerHTML=`
+    <span class="vtabs" id="vtabs"><span class="${S.view==='design'?'on':''}" data-view2="design">Design</span><span class="${S.view==='code'?'on':''}" data-view2="code">Code</span></span>
+    <span class="badge ${p.shape} no" title="detected from the source">${p.shape==='unbounded'?'Unbounded · streaming':'Bounded · batch'}</span>
+    <span class="chip idle no">${p.mode.toUpperCase()}</span>
+    <span class="grow"></span>
+    <span class="chip ok" id="valchip">valid · 0 errors</span>
+    <span class="btn" data-cmd="autolayout">▦ Auto-layout</span>
+    <span class="btn run" data-cmd="run">▶ Run</span>`;
+}
+function portY(node,side,i){ const arr=(side==='in'?node.in:node.out)||['x']; const n=arr.length; const c=27; return c+(i-(n-1)/2)*18; }
+function mapper3HTML(n){
+  const M=mapModel(n);
+  const sf=(S.mapField&&M.fields.some(f=>f.t===S.mapField))?S.mapField:(M.fields.find(f=>f.kind==='expr')||M.fields[0]).t;
+  const avail=M.avail.map((g,gi)=>`<div class="tnode"${gi?' style="margin-top:6px"':''}>▾ ${esc(g.g)} <span class="tk ${g.k==='ctx'?'p':(g.k==='source'?'':'j')}">${g.k}</span></div>${g.leaves.map(l=>`<div class="tleaf" data-leaf="${esc(l[0])}">${esc(l[0])} <span class="ty">${l[1]}</span></div>`).join('')}`).join('');
+  const rows=M.fields.map(f=>{ const sel=sf===f.t; let cell; if(f.kind==='direct')cell=`<span class="direct"><span class="lk">⇢</span>${esc(f.src)}</span>`; else if(f.kind==='expr')cell=`<span class="exprc"><span class="fx">fx</span>${esc(f.expr)}</span>`; else cell=`<span class="exprc empty">drag a field or type =…</span>`; return `<tr class="${sel?'sel':''}" data-mapfield="${esc(f.t)}"><td class="agfld">${esc(f.t)}${f.auto?'<span class="autob">auto</span>':''}</td><td class="agty">${f.ty}</td><td>${cell}</td></tr>`; }).join('');
+  const cur=M.fields.find(f=>f.t===sf)||M.fields[0];
+  const box=cur.expr?esc(cur.expr):'// drag a field from Available Data, or type an fx expression';
+  const assist=`<div class="exprbox">${box}</div>
+    <div class="fncat" data-fncat="String">String <span class="cnt">18</span></div>
+    <div style="margin-bottom:8px"><span class="fnchip">concat</span><span class="fnchip">upper</span><span class="fnchip">substring</span><span class="fnchip">replace</span></div>
+    <div class="fncat" data-fncat="Coerce">Coerce <span class="cnt">9</span></div>
+    <div class="fncat" data-fncat="Number">Number · Date · Array <span class="cnt">31</span></div>
+    <div class="fld" style="margin-top:12px"><div class="k">Live value <span style="margin-left:auto;color:var(--src)">✓</span></div><div class="v mono">${cur.live?esc(cur.live):'<span class="muted">—</span>'}</div><p class="muted" style="font-size:11px;margin:4px 0 0">Evaluated against the sampled first row.</p></div>`;
+  return `<div class="mapper3">
+    <div class="mcol"><div class="mcolh">Available Data <span>⌕</span></div><div class="mcb tree">${avail}</div></div>
+    <div class="mcol"><div class="mcolh">Map to · input schema <span style="cursor:pointer" data-cmd="addfield">＋ field</span></div><div class="mcb" style="padding:0"><table class="aggrid"><tr><th>Target field</th><th>Type</th><th>Source / expression</th></tr>${rows}</table></div></div>
+    <div class="mcol"><div class="mcolh">Expression · ${esc(sf)}</div><div class="mcb">${assist}</div></div>
+  </div>`;
+}
+function mapperFxHTML(n){
+  const M=mapModel(n);
+  const w=Math.max.apply(null,M.fields.map(f=>f.t.length));
+  const lines=M.fields.map(f=>`${f.t.padEnd(w)}  =  ${f.kind==='empty'?'':(f.expr||'').replace(/^=/,'')}`).join('\n');
+  return `<div class="mcb" style="flex:1"><div class="k" style="margin-bottom:6px">Expression view <span class="muted" style="font-weight:400">· every target as a Flogo fx assignment</span></div><div class="codeview" style="margin:0;min-height:220px;white-space:pre;font-size:12px">${esc(lines)}</div></div>`;
+}
+function configPanelInput(n){
+  if(['mapper','map','cast'].includes(n.type)) return mapper3HTML(n);
+  let cfg; if(n.type==='join') cfg=cfgJoin(n); else if(n.type==='router') cfg=cfgRouter(n); else if(n.type==='validate') cfg=cfgValidate(n); else cfg=cfgFields(n);
+  return `<div class="mapper2">${availCol(n)}<div class="mcol"><div class="mcolh">Configuration <span>${esc(n.type)}</span></div><div class="mcb">${cfg}</div></div></div>`;
+}
+function availCol(n){
+  let groups='';
+  if(n.in&&n.in.length){ const seen={}; (n.in||[]).forEach(port=>{ const up=upOf(n.id,port); if(!up||seen[up.id])return; seen[up.id]=1; const sch=schemaOf(up.id); const kind=up.kind==='src'?'source':(up.kind==='transform'||up.kind==='control')?'derived':up.kind; const cls=up.kind==='src'?'':'j'; groups+=`<div class="tnode"${groups?' style="margin-top:6px"':''}>▾ ${esc(up.name)} <span class="tk ${cls}">${kind}</span></div>${sch.map(l=>`<div class="tleaf" data-leaf="${esc(l[0])}">${esc(l[0])} <span class="ty">${l[1]}</span></div>`).join('')}`; }); }
+  else { const sch=schemaOf(n.id); groups+=`<div class="tnode">▾ ${esc(n.name)} <span class="tk">produces</span></div>${sch.map(l=>`<div class="tleaf" data-leaf="${esc(l[0])}">${esc(l[0])} <span class="ty">${l[1]}</span></div>`).join('')}`; }
+  groups+=`<div class="tnode" style="margin-top:6px">▾ $pipeline <span class="tk p">ctx</span></div><div class="tleaf" data-leaf="runId">runId <span class="ty">string</span></div><div class="tleaf" data-leaf="now()">now() <span class="ty">datetime</span></div>`;
+  return `<div class="mcol"><div class="mcolh">Available Data <span>⌕</span></div><div class="mcb tree">${groups}</div></div>`;
+}
+function settingsBody(n){
+  const connRow=(n.kind==='src'||n.kind==='sink')?(CFG[n.id]||[]).find(r=>/connection/i.test(r[0])):null;
+  let exec;
+  if(n.kind==='src') exec=`<div class="fld"><div class="k">On bad row<span class="wt">listbox</span></div><div class="v">skip &amp; log ▾</div></div><div class="fld"><div class="k">Fetch size<span class="wt">number</span></div><div class="v mono">5,000</div></div>`;
+  else if(n.kind==='sink'||n.kind==='dlq') exec=`<div class="fld"><div class="k">On write error<span class="wt">listbox</span></div><div class="v">retry ×3 → dead-letter ▾</div></div><div class="fld"><div class="k">Batch size<span class="wt">number</span></div><div class="v mono">10,000</div></div>`;
+  else exec=`<div class="fld"><div class="k">On error<span class="wt">listbox</span></div><div class="v">route to reject ▾</div></div><div class="fld"><div class="k">Parallelism<span class="wt">number</span></div><div class="v mono">8</div></div>`;
+  return `<div class="mcb" style="flex:1;max-width:560px"><div class="k" style="margin-bottom:6px">Node</div>
+    <div class="fld"><div class="k">Name<span class="wt">text</span></div><div class="v">${esc(n.name)}</div></div>
+    <div class="fld"><div class="k">Description<span class="wt">text</span></div><div class="v" style="color:var(--mute)">Add a description…</div></div>
+    ${connRow?`<div class="fld"><div class="k">Connection<span class="wt">listbox</span></div><div class="slot"><span class="linkchip conn">🔗 ${esc(String(connRow[1]).replace(/ ▾$/,''))}</span></div></div>`:''}
+    <div class="k" style="margin:13px 0 6px">Execution</div>${exec}</div>`;
+}
+function outputBody(n){
+  const outSch=schemaOf(n.id);
+  const linked=S.schemaLinks[n.id], ls=linked?SHSCHEMAS.find(s=>s.name===linked):null;
+  const tbl=`<table class="grid"><tr><th>Field</th><th>Type</th></tr>${outSch.map(r=>`<tr><td class="fld0">${r[0]}</td><td class="mono">${r[1]}</td></tr>`).join('')}</table>`;
+  const linkRow=linked?`<div class="slot" style="margin-bottom:8px"><span class="linkchip schema">🔗 ${esc(linked)} ${ls?ls.ver:''}</span><span class="muted" style="margin-left:auto;font-size:11px">shared contract</span><span data-schunlink="${n.id}" style="cursor:pointer;color:var(--mute);margin-left:8px" title="unlink">✕</span></div>`:`<div style="margin-bottom:8px"><span class="linkbtn" data-schlink="${n.id}" style="width:auto;padding:0 10px;height:24px">🔗 Link a shared schema</span></div>`;
+  const pick=S.schlinking===n.id?`<div class="picker" style="margin-bottom:8px"><div class="ph">🔗 Link output to a shared schema (contract)</div>${SHSCHEMAS.map(s=>`<div class="pi" data-schpick="${n.id}~~${s.name}"><span class="pt">${s.name}</span><span class="pty">${s.ver} · contract</span></div>`).join('')}</div>`:'';
+  const outs=(n.out||[]).map(port=>{ const ds=downOf(n.id,port); const err=ds.some(d=>d.err); const tgt=ds.length?ds.map(d=>esc(d.node.name)).join(', '):'<span style="color:var(--warn)">unwired</span>'; return `<div class="rcard"><div class="rh" style="margin:0;gap:6px"><b style="${err?'color:var(--err)':''}">${port==='rows'?'Output':port}</b>${err?'<span class="wt sec">error</span>':''}<span class="muted" style="flex:1;text-align:right;font-weight:400">→ ${tgt}</span></div></div>`; }).join('');
+  return `<div class="mcb" style="flex:1;max-width:640px"><div class="k" style="margin-bottom:6px">Output schema <span class="muted" style="font-weight:400">· ${outSch.length} cols</span></div>${linkRow}${pick}${tbl}${outs?`<div class="k" style="margin:13px 0 6px">Where rows go</div>${outs}`:''}<div class="addrow" style="margin-top:8px" data-doc="contracts">Open shared schemas & contracts →</div></div>`;
+}
+function testBody(n){
+  let asserts;
+  if(n.type==='validate') asserts=['reject rate < 2% · amount ≥ 0, status in set','no nulls in order_id · region','every row goes to pass or reject'];
+  else if(n.type==='join') asserts=['no unmatched left rows (inner join)','output rows == left rows','join key customers.id is unique'];
+  else if(n.type==='router') asserts=['every row matches exactly one route','default route catches the rest','no rows silently dropped'];
+  else if(['mapper','map','cast'].includes(n.type)) asserts=['output schema == '+mapModel(n).fields.filter(f=>f.kind!=='empty').length+' fields','no nulls in mapped key fields','types coerce without error'];
+  else if(n.kind==='src') asserts=['row count > 0','schema matches contract','no unparseable rows'];
+  else if(n.kind==='sink'||n.kind==='dlq') asserts=['rows written == rows in','no write errors after retries','idempotent on re-run (upsert)'];
+  else asserts=['output rows > 0','no nulls in key columns'];
+  const rows=asserts.map(a=>`<div class="rcard">assert · ${esc(a)}</div>`).join('');
+  return `<div class="mcb" style="flex:1;max-width:560px"><div class="k" style="margin-bottom:6px">Node tests <span class="muted" style="font-weight:400">· ${asserts.length} assertions</span></div>${rows}<div class="addrow" data-cmd="addfield">＋ Add assertion</div><span class="btn run" data-cmd="runtests" style="margin-top:8px">▷ Run node tests</span></div>`;
+}
+function cfgValidate(n){
+  const rules=VRULES[n.id]||[['field','condition']];
+  const rr=rules.map(r=>`<div class="rcard"><div class="rh" style="margin:0"><b>${esc(r[0])}</b><span class="muted" style="margin-left:auto;font-family:var(--mono);font-size:11px">${esc(r[1])}</span></div></div>`).join('');
+  return `<div class="k" style="margin-bottom:5px">Data-quality rules <span class="muted" style="font-weight:400">· ${rules.length} · field → condition</span></div>${rr}<div class="addrow" data-cmd="addfield">＋ Add rule</div>
+    <div class="k" style="margin:13px 0 5px">On violation</div><div class="v" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">Route failing rows to <span class="linkchip" style="color:var(--err);background:var(--err-bg)">⚠ reject → orders_dlq</span></div>
+    <div class="addrow" data-doc="recover" style="margin-top:8px">↩ Open recovery / DLQ →</div>`;
+}
+function cfgJoin(n){
+  const jt=S.joinType||'inner';
+  const types=[['inner','Inner'],['left','Left'],['right','Right'],['full','Full']];
+  const L=upOf(n.id,'left'), R=upOf(n.id,'right');
+  const keys=[['orders.cust_id','customers.id']];
+  const emit=['name','tier','segment'];
+  const jrow=(lbl,role,node)=>`<div class="rcard"><div class="rh" style="margin:0;gap:6px"><b>${lbl}</b><span class="wt">${role}</span><span class="muted" style="flex:1;text-align:right;font-weight:400">${node?esc(node.name):'<span style="color:var(--err)">unwired</span>'}</span></div></div>`;
+  return `<div class="k" style="margin-bottom:5px">Join type <span class="muted" style="font-weight:400">· how rows are matched</span></div>
+    <div class="subtab" style="margin-bottom:12px">${types.map(t=>`<span class="${jt===t[0]?'on':''}" data-jt="${t[0]}">${t[1]}</span>`).join('')}</div>
+    <div class="k" style="margin-bottom:5px">Inputs</div>${jrow('Left','driving',L)}${jrow('Right','lookup',R)}
+    <div class="k" style="margin:13px 0 6px">Match keys <span class="muted" style="font-weight:400">· left = right</span></div>
+    ${keys.map(k=>`<div class="keyrow"><span class="kc mono">${k[0]}</span><span class="keq">=</span><span class="kc mono">${k[1]}</span><span class="kx" data-rmkey title="remove">✕</span></div>`).join('')}
+    <div class="addrow" data-cmd="addfield">＋ Add key pair</div>
+    <div class="k" style="margin:13px 0 6px">Emit from right <span class="muted" style="font-weight:400">· columns added to left rows</span></div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap">${emit.map(c=>`<span class="linkchip">${c}</span>`).join('')}</div>`;
+}
+function cfgRouter(n){
+  const routes=[['eu',"region == 'EU'"],['us',"region == 'US'"],['rest','__default']];
+  const rr=routes.map((r,i)=>{ const ds=downOf(n.id,r[0]); const tgt=ds.length?ds.map(d=>esc(d.node.name)).join(', '):'<span style="color:var(--warn)">unwired</span>'; const isDef=r[1]==='__default'; return `<div class="routerow${isDef?' def':''}"><span class="rnum">${isDef?'∗':(i+1)}</span><span class="linkchip">${r[0]}</span><span class="rcond mono">${isDef?'<span class="muted">everything else · default</span>':esc(r[1])}</span><span class="rto muted">→ ${tgt}</span></div>`; }).join('');
+  return `<div class="k" style="margin-bottom:5px">Match mode <span class="muted" style="font-weight:400">· first matching route wins</span></div>
+    <div class="subtab" style="margin-bottom:12px"><span class="on">First-match</span><span>All-match</span></div>
+    <div class="k" style="margin-bottom:6px">Routes <span class="muted" style="font-weight:400">· evaluated top to bottom</span></div>${rr}
+    <div class="addrow" data-cmd="addfield">＋ Add route</div>
+    <p class="muted" style="font-size:11px;margin-top:9px">Each row sends matching rows out its named port; the default catches the rest — like a conditional split.</p>`;
+}
+function cfgFields(n){
+  const isRef=(v)=>/\$env|\$property|CONNECTION\./i.test(v);
+  const isPwd=(k)=>/password|secret|token|passphrase/i.test(k);
+  const wtag=(k,v)=>/^connection$/i.test(k)?'listbox':isPwd(k)?'password':/query|expr|sql|rule/i.test(k)?'code':(/^[\d., ]+$/.test(v)?'number':'text');
+  const linkbtn=(lk)=>`<span class="linkbtn" data-link="${lk}" title="Link to app property">🔗</span>`;
+  const row=(k,v)=>{
+    const lk=n.id+'~~'+k, lp=S.links[lk]; let tag=wtag(k,v), ctl;
+    if(lp){ const p=propByName(lp); tag='property';
+      ctl=`<div class="slot"><span class="linkchip prop">🔗 $property["${esc(lp)}"]</span><span class="muted" style="margin-left:auto;font-family:var(--mono);font-size:11px">→ ${esc(String(propVal(p)))}</span><span data-unlink="${lk}" title="unlink" style="cursor:pointer;color:var(--mute);margin-left:8px">✕</span></div>`;
+    } else if(/^connection$/i.test(k)){ ctl=`<div class="slot"><span class="linkchip conn">🔗 ${esc(v.replace(/ ▾$/,''))}</span></div>`;
+    } else if(isPwd(k)&&isRef(v)){ ctl=`<div class="slot"><span class="linkchip secret">🔒 ${esc(v)}</span></div>`;
+    } else if(isPwd(k)){ ctl=`<div class="v" style="display:flex;align-items:center;gap:8px"><span class="pwv" data-val="${esc(v)}" style="font-family:var(--mono);letter-spacing:2px;flex:1">••••••••</span><span data-reveal style="cursor:pointer;color:var(--mute)" title="reveal">👁</span>${linkbtn(lk)}</div>`;
+    } else { ctl=`<div class="v" style="display:flex;align-items:center;gap:8px"><span style="flex:1;${/[=·{]/.test(v)?'font-family:var(--mono);font-size:11.5px':''}">${esc(v)}</span>${linkbtn(lk)}</div>`; }
+    const tsec=(tag==='password'||tag==='property'), tst=tag==='property'?' style="background:var(--accent-soft);color:var(--accent)"':'';
+    const pick=S.linking===lk?pickerHTML(k,v,lk):'';
+    return `<div class="fld"><div class="k">${k}<span class="wt${tsec?' sec':''}"${tst}>${tag}</span></div>${ctl}${pick}</div>`;
+  };
+  const rows=(CFG[n.id]||[['Type',n.type]]).map(([k,v])=>row(k,v)).join('');
+  const actions = (n.kind==='src'||n.kind==='sink')?`<div style="display:flex;gap:6px;margin:2px 0 9px"><span class="btn" data-cmd="readschema">↻ Read schema</span><span class="btn" data-cmd="testconn">◉ Test</span></div>`:'';
+  const ctx = n.type==='window'?`<div class="addrow" data-doc="windowing">⧖ Configure windowing →</div>`:n.kind==='dlq'?`<div class="addrow" data-doc="recover">↩ Open recovery / DLQ →</div>`:n.kind==='src'?`<div class="addrow" data-doc="incremental">⇧ Incremental load →</div>`:`<div class="addrow" data-cmd="addfield">＋ Add field</div>`;
+  return rows+actions+ctx;
+}
+function renderMain(){
+  const el=document.getElementById('emain');
+  if(!S.tabs.length){ el.style.gridTemplateColumns='1fr'; el.innerHTML=welcomeHTML(); return; }
+  if(isDoc()){ el.style.gridTemplateColumns='1fr'; el.innerHTML=DOCS[DOCKEY()].render(); return; }
+  const p=PIPE();
+  if(S.view==='code'){
+    el.style.gridTemplateColumns='1fr';
+    el.innerHTML=`<div class="codeview">${esc(CODE[S.open]||JSON.stringify({name:p.id,mode:p.mode,nodes:p.nodes.length},null,2))}</div>`;
+    return;
+  }
+  el.style.gridTemplateColumns='172px 1fr';
+  // palette
+  const pal=`<div class="palette">
+    <div class="psearch"><span class="psi">⌕</span><input id="palsearch" placeholder="Search components…" autocomplete="off" spellcheck="false" value="${esc(S.palQ||'')}"><span class="pkb">⌘K</span></div>
+    <div class="pg">Sources</div>
+    <div class="pitem" data-add="csv"><span class="pico s">C</span>CSV / TSV</div><div class="pitem" data-add="jdbc-src"><span class="pico s">J</span>JDBC</div><div class="pitem" data-add="kafka-src"><span class="pico s">K</span>Kafka</div><div class="pitem" data-add="objstore-src"><span class="pico s">◇</span>Object store</div>
+    <div class="pg">Transforms</div>
+    <div class="pitem" data-add="join"><span class="pico t">⨝</span>Join</div><div class="pitem" data-add="router"><span class="pico c">⋔</span>Router</div><div class="pitem" data-add="validate"><span class="pico t">✓</span>Validate</div><div class="pitem" data-add="map"><span class="pico t">ƒ</span>Map · Filter · Cast</div><div class="pitem" data-add="window"><span class="pico t">⧖</span>Window</div>
+    <div class="pg">Sinks</div>
+    <div class="pitem" data-add="jdbc-sink"><span class="pico k">▣</span>JDBC · Kafka</div><div class="pitem" data-add="objstore-sink"><span class="pico k">◇</span>Object store</div><div class="pitem" data-add="dlq"><span class="pico d">⚠</span>Dead-letter</div>
+    <div class="pnores muted" style="display:none;padding:6px 4px;font-size:12px">No components match.</div>
+  </div>`;
+  // canvas dims
+  let maxX=0,maxY=0; p.nodes.forEach(n=>{maxX=Math.max(maxX,n.x+152);maxY=Math.max(maxY,n.y+70);});
+  const W=maxX+40,H=maxY+40;
+  const byId={}; p.nodes.forEach(n=>byId[n.id]=n);
+  const wires=p.edges.map((e,i)=>{
+    const[sid,sp,tid,tp,err]=e; const s=byId[sid],t=byId[tid]; if(!s||!t)return'';
+    const oi=(s.out||['rows']).indexOf(sp), ii=(t.in||['in']).indexOf(tp);
+    const x1=s.x+152, y1=s.y+portY(s,'out',oi<0?0:oi), x2=t.x, y2=t.y+portY(t,'in',ii<0?0:ii);
+    const sel=i===S.selEdge; const col=sel?'var(--accent)':(err?'var(--dlq)':'#9aa4b0'), dash=err?'stroke-dasharray="6 4"':'';
+    const d=`M${x1},${y1} C${x1+42},${y1} ${x2-42},${y2} ${x2},${y2}`;
+    return `<path class="wirehit" data-edge="${i}" d="${d}" fill="none" stroke="transparent" stroke-width="14"/><path d="${d}" fill="none" stroke="${col}" stroke-width="${sel?3.4:2.4}" ${dash} marker-end="url(#arw${err?'e':''})" style="pointer-events:none"/>`;
+  }).join('');
+  const nodes=p.nodes.map(n=>{
+    const st=n.st||'ok'; const pb=probOf(n.id);
+    const ins=(n.in||[]).map((pl,i)=>`<span class="port" style="left:-6px;top:${portY(n,'in',i)-5}px"></span>`).join('');
+    const outs=(n.out||[]).map((pl,i)=>`<span class="port ${pl==='reject'?'err':''}" style="right:-6px;top:${portY(n,'out',i)-5}px"><span class="pl">${pl==='rows'?'':pl}</span></span>`).join('');
+    return `<div class="node ${n.kind} ${n.id===S.sel?'sel':''} ${pb?'nprob '+pb.sev:''}${n.off?' off':''}" data-node="${n.id}" style="left:${n.x}px;top:${n.y}px">
+      ${pb?`<span class="nbadge ${pb.sev}">!</span>`:''}
+      ${n.count?`<span class="ncount">${n.count}</span>`:''}
+      <div class="nh"><span class="nico">${n.ico}</span><span class="nk">${n.kind==='src'?'Source':n.kind==='dlq'?'Dead-letter':n.kind}</span><span class="nst ${st}" data-st></span></div>
+      <div class="nb"><div class="nnm">${n.name}</div><div class="nmeta">${n.meta}</div></div>
+      ${ins}${outs}</div>`;
+  }).join('');
+  let wireChip='';
+  if(S.selEdge!=null && p.edges[S.selEdge]){ const [sid,sp,tid,tp,err]=p.edges[S.selEdge]; const s=byId[sid],t=byId[tid]; if(s&&t){ const oi=(s.out||['rows']).indexOf(sp), ii=(t.in||['in']).indexOf(tp); const x1=s.x+152,y1=s.y+portY(s,'out',oi<0?0:oi),x2=t.x,y2=t.y+portY(t,'in',ii<0?0:ii); const sch=schemaOf(sid); wireChip=`<div class="wirechip" style="left:${(x1+x2)/2}px;top:${(y1+y2)/2}px">${sch.length} cols · ${s.count||'—'}${err?' · reject':''}</div>`; } }
+  const canvas=`<div class="canvaswrap"><div class="ctool"><span class="mb" data-cmd="fit">⤢ Fit</span><span class="mb" data-cmd="autolayout">▦ Auto-layout</span><span class="mb" data-cmd="validate">✓ Validate</span><span style="flex:1"></span><span class="mb" data-cmd="zoomout" title="Zoom out ⌘−">−</span><span class="zlvl" data-cmd="zoomreset" title="Reset zoom ⌘0">${Math.round((S.zoom||1)*100)}%</span><span class="mb" data-cmd="zoomin" title="Zoom in ⌘+">＋</span></div>
+    <div class="canvas" style="width:${W}px;height:${H}px;zoom:${S.zoom||1}">
+      <svg class="wires" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><defs>
+        <marker id="arw" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#9aa4b0"/></marker>
+        <marker id="arwe" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="var(--dlq)"/></marker>
+      </defs>${wires}</svg>${nodes}${wireChip}</div></div>`;
+  el.innerHTML=pal+canvas;
+  if(S.palQ) filterPalette(S.palQ);
+  renderPanel();
+}
+function filterPalette(q){
+  q=(q||'').trim().toLowerCase();
+  const pal=document.querySelector('.palette'); if(!pal) return;
+  let anyVisible=false, lastGroup=null, groupHas=false; const groups=[];
+  [...pal.children].forEach(el=>{
+    if(el.classList.contains('pg')){ if(lastGroup)groups.push([lastGroup,groupHas]); lastGroup=el; groupHas=false; }
+    else if(el.classList.contains('pitem')){ const show=!q||el.innerText.toLowerCase().includes(q); el.style.display=show?'':'none'; if(show){groupHas=true;anyVisible=true;} }
+  });
+  if(lastGroup)groups.push([lastGroup,groupHas]);
+  groups.forEach(([g,vis])=>g.style.display=vis?'':'none');
+  const nr=pal.querySelector('.pnores'); if(nr)nr.style.display=anyVisible?'none':'';
+}
+function edgeInspector(){
+  const p=PIPE(), e=p.edges[S.selEdge]; if(!e) return '';
+  const [sid,sp,tid,tp,err]=e; const s=p.nodes.find(n=>n.id===sid), t=p.nodes.find(n=>n.id===tid); if(!s||!t) return '';
+  const sch=schemaOf(sid);
+  const tbl=`<table class="grid"><tr><th>Field</th><th>Type</th></tr>${sch.map(r=>`<tr><td class="fld0">${r[0]}</td><td class="mono">${r[1]}</td></tr>`).join('')}</table>`;
+  return `<div class="insp"><div class="ih"><span class="ik" style="color:var(--accent);background:var(--accent-soft)">Wire</span><span class="inm">data on this link</span><span class="itools"><span class="itool" data-cmd="deselect" title="Close">✕</span></span></div>
+    <div class="ib">
+      <div class="rcard"><div class="rh" style="margin:0;gap:6px"><b>${esc(s.name)}</b>${sp&&sp!=='rows'?`<span class="muted">${sp}</span>`:''}<span class="muted" style="flex:1;text-align:center">→</span><b>${esc(t.name)}</b></div>${err?'<div class="muted" style="margin-top:5px;color:var(--err)">error · reject path</div>':''}</div>
+      <div class="k" style="margin:12px 0 5px">Schema on wire <span class="muted" style="font-weight:400">· ${sch.length} cols · ${s.count||'—'} rows</span></div>${tbl}
+      <div class="addrow" data-cmd="preview" style="margin-top:9px">▷ Preview sample rows on this wire →</div></div></div>`;
+}
+function renderInspector(){
+  if(S.selEdge!=null) return edgeInspector();
+  if(!S.sel) return '';
+  const n=PIPE().nodes.find(x=>x.id===S.sel);
+  if(!n) return '';
+  if(S.inspOpen===false){ return `<div class="insp rail"><span class="railbtn" data-cmd="inspopen" title="Expand inspector">‹ ${esc(n.name)}</span></div>`; }
+  const kc={src:['Source','var(--src)','var(--src-bg)'],transform:['Transform','var(--tf)','var(--tf-bg)'],control:['Control','var(--ctrl)','var(--ctrl-bg)'],sink:['Sink','var(--snk)','var(--snk-bg)'],dlq:['Error','var(--dlq)','var(--dlq-bg)']}[n.kind];
+  const tb=['Config','I/O','Schema','Test'].map(t=>`<span class="${S.itab===t?'on':''}" data-itab="${t}">${t}</span>`).join('');
+  let body;
+  if(S.itab==='I/O'){
+    const portLabel=(p)=>({left:'Left input',right:'Right input',in:'Input',rows:'Output',pass:'Pass',reject:'Reject'}[p]||p);
+    const portRole={left:'driving',right:'lookup'};
+    const inRows=(n.in||[]).map(port=>{ const up=upOf(n.id,port); const sch=up?schemaOf(up.id):[]; const role=portRole[port]; return `<div class="rcard"><div class="rh" style="margin:0;gap:6px"><b>${portLabel(port)}</b>${role?`<span class="wt">${role}</span>`:''}<span class="muted" style="font-weight:400;flex:1;text-align:right">${sch.length} cols</span></div><div class="muted" style="margin-top:3px">${up?'← from '+esc(up.name):'<span style="color:var(--err)">← unconnected</span>'}</div>${up?`<div class="muted" style="font-family:var(--mono);font-size:10.5px;margin-top:3px">${sch.slice(0,4).map(c=>c[0]).join(' · ')}${sch.length>4?' …':''}</div>`:''}</div>`; }).join('')||`<div class="muted">No inputs — this is a source (it reads from a connection).</div>`;
+    const outRows=(n.out||[]).map(port=>{ const ds=downOf(n.id,port); const sch=schemaOf(n.id); const err=ds.some(d=>d.err); const tgt=ds.length?ds.map(d=>esc(d.node.name)).join(', '):`<span style="color:var(--warn)">unwired</span>`; return `<div class="rcard"><div class="rh" style="margin:0;gap:6px"><b style="${err?'color:var(--err)':''}">${portLabel(port)}</b>${err?`<span class="wt sec">error path</span>`:''}<span class="muted" style="font-weight:400;flex:1;text-align:right">${sch.length} cols · ${n.count||'—'}</span></div><div class="muted" style="margin-top:3px">→ ${tgt}</div></div>`; }).join('')||`<div class="muted">No outputs — this is a sink (it writes to a connection).</div>`;
+    body=`<div class="k" style="margin-bottom:5px">Inputs <span class="muted" style="font-weight:400">· what feeds this node</span></div>${inRows}<div class="k" style="margin:13px 0 5px">Outputs <span class="muted" style="font-weight:400">· where its rows go</span></div>${outRows}<div class="addrow" data-cmd="preview" style="margin-top:9px">▷ Preview sample rows on this node →</div><p class="muted" style="font-size:11px;margin-top:9px">Each input / output carries a typed schema from the node it's wired to — this is dataflow between steps, not a network port.</p>`;
+  } else if(S.itab==='Schema'){
+    const inp=(n.in&&n.in.length)?upOf(n.id,n.in[0]):null; const inSch=inp?schemaOf(inp.id):null; const outSch=schemaOf(n.id);
+    const linked=S.schemaLinks[n.id], ls=linked?SHSCHEMAS.find(s=>s.name===linked):null;
+    const tbl=(rows)=>`<table class="grid"><tr><th>Field</th><th>Type</th></tr>${rows.map(r=>`<tr><td class="fld0">${r[0]}</td><td class="mono">${r[1]}</td></tr>`).join('')}</table>`;
+    const linkRow=linked?`<div class="slot" style="margin-bottom:8px"><span class="linkchip schema">🔗 ${esc(linked)} ${ls?ls.ver:''}</span><span class="muted" style="margin-left:auto;font-size:11px">shared contract</span><span data-schunlink="${n.id}" style="cursor:pointer;color:var(--mute);margin-left:8px" title="unlink">✕</span></div>`:`<div style="margin-bottom:8px"><span class="linkbtn" data-schlink="${n.id}" style="width:auto;padding:0 10px;height:24px">🔗 Link a shared schema</span></div>`;
+    const pick=S.schlinking===n.id?`<div class="picker" style="margin-bottom:8px"><div class="ph">🔗 Link output to a shared schema (contract)</div>${SHSCHEMAS.map(s=>`<div class="pi" data-schpick="${n.id}~~${s.name}"><span class="pt">${s.name}</span><span class="pty">${s.ver} · contract</span></div>`).join('')}</div>`:'';
+    body=`${inSch?`<div class="k" style="margin-bottom:5px">Input schema <span class="muted" style="font-weight:400">· from ${esc(inp.name)}</span></div>${tbl(inSch)}`:''}<div class="k" style="margin:13px 0 5px">Output schema</div>${linkRow}${pick}${tbl(outSch)}<div class="addrow" style="margin-top:8px" data-doc="contracts">Open shared schemas & contracts →</div>`;
+  } else if(S.itab==='Test'){
+    body=`<div class="rcard">assert · output rows &gt; 0</div><div class="rcard">assert · no nulls in order_id</div><span class="btn run" data-cmd="runtests" style="margin-top:6px">▷ Run node tests</span>`;
+  } else if(['mapper','map','cast'].includes(n.type)){
+    body=`<div class="rcard"><b>Mapping transform</b><div class="muted" style="margin-top:3px">${MAP3.fields.length} target fields · auto-map + fx expressions</div></div><div class="addrow" data-cmd="openmapper" style="margin-top:8px">⤢ Open mapping editor →</div>`;
+  } else if(n.type==='validate'){
+    const rules=VRULES[n.id]||[['field','condition']];
+    const rr=rules.map(r=>`<div class="rcard"><div class="rh" style="margin:0"><b>${esc(r[0])}</b><span class="muted" style="margin-left:auto;font-family:var(--mono);font-size:11px">${esc(r[1])}</span></div></div>`).join('');
+    body=`<div class="k" style="margin-bottom:5px">Data-quality rules <span class="muted" style="font-weight:400">· ${rules.length} · field → condition</span></div>${rr}<div class="addrow" data-cmd="addfield">＋ Add rule</div>
+      <div class="k" style="margin:13px 0 5px">On violation</div><div class="v" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">Route failing rows to <span class="linkchip" style="color:var(--err);background:var(--err-bg)">⚠ reject → orders_dlq</span></div>
+      <div class="addrow" data-doc="recover" style="margin-top:8px">↩ Open recovery / DLQ →</div>`;
+  } else if(n.type==='join'){
+    const jt=S.joinType||'inner';
+    const types=[['inner','Inner'],['left','Left'],['right','Right'],['full','Full']];
+    const L=upOf(n.id,'left'), R=upOf(n.id,'right');
+    const keys=[['orders.cust_id','customers.id']];
+    const emit=['name','tier','segment'];
+    const jrow=(lbl,role,node)=>`<div class="rcard"><div class="rh" style="margin:0;gap:6px"><b>${lbl}</b><span class="wt">${role}</span><span class="muted" style="flex:1;text-align:right;font-weight:400">${node?esc(node.name):'<span style=\"color:var(--err)\">unwired</span>'}</span></div></div>`;
+    body=`<div class="k" style="margin-bottom:5px">Join type <span class="muted" style="font-weight:400">· how rows are matched</span></div>
+      <div class="subtab" style="margin-bottom:12px">${types.map(t=>`<span class="${jt===t[0]?'on':''}" data-jt="${t[0]}">${t[1]}</span>`).join('')}</div>
+      <div class="k" style="margin-bottom:5px">Inputs</div>${jrow('Left','driving',L)}${jrow('Right','lookup',R)}
+      <div class="k" style="margin:13px 0 6px">Match keys <span class="muted" style="font-weight:400">· left = right</span></div>
+      ${keys.map(k=>`<div class="keyrow"><span class="kc mono">${k[0]}</span><span class="keq">=</span><span class="kc mono">${k[1]}</span><span class="kx" data-rmkey title="remove">✕</span></div>`).join('')}
+      <div class="addrow" data-cmd="addfield">＋ Add key pair</div>
+      <div class="k" style="margin:13px 0 6px">Emit from right <span class="muted" style="font-weight:400">· columns added to left rows</span></div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">${emit.map(c=>`<span class="linkchip">${c}</span>`).join('')}</div>`;
+  } else if(n.type==='router'){
+    const routes=[['eu',"region == 'EU'"],['us',"region == 'US'"],['rest','__default']];
+    const rr=routes.map((r,i)=>{ const ds=downOf(n.id,r[0]); const tgt=ds.length?ds.map(d=>esc(d.node.name)).join(', '):'<span style="color:var(--warn)">unwired</span>'; const isDef=r[1]==='__default'; return `<div class="routerow${isDef?' def':''}"><span class="rnum">${isDef?'∗':(i+1)}</span><span class="linkchip">${r[0]}</span><span class="rcond mono">${isDef?'<span class="muted">everything else · default</span>':esc(r[1])}</span><span class="rto muted">→ ${tgt}</span></div>`; }).join('');
+    body=`<div class="k" style="margin-bottom:5px">Match mode <span class="muted" style="font-weight:400">· first matching route wins</span></div>
+      <div class="subtab" style="margin-bottom:12px"><span class="on">First-match</span><span>All-match</span></div>
+      <div class="k" style="margin-bottom:6px">Routes <span class="muted" style="font-weight:400">· evaluated top to bottom</span></div>${rr}
+      <div class="addrow" data-cmd="addfield">＋ Add route</div>
+      <p class="muted" style="font-size:11px;margin-top:9px">Each row sends matching rows out its named port; the default catches the rest — like a conditional split.</p>`;
+  } else {
+    const isRef=(v)=>/\$env|\$property|CONNECTION\./i.test(v);
+    const isPwd=(k)=>/password|secret|token|passphrase/i.test(k);
+    const wtag=(k,v)=>/^connection$/i.test(k)?'listbox':isPwd(k)?'password':/query|expr|sql|rule/i.test(k)?'code':(/^[\d., ]+$/.test(v)?'number':'text');
+    const linkbtn=(lk)=>`<span class="linkbtn" data-link="${lk}" title="Link to app property">🔗</span>`;
+    const row=(k,v)=>{
+      const lk=n.id+'~~'+k, lp=S.links[lk]; let tag=wtag(k,v), ctl;
+      if(lp){ const p=propByName(lp); tag='property';
+        ctl=`<div class="slot"><span class="linkchip prop">🔗 $property["${esc(lp)}"]</span><span class="muted" style="margin-left:auto;font-family:var(--mono);font-size:11px">→ ${esc(String(propVal(p)))}</span><span data-unlink="${lk}" title="unlink" style="cursor:pointer;color:var(--mute);margin-left:8px">✕</span></div>`;
+      } else if(/^connection$/i.test(k)){ ctl=`<div class="slot"><span class="linkchip conn">🔗 ${esc(v.replace(/ ▾$/,''))}</span></div>`;
+      } else if(isPwd(k)&&isRef(v)){ ctl=`<div class="slot"><span class="linkchip secret">🔒 ${esc(v)}</span></div>`;
+      } else if(isPwd(k)){ ctl=`<div class="v" style="display:flex;align-items:center;gap:8px"><span class="pwv" data-val="${esc(v)}" style="font-family:var(--mono);letter-spacing:2px;flex:1">••••••••</span><span data-reveal style="cursor:pointer;color:var(--mute)" title="reveal">👁</span>${linkbtn(lk)}</div>`;
+      } else { ctl=`<div class="v" style="display:flex;align-items:center;gap:8px"><span style="flex:1;${/[=·{]/.test(v)?'font-family:var(--mono);font-size:11.5px':''}">${esc(v)}</span>${linkbtn(lk)}</div>`; }
+      const tsec=(tag==='password'||tag==='property'), tst=tag==='property'?' style="background:var(--accent-soft);color:var(--accent)"':'';
+      const pick=S.linking===lk?pickerHTML(k,v,lk):'';
+      return `<div class="fld"><div class="k">${k}<span class="wt${tsec?' sec':''}"${tst}>${tag}</span></div>${ctl}${pick}</div>`;
+    };
+    const rows=(CFG[n.id]||[['Type',n.type]]).map(([k,v])=>row(k,v)).join('');
+    const actions = (n.kind==='src'||n.kind==='sink')?`<div style="display:flex;gap:6px;margin:2px 0 9px"><span class="btn" data-cmd="readschema">↻ Read schema</span><span class="btn" data-cmd="testconn">◉ Test</span></div>`:'';
+    const ctx = n.type==='window'?`<div class="addrow" data-doc="windowing">⧖ Configure windowing →</div>`:n.kind==='dlq'?`<div class="addrow" data-doc="recover">↩ Open recovery / DLQ →</div>`:n.kind==='src'?`<div class="addrow" data-doc="incremental">⇧ Incremental load →</div>`:`<div class="addrow" data-cmd="addfield">＋ Add field</div>`;
+    body=rows+actions+ctx;
+  }
+  return `<div class="insp"><div class="ih"><span class="ik" style="color:${kc[1]};background:${kc[2]}">${kc[0]}</span><span class="inm">${esc(n.name)}</span><span class="itools"><span class="itool" data-cmd="inspcollapse" title="Collapse inspector">»</span><span class="itool" data-cmd="deselect" title="Close">✕</span></span></div>
+    <div class="itabs">${tb}</div>
+    <div class="ib">${body}</div></div>`;
+}
+function configBarHTML(n){
+  const isMap=['mapper','map','cast'].includes(n.type);
+  const kc={src:['Source','var(--src)','var(--src-bg)'],transform:['Transform','var(--tf)','var(--tf-bg)'],control:['Control','var(--tf)','var(--tf-bg)'],sink:['Sink','var(--snk)','var(--snk-bg)'],dlq:['Error','var(--dlq)','var(--dlq-bg)']}[n.kind]||['Node','var(--tf)','var(--tf-bg)'];
+  const tab=S.cfgTab||'Input', mode=S.mapMode||'visual';
+  const tabsHTML=['Settings','Input','Output','Test'].map(t=>`<span class="${tab===t?'on':''}" data-cfgtab="${t}">${t}</span>`).join('');
+  const mapped=mapModel(n).fields.filter(f=>f.kind!=='empty').length;
+  const autoBtn=isMap?`<span class="btn pri" data-cmd="automap">⚡ Auto-map by name</span>`:'';
+  const modeSeg=isMap?`<span class="modeseg"><span class="${mode==='visual'?'on':''}" data-mapmode="visual">▤ Visual</span><span class="${mode==='fx'?'on':''}" data-mapmode="fx">fx Expression</span></span>`:'';
+  const status=isMap?`<span class="chip ok">${mapped} of ${mapped} mapped</span>`:`<span class="chip ok">valid</span>`;
+  return `<span class="ik" style="color:${kc[1]};background:${kc[2]}">${kc[0]}</span><span class="inm">${esc(n.name)}</span><span class="mtabs2" style="margin-left:10px">${tabsHTML}</span><span style="flex:1"></span>${autoBtn}${modeSeg}${status}<span class="pt-tools" style="margin-left:8px"><span class="ptool" data-cmd="panelmax" title="Toggle height">⤢</span><span class="ptool" data-cmd="paneltoggle" title="${S.panelOpen===false?'Expand':'Collapse'}">${S.panelOpen===false?'⌃':'⌄'}</span><span class="ptool" data-cmd="deselect" title="Close">✕</span></span>`;
+}
+function configMid(n){
+  const isMap=['mapper','map','cast'].includes(n.type), mode=S.mapMode||'visual', tab=S.cfgTab||'Input';
+  if(tab==='Input') return isMap?((mode==='fx')?mapperFxHTML(n):mapper3HTML(n)):configPanelInput(n);
+  if(tab==='Output') return outputBody(n);
+  if(tab==='Settings') return settingsBody(n);
+  return testBody(n);
+}
+function wireBarHTML(e){
+  const p=PIPE(); const [sid,sp,tid,tp,err]=e; const s=p.nodes.find(n=>n.id===sid), t=p.nodes.find(n=>n.id===tid);
+  return `<span class="ik" style="color:var(--accent);background:var(--accent-soft)">Wire</span><span class="inm">${esc(s?s.name:'?')} → ${esc(t?t.name:'?')}</span>${err?'<span class="wt sec" style="margin-left:8px">error · reject</span>':''}<span style="flex:1"></span><span class="chip ok">valid</span><span class="pt-tools" style="margin-left:8px"><span class="ptool" data-cmd="panelmax" title="Toggle height">⤢</span><span class="ptool" data-cmd="paneltoggle" title="${S.panelOpen===false?'Expand':'Collapse'}">${S.panelOpen===false?'⌃':'⌄'}</span><span class="ptool" data-cmd="deselect" title="Close">✕</span></span>`;
+}
+function wireMidHTML(e){
+  const p=PIPE(); const [sid,sp,tid,tp,err]=e; const s=p.nodes.find(n=>n.id===sid), t=p.nodes.find(n=>n.id===tid); const sch=schemaOf(sid);
+  const tbl=`<table class="grid"><tr><th>Field</th><th>Type</th></tr>${sch.map(r=>`<tr><td class="fld0">${r[0]}</td><td class="mono">${r[1]}</td></tr>`).join('')}</table>`;
+  return `<div class="mcb" style="flex:1;max-width:640px"><div class="rcard"><div class="rh" style="margin:0;gap:6px"><b>${esc(s?s.name:'?')}</b>${sp&&sp!=='rows'?`<span class="muted">${sp}</span>`:''}<span class="muted" style="flex:1;text-align:center">→</span><b>${esc(t?t.name:'?')}</b></div>${err?'<div class="muted" style="margin-top:5px;color:var(--err)">error · reject path</div>':''}</div><div class="k" style="margin:12px 0 5px">Schema on wire <span class="muted" style="font-weight:400">· ${sch.length} cols · ${s?s.count||'—':'—'} rows</span></div>${tbl}<div class="addrow" data-cmd="preview" style="margin-top:9px">▷ Preview sample rows on this wire →</div></div>`;
+}
+function renderPanel(){
+  const el=document.getElementById('panel');
+  if(isDoc()||!S.tabs.length){ el.classList.add('hidden'); el.innerHTML=''; return; } el.classList.remove('hidden');
+  el.classList.toggle('collapsed', S.panelOpen===false);
+  el.classList.toggle('max', !!S.panelMax);
+  el.style.height=(S.panelOpen!==false && S.panelH)?S.panelH+'px':'';
+  const PRESIZE='<div class="presize" data-resize title="Drag to resize"></div>';
+  const selNode = S.sel ? PIPE().nodes.find(x=>x.id===S.sel) : null;
+  const selEdge = (!selNode && S.selEdge!=null) ? PIPE().edges[S.selEdge] : null;
+  el.classList.toggle('cfg', !!selNode || !!selEdge);
+  el.classList.toggle('termh', !selNode && !selEdge && S.panel==='terminal');
+  if(selNode){ el.innerHTML=PRESIZE+`<div class="mapbar">${configBarHTML(selNode)}</div><div class="pbody cfgbody" id="pbody">${configMid(selNode)}</div>`; return; }
+  if(selEdge){ el.innerHTML=PRESIZE+`<div class="mapbar">${wireBarHTML(selEdge)}</div><div class="pbody cfgbody" id="pbody">${wireMidHTML(selEdge)}</div>`; return; }
+  const pc=probsFor().length;
+  const tabs=[['preview','Preview'],['problems','Problems'+(pc?` <b style="color:var(--err)">${pc}</b>`:'')],['output','Output'],['tests','Tests'],['terminal','Terminal']];
+  const th=tabs.map(([k,l])=>`<div class="ptab ${S.panel===k?'on':''}" data-panel="${k}">${l}</div>`).join('');
+  el.innerHTML=PRESIZE+`<div class="ptabs">${th}<span class="pt-tools"><span class="ptool" data-cmd="panelmax" title="Toggle max height">⤢</span><span class="ptool" data-cmd="paneltoggle" title="${S.panelOpen===false?'Expand':'Collapse'} panel">${S.panelOpen===false?'⌃':'⌄'}</span></span></div><div class="pbody${S.panel==='terminal'?' termbody':''}" id="pbody">${panelBody()}</div>`;
+  if(S.panel==='terminal') requestAnimationFrame(()=>{ const to=document.getElementById('termout'); if(to)to.scrollTop=to.scrollHeight; const ti=document.getElementById('terminput'), ae=document.activeElement; if(ti && (!ae||ae===document.body||ae.id==='terminput'))ti.focus(); });
+}
+function panelBody(){
+  if(S.panel==='preview'){
+    const d=PREVIEW[S.open]; if(!d) return `<div class="muted">Run a preview on a node to see sampled rows.</div>`;
+    const sub=`<div class="subtab" id="pvsub">${[['output','Output · 100'],['rejected','Rejected · 3'],['dropped','Dropped · 1'],['profile','Profile']].map(([k,l])=>`<span class="${S.pv===k?'on':''}" data-pv="${k}">${l}</span>`).join('')}</div>`;
+    let body='';
+    if(S.pv==='output') body=`<table class="grid"><tr>${d.cols.map(c=>`<th>${c}</th>`).join('')}</tr>${d.output.map(r=>`<tr>${r.map((c,i)=>`<td class="${i===0?'fld0':i===2?'num':''}">${c}</td>`).join('')}</tr>`).join('')}</table>`;
+    else if(S.pv==='rejected') body=`<table class="grid"><tr><th>order_id</th><th>reason</th><th>value</th></tr>${d.rejected.map(r=>`<tr><td class="fld0">${r[0]}</td><td><span class="reason">${r[1]}</span></td><td class="num">${r[2]}</td></tr>`).join('')}</table>`;
+    else if(S.pv==='dropped') body=`<table class="grid"><tr><th>order_id</th><th>dropped by</th><th>amount</th></tr>${d.dropped.map(r=>`<tr><td class="fld0">${r[0]}</td><td class="mono">${r[1]}</td><td class="num">${r[2]}</td></tr>`).join('')}</table>`;
+    else body=`<table class="grid"><tr><th>Column</th><th>Null</th><th>Distinct</th><th>Range / top</th></tr>${d.profile.map(r=>`<tr><td class="fld0">${r[0]}</td><td class="mono">${r[1]}</td><td class="mono">${r[2]}</td><td class="mono">${r[3]}</td></tr>`).join('')}</table>`;
+    return `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><span class="chip run no">sample 104 rows · 38 ms</span></div>${sub}${body}`;
+  }
+  if(S.panel==='problems'){ const ps=probsFor(); if(!ps.length) return `<div class="rlog"><span class="ok">✓ 0 errors · 0 warnings</span> — pipeline valid. Mappings resolve, ports connected, no cycles.</div>`;
+    const ec=ps.filter(p=>p.sev==='err').length, wc=ps.filter(p=>p.sev==='warn').length;
+    return `<div style="margin-bottom:8px"><span class="chip err" style="color:var(--err)">✗ ${ec} error${ec!==1?'s':''}</span> <span class="chip warn" style="color:var(--warn)">! ${wc} warning${wc!==1?'s':''}</span> <span class="muted" style="margin-left:6px">design-time · blocks Run &amp; build</span></div>`
+      + ps.map(p=>`<div class="prob ${p.sev}" data-node="${p.node}"><span class="pi">${p.sev==='err'?'✗':'!'}</span><span class="pl"><b>${esc(PIPE().nodes.find(n=>n.id===p.node)?.name||p.node)}</b> — ${p.msg}</span><span class="pw">${p.loc}</span></div>`).join('');
+  }
+  if(S.panel==='output') return `<div class="rlog" id="runlog"><span class="muted">Press ▶ Run to execute the pipeline (mock engine).</span></div>`;
+  if(S.panel==='tests') return testsBody();
+  if(S.panel==='terminal') return termHTML();
+}
+function testsBody(){
+  const rows=[['rowCount · output==100 · rejected==3',9,0],['schema · 5 cols, types locked',14,0],['goldenSample · first 20 rows',22,1],['dqPassRate · amount ≥ 99.5%',6,0],['noDeadLetter · dlq==0',4,0]];
+  return `<div style="display:flex;gap:10px;align-items:center;margin-bottom:8px"><span class="btn run" data-cmd="runtests">▷ Run tests</span><span class="muted">enrich-route-load.datapipelinetest · 5 assertions</span></div>
+    <div id="trows">${rows.map((r,i)=>`<div class="trow" data-fail="${r[2]}" data-ms="${r[1]}"><span class="td"></span>${r[0]}<span class="ts">idle</span></div>`).join('')}</div>
+    <div id="tsum" style="margin-top:8px;font-weight:700"></div>`;
+}
+function termPrompt(){ return '~/'+S.open; }
+const TERMHELP=[
+  'Commands:',
+  '  flogo build      — compile the pipeline to a self-contained binary',
+  '  flogo run        — execute the pipeline (mock engine)',
+  '  flogo test       — run the .datapipelinetest assertions',
+  '  flogo validate   — check mappings, ports, cycles',
+  '  flogo deploy     — build image and push',
+  '  flogo version    — CLI version',
+  '  ls · pwd · git status · echo · date · clear',
+  '  <span class="mut">↑/↓ recall history · mock shell for the demo</span>',
+];
+function termGit(a){ if(a[0]==='status') return 'On branch <b>prototype/studio-demo</b>\nnothing to commit, working tree clean'; if(a[0]==='log') return '<span class="warn">e219945</span> per-node mapper data + node tests\n<span class="warn">d36e43e</span> dock config at bottom (ADF pattern)'; return 'usage: git &lt;status|log&gt;'; }
+function termFlogo(a){ const s=a[0];
+  if(s==='version'||s==='--version'||s==='-v') S.term.push('Flogo Data Pipeline CLI · v2.26.5');
+  else if(s==='build'){ S.term.push('<span class="mut">compiling '+esc(S.open)+' → flogo app…</span>'); S.term.push('<span class="ok">✓ built '+esc(S.open)+' (linux/amd64) · 24.1 MB · 11.8s</span>'); }
+  else if(s==='run'){ S.term.push('<span class="mut">starting '+esc(S.open)+' · mode=etl…</span>'); S.term.push('<span class="ok">✓ completed — 2.0M rows · 4m12s · DQ 99.2%</span>'); }
+  else if(s==='test'){ S.term.push('<span class="mut">running '+esc(S.open)+'.datapipelinetest…</span>'); S.term.push('<span class="ok">✓ 5 passed</span> <span class="warn">· 1 flaky</span> · 0 failed'); }
+  else if(s==='validate'){ S.term.push('<span class="ok">✓ 0 errors · 0 warnings</span> — mappings resolve, ports connected, no cycles'); }
+  else if(s==='deploy'){ S.term.push('<span class="mut">build + push…</span>'); S.term.push('<span class="ok">✓ ghcr.io/acme/'+esc(S.open)+':1.4.0</span>'); }
+  else S.term.push('usage: flogo &lt;build|run|test|validate|deploy|version&gt;');
+}
+function runTerm(raw){
+  if(!S.term)S.term=[];
+  S.term.push('<span class="termps">'+esc(termPrompt())+' $</span> '+esc(raw));
+  const cmd=(raw||'').trim(), parts=cmd.split(/\s+/), c=parts[0], a=parts.slice(1);
+  if(cmd===''){}
+  else if(c==='help'||c==='?') TERMHELP.forEach(l=>S.term.push(l));
+  else if(c==='clear'||c==='cls') S.term=[];
+  else if(c==='pwd') S.term.push('/Users/you/flogo/'+esc(S.open));
+  else if(c==='ls') S.term.push('<span class="ok">'+esc(S.open)+'.datapipeline</span>  '+esc(S.open)+'.datapipelinetest  README.md  bin/  config/');
+  else if(c==='echo') S.term.push(esc(a.join(' ')));
+  else if(c==='date') S.term.push(esc(new Date().toString()));
+  else if(c==='whoami') S.term.push('flogo');
+  else if(c==='git') termGit(a).split('\n').forEach(l=>S.term.push(l));
+  else if(c==='flogo'||c==='fcli') termFlogo(a);
+  else S.term.push('<span class="err">command not found: '+esc(c)+'</span> · type <b>help</b>');
+  renderPanel();
+}
+function termHTML(){
+  if(!S.term||!S.term.length) S.term=['<b>Flogo Data Pipeline</b> — integrated terminal','<span class="mut">local mock engine · type </span><b>help</b><span class="mut"> for commands</span>',''];
+  const out=S.term.map(l=>`<div class="tl">${l}</div>`).join('');
+  return `<div class="term"><div class="termout" id="termout">${out}</div><div class="termin"><span class="termps">${esc(termPrompt())} $</span><input id="terminput" autocomplete="off" autocapitalize="off" spellcheck="false"></div></div>`;
+}
+document.addEventListener('keydown',e=>{ if(!e.target||e.target.id!=='terminput')return; if(e.key==='Enter'){ const v=e.target.value; if(v.trim())S.termHist.push(v); S.termHistIdx=S.termHist.length; runTerm(v); } else if(e.key==='ArrowUp'){ e.preventDefault(); if(S.termHistIdx>0){S.termHistIdx--; e.target.value=S.termHist[S.termHistIdx]||'';} } else if(e.key==='ArrowDown'){ e.preventDefault(); if(S.termHistIdx<S.termHist.length-1){S.termHistIdx++; e.target.value=S.termHist[S.termHistIdx]||'';}else{S.termHistIdx=S.termHist.length; e.target.value='';} } });
+function renderStatus(){
+  if(!S.tabs.length){ document.getElementById('statusbar').innerHTML=`<span class="s">⑂ prototype/studio-demo</span><span class="grow"></span><span class="s">Flogo engine: ready</span>`; return; }
+  if(isDoc()){ document.getElementById('statusbar').innerHTML=`<span class="s">⑂ prototype/studio-demo</span><span class="s">◈ ${DOCS[DOCKEY()].title}</span><span class="grow"></span><span class="s">mock data</span><span class="s">Flogo engine: ready</span>`; return; }
+  const p=PIPE();
+  document.getElementById('statusbar').innerHTML=`<span class="s">⑂ prototype/studio-demo</span><span class="s">◈ Data Pipeline</span><span class="s" data-cmd="envswitch" style="cursor:pointer" title="switch environment">🌐 ${S.env}</span><span class="s">${p.shape==='unbounded'?'∞ streaming':'▦ batch'}</span><span class="grow"></span><span class="s" id="statusvalid">✓ valid</span><span class="s">${p.mode.toUpperCase()}</span><span class="s">UTF-8</span><span class="s">Flogo engine: ready</span>`;
+}
+
+/* ============================ INTERACTIONS ============================ */
+document.addEventListener('click',e=>{
+  const t=e.target;
+  const close=t.closest('[data-close]'); if(close){ e.stopPropagation(); closeTab(close.getAttribute('data-close')); return; }
+  const open=t.closest('[data-open]'); if(open){ openPipe(open.getAttribute('data-open')); return; }
+  const ew=t.closest('[data-edge]'); if(ew){ S.selEdge=+ew.getAttribute('data-edge'); S.sel=null; S.linking=null; S.panelOpen=true; renderMain(); return; }
+  const node=t.closest('[data-node]'); if(node){ if(_suppressClick){_suppressClick=false;return;} S.sel=node.getAttribute('data-node'); S.cfgTab='Input'; S.selEdge=null; S.linking=null; S.panelOpen=true; renderMain(); scrollNodeIntoView(S.sel); return; }
+  const v2=t.closest('[data-view2]'); if(v2){ S.view=v2.getAttribute('data-view2'); renderToolbar(); renderMain(); return; }
+  const pn=t.closest('[data-panel]'); if(pn){ const k=pn.getAttribute('data-panel'); if(k===S.panel&&S.panelOpen!==false){ S.panelOpen=false; } else { S.panel=k; S.panelOpen=true; } renderPanel(); return; }
+  const pv=t.closest('[data-pv]'); if(pv){ S.pv=pv.getAttribute('data-pv'); renderPanel(); return; }
+  const conn=t.closest('[data-conn]'); if(conn){ openConnection(conn.getAttribute('data-conn')); return; }
+  const run=t.closest('[data-run]'); if(run){ openRun(run.getAttribute('data-run')); return; }
+  const av=t.closest('.abar .ai'); if(av && av.getAttribute('data-view')){ const v=av.getAttribute('data-view'); const mp={scm:'git',run:'ops',settings:'settings',ai:'ai'}; if(mp[v])return openDoc(mp[v]); if(v==='pipeline'){ if(isDoc())return openPipe(lastPipe()); S.sideOpen=!S.sideOpen; applyChrome(); return; } if(v==='explorer'){ S.sideOpen=!S.sideOpen; applyChrome(); return; } toast('View: '+v+' — Data Pipeline view active in this prototype'); return; }
+  const cmd=t.closest('[data-cmd]'); if(cmd){ runCmd(cmd.getAttribute('data-cmd')); return; }
+  const grp=t.closest('[data-grp]'); if(grp){ const g=grp.getAttribute('data-grp'); S.grpc[g]=!S.grpc[g]; renderSide(); return; }
+  if(t.closest('#cmdopen')){ openPalette(); return; }
+  if(S.selEdge!=null && t.closest('.canvas') && !t.closest('[data-edge]') && !t.closest('[data-node]')){ S.selEdge=null; renderMain(); return; }
+  if(t.id==='scrim'){ closeOverlays(); return; }
+});
+function openPipe(id){ if(id[0]!=='@' && !DB.pipelines[id])return; S.open=id; S.mapEdit=null; if(id[0]!=='@')S.sel=null; if(!S.tabs.includes(id))S.tabs.push(id); render(); }
+function closeTab(id){ S.tabs=S.tabs.filter(x=>x!==id); if(S.open===id)S.open=S.tabs[0]||''; render(); }
+function runCmd(c){
+  if(c==='run') return doRun();
+  if(c==='runtests') return doTests();
+  if(c==='deselect'){ S.sel=null; S.selEdge=null; S.inspOpen=true; renderMain(); return; }
+  if(c==='inspcollapse'){ S.inspOpen=false; renderMain(); return; }
+  if(c==='inspopen'){ S.inspOpen=true; renderMain(); return; }
+  if(c==='paneltoggle'){ S.panelOpen=S.panelOpen===false; renderPanel(); return; }
+  if(c==='panelmax'){ S.panelMax=!S.panelMax; S.panelH=null; renderPanel(); return; }
+  if(c==='addfield'){ toast('Field editor (mock) — type · default · nullability'); return; }
+  if(c==='envswitch'){ const q=['dev','stg','prod']; S.env=q[(q.indexOf(S.env)+1)%3]; render(); toast('Active environment: '+S.env); return; }
+  if(c==='closemodal'){ closeOverlays(); return; }
+  if(c==='validate'){ if(!isDoc()){S.panel='problems';renderPanel();} toast('✓ Validation passed — 0 errors, 0 warnings'); return; }
+  if(c==='autolayout'){ toast('Auto-layout applied'); return; }
+  if(c==='fit'){ S.zoom=1; renderMain(); toast('Fit to graph · 100%'); return; }
+  if(c==='zoomin'){ S.zoom=Math.min(1.6, Math.round(((S.zoom||1)+0.1)*10)/10); renderMain(); return; }
+  if(c==='zoomout'){ S.zoom=Math.max(0.4, Math.round(((S.zoom||1)-0.1)*10)/10); renderMain(); return; }
+  if(c==='zoomreset'){ S.zoom=1; renderMain(); return; }
+  if(c==='new'){ openTemplates(); return; }
+  if(c==='preview'){ if(isDoc())openPipe(lastPipe()); S.panel='preview'; renderPanel(); return; }
+  if(c==='automap'){ S.mapped=true; renderMain(); toast('✨ Auto-mapped by name — matching columns linked'); return; }
+  if(c==='mapback'){ S.mapEdit=null; S.sel=null; renderMain(); return; }
+  if(c==='openmapper'){ if(S.sel)S.mapEdit=S.sel; renderMain(); return; }
+  const M={resume:'↻ Resuming from checkpoint 09:15:04Z — no data loss',replay:'↩ Replaying 18k dead-lettered rows into the pipeline',dobuild:'▲ Build started — compiling pipeline → single binary',aiapply:'✓ Applied — Filter node inserted before Router',aiask:'Impact: drops ~1 row (ORD-000002) in the sample; downstream counts update automatically.',expandgroup:'Extracted 3 nodes into sub-pipeline “standardise-customer”',testconn:'✓ Connection succeeded',readschema:'↻ Read 12 columns from source — schema updated',save:'✓ Saved'};
+  if(M[c]){ toast(M[c]); return; }
+  if(typeof DOCS!=='undefined' && DOCS[c]) return openDoc(c);
+  toast(c);
+}
+function doRun(){
+  if(S.running)return; S.running=true; clearInterval(S._striv);
+  S.panel='output'; renderPanel();
+  const log=document.getElementById('runlog'); log.innerHTML='';
+  const p=PIPE(), nodes=p.nodes.filter(n=>n.kind!=='dlq');
+  const line=(cls,txt)=>{ log.innerHTML+=`<div><span class="t">[${new Date().toLocaleTimeString()}]</span> <span class="${cls}">${txt}</span></div>`; log.scrollTop=log.scrollHeight; };
+  line('i',`run started — ${p.id} · mode=${p.mode} · shape=${p.shape}`);
+  document.querySelectorAll('#emain .node .nst').forEach(d=>d.className='nst idle');
+  let i=0;
+  const step=()=>{
+    if(i>=nodes.length){
+      const vc=document.getElementById('valchip'); if(vc){vc.className='chip '+(p.shape==='unbounded'?'run':'ok');vc.textContent=p.shape==='unbounded'?'streaming · live':'completed · 2.0M rows';}
+      if(p.shape==='unbounded'){ startStream(); }
+      else { line('ok','pipeline run completed — processed 2,000,000 · written 1,980,000 · rejected→DLQ 18,000'); S.running=false; }
+      return;
+    }
+    const n=nodes[i]; const dot=document.querySelector(`.node[data-node="${n.id}"] .nst`);
+    if(dot)dot.className='nst run';
+    line('', `▸ ${n.name} — running`);
+    setTimeout(()=>{ if(dot)dot.className='nst ok'; line('ok',`✓ ${n.name} — ${n.count||'ok'}`); i++; step(); }, 380);
+  };
+  const vc=document.getElementById('valchip'); if(vc){vc.className='chip run';vc.textContent='running…';}
+  step();
+}
+function doTests(){
+  S.panel='tests'; renderPanel();
+  setTimeout(()=>{
+    const rows=[...document.querySelectorAll('#trows .trow')], sum=document.getElementById('tsum');
+    let i=0,pass=0,fail=0,ms=0;
+    const step=()=>{
+      if(i>=rows.length){ sum.innerHTML=fail?`<span style="color:var(--err)">✗ ${fail} failed</span> · ${pass} passed · ${ms} ms &nbsp;<span class="btn" data-cmd="fixtests">↻ Fix &amp; re-run</span>`:`<span style="color:var(--ok)">✓ all ${pass} passed</span> · ${ms} ms`; return; }
+      const r=rows[i], s=r.querySelector('.ts'); r.className='trow run'; s.textContent='running…';
+      setTimeout(()=>{ r.classList.remove('run'); const f=r.getAttribute('data-fail')==='1'; const t=+r.getAttribute('data-ms'); ms+=t;
+        if(f){r.classList.add('fail');s.textContent='✗ fail';fail++;}else{r.classList.add('pass');s.textContent='✓ '+t+'ms';pass++;} i++;step(); },300);
+    }; step();
+  },30);
+}
+document.addEventListener('click',e=>{ if(e.target.closest('[data-cmd="fixtests"]')){ document.querySelectorAll('#trows .trow').forEach(r=>r.setAttribute('data-fail','0')); doTests(); }});
+
+/* command palette */
+const COMMANDS=[
+  {ico:'＋',label:'Data Pipeline: New Pipeline from Template…',cmd:'new',kb:''},
+  {ico:'◆',label:'Data Pipeline: App Properties',cmd:'appprops',kb:''},
+  {ico:'▤',label:'Data Pipeline: Schemas & Contracts',cmd:'contracts',kb:''},
+  {ico:'▶',label:'Data Pipeline: Run Pipeline',cmd:'run',kb:'⌘R'},
+  {ico:'▷',label:'Data Pipeline: Run Tests',cmd:'runtests',kb:''},
+  {ico:'✓',label:'Data Pipeline: Validate',cmd:'validate',kb:''},
+  {ico:'◇',label:'Data Pipeline: Preview Data',cmd:'preview',kb:''},
+  {ico:'▤',label:'Data Pipeline: Schema & Formats',cmd:'schema',kb:''},
+  {ico:'⇧',label:'Data Pipeline: Incremental & CDC',cmd:'incremental',kb:''},
+  {ico:'⧖',label:'Data Pipeline: Windowing',cmd:'windowing',kb:''},
+  {ico:'⧉',label:'Data Pipeline: Lineage & Impact',cmd:'lineage',kb:''},
+  {ico:'🛡',label:'Data Pipeline: Security & Governance',cmd:'security',kb:''},
+  {ico:'⚙',label:'Data Pipeline: Environments',cmd:'environments',kb:''},
+  {ico:'⚙',label:'Data Pipeline: Settings',cmd:'settings',kb:''},
+  {ico:'📊',label:'Data Pipeline: Operations Monitor',cmd:'ops',kb:''},
+  {ico:'⚡',label:'Data Pipeline: Performance & Scaling',cmd:'performance',kb:''},
+  {ico:'⏰',label:'Data Pipeline: Schedule & Orchestrate',cmd:'schedule',kb:''},
+  {ico:'↩',label:'Data Pipeline: Recovery & DLQ',cmd:'recover',kb:''},
+  {ico:'▲',label:'Data Pipeline: Build & Deploy…',cmd:'deploy',kb:''},
+  {ico:'⑂',label:'Data Pipeline: Show Git Diff',cmd:'git',kb:''},
+  {ico:'▦',label:'Data Pipeline: Sub-pipelines & Reuse',cmd:'groups',kb:''},
+  {ico:'✨',label:'Data Pipeline: AI Copilot',cmd:'ai',kb:''},
+  {ico:'⇄',label:'Data Pipeline: Migrate Existing Job',cmd:'migrate',kb:''},
+  {ico:'◈',label:'Data Pipeline: Runtime Model',cmd:'model',kb:''},
+  {ico:'⌨',label:'Preferences: Keyboard Shortcuts',cmd:'keys',kb:''},
+];
+function openPalette(){ document.getElementById('scrim').classList.add('on'); const cp=document.getElementById('cmdp'); cp.classList.add('on'); const inp=document.getElementById('cmdinput'); inp.value=''; renderCmdList(''); inp.focus(); }
+function renderCmdList(q){ const list=COMMANDS.filter(c=>c.label.toLowerCase().includes(q.toLowerCase())); document.getElementById('cmdlist').innerHTML=list.map((c,i)=>`<div class="ci ${i===0?'on':''}" data-run="__cmd_${c.cmd}"><span class="ico">${c.ico}</span>${c.label}<span class="kb">${c.kb}</span></div>`).join('')||`<div class="ci">No matching commands</div>`; }
+document.getElementById('cmdinput').addEventListener('input',e=>renderCmdList(e.target.value));
+document.getElementById('cmdinput').addEventListener('keydown',e=>{ if(e.key==='Enter'){ const on=document.querySelector('#cmdlist .ci.on')||document.querySelector('#cmdlist .ci[data-run]'); if(on){const c=on.getAttribute('data-run').replace('__cmd_','');closeOverlays();runCmd(c);} } if(e.key==='Escape')closeOverlays(); });
+document.getElementById('cmdlist').addEventListener('click',e=>{ const ci=e.target.closest('.ci[data-run]'); if(ci){const c=ci.getAttribute('data-run').replace('__cmd_','');closeOverlays();runCmd(c);} });
+document.addEventListener('keydown',e=>{ if((e.metaKey||e.ctrlKey)&&e.shiftKey&&e.key.toLowerCase()==='p'){e.preventDefault();openPalette();} if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='r'){e.preventDefault();doRun();} if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='k'){e.preventDefault();const s=document.getElementById('palsearch');if(s){s.focus();s.select();}} if((e.metaKey||e.ctrlKey)&&(e.key==='='||e.key==='+')){e.preventDefault();runCmd('zoomin');} if((e.metaKey||e.ctrlKey)&&e.key==='-'){e.preventDefault();runCmd('zoomout');} if((e.metaKey||e.ctrlKey)&&e.key==='0'){e.preventDefault();runCmd('zoomreset');} if(e.key==='Escape'){ if(document.getElementById('ctxmenu')){ closeCtxMenu(); } else if(S.linking){ S.linking=null; renderMain(); } else if(document.getElementById('scrim').classList.contains('on')){closeOverlays();} else if(S.selEdge!=null){ S.selEdge=null; renderMain(); } else if(S.sel){ S.sel=null; renderMain(); } } });
+function closeOverlays(){ document.getElementById('scrim').classList.remove('on'); document.getElementById('cmdp').classList.remove('on'); document.getElementById('modal').classList.remove('on'); }
+
+/* modals */
+function openTemplates(){
+  const tpls=[['Clean & standardise a file','CSV → cast → validate → JSONL'],['Enrich & load to warehouse','CSV → join → map → JDBC'],['Route by region','JDBC → router → S3 · Kafka'],['CDC → stream','Kafka·HWM → window → Kafka'],['Quality gate + DLQ','CSV → validate → JSONL + ⚠ dlq'],['Mainframe EBCDIC → PostgreSQL','fixed-width → cast → JDBC']];
+  showModal('＋ New Pipeline from Template', tpls.map((t,i)=>`<div class="tmpl" data-tmpl="${i}"><b>${t[0]}</b><div class="fl">${t[1]}</div></div>`).join('')+`<p class="muted" style="margin-top:6px">Scaffolds a working <code>.datapipeline</code> you can edit and run.</p>`);
+}
+function openConnection(id){
+  const c=DB.connections.find(x=>x.id===id);
+  showModal('🔌 Connection · '+c.id, `<div class="g2"><div class="fld"><div class="k">Type</div><div class="v mono">${c.type}</div></div><div class="fld"><div class="k">Status</div><div class="v"><span class="chip ok">tested</span></div></div></div>
+    <div class="fld"><div class="k">Endpoint</div><div class="v mono">${c.meta}</div></div>
+    <div class="fld"><div class="k">Password <span style="color:var(--err)">secret</span></div><div class="v mono">$env:${c.id.toUpperCase().replace(/-/g,'_')}_PASSWORD</div></div>
+    <div style="display:flex;gap:8px;margin-top:8px"><span class="btn pri" data-cmd="testconn">Test connection</span><span class="muted" style="align-self:center">used by 4 pipelines</span></div>`);
+}
+function openRun(t){
+  const r=DB.runs.find(x=>x.t===t); if(!r)return;
+  const sc=r.status==='completed'?'ok':r.status==='partial'?'warn':'idle';
+  showModal('▷ Run · '+r.pipe+' · '+r.t, `<div class="g3" style="margin-bottom:10px">
+     <div class="metric"><div class="ml">Status</div><div class="mv" style="font-size:15px"><span class="chip ${sc}">${r.status}</span></div></div>
+     <div class="metric"><div class="ml">Duration</div><div class="mv" style="font-size:18px">${r.dur}</div></div>
+     <div class="metric"><div class="ml">Rows · DQ</div><div class="mv" style="font-size:18px">${r.rows} · ${r.dq}</div></div>
+   </div>
+   <div class="rlog"><span class="t">[${r.t}]</span> <span class="i">run started · ${r.pipe}</span><br><span class="t">[${r.t}]</span> <span class="${sc==='ok'?'ok':'w'}">${r.status==='completed'?'✓ completed — '+r.rows+' rows · '+r.dur:r.status==='partial'?'⚠ partial — some rows routed to DLQ':'idle'}</span></div>
+   <div style="display:flex;gap:8px;margin-top:12px"><span class="btn pri" data-goto="${r.pipe}">Open pipeline</span><span class="btn" data-goto="@ops">View in Operations</span></div>`);
+}
+function showModal(title,html){ document.getElementById('scrim').classList.add('on'); const m=document.getElementById('modal'); m.classList.add('on'); m.innerHTML=`<div class="mh">${title}<span class="x" data-cmd="closemodal">✕</span></div><div class="mc">${html}</div>`; }
+document.addEventListener('click',e=>{ const tm=e.target.closest('[data-tmpl]'); if(tm){ closeOverlays(); toast('Scaffolded pipeline from template — opening…'); } const g=e.target.closest('[data-goto]'); if(g){ closeOverlays(); const v=g.getAttribute('data-goto'); if(v[0]==='@')openDoc(v.slice(1)); else openPipe(v); }});
+document.addEventListener('click',e=>{ const it=e.target.closest('[data-itab]'); if(it){ S.itab=it.getAttribute('data-itab'); renderMain(); return; } const dc=e.target.closest('[data-doc]'); if(dc){ openDoc(dc.getAttribute('data-doc')); return; } const rv=e.target.closest('[data-reveal]'); if(rv){ const v=rv.parentElement.querySelector('.pwv'); if(v){ const sh=v.dataset.shown==='1'; v.textContent=sh?'••••••••':v.dataset.val; v.dataset.shown=sh?'0':'1'; rv.textContent=sh?'👁':'🙈'; } return; } const lb=e.target.closest('[data-link]'); if(lb){ const lk=lb.getAttribute('data-link'); S.linking=S.linking===lk?null:lk; renderMain(); return; } const pk=e.target.closest('[data-pick]'); if(pk){ const raw=pk.getAttribute('data-pick'), ix=raw.lastIndexOf('~~'), lk=raw.slice(0,ix), name=raw.slice(ix+2); if(name==='__new'){ const nm='new.property'; if(!propByName(nm))APPPROPS.push({name:nm,type:'string',dev:'—',stg:'—',prod:'—'}); S.links[lk]=nm; toast('Created & linked $property["'+nm+'"]'); } else { S.links[lk]=name; toast('Linked to $property["'+name+'"]'); } S.linking=null; renderMain(); return; } const ul=e.target.closest('[data-unlink]'); if(ul){ delete S.links[ul.getAttribute('data-unlink')]; S.linking=null; renderMain(); toast('Unlinked — back to a literal value'); return; } const ev=e.target.closest('[data-env]'); if(ev){ S.env=ev.getAttribute('data-env'); render(); return; } const sl=e.target.closest('[data-schlink]'); if(sl){ const id=sl.getAttribute('data-schlink'); S.schlinking=S.schlinking===id?null:id; renderMain(); return; } const sp=e.target.closest('[data-schpick]'); if(sp){ const raw=sp.getAttribute('data-schpick'), ix=raw.lastIndexOf('~~'); S.schemaLinks[raw.slice(0,ix)]=raw.slice(ix+2); S.schlinking=null; renderMain(); toast('Linked to shared schema “'+raw.slice(ix+2)+'”'); return; } const su=e.target.closest('[data-schunlink]'); if(su){ delete S.schemaLinks[su.getAttribute('data-schunlink')]; renderMain(); toast('Unlinked shared schema'); return; }});
+
+/* palette search + join-type interactions */
+document.addEventListener('input',e=>{ if(e.target&&e.target.id==='palsearch'){ S.palQ=e.target.value; filterPalette(S.palQ); } });
+document.addEventListener('click',e=>{ const jt=e.target.closest('[data-jt]'); if(jt){ S.joinType=jt.getAttribute('data-jt'); renderMain(); toast('Join type · '+jt.getAttribute('data-jt')); return; } const rk=e.target.closest('[data-rmkey]'); if(rk){ toast('Removed key pair (demo)'); } });
+document.addEventListener('click',e=>{ const mt=e.target.closest('[data-cfgtab]'); if(mt){ S.cfgTab=mt.getAttribute('data-cfgtab'); renderMain(); return; } const mm=e.target.closest('[data-mapmode]'); if(mm){ S.mapMode=mm.getAttribute('data-mapmode'); renderMain(); return; } const mf=e.target.closest('[data-mapfield]'); if(mf){ S.mapField=mf.getAttribute('data-mapfield'); S.cfgTab='Input'; renderMain(); return; } const fc=e.target.closest('.fnchip'); if(fc){ toast('Inserted '+fc.textContent+'( ) into the expression'); return; } const lf=e.target.closest('[data-leaf]'); if(lf){ toast('Drag '+lf.getAttribute('data-leaf')+' onto a target field to map it'); return; } });
+
+/* ============================ DOC VIEWS ============================ */
+const H=(t,s,b)=>`<div class="docview"><div class="dtitle">${t}</div><div class="dsub">${s}</div>${b}</div>`;
+const spark=(pts,c)=>`<svg viewBox="0 0 100 28" preserveAspectRatio="none" style="width:100%;height:26px;margin-top:6px"><polyline points="${pts}" fill="none" stroke="${c}" stroke-width="2"/></svg>`;
+const DOCS = {
+  settings:{title:'Settings',icon:'⚙',render:()=>H('Pipeline settings','Execution mode, error handling, checkpointing & effective configuration.',
+    `<div class="g2">
+      <div class="card"><h4>Execution mode</h4><div class="subtab"><span class="on">ETL</span><span>ELT</span><span>EL</span></div><p class="muted">Transform in-engine before load. Switch to ELT to push transforms down to the warehouse.</p></div>
+      <div class="card"><h4>Error handling</h4><p>On violation: <b>route to dead-letter</b></p><p>maxErrors <b>0</b> · onError <b>fail-fast</b></p></div>
+    </div>
+    <div class="g2">
+      <div class="card"><h4>Checkpointing</h4><p>Store <b>file</b> · interval <b>10s</b> · resume on restart ✓</p></div>
+      <div class="card"><h4>Parallelism</h4><p>Workers <b>8</b> · batch <b>10,000</b> · backpressure ✓</p></div>
+    </div>
+    <div class="sec">Effective configuration</div>
+    <div class="fld"><div class="v mono" style="white-space:pre">mode: etl
+checkpoint: { store: file, intervalMs: 10000 }
+error:      { onViolation: route, maxErrors: 0 }
+parallelism: 8</div></div>
+    <p class="muted">Resolved from defaults + the active environment. (Definition.Mode · CheckpointDef · PerformanceDef)</p>`)},
+
+  appprops:{title:'App properties',icon:'◆',render:()=>{ const envs=['dev','stg','prod'];
+    const cell=(p,en)=> p.type==='password'?`<span class="linkchip secret">🔒 ••••</span>`:esc(String(p[en]));
+    const tr=(p)=>`<tr><td class="fld0">${p.name}</td><td class="mono">${p.type}</td>${envs.map(en=>`<td class="mono" style="${en===S.env?'background:var(--accent-soft)':''}">${cell(p,en)}</td>`).join('')}</tr>`;
+    return H('App properties','The shared registry every field binds to — one value per environment, resolved at runtime.',
+    `<div style="margin-bottom:10px;display:flex;align-items:center;gap:8px"><span class="btn pri">＋ New property</span><span class="muted">Active environment:</span><span class="subtab">${envs.map(en=>`<span class="${en===S.env?'on':''}" data-env="${en}">${en}</span>`).join('')}</span></div>
+     <table class="grid reg"><tr><th>Property</th><th>Type</th>${envs.map(en=>`<th style="${en===S.env?'color:var(--accent)':''}">${en}</th>`).join('')}</tr>
+     <tr><td class="grp" colspan="5">Pipeline · user-defined</td></tr>
+     ${APPPROPS.filter(p=>p.cat!=='conn').map(tr).join('')}
+     <tr><td class="grp" colspan="5">Connections · auto-managed</td></tr>
+     ${APPPROPS.filter(p=>p.cat==='conn').map(tr).join('')}
+     </table>
+     <p class="muted" style="margin-top:10px">Each property resolves to its value for the active environment; a field that links to it inherits that value. Secrets stay by reference (FLOGO_APP_PROPS_ENV). (app.appProperties · internal/appprops)</p>`);}},
+
+  contracts:{title:'Schemas & contracts',icon:'▤',render:()=>H('Shared schemas & data contracts','Define a schema once, link it everywhere, version it — with drift detection.',
+    `<div class="g2">
+      <div class="card"><h4>Shared schema library</h4>
+        <div class="rcard"><b>▤ orders</b> <span class="cver">v3</span><div class="muted" style="font-family:var(--mono);font-size:11px;margin-top:3px">order_id · amount · region · … 12 cols</div><div class="muted" style="font-size:11px;margin-top:3px">🔗 linked by 4 fields · 2 pipelines</div></div>
+        <div class="rcard"><b>▤ customer</b> <span class="cver">v2</span><div class="muted" style="font-family:var(--mono);font-size:11px;margin-top:3px">id · name · tier · segment</div><div class="muted" style="font-size:11px;margin-top:3px">🔗 linked by 3 fields</div></div>
+        <div class="addrow">＋ New shared schema · or ✨ infer</div></div>
+      <div class="card"><h4>Contract · orders <span class="cver">v3</span> <span class="chip warn" style="color:var(--warn);margin-left:6px">⚠ drift on region</span></h4>
+        <table class="grid"><tr><th>Column</th><th>Type</th><th>Rule</th></tr>
+        <tr><td class="fld0">order_id</td><td class="mono">string</td><td class="mono">not null · unique</td></tr>
+        <tr><td class="fld0">amount</td><td class="mono">decimal(2)</td><td class="mono">≥ 0</td></tr>
+        <tr><td class="fld0">region</td><td class="mono">string</td><td class="mono">in [EU,US,APAC] · <span style="color:var(--warn)">+LATAM</span></td></tr></table>
+        <p class="muted" style="margin-top:8px">Bump to v4 to accept LATAM, or route violators to the DLQ.</p></div>
+    </div>
+    <div class="g3" style="margin-top:10px">
+      <div class="metric"><div class="ml">Shared schemas</div><div class="mv">2</div></div>
+      <div class="metric"><div class="ml">Bound fields</div><div class="mv">7</div></div>
+      <div class="metric"><div class="ml">Drift alerts</div><div class="mv" style="color:var(--warn)">1</div></div>
+    </div>
+    <p class="muted" style="margin-top:10px">Bind by reference (🔗) like properties; promote to a versioned contract (dbt · Databricks DLT); drift = the schemadrift stage as governance. (task.schemaMap · shared-schemas)</p>`)},
+
+  environments:{title:'Environments',icon:'⚙',render:()=>{ const rows=[['source.path','./data/orders.csv','s3://stg/orders/','s3://prod/orders/'],['jdbc.url','localhost:5432','pg-stg:5432','warehouse:5432'],['kafka.brokers','localhost:9092','stg-kafka:9092','prod-kafka:9092'],['parallelism','2','4','8'],['batch.size','1,000','5,000','10,000'],['checkpoint.dir','/tmp/ckpt','/mnt/ckpt','/mnt/ckpt']];
+    return H('Environments','App properties resolved per environment — promote without changing the pipeline.',
+    `<div style="margin-bottom:10px"><span class="chip ok">active · dev</span> <span class="chip idle">staging</span> <span class="chip idle">prod</span></div>
+     <table class="grid"><tr><th>Property</th><th>dev</th><th>staging</th><th>prod</th></tr>
+     ${rows.map(r=>`<tr><td class="fld0">${r[0]}</td><td class="mono">${r[1]}</td><td class="mono">${r[2]}</td><td class="mono">${r[3]}</td></tr>`).join('')}</table>
+     <p class="muted" style="margin-top:10px">Secrets resolve from the environment at runtime — never stored in the .datapipeline. (internal/appprops)</p>`);}},
+
+  security:{title:'Security & governance',icon:'🛡',render:()=>{ const rows=[['full_name','PII','mask · partial','sink','masked','warn'],['email','PII','hash · sha-256','transform','masked','warn'],['ssn','Sensitive','redact','source','blocked','err'],['tier','Internal','—','—','',''],['net_amount','None','—','—','','']];
+    return H('Security & governance','Field-level classification, masking policy & audit — enforced in-pipeline.',
+    `<div class="g3" style="margin-bottom:12px">
+       <div class="metric"><div class="ml">Classified fields</div><div class="mv">3</div><div class="muted">of 12 columns</div></div>
+       <div class="metric"><div class="ml">Masking policies</div><div class="mv">2</div><div class="muted">mask · hash</div></div>
+       <div class="metric"><div class="ml">Audit log</div><div class="mv" style="color:var(--ok)">on</div><div class="muted">every run recorded</div></div>
+     </div>
+     <table class="grid"><tr><th>Field</th><th>Classification</th><th>Policy</th><th>Applied at</th><th>Effect</th></tr>
+     ${rows.map(r=>`<tr><td class="fld0">${r[0]}</td><td>${r[1]}</td><td class="mono">${r[2]}</td><td>${r[3]}</td><td>${r[5]?`<span class="chip ${r[5]}">${r[4]}</span>`:'<span class="muted">—</span>'}</td></tr>`).join('')}</table>
+     <p class="muted" style="margin-top:10px">Classifications travel with lineage; masking runs before data leaves the engine. (audit.Config · ObservabilityDef)</p>`);}},
+
+  lineage:{title:'Lineage & impact',icon:'⧉',render:()=>H('Lineage & impact','OpenLineage dataset + column lineage, emitted on every run.',
+    `<div class="sec">Dataset lineage</div>
+     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12.5px">
+       <span class="chip no" style="background:var(--src-bg);color:var(--src)">orders.csv</span>
+       <span class="chip no" style="background:var(--src-bg);color:var(--src)">customers</span>
+       <span class="muted">→</span>
+       <span class="chip run">enrich-route-load</span>
+       <span class="muted">→</span>
+       <span class="chip no" style="background:var(--snk-bg);color:var(--snk)">lake/EU</span>
+       <span class="chip no" style="background:var(--snk-bg);color:var(--snk)">warehouse/US</span>
+       <span class="chip no" style="background:var(--snk-bg);color:var(--snk)">orders.enriched</span>
+     </div>
+     <div class="sec">Column lineage · net_amount</div>
+     <div class="card"><p class="mono" style="font-size:12px;margin:0">warehouse.orders_us.net_amount ← orders.amount − orders.discount × customers.tier_factor</p><p class="muted" style="margin:6px 0 0">3 source columns · 1 transform (map) · emitted to catalog</p></div>
+     <div class="sec">Impact analysis — if you change <b>orders.amount</b></div>
+     <table class="grid"><tr><th>Downstream</th><th>Type</th><th>Impact</th></tr>
+       <tr><td class="fld0">enrich customer</td><td>transform</td><td><span class="chip warn">recompute</span></td></tr>
+       <tr><td class="fld0">warehouse/US.net_amount</td><td>column</td><td><span class="chip warn">schema change</span></td></tr>
+       <tr><td class="fld0">orders.enriched</td><td>topic</td><td><span class="chip err">consumer break</span></td></tr>
+       <tr><td class="fld0">daily-cdc-load</td><td>pipeline</td><td><span class="chip warn">re-run</span></td></tr></table>
+     <p class="muted" style="margin-top:10px">Lineage events are OpenLineage-compatible. (lineage/lineage.go)</p>`)},
+
+  incremental:{title:'Incremental & CDC',icon:'⇧',render:()=>H('Incremental load','Only process what changed — high-water-mark or change-data-capture.',
+    `<div class="g2">
+       <div class="card"><h4>Strategy</h4><div class="subtab"><span class="on">High-water-mark</span><span>CDC (log)</span><span>Full</span></div><p class="muted">Track a monotonic column; next run starts where the last one stopped.</p></div>
+       <div class="card"><h4>Watermark column</h4><p class="mono">updated_at · timestamp</p><p>Last committed: <b class="mono">2026-07-28 09:15:04Z</b></p></div>
+     </div>
+     <div class="sec">Run windows</div>
+     <table class="grid"><tr><th>Run</th><th>From</th><th>To</th><th>Rows</th></tr>
+       <tr><td class="fld0">#128</td><td class="mono">08:00:00Z</td><td class="mono">09:15:04Z</td><td class="num">480k</td></tr>
+       <tr><td class="fld0">#127</td><td class="mono">00:00:00Z</td><td class="mono">08:00:00Z</td><td class="num">2.0M</td></tr></table>
+     <p class="muted" style="margin-top:10px">The watermark is checkpointed; a failed run resumes without double-processing. (IncrementalDef · watermark/)</p>`)},
+
+  windowing:{title:'Windowing',icon:'⧖',render:()=>H('Event-time windowing','Group unbounded streams into finite windows for aggregation.',
+    `<div class="g2">
+       <div class="card"><h4>Window</h4><div class="subtab"><span class="on">Tumbling</span><span>Sliding</span><span>Session</span></div><p>Size <b>5 min</b> · key <b>region</b> · fire <b>on watermark</b></p></div>
+       <div class="card"><h4>Watermark & lateness</h4><p>Watermark: <b class="mono">event_time − 30s</b></p><p>Allowed lateness <b>2 min</b> → late rows to <span class="chip warn">side output</span></p></div>
+     </div>
+     <div class="sec">Timeline</div>
+     <div class="tl">${[0,1,2,3].map(i=>`<div class="win"><span>w${i}</span><small>10:${(i*5).toString().padStart(2,'0')}</small></div>`).join('')}<div class="late">late ↩</div></div>
+     <p class="muted" style="margin-top:12px">Windows close on the watermark, not wall-clock — deterministic under replay. (window transform)</p>`)},
+
+  ops:{title:'Operations',icon:'📊',render:()=>H('Operations & monitoring','Fleet health across all running pipelines.',
+    `<div class="g3" style="margin-bottom:6px">
+       <div class="metric"><div class="ml">Pipelines running</div><div class="mv">3</div>${spark('0,20 20,14 40,16 60,8 80,10 100,4','var(--ok)')}</div>
+       <div class="metric"><div class="ml">Throughput</div><div class="mv">48k/s</div>${spark('0,22 20,10 40,18 60,6 80,12 100,8','var(--run)')}</div>
+       <div class="metric"><div class="ml">Error rate</div><div class="mv" style="color:var(--warn)">0.8%</div>${spark('0,6 20,10 40,8 60,16 80,12 100,18','var(--warn)')}</div>
+     </div>
+     <div class="sec">Active pipelines</div>
+     <table class="grid"><tr><th>Pipeline</th><th>State</th><th>Throughput</th><th>Lag</th><th>DQ</th><th>Uptime</th></tr>
+       <tr><td class="fld0">daily-cdc-load</td><td><span class="chip run">streaming</span></td><td class="num">48k/s</td><td class="num">12k</td><td class="num">97.1%</td><td class="mono">6h 12m</td></tr>
+       <tr><td class="fld0">enrich-route-load</td><td><span class="chip ok">completed</span></td><td class="num">—</td><td class="num">—</td><td class="num">99.2%</td><td class="mono">4m 12s</td></tr>
+       <tr><td class="fld0">orders-quality</td><td><span class="chip idle">idle</span></td><td class="num">—</td><td class="num">—</td><td class="num">100%</td><td class="mono">—</td></tr></table>
+     <p class="muted" style="margin-top:10px">Metrics exported for Prometheus / OpenTelemetry. (metrics/ · ObservabilityDef)</p>`)},
+
+  performance:{title:'Performance & scaling',icon:'⚡',render:()=>H('Performance & scaling','Partitioning, parallelism and per-stage timing.',
+    `<div class="g2">
+       <div class="card"><h4>Scaling mode</h4><div class="subtab"><span>Single</span><span class="on">Sharded</span><span>Distributed</span></div><p>Shards <b>8</b> · partition key <b>region</b> · coordinator <b>lease</b></p></div>
+       <div class="card"><h4>Throughput</h4><p style="font:700 22px var(--sans);margin:2px 0">2.0M <span class="muted" style="font:400 12px var(--sans)">rows in 4m 12s</span></p><p>≈ <b>7,940 rows/s</b></p></div>
+     </div>
+     <div class="sec">Per-stage timing</div>
+     ${[['source · read',18],['join · enrich',34],['validate · DQ',22],['router',6],['sinks · write',20]].map(s=>`<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px"><span style="width:120px;font-size:12px">${s[0]}</span><div style="flex:1;background:#eef0f2;border-radius:6px;overflow:hidden"><div style="width:${s[1]*2.4}%;height:14px;background:var(--accent)"></div></div><span class="mono" style="width:40px;text-align:right;font-size:11px">${s[1]}%</span></div>`).join('')}
+     <p class="muted" style="margin-top:10px">Sharded / distributed execution with lease-based coordination. (scaling/coordinator.go · partition/)</p>`)},
+
+  schedule:{title:'Schedule & orchestrate',icon:'⏰',render:()=>H('Schedule & orchestrate','Triggers, control flow and cross-pipeline dependencies.',
+    `<div class="g2">
+       <div class="card"><h4>Trigger</h4><div class="subtab"><span class="on">Cron</span><span>Event</span><span>Manual</span></div><p class="mono">0 2 * * *  ·  daily 02:00 UTC</p></div>
+       <div class="card"><h4>On completion</h4><p>✓ success → start <b>publish-metrics</b></p><p>✗ failure → <span class="chip err">alert</span> + retry ×2</p></div>
+     </div>
+     <div class="sec">Pipeline dependency graph</div>
+     <div style="display:flex;align-items:center;gap:8px;font-size:12.5px;flex-wrap:wrap">
+       <span class="chip ok">extract-orders</span><span class="muted">→</span>
+       <span class="chip run">enrich-route-load</span><span class="muted">→</span>
+       <span class="chip no" style="background:var(--tf-bg);color:var(--tf)">publish-metrics</span>
+     </div>
+     <p class="muted" style="margin-top:12px">Trigger-driven; a completed run can chain the next pipeline. (trigger/)</p>`)},
+
+  recover:{title:'Recovery & DLQ',icon:'↩',render:()=>H('Recovery & dead-letter','Inspect failures, resume from checkpoint or replay the dead-letter queue.',
+    `<div class="g3" style="margin-bottom:10px">
+       <div class="metric"><div class="ml">Dead-lettered</div><div class="mv" style="color:var(--warn)">18k</div><div class="muted">0.9% of input</div></div>
+       <div class="metric"><div class="ml">Last checkpoint</div><div class="mv" style="font-size:15px">09:15:04Z</div><div class="muted">offset 1,982,004</div></div>
+       <div class="metric"><div class="ml">Resumable</div><div class="mv" style="color:var(--ok)">yes</div><div class="muted">no data loss</div></div>
+     </div>
+     <div style="display:flex;gap:8px;margin-bottom:12px"><span class="btn pri" data-cmd="resume">↻ Resume from checkpoint</span><span class="btn" data-cmd="replay">↩ Replay DLQ</span></div>
+     <div class="sec">Dead-letter queue</div>
+     <table class="grid"><tr><th>order_id</th><th>reason</th><th>value</th><th>stage</th></tr>
+       <tr><td class="fld0">ORD-000004</td><td><span class="reason">amount ≤ 0</span></td><td class="num">-12.00</td><td>validate</td></tr>
+       <tr><td class="fld0">ORD-000007</td><td><span class="reason">status unknown</span></td><td class="mono">"RETURND"</td><td>validate</td></tr>
+       <tr><td class="fld0">ORD-000011</td><td><span class="reason">not a number</span></td><td class="mono">"N/A"</td><td>cast</td></tr></table>
+     <p class="muted" style="margin-top:10px">Checkpoints let a failed run resume exactly-once. (CheckpointDef · checkpoint/{file,redis})</p>`)},
+
+  deploy:{title:'Build & deploy',icon:'▲',render:()=>H('Build & deploy','Compile the pipeline to a self-contained Flogo binary or container.',
+    `<div class="g2">
+       ${[['⬢ Local binary','go build · single executable','Build'],['🐳 Docker image','multi-stage · distroless','Build image'],['☸ Kubernetes','Deployment + HPA','Apply'],['◆ TIBCO Platform','managed capability bundle','Push']].map(t=>`<div class="card"><h4>${t[0]}</h4><p class="muted">${t[1]}</p><span class="btn pri" data-cmd="dobuild" style="margin-top:8px">${t[2]}</span></div>`).join('')}
+     </div>
+     <div class="sec">Last build</div>
+     <div class="rlog"><span class="t">[10:40:02]</span> <span class="i">compiling pipeline → flogo app…</span><br><span class="t">[10:40:14]</span> <span class="ok">✓ built enrich-route-load (linux/amd64) · 24.1 MB</span><br><span class="t">[10:40:15]</span> <span class="ok">✓ image ghcr.io/acme/enrich-route-load:1.4.0</span></div>
+     <p class="muted" style="margin-top:10px">One artifact — no external runtime. (FlogoWorkDirAssets: Dockerfile · k8s template)</p>`)},
+
+  git:{title:'Source control',icon:'⑂',render:()=>H('Git-native diff','A .datapipeline is text — Studio renders the change as a readable graph, not line noise.',
+    `<div class="g2">
+      <div class="difframe">
+        <div class="dfh"><span class="ik" style="color:var(--snk);background:var(--snk-bg)">Diff</span>enrich-route-load.datapipeline<span class="grow"></span><span class="chip run">PR #142</span></div>
+        <div style="padding:6px 0">
+          <div class="dl"><span class="g"> </span><span class="tx">  transforms:</span></div>
+          <div class="dl add"><span class="g">+</span><span class="tx">    - type: validate      # DQ gate · 5 rules</span></div>
+          <div class="dl add"><span class="g">+</span><span class="tx">      onViolation: route → dlq</span></div>
+          <div class="dl"><span class="g"> </span><span class="tx">    - type: router</span></div>
+          <div class="dl del"><span class="g">−</span><span class="tx">      routes: [US, rest]</span></div>
+          <div class="dl add"><span class="g">+</span><span class="tx">      routes: [EU, US, rest]</span></div>
+        </div>
+      </div>
+      <div class="difframe">
+        <div class="dfh"><span class="ik" style="color:var(--tf);background:var(--tf-bg)">Graph diff</span>what changed, visually</div>
+        <div style="padding:16px 10px">
+          <div class="mgraph">
+            <div class="mnode"><div class="mk">Source</div><div class="mn">orders</div></div>
+            <span class="marrow"></span>
+            <div class="mnode add"><div class="mk">+ added</div><div class="mn">validate</div></div>
+            <span class="marrow"></span>
+            <div class="mnode chg"><div class="mk">~ changed</div><div class="mn">router · +EU</div></div>
+            <span class="marrow"></span>
+            <div class="mnode"><div class="mk">Sinks</div><div class="mn">3 ways</div></div>
+          </div>
+          <div class="lgnd"><span><b style="background:var(--ok)"></b>added</span><span><b style="background:var(--err)"></b>removed</span><span><b style="background:var(--warn)"></b>changed config</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="g3" style="margin-top:14px">
+      <div class="card"><h4>Native VS Code SCM</h4><p class="muted">Branch, stage, commit, PR in the editor. Node positions live in a side-car ui block so a layout nudge never pollutes the diff.</p></div>
+      <div class="card"><h4>Reviewable by anyone</h4><p class="muted">The graph diff makes a routing or mapping change legible to a reviewer who doesn't read JSON.</p></div>
+      <div class="card"><h4>CI on the file</h4><p class="muted">Same file drives validate, tests and build in CI — a red check blocks the merge.</p></div>
+    </div>
+    <p class="muted" style="margin-top:10px">The net-new piece is the graph-aware diff renderer over the JSON. (studio is a VS Code extension with native SCM)</p>`)},
+
+  ai:{title:'AI copilot',icon:'✨',render:()=>H('AI copilot','Describe a change in plain language — review the diff before it applies.',
+    `<div class="chat">
+       <div class="msg u">Add a filter to drop orders under $100 before the router.</div>
+       <div class="msg a">I'll insert a <b>Filter</b> node between <b>Validate</b> and <b>Router</b>:<br><span class="mono" style="font-size:11.5px">filter: net_amount ≥ 100</span><br>This drops ~1 row in the sample. Apply?</div>
+     </div>
+     <div style="display:flex;gap:8px;margin:12px 0"><span class="btn pri" data-cmd="aiapply">✓ Apply change</span><span class="btn" data-cmd="aiask">Explain the impact</span></div>
+     <div class="fld"><div class="v" style="color:var(--mute)">Ask the copilot to add nodes, write validation rules, or explain a mapping…</div></div>
+     <p class="muted">Grounded in your pipeline schema — suggestions are typed and validated. (flogo-agents)</p>`)},
+
+  groups:{title:'Sub-pipelines',icon:'▦',render:()=>H('Sub-pipelines & reuse','Extract a subgraph into a reusable, versioned sub-pipeline.',
+    `<div class="g2">
+       <div class="card"><h4>▦ standardise-customer</h4><p class="muted">trim → lowercase → validate email</p><p>Used by <b>4</b> pipelines · v1.2</p></div>
+       <div class="card"><h4>▦ to-warehouse</h4><p class="muted">cast → upsert (conflict = id)</p><p>Used by <b>2</b> pipelines · v2.0</p></div>
+     </div>
+     <div class="sec">In this pipeline</div>
+     <div style="display:flex;align-items:center;gap:8px"><span class="chip no" style="background:var(--tf-bg);color:var(--tf)">▦ standardise-customer</span><span class="muted">expands to 3 nodes</span><span class="btn" data-cmd="expandgroup" style="margin-left:auto">Extract selection to sub-pipeline</span></div>
+     <p class="muted" style="margin-top:12px">A sub-pipeline is a normal .datapipeline referenced by others — versioned and testable on its own.</p>`)},
+
+  schema:{title:'Schema & formats',icon:'▤',render:()=>{ const rows=[['order_id','string','no','—'],['amount','decimal(12,2)','no','fixed · offset 12 · len 10'],['status','string','no','ebcdic · cp037'],['region','string','yes','—'],['updated_at','timestamp','no','yyyy-MM-dd']];
+    return H('Schema & formats','Typed columns with fixed-width / EBCDIC support for mainframe feeds.',
+    `<div style="margin-bottom:10px"><span class="chip run">✨ inferred from sample</span> <span class="muted">12 columns · edit types, nullability & format</span></div>
+     <table class="grid"><tr><th>Column</th><th>Type</th><th>Nullable</th><th>Format / encoding</th></tr>
+     ${rows.map(r=>`<tr><td class="fld0">${r[0]}</td><td class="mono">${r[1]}</td><td>${r[2]}</td><td class="mono">${r[3]}</td></tr>`).join('')}</table>
+     <p class="muted" style="margin-top:10px">Fixed-width offsets and EBCDIC code pages are first-class. (ColumnDef · schema/)</p>`);}},
+
+  migrate:{title:'Migrate',icon:'⇄',render:()=>H('Migrate existing jobs','Import BusinessWorks / legacy ETL and map constructs to pipeline nodes.',
+    `<div class="g2">
+       <div class="card"><h4>Source</h4><p class="mono">MC300ConversionModule (BW6)</p><p class="muted">4 processes · 12 activities</p></div>
+       <div class="card"><h4>Coverage</h4><p style="font:700 22px var(--sans);color:var(--ok);margin:2px 0">83%</p><p class="muted">10 of 12 activities auto-mapped</p></div>
+     </div>
+     <div class="sec">Construct mapping</div>
+     <table class="grid"><tr><th>Source construct</th><th>→ Pipeline node</th><th>Status</th></tr>
+       <tr><td class="mono">File Poller</td><td>Source · CSV</td><td><span class="chip ok">mapped</span></td></tr>
+       <tr><td class="mono">Mapper (XSLT)</td><td>Map · Filter · Cast</td><td><span class="chip ok">mapped</span></td></tr>
+       <tr><td class="mono">JDBC Update</td><td>Sink · JDBC (upsert)</td><td><span class="chip ok">mapped</span></td></tr>
+       <tr><td class="mono">Custom Java</td><td>—</td><td><span class="chip warn">review</span></td></tr></table>
+     <p class="muted" style="margin-top:10px">Import maps activities to typed nodes; unmapped steps are flagged for review.</p>`)},
+
+  model:{title:'Runtime model',icon:'◈',render:()=>H('Runtime model','How a .datapipeline executes on the Flogo engine.',
+    `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12.5px;margin-bottom:12px">
+       <span class="chip no" style="background:#eef0f2">.datapipeline (JSON)</span><span class="muted">→</span>
+       <span class="chip no" style="background:#eef0f2">compile</span><span class="muted">→</span>
+       <span class="chip run">Flogo app + engine</span><span class="muted">→</span>
+       <span class="chip ok">single binary</span>
+     </div>
+     <div class="g2">
+       <div class="card"><h4>Records, not events</h4><p class="muted">Bounded sources stream records through the DAG in batches; unbounded sources run continuously.</p></div>
+       <div class="card"><h4>Executor</h4><p class="muted">Batch → funnel to completion. Streaming → long-running with windows + checkpoints.</p></div>
+       <div class="card"><h4>Backpressure</h4><p class="muted">Each stage pulls; slow sinks throttle upstream automatically.</p></div>
+       <div class="card"><h4>Exactly-once</h4><p class="muted">Checkpointed offsets + idempotent upserts on restart.</p></div>
+     </div>
+     <p class="muted" style="margin-top:10px">Same model, two shapes — inferred from the source, not chosen. (action/pipeline)</p>`)},
+
+  keys:{title:'Keyboard shortcuts',icon:'⌨',render:()=>{ const ks=[['⌘⇧P','Command palette'],['⌘R','Run pipeline'],['⌘K','Search components'],['⌘S','Save'],['⌘⏎','Preview selected node'],['⌘/','Toggle Design / Code'],['⌘F','Find in pipeline'],['⌫','Delete node']];
+    return H('Keyboard shortcuts','Move at speed — everything is keyboard-first.',
+    `<div class="g2">${ks.map(k=>`<div style="display:flex;align-items:center;gap:10px;padding:7px 2px;border-bottom:1px solid #eef0f2"><span class="kbd">${k[0]}</span><span>${k[1]}</span></div>`).join('')}</div>`);}},
+};
+function openDoc(key){ if(!DOCS[key])return; if(!S.tabs.includes('@'+key))S.tabs.push('@'+key); S.open='@'+key; render(); }
+
+/* ============================ AUTHORING · add / drag ============================ */
+const PADD={
+  'csv':{kind:'src',type:'csv',ico:'C',name:'new source',meta:'csv · header',out:['rows']},
+  'jdbc-src':{kind:'src',type:'jdbc',ico:'J',name:'jdbc source',meta:'jdbc · query',out:['rows']},
+  'kafka-src':{kind:'src',type:'kafka',ico:'K',name:'kafka source',meta:'kafka · topic',out:['rows']},
+  'objstore-src':{kind:'src',type:'s3',ico:'◇',name:'object source',meta:'s3 · prefix',out:['rows']},
+  'join':{kind:'transform',type:'join',ico:'⨝',name:'join',meta:'left = right',in:['left','right'],out:['rows']},
+  'router':{kind:'control',type:'router',ico:'⋔',name:'router',meta:'by rule',in:['in'],out:['a','b']},
+  'validate':{kind:'transform',type:'validate',ico:'✓',name:'validate',meta:'DQ rules',in:['in'],out:['pass','reject']},
+  'map':{kind:'transform',type:'mapper',ico:'ƒ',name:'map · filter',meta:'expression',in:['in'],out:['rows']},
+  'window':{kind:'transform',type:'window',ico:'⧖',name:'window',meta:'tumbling',in:['in'],out:['rows']},
+  'jdbc-sink':{kind:'sink',type:'jdbc',ico:'▣',name:'jdbc sink',meta:'upsert',in:['in']},
+  'objstore-sink':{kind:'sink',type:'s3',ico:'◇',name:'object sink',meta:'parquet',in:['in']},
+  'dlq':{kind:'dlq',type:'jdbc',ico:'⚠',name:'dead-letter',meta:'+reason',in:['in']},
+};
+function addNode(key){
+  if(isDoc()||!S.tabs.length)return; const spec=PADD[key]; if(!spec)return;
+  const p=PIPE(); p._n=(p._n||0)+1;
+  const n=Object.assign({},spec,{id:'n'+Date.now(),x:70+(p._n%6)*26,y:44+(p._n%6)*24});
+  p.nodes.push(n); S.sel=n.id; S.view='design'; renderToolbar(); renderMain();
+  toast('Added '+spec.name+' — drag to position, then wire a port');
+}
+document.addEventListener('click',e=>{ const a=e.target.closest('[data-add]'); if(a){ addNode(a.getAttribute('data-add')); }});
+function closeCtxMenu(){ const m=document.getElementById('ctxmenu'); if(m)m.remove(); }
+function showCtxMenu(id,x,y){ closeCtxMenu(); const nn=PIPE().nodes.find(z=>z.id===id); if(!nn)return; const items=[['open','▤','Open'],['preview','▷','Preview data'],['dup','⧉','Duplicate'],[nn.off?'enable':'disable',nn.off?'◉':'○',nn.off?'Enable':'Disable'],['sep'],['del','✕','Delete']]; const m=document.createElement('div'); m.className='ctxmenu'; m.id='ctxmenu'; m._node=id; m.innerHTML=items.map(it=>it[0]==='sep'?'<div class="ctxsep"></div>':`<div class="ctxitem ${it[0]==='del'?'danger':''}" data-ctx="${it[0]}"><span class="ci">${it[1]}</span>${it[2]}</div>`).join(''); document.body.appendChild(m); const mw=m.offsetWidth||178, mh=m.offsetHeight; m.style.left=Math.min(x,window.innerWidth-mw-8)+'px'; m.style.top=Math.min(y,window.innerHeight-mh-8)+'px'; }
+function ctxAction(act,id){ const p=PIPE(); const n=p.nodes.find(z=>z.id===id); if(!n)return; if(act==='open'){ S.sel=id; S.cfgTab='Input'; S.selEdge=null; renderMain(); scrollNodeIntoView(id); } else if(act==='preview'){ S.sel=id; S.selEdge=null; S.panel='preview'; S.panelOpen=true; renderMain(); renderPanel(); toast('Previewing '+n.name); } else if(act==='dup'){ p._n=(p._n||0)+1; const c=Object.assign(JSON.parse(JSON.stringify(n)),{id:'n'+Date.now(),x:(n.x||60)+30,y:(n.y||60)+30,name:n.name+' copy'}); p.nodes.push(c); S.sel=c.id; S.selEdge=null; renderMain(); toast('Duplicated '+n.name); } else if(act==='disable'){ n.off=true; renderMain(); toast(n.name+' disabled'); } else if(act==='enable'){ n.off=false; renderMain(); toast(n.name+' enabled'); } else if(act==='del'){ p.edges=(p.edges||[]).filter(ed=>ed[0]!==id&&ed[2]!==id); p.nodes=p.nodes.filter(z=>z.id!==id); if(S.sel===id)S.sel=null; S.selEdge=null; renderMain(); toast('Deleted '+n.name); } }
+document.addEventListener('contextmenu',e=>{ const nd=e.target.closest('.node'); if(nd&&!isDoc()){ e.preventDefault(); showCtxMenu(nd.getAttribute('data-node'),e.clientX,e.clientY); } });
+document.addEventListener('click',e=>{ const ci=e.target.closest('[data-ctx]'); if(ci){ const id=document.getElementById('ctxmenu')?._node; const act=ci.getAttribute('data-ctx'); closeCtxMenu(); ctxAction(act,id); return; } if(!e.target.closest('#ctxmenu')) closeCtxMenu(); });
+
+let _drag=null, _suppressClick=false, _presize=null;
+document.addEventListener('mousedown',e=>{ const rh=e.target.closest('[data-resize]'); if(rh){ e.preventDefault(); _presize={y:e.clientY,h:document.getElementById('panel').offsetHeight}; document.body.style.userSelect='none'; document.body.style.cursor='ns-resize'; } });
+document.addEventListener('mousemove',e=>{ if(!_presize)return; let h=_presize.h+(_presize.y-e.clientY); h=Math.max(120,Math.min(Math.round(window.innerHeight*0.82),h)); S.panelH=Math.round(h); S.panelMax=false; const panel=document.getElementById('panel'); panel.classList.remove('max'); panel.style.height=S.panelH+'px'; });
+document.addEventListener('mouseup',()=>{ if(_presize){ _presize=null; document.body.style.userSelect=''; document.body.style.cursor=''; } });
+document.addEventListener('mousedown',e=>{
+  if(e.button!==0)return;
+  _suppressClick=false;
+  const nd=e.target.closest('.node'); if(!nd||isDoc()||e.target.closest('.port'))return;
+  const cv=nd.closest('.canvas'); if(!cv)return; const r=nd.getBoundingClientRect();
+  _drag={id:nd.getAttribute('data-node'),n:PIPE().nodes.find(x=>x.id===nd.getAttribute('data-node')),el:nd,cv,dx:e.clientX-r.left,dy:e.clientY-r.top,sx:e.clientX,sy:e.clientY,moved:false};
+  nd.classList.add('drag');
+});
+document.addEventListener('mousemove',e=>{
+  if(!_drag)return; const cr=_drag.cv.getBoundingClientRect();
+  const x=Math.max(0,Math.round(e.clientX-cr.left-_drag.dx)), y=Math.max(0,Math.round(e.clientY-cr.top-_drag.dy));
+  _drag.n.x=x; _drag.n.y=y; _drag.el.style.left=x+'px'; _drag.el.style.top=y+'px';
+  if(Math.abs(e.clientX-_drag.sx)+Math.abs(e.clientY-_drag.sy)>3)_drag.moved=true;
+});
+document.addEventListener('mouseup',()=>{ if(!_drag)return; const d=_drag; _drag=null; d.el.classList.remove('drag'); if(d.moved){ _suppressClick=true; renderMain(); } });
+
+/* ============================ STREAMING · live run ============================ */
+function startStream(){
+  const log=document.getElementById('runlog'), pb=document.getElementById('pbody'); if(!pb)return;
+  const dash=document.createElement('div'); dash.className='g3'; dash.style.margin='0 0 10px';
+  dash.innerHTML=`<div class="metric"><div class="ml">Events / sec</div><div class="mv" id="m_eps">—</div>${spark('0,20 20,12 40,16 60,7 80,11 100,5','var(--run)')}</div><div class="metric"><div class="ml">Consumer lag</div><div class="mv" id="m_lag" style="color:var(--warn)">—</div></div><div class="metric"><div class="ml">Watermark</div><div class="mv" id="m_wm" style="font-size:15px">—</div></div>`;
+  pb.insertBefore(dash,pb.firstChild);
+  let lag=42000, wm=Date.parse('2026-07-28T10:42:00Z'), k=0;
+  clearInterval(S._striv);
+  S._striv=setInterval(()=>{
+    const eps=document.getElementById('m_eps'); if(!eps){clearInterval(S._striv);return;}
+    k++; const ev=46000+Math.floor(Math.random()*6000); lag=Math.max(700,lag-1200-Math.floor(Math.random()*4200)); wm+=3000;
+    eps.textContent=(ev/1000).toFixed(1)+'k';
+    document.getElementById('m_lag').textContent=(lag/1000).toFixed(1)+'k';
+    document.getElementById('m_wm').textContent=new Date(wm).toISOString().substr(11,8)+'Z';
+    if(log){ log.innerHTML+=`<div><span class="t">[${new Date().toLocaleTimeString()}]</span> <span class="i">▸ window closed · ${Math.floor(ev/50)} rollups → metrics table · lag ${(lag/1000).toFixed(1)}k</span></div>`; log.scrollTop=log.scrollHeight; }
+    if(k>=8){ clearInterval(S._striv); if(log)log.innerHTML+=`<div><span class="ok">streaming · healthy — lag draining, watermark advancing</span></div>`; S.running=false; }
+  },700);
+}
+
+/* ============================ WELCOME / first-run ============================ */
+function welcomeHTML(){
+  return `<div class="docview" style="display:grid;place-items:center;text-align:center">
+    <div style="max-width:540px">
+      <div style="font-size:40px;color:var(--tibco);line-height:1">◈</div>
+      <div class="dtitle" style="font-size:21px;margin-top:8px">Flogo Data Pipeline Studio</div>
+      <div class="dsub">Design, preview and ship batch &amp; streaming data pipelines — as versionable text.</div>
+      <div style="display:flex;gap:10px;justify-content:center;margin:16px 0">
+        <span class="btn pri" data-cmd="new">＋ New from template</span>
+        <span class="btn" data-open="enrich-route-load">Open a sample pipeline</span>
+      </div>
+      <div class="sec" style="text-align:left;margin-top:22px">Recent</div>
+      <div style="text-align:left;border:1px solid var(--lineL);border-radius:9px;overflow:hidden">
+        ${Object.values(DB.pipelines).map(p=>`<div style="display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid #eef0f2;cursor:pointer;font-size:13px" data-open="${p.id}"><span style="color:var(--tibco)">◈</span><span style="flex:1;font-weight:600">${p.id}.datapipeline</span><span class="muted" style="font-size:11px">${p.shape==='unbounded'?'stream':'batch'}</span></div>`).join('')}
+      </div>
+      <p class="muted" style="margin-top:14px;font-size:11.5px">⌘⇧P for all commands · everything runs on the local mock engine</p>
+    </div></div>`;
+}
+
+render();
+</script>
+</body>
+</html>

@@ -48,12 +48,18 @@ type SinkOwner interface {
 // Pipeline chains multiple transforms in sequence.
 // The output of transform N is the input of transform N+1.
 type Pipeline struct {
-	stages []Transform
+	stages  []Transform
+	rowsIn  []int64 // per-stage rows consumed, accumulated across batches
+	rowsOut []int64 // per-stage rows emitted, accumulated across batches
 }
 
 // NewPipeline constructs a Pipeline from an ordered slice of transforms.
 func NewPipeline(stages []Transform) *Pipeline {
-	return &Pipeline{stages: stages}
+	return &Pipeline{
+		stages:  stages,
+		rowsIn:  make([]int64, len(stages)),
+		rowsOut: make([]int64, len(stages)),
+	}
 }
 
 // Stages returns the ordered slice of transform stages.
@@ -65,17 +71,26 @@ func (p *Pipeline) Stages() []Transform { return p.stages }
 // Returns nil if any stage reduces the batch to zero rows.
 func (p *Pipeline) Apply(in *record.RecordBatch) (*record.RecordBatch, error) {
 	cur := in
-	for _, t := range p.stages {
+	for i, t := range p.stages {
 		if cur == nil || cur.Len() == 0 {
 			if cur != nil && cur != in {
 				record.Put(cur)
 			}
 			return nil, nil
 		}
+		inLen := cur.Len()
 		out, err := t.Apply(cur)
 		if err != nil {
 			return nil, fmt.Errorf("transform %s: %w", t.Name(), err)
 		}
+		outLen := 0
+		if out != nil {
+			outLen = out.Len()
+		}
+		// Per-stage row accounting (RowsOut can exceed RowsIn for fan-out stages
+		// such as join/explode, and be smaller for filter/validate/router).
+		p.rowsIn[i] += int64(inLen)
+		p.rowsOut[i] += int64(outLen)
 		// Return the intermediate batch to the pool once we're done with it —
 		// but ONLY when the stage produced a DISTINCT batch. Pass-through stages
 		// (hwm, dq, schemadrift, validate-keep) return the SAME batch they were
@@ -86,6 +101,27 @@ func (p *Pipeline) Apply(in *record.RecordBatch) (*record.RecordBatch, error) {
 		cur = out
 	}
 	return cur, nil
+}
+
+// StageStat reports the rows a single transform stage consumed (RowsIn) and
+// emitted (RowsOut) across the whole run, accumulated over every batch.
+type StageStat struct {
+	Name    string
+	RowsIn  int64
+	RowsOut int64
+}
+
+// StageStats returns the per-stage row counters accumulated by Apply. Read it
+// after the run completes: the counters are written by Apply on the pipeline's
+// own goroutine (the parallel engine gives each worker its own Pipeline), so no
+// locking is needed for a post-run read. Aggregate across worker pipelines by
+// summing matching stage indices.
+func (p *Pipeline) StageStats() []StageStat {
+	out := make([]StageStat, len(p.stages))
+	for i, t := range p.stages {
+		out[i] = StageStat{Name: t.Name(), RowsIn: p.rowsIn[i], RowsOut: p.rowsOut[i]}
+	}
+	return out
 }
 
 // Close closes all stages in reverse order, accumulating all errors.

@@ -28,6 +28,7 @@ registered with `transform.Register(name, …)`
 | [`router`, `split`](transforms/router.md) | N-way route rows to different sinks by predicate (conditional split) |
 | [`join`](transforms/join.md) | keyed stream-table join against a source-loaded reference dataset |
 | [`window`](transforms/window.md) | event-time windowed aggregation (tumbling / sliding / session / global) |
+| [`union`](transforms/union.md) | append bounded secondary datasets (N→1, `UNION ALL`) |
 
 ## Filter — `filter`
 

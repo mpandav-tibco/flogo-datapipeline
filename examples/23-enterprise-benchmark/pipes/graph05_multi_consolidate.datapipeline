@@ -1,0 +1,378 @@
+{
+ "name": "graph05_multi_consolidate",
+ "type": "flogo:app",
+ "version": "1.0.0",
+ "appModel": "1.1.1",
+ "imports": [
+  "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+  "github.com/mpandav-tibco/flogo-datapipeline/source/csv",
+  "github.com/mpandav-tibco/flogo-datapipeline/source/jsonlines",
+  "github.com/mpandav-tibco/flogo-datapipeline/source/parquet",
+  "github.com/mpandav-tibco/flogo-datapipeline/transform/filter",
+  "github.com/mpandav-tibco/flogo-datapipeline/transform/mapper",
+  "github.com/mpandav-tibco/flogo-datapipeline/transform/validate",
+  "github.com/mpandav-tibco/flogo-datapipeline/sink/parquet",
+  "github.com/project-flogo/contrib/trigger/timer"
+ ],
+ "triggers": [
+  {
+   "id": "bench-timer",
+   "ref": "github.com/project-flogo/contrib/trigger/timer",
+   "settings": {
+    "repeating": true,
+    "startDelay": 0,
+    "interval": 86400000
+   },
+   "handlers": [
+    {
+     "settings": {},
+     "action": {
+      "ref": "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+      "settings": {
+       "pipelineRef": "res://pipeline:graph05_multi_consolidate"
+      }
+     }
+    }
+   ]
+  }
+ ],
+ "resources": [
+  {
+   "id": "pipeline:graph05_multi_consolidate",
+   "data": {
+    "mode": "etl",
+    "performance": {
+     "batchSize": 5000,
+     "maxMemoryMB": 1024
+    },
+    "scaling": {
+     "mode": "single"
+    },
+    "checkpoint": {
+     "type": "none"
+    },
+    "source": {
+     "type": "csv",
+     "path": "./data/orders.csv",
+     "delimiter": ",",
+     "hasHeader": true,
+     "columns": [
+      {
+       "name": "order_id",
+       "type": "string"
+      },
+      {
+       "name": "customer_id",
+       "type": "string"
+      },
+      {
+       "name": "region",
+       "type": "string"
+      },
+      {
+       "name": "product",
+       "type": "string"
+      },
+      {
+       "name": "category",
+       "type": "string"
+      },
+      {
+       "name": "quantity",
+       "type": "int"
+      },
+      {
+       "name": "unit_price",
+       "type": "float"
+      },
+      {
+       "name": "status",
+       "type": "string"
+      },
+      {
+       "name": "order_date",
+       "type": "string"
+      },
+      {
+       "name": "email",
+       "type": "string"
+      }
+     ]
+    },
+    "transforms": [
+     {
+      "type": "filter",
+      "expr": "status != 'CANCELLED'"
+     },
+     {
+      "type": "map",
+      "fieldOrder": [
+       "order_id",
+       "customer_id",
+       "region_code",
+       "product",
+       "category",
+       "quantity",
+       "net_amount",
+       "status",
+       "order_date",
+       "email"
+      ],
+      "fields": {
+       "order_id": "=$order_id",
+       "customer_id": "=$customer_id",
+       "region_code": "=upper(=$region)",
+       "product": "=$product",
+       "category": "=$category",
+       "quantity": "=$quantity",
+       "net_amount": "=multiply(=$quantity, =$unit_price)",
+       "status": "=$status",
+       "order_date": "=$order_date",
+       "email": "=lower(=$email)"
+      }
+     },
+     {
+      "type": "validate",
+      "rules": [
+       {
+        "field": "quantity",
+        "notNull": true,
+        "max": 950
+       }
+      ]
+     }
+    ],
+    "sink": {
+     "type": "parquet",
+     "path": "./out/graph05_multi_consolidate_west.parquet",
+     "compression": "snappy",
+     "rowGroupSize": 100000
+    },
+    "graph": {
+     "nodes": [
+      {
+       "id": "source",
+       "kind": "source",
+       "type": "csv",
+       "ports": {
+        "out": [
+         "rows"
+        ]
+       }
+      },
+      {
+       "id": "xsrc-2",
+       "kind": "source",
+       "type": "jsonlines",
+       "ports": {
+        "out": [
+         "rows"
+        ]
+       },
+       "config": {
+        "type": "jsonlines",
+        "path": "./data/orders.jsonl"
+       }
+      },
+      {
+       "id": "xsrc-3",
+       "kind": "source",
+       "type": "parquet",
+       "ports": {
+        "out": [
+         "rows"
+        ]
+       },
+       "config": {
+        "type": "parquet",
+        "path": "./data/orders.parquet",
+        "batchSize": 10000
+       }
+      },
+      {
+       "id": "t0",
+       "kind": "transform",
+       "type": "filter",
+       "ports": {
+        "in": [
+         "in"
+        ],
+        "out": [
+         "out"
+        ]
+       }
+      },
+      {
+       "id": "t1",
+       "kind": "transform",
+       "type": "map",
+       "ports": {
+        "in": [
+         "in"
+        ],
+        "out": [
+         "out"
+        ]
+       }
+      },
+      {
+       "id": "t2",
+       "kind": "transform",
+       "type": "validate",
+       "ports": {
+        "in": [
+         "in"
+        ],
+        "out": [
+         "out"
+        ]
+       }
+      },
+      {
+       "id": "sink",
+       "kind": "sink",
+       "type": "parquet",
+       "ports": {
+        "in": [
+         "in"
+        ]
+       }
+      },
+      {
+       "id": "xsink-north",
+       "kind": "sink",
+       "type": "parquet",
+       "ports": {
+        "in": [
+         "in"
+        ]
+       },
+       "config": {
+        "path": "./out/graph05_multi_consolidate_north.parquet",
+        "compression": "snappy",
+        "rowGroupSize": 100000
+       }
+      },
+      {
+       "id": "xsink-central",
+       "kind": "sink",
+       "type": "parquet",
+       "ports": {
+        "in": [
+         "in"
+        ]
+       },
+       "config": {
+        "path": "./out/graph05_multi_consolidate_central.parquet",
+        "compression": "snappy",
+        "rowGroupSize": 100000
+       }
+      },
+      {
+       "id": "xsink-east",
+       "kind": "sink",
+       "type": "parquet",
+       "ports": {
+        "in": [
+         "in"
+        ]
+       },
+       "config": {
+        "path": "./out/graph05_multi_consolidate_east.parquet",
+        "compression": "snappy",
+        "rowGroupSize": 100000
+       }
+      },
+      {
+       "id": "xsink-south",
+       "kind": "sink",
+       "type": "parquet",
+       "ports": {
+        "in": [
+         "in"
+        ]
+       },
+       "config": {
+        "path": "./out/graph05_multi_consolidate_south.parquet",
+        "compression": "snappy",
+        "rowGroupSize": 100000
+       }
+      },
+      {
+       "id": "xsink-reject",
+       "kind": "sink",
+       "type": "parquet",
+       "ports": {
+        "in": [
+         "in"
+        ]
+       },
+       "config": {
+        "path": "./out/graph05_multi_consolidate_reject.parquet",
+        "compression": "snappy",
+        "rowGroupSize": 100000
+       }
+      }
+     ],
+     "edges": [
+      [
+       "source:rows",
+       "t0:in"
+      ],
+      [
+       "xsrc-2:rows",
+       "t0:in"
+      ],
+      [
+       "xsrc-3:rows",
+       "t0:in"
+      ],
+      [
+       "t0:out",
+       "t1:in"
+      ],
+      [
+       "t1:out",
+       "t2:in"
+      ],
+      {
+       "from": "t2:out",
+       "to": "xsink-north:in",
+       "type": "expression",
+       "value": "region_code = 'NORTH'"
+      },
+      {
+       "from": "t2:out",
+       "to": "xsink-central:in",
+       "type": "expression",
+       "value": "region_code = 'CENTRAL'"
+      },
+      {
+       "from": "t2:out",
+       "to": "xsink-east:in",
+       "type": "expression",
+       "value": "region_code = 'EAST'"
+      },
+      {
+       "from": "t2:out",
+       "to": "xsink-south:in",
+       "type": "expression",
+       "value": "region_code = 'SOUTH'"
+      },
+      {
+       "from": "t2:out",
+       "to": "sink:in",
+       "type": "otherwise"
+      },
+      {
+       "from": "t2:out",
+       "to": "xsink-reject:in",
+       "type": "error"
+      }
+     ]
+    },
+    "name": "graph05_multi_consolidate"
+   }
+  }
+ ]
+}

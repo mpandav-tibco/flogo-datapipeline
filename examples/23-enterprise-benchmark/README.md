@@ -33,6 +33,15 @@ interruption — the everyday demands of a production data platform.
   table server-side (transform pushed into PostgreSQL).
 - **Enterprise reliability** — dead-letter isolation (no row lost) and
   checkpoint/resume (interrupt-safe loads).
+- **Graph (DAG) fan-out** — a streaming graph runner routes **one source read to
+  N sinks in a single pass** (regional router, valid/reject quarantine,
+  tee+audit) — the enterprise shapes the single-chain linear engine can't
+  express without one full re-read per destination.
+- **Multi-source consolidation** — the everyday enterprise DAG: **three feeds in**
+  (CSV + JSON Lines + Parquet) fanned together through a filter → map → validate
+  chain and **six sinks out** (5 regional partitions + a quarantine), 159M rows
+  in one streaming pass — a shape with no single-source/single-sink linear
+  equivalent.
 
 Every pipeline is one Flogo app (a timer trigger fires it once) executed by a
 single statically-linked Go binary — no external runtime, no cluster.
@@ -42,7 +51,7 @@ single statically-linked Go binary — no external runtime, no cluster.
 See **[SUMMARY.md](SUMMARY.md)** for the headline numbers and
 **[reports/](reports/)** for the full tables:
 [matrix.md](reports/matrix.md) · [elt.md](reports/elt.md) ·
-[enterprise.md](reports/enterprise.md).
+[enterprise.md](reports/enterprise.md) · [graph.md](reports/graph.md).
 
 The `pipes/` directory holds all 30 pipeline definitions — they are the
 showcase artifacts and are meant to be read.
@@ -70,6 +79,8 @@ python3 harness/lookup_mock.py 9099 &      # enrichment endpoint for the lookup 
 python3 harness/run_matrix.py              # 17 EL + 11 ETL + 2 reliability cases
 python3 harness/run_elt.py                 # 3 in-database transforms
 python3 harness/run_enterprise.py          # DLQ + checkpoint/resume
+python3 harness/gen_graph_pipes.py         # -> pipes/graph0*.datapipeline (DAGs)
+python3 harness/run_graph.py               # 5 graph fan-out DAGs (needs minio for graph04)
 python3 harness/gen_reports.py             # -> SUMMARY.md, reports/*.md
 
 ./scripts/teardown-infra.sh                # tear the containers down
@@ -108,8 +119,8 @@ as one small static file (see the *Footprint & TCO* table in
 ## Layout
 
 ```
-pipes/       30 pipeline definitions (the showcase) + 4 _prep loaders
-harness/     gen_pipes, seed, run_matrix, run_elt, run_enterprise, gen_reports, lib
+pipes/       30 pipeline definitions (the showcase) + 5 graph DAGs + 4 _prep loaders
+harness/     gen_pipes, gen_graph_pipes, seed, run_matrix, run_elt, run_enterprise, run_graph, gen_reports, lib
 scripts/     setup-infra, build, build-lean, gen-data, run-benchmark, teardown-infra
 sql/         warehouse schema (orders_raw / _sink / _clean / _rejects)
 reports/     generated result tables      SUMMARY.md  headline

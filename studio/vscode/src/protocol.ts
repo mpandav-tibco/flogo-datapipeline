@@ -56,6 +56,8 @@ export type WebviewToHost =
   | { type: 'definition' }
   | { type: 'showOutput' }
   | { type: 'showProblems' }
+  | { type: 'showDataPreview' }
+  | { type: 'showTerminal' }
   | { type: 'browse'; id: string; mode?: 'file' | 'folder' }
   | { type: 'newFromTemplate' }
   | { type: 'newConnection'; family?: string }

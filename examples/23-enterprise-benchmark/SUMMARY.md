@@ -17,8 +17,9 @@ showcases.
 | Sinks | parquet, postgres, kafka, s3, null |
 | Transforms | filter, map, validate, schemadrift, dq, hwm, lookup |
 
-See [reports/matrix.md](reports/matrix.md), [reports/elt.md](reports/elt.md)
-and [reports/enterprise.md](reports/enterprise.md) for the full tables.
+See [reports/matrix.md](reports/matrix.md), [reports/elt.md](reports/elt.md),
+[reports/enterprise.md](reports/enterprise.md) and [reports/graph.md](reports/graph.md)
+for the full tables.
 
 ## Footprint & TCO
 
@@ -60,4 +61,13 @@ engine, and CGO-free unless it uses the sqlite driver.
 
 - **DLQ isolation:** 50,589,628 good + 2,410,372 rejected = 53,000,000 processed, no rows lost.
 - **Checkpoint/resume:** interrupted after 3,000,000 rows, resumed and finished (completed).
+
+## Graph (DAG) fan-out
+
+The streaming graph runner routes **one source read to N sinks in a
+single pass** - the linear engine would need one full pass per sink. 5 non-reducible DAGs ran at up to **727,442/s**, matching the linear engine while doing N-way fan-out; a 5-way regional router finishes ~5.7x sooner than five linear passes and reads the source once.
+
+The **multi-source consolidation** DAG (`graph05_multi_consolidate`) fans **three feeds in** (CSV + JSON Lines + Parquet, 159,000,000 rows) through a filter -> map -> validate chain and **six sinks out** in one 486 MB pass at 540,010/s - a shape the single-source/single-sink linear engine cannot express at all.
+
+See [reports/graph.md](reports/graph.md).
 

@@ -8,6 +8,7 @@ import type { PipelineDoc } from '../src/model/pipeline';
 import type { HostToWebview, WebviewToHost } from '../src/protocol';
 import type { RunResponse, PreviewResult, StatusResponse, StageTestResult } from '../src/engine/apiClient';
 import { TRIGGER_CATALOG, triggerDef } from '../src/model/triggers';
+import { deriveBranches, branchesByOwner, deriveGraph, type DerivedBranch } from '../src/model/graph';
 interface VsCodeApi {
   postMessage(msg: WebviewToHost): void;
   getState(): unknown;
@@ -31,12 +32,17 @@ function post(msg: WebviewToHost) {
   vscode.postMessage(msg);
 }
 
-// Make an inspector panel resizable: applies the remembered width and adds a
+// Make the config dock resizable: applies the remembered width and adds a
 // left-edge drag grip that updates S.inspWidth live (clamped to a sane range).
 function attachResize(insp: HTMLElement): void {
-  insp.style.width = (S.inspWidth || 300) + 'px';
+  // Mappers need more room than a simple form, so give map/mapper nodes a wider
+  // default dock — until the user drags it to a width of their own.
+  const sn = S.pipe && S.pipe.nodes ? S.pipe.nodes.find((n) => n.id === S.selNode) : null;
+  const tall = !!(sn && (sn.type === 'map' || sn.type === 'mapper'));
+  const def = tall ? Math.min(560, Math.round(window.innerWidth * 0.5)) : 360;
+  insp.style.width = (S.inspWidthSet ? (S.inspWidth || def) : def) + 'px';
   const grip = el('div', 'inspgrip');
-  grip.title = 'Drag to resize panel';
+  grip.title = 'Drag to resize the config panel';
   grip.onmousedown = (e: MouseEvent) => {
     e.preventDefault();
     const startX = e.clientX;
@@ -44,9 +50,11 @@ function attachResize(insp: HTMLElement): void {
     document.body.style.cursor = 'col-resize';
     document.body.style.userSelect = 'none';
     const move = (ev: MouseEvent) => {
-      const w = Math.max(260, Math.min(760, startW + (startX - ev.clientX)));
+      // Grip sits on the LEFT edge of the right-docked panel: dragging left widens.
+      const w = Math.max(300, Math.min(Math.round(window.innerWidth * 0.6), startW + (startX - ev.clientX)));
       insp.style.width = w + 'px';
       S.inspWidth = w;
+      S.inspWidthSet = true;
     };
     const up = () => {
       document.removeEventListener('mousemove', move);
@@ -68,7 +76,7 @@ interface Node {
   nm: string;
   meta: string;
   cfg: Record<string, string>;
-  ref: 'source' | 'sink' | 'dlq' | number; // where this maps back into the doc
+  ref: 'source' | 'sink' | 'dlq' | number | string; // maps back into the doc; an extra sink uses its graph node id
 }
 
 interface Pipe {
@@ -77,6 +85,8 @@ interface Pipe {
   mode: string;
   status: string;
   nodes: Node[];
+  branches: DerivedBranch[];
+  extraNodes: Node[];
   hasDlq: boolean;
   dlqNode: Node | null;
 }
@@ -90,7 +100,20 @@ const S = {
   selNode: null as string | null,
   inspTab: 'Config',
   inspClosed: false,
-  inspWidth: 300,
+  inspWidth: 360,
+  inspWidthSet: false,
+  zoom: 1,
+  mapMode: 'visual',
+  showBranches: true,
+  showCounts: true,
+  minimapOpen: false,
+  paletteOpen: true,
+  paletteQ: '',
+  paletteCat: {} as Record<string, boolean>,
+  panelOpen: false,
+  panelTab: 'problems',
+  rateRps: 0,
+  ratePrev: null as { rows: number; at: number } | null,
   setOpen: null as Record<string, boolean> | null,
   tabs: [{ id: 'canvas', type: 'canvas' as string }],
   active: 'canvas',
@@ -177,12 +200,56 @@ const statusColor: Record<string, string> = { running: 'b', completed: 'g', part
 
 // ── build a Pipe from the real doc ────────────────────────────────────────
 function metaFor(kind: string, type: string, cfg: any): string {
-  // Show the friendly display label (e.g. "Text Document" for the sectioned
-  // source), falling back to the raw engine id for types without a label.
+  cfg = cfg || {};
+  // Transform stages show a semantic one-liner (like the wireframe node
+  // subtitles) so the graph documents itself at a glance.
+  if (kind === 'transform') {
+    const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? '' : 's'}`;
+    switch (type) {
+      case 'join':
+        return `${cfg.joinType || 'inner'} · ${cfg.leftKey || 'key'} = ${cfg.rightKey || 'key'}`;
+      case 'validate':
+        return plural(Array.isArray(cfg.rules) ? cfg.rules.length : 0, 'rule') + (cfg.onViolation ? ' · ' + cfg.onViolation : '');
+      case 'router': case 'split':
+        return plural(Array.isArray(cfg.routes) ? cfg.routes.length : 0, 'route') + ' · first-match';
+      case 'dq':
+        return plural(Array.isArray(cfg.expectations) ? cfg.expectations.length : 0, 'expectation') + (cfg.onFail ? ' · ' + cfg.onFail : '');
+      case 'window': {
+        const wk = (cfg.window && cfg.window.kind) || 'tumbling';
+        return `${wk} · ` + plural(Array.isArray(cfg.aggregations) ? cfg.aggregations.length : 0, 'agg');
+      }
+      case 'map': case 'mapper':
+        return plural(cfg.fields && typeof cfg.fields === 'object' ? Object.keys(cfg.fields).length : 0, 'field');
+      case 'cast':
+        return plural(Array.isArray(cfg.columns) ? cfg.columns.length : 0, 'column');
+      case 'lookup': {
+        const host = cfg.url ? String(cfg.url).replace(/^https?:\/\//, '').split('/')[0] : '';
+        return (cfg.keyField || 'key') + (host ? ' → ' + host : '');
+      }
+      case 'filter':
+        return cfg.expr ? String(cfg.expr).slice(0, 30) : 'filter';
+      case 'parse':
+        return `${cfg.mode || 'regex'}` + (cfg.source ? ' · ' + cfg.source : '');
+      case 'union':
+        return 'union +' + (Array.isArray(cfg.with) ? cfg.with.length : 0);
+      case 'schemadrift':
+        return `${cfg.policy || 'additive'}` + (cfg.onDrift ? ' · ' + cfg.onDrift : '');
+      case 'explode':
+        return cfg.column ? 'explode ' + cfg.column : 'explode';
+      case 'flatten':
+        return 'flatten' + (cfg.separator ? ' · "' + cfg.separator + '"' : '');
+      case 'hwm':
+        return cfg.column ? 'hwm ' + cfg.column : 'high-water mark';
+    }
+    return transformLabel(type);
+  }
+  // Source / sink / dlq: friendly label + the salient destination detail.
   const bits: string[] = [typeLabel(type)];
   if (cfg.path) bits.push(String(cfg.path).split(/[\\/]/).pop() || '');
   if (cfg.table) bits.push(cfg.table);
   if (cfg.topic) bits.push(cfg.topic);
+  if (cfg.bucket) bits.push(cfg.bucket);
+  if (cfg.index) bits.push(cfg.index);
   if (cfg.dsn) bits.push('dsn');
   if (cfg.expr) bits.push(String(cfg.expr).slice(0, 24));
   return bits.filter(Boolean).join(' · ');
@@ -255,12 +322,33 @@ function buildPipe(doc: PipelineDoc): Pipe {
     };
   }
 
+  // Extra sink nodes live ONLY in the graph (self-contained `config`), never in
+  // the linear model. Surface them as first-class nodes for the canvas + inspector
+  // but keep them OUT of `nodes` so they never join the linear main chain.
+  const extraNodes: Node[] = [];
+  const gg: any = (doc as any).graph;
+  if (gg && Array.isArray(gg.nodes)) {
+    for (const gn of gg.nodes) {
+      if (typeof gn.id !== 'string' || !gn.id.startsWith('xsink-')) continue;
+      const c = (gn.config && typeof gn.config === 'object') ? gn.config : {};
+      extraNodes.push({
+        id: gn.id, kind: 'sink', type: gn.type || 'null',
+        nm: (c.path && String(c.path).split(/[\\/]/).pop()) || c.table || typeLabel(gn.type) || 'sink',
+        meta: metaFor('sink', gn.type || '—', c),
+        cfg: cfgOf(c), ref: gn.id,
+      });
+    }
+  }
+
+  const branches = deriveBranches(doc);
   return {
     name: doc.name || S.fileName.replace(/\.datapipeline$/, ''),
     description: doc.description || '',
     mode: String(doc.mode || 'etl').toUpperCase(),
     status: S.running ? 'running' : S.ran ? 'partial' : 'idle',
     nodes,
+    branches,
+    extraNodes,
     hasDlq,
     dlqNode,
   };
@@ -281,8 +369,29 @@ function cfgTarget(node: Node): any {
     doc.dlq.options = doc.dlq.options || {};
     return doc.dlq.options;
   }
+  if (typeof node.ref === 'string' && node.ref.startsWith('xsink-')) {
+    const gn = graphNodeById(doc, node.ref);
+    if (gn) return (gn.config = gn.config || {});
+    return {};
+  }
   doc.transforms = doc.transforms || [];
-  return (doc.transforms[node.ref] = doc.transforms[node.ref] || {});
+  const ti = node.ref as number;
+  return (doc.transforms[ti] = doc.transforms[ti] || {});
+}
+
+// Find a node in the explicit graph block by id (used for self-contained extra
+// sink nodes whose config lives in doc.graph.nodes[i].config).
+function graphNodeById(doc: any, id: string): any {
+  const g = doc && doc.graph;
+  if (!g || !Array.isArray(g.nodes)) return null;
+  return g.nodes.find((n: any) => n && n.id === id) || null;
+}
+
+// Resolve the currently-selected node across the main chain, the DLQ branch, and
+// any extra sink nodes (which live only in the graph).
+function findSelNode(p: Pipe): Node {
+  if (S.selNode === 'dlq' && p.dlqNode) return p.dlqNode;
+  return p.nodes.find((n) => n.id === S.selNode) || p.extraNodes.find((n) => n.id === S.selNode) || p.nodes[0];
 }
 
 // Write a config field back into the doc and persist (string value, coerced to
@@ -498,6 +607,35 @@ const TF_LABELS: Record<string, string> = {
 function transformLabel(t: string): string {
   return TF_LABELS[t] || t;
 }
+
+// Per-type glyphs so a join, router, validate and filter are visually distinct
+// on the canvas and in the palette instead of a single generic "ƒ". Single
+// characters only, so they sit cleanly in the fixed-size icon box.
+const TF_ICON: Record<string, string> = {
+  filter: '▽', map: 'ƒ', mapper: 'ƒ', cast: '⇄', parse: '❮',
+  validate: '✓', dq: '◉', lookup: '⌕', hwm: '⇡', schemadrift: '⟳',
+  window: '⧖', join: '⨝', union: '⋃', explode: '✶', flatten: '≡',
+  router: '⋔', split: '⋔',
+};
+const SRC_ICON: Record<string, string> = {
+  csv: 'C', tsv: 'T', fixedwidth: '▦', sectioned: '▦', parquet: '◱',
+  xml: '⟨', jsonlines: '⌗', jdbc: 'J', kafka: 'K', objstore: '◇',
+  s3: '◇', gcs: '◇', adls: '◇', podlog: '☰',
+};
+const SINK_ICON: Record<string, string> = {
+  jdbc: 'J', kafka: 'K', parquet: '◱', objstore: '◇', s3: '◇',
+  gcs: '◇', adls: '◇', jsonlines: '⌗', csv: 'C', null: '∅', template: '❏',
+};
+function nodeIcon(kind: string, type: string): string {
+  if (kind === 'source') return SRC_ICON[type] || '⇥';
+  if (kind === 'sink') return SINK_ICON[type] || '⇤';
+  return TF_ICON[type] || 'ƒ';
+}
+// Fan-in / fan-out hint shown in the palette (blank for the 1→1 majority).
+const TF_ARITY: Record<string, string> = {
+  join: '2→1', union: 'N→1', router: '1→N', split: '1→N',
+  validate: '1→2', dq: '1→2', explode: '1→N',
+};
 
 // Fixed emitted schemas for sources whose columns are NOT declared in the
 // .datapipeline JSON (the engine knows them internally). Surfacing them here
@@ -760,6 +898,119 @@ function renderBoundField(f: HTMLElement, node: Node, key: string, value: string
 }
 
 // Build one config field widget appropriate to its key/value type.
+// The source's parse-error branch (errorSink) — a typed sub-form instead of a
+// raw JSON field, so bad rows can be routed to a sink without hand-writing JSON.
+function renderErrorSinkEditor(sn: Node): HTMLElement {
+  const wrap = el('div', '');
+  wrap.appendChild(el('div', 'hr'));
+  const cfg = cfgTarget(sn) as any;
+  if (!cfg.errorSink || typeof cfg.errorSink !== 'object') cfg.errorSink = { type: 'jsonlines', path: './out/parse-errors.jsonl' };
+  const es = cfg.errorSink;
+  wrap.appendChild(el('div', 'ttl', 'Parse-error sink'));
+  wrap.appendChild(el('div', 'hint', 'Rows that fail to parse are routed here as a side branch — the main pipeline keeps running.'));
+
+  const tf = el('div', 'fld');
+  tf.appendChild(el('div', 'k', 'Sink type'));
+  const sel = el('select', 'v') as HTMLSelectElement;
+  const ESINK_TYPES = ['jsonlines', 'csv', 'parquet', 'kafka', 'null'];
+  const curType = es.type || es.innerType || 'jsonlines';
+  const list = ESINK_TYPES.includes(curType) ? ESINK_TYPES : [curType, ...ESINK_TYPES];
+  list.forEach((o) => {
+    const op = document.createElement('option');
+    op.value = o; op.textContent = typeLabel(o);
+    if (o === curType) op.selected = true;
+    sel.appendChild(op);
+  });
+  sel.onchange = () => {
+    delete es.innerType; delete es.innerOptions;
+    es.type = sel.value;
+    if (['jsonlines', 'csv', 'parquet'].includes(sel.value) && !es.path) {
+      es.path = './out/parse-errors.' + (sel.value === 'jsonlines' ? 'jsonl' : sel.value);
+    }
+    persistAndRebuild();
+  };
+  tf.appendChild(sel);
+  wrap.appendChild(tf);
+
+  if (['jsonlines', 'csv', 'parquet'].includes(curType)) {
+    const pf = el('div', 'fld');
+    pf.appendChild(el('div', 'k', 'Path'));
+    const pi = el('input', 'v') as HTMLInputElement;
+    pi.value = es.path || '';
+    pi.placeholder = 'e.g. ./out/parse-errors.jsonl';
+    pi.onchange = () => { const v = pi.value.trim(); if (v === '') delete es.path; else es.path = v; persistAndRebuild(); };
+    pf.appendChild(pi);
+    wrap.appendChild(pf);
+  } else if (curType === 'kafka') {
+    const kf = el('div', 'fld');
+    kf.appendChild(el('div', 'k', 'Topic'));
+    const ki = el('input', 'v') as HTMLInputElement;
+    ki.value = es.topic || '';
+    ki.placeholder = 'e.g. parse-errors';
+    ki.onchange = () => { const v = ki.value.trim(); if (v === '') delete es.topic; else es.topic = v; persistAndRebuild(); };
+    kf.appendChild(ki);
+    wrap.appendChild(kf);
+  }
+
+  const rm = el('button', 'btn sm', '✕ Remove error sink');
+  rm.style.marginTop = '4px';
+  rm.onclick = () => { delete cfg.errorSink; persistAndRebuild(); toast('warn', 'Parse errors will now fail the run instead of routing to a sink'); };
+  wrap.appendChild(rm);
+  return wrap;
+}
+
+// Typed editor for the union transform's `with` list (was a raw-JSON blob):
+// each additional source is a card with a type dropdown + one location field.
+function renderUnionSourcesEditor(node: Node): HTMLElement {
+  const f = el('div', 'fld');
+  f.appendChild(el('div', 'k', 'Additional sources (UNION ALL)'));
+  f.appendChild(el('div', 'hint', 'Bounded, same-schema sources appended to the primary input — each is read fully, then the union emits.'));
+  const target = cfgTarget(node) as any;
+  const withArr: any[] = Array.isArray(target.with) ? target.with : [];
+  const save = () => setCfgValue(node, 'with', withArr);
+  const UNION_SRC = ['csv', 'tsv', 'jsonlines', 'parquet', 'xml', 'jdbc', 's3', 'gcs', 'adls'];
+  const locKey = (t: string) => (t === 'jdbc' ? 'table' : ['s3', 'gcs', 'adls'].includes(t) ? 'key' : 'path');
+
+  const box = el('div', 'rcards');
+  withArr.forEach((src, i) => {
+    const card = el('div', 'rcard');
+    const head = el('div', 'rhead');
+    head.appendChild(el('span', 'muted', '<span style="font-size:11px">Type</span>'));
+    const sel = document.createElement('select');
+    const cur = src.type || 'csv';
+    (UNION_SRC.includes(cur) ? UNION_SRC : [cur, ...UNION_SRC]).forEach((o) => {
+      const op = document.createElement('option'); op.value = o; op.textContent = typeLabel(o);
+      if (o === cur) op.selected = true; sel.appendChild(op);
+    });
+    sel.onchange = () => {
+      const old = locKey(src.type || 'csv'); const neu = locKey(sel.value);
+      if (old !== neu && src[old] != null) { src[neu] = src[old]; delete src[old]; }
+      src.type = sel.value; save(); renderEditor();
+    };
+    const del = el('span', 'del', '✕'); del.title = 'Remove source';
+    del.onclick = () => { withArr.splice(i, 1); save(); renderEditor(); };
+    head.appendChild(sel);
+    head.appendChild(del);
+    card.appendChild(head);
+
+    const lk = locKey(src.type || 'csv');
+    const row = el('div', 'rrow');
+    row.appendChild(el('label', undefined, lk === 'table' ? 'Table' : lk === 'key' ? 'Object' : 'Path'));
+    const inp = document.createElement('input');
+    inp.placeholder = lk === 'table' ? 'e.g. archive_orders' : lk === 'key' ? 'e.g. archive/orders.parquet' : 'e.g. more-orders.csv';
+    inp.value = src[lk] != null ? String(src[lk]) : '';
+    inp.onchange = () => { const v = inp.value.trim(); if (v === '') delete src[lk]; else src[lk] = v; save(); };
+    row.appendChild(inp);
+    card.appendChild(row);
+    box.appendChild(card);
+  });
+  const add = el('button', 'addcard', '＋ Add source');
+  add.onclick = () => { withArr.push({ type: 'csv', path: '' }); setCfgValue(node, 'with', withArr); renderEditor(); };
+  box.appendChild(add);
+  f.appendChild(box);
+  return f;
+}
+
 function renderField(node: Node, key: string, value: string): HTMLElement {
   const f = el('div', 'fld');
   const kdiv = el('div', 'k');
@@ -2147,8 +2398,24 @@ function renderMapEditor(node: Node): HTMLElement {
     const del = el('span', 'del', '✕');
     del.title = 'Remove field';
     del.onclick = (e) => { e.stopPropagation(); delete fields[outName]; order = order.filter((k) => k !== outName); if (mapSelectedTarget === outName) mapSelectedTarget = null; persist(); renderEditor(); };
-    row.appendChild(dot); row.appendChild(out); row.appendChild(del);
-    row.onclick = (e) => { if (e.target === row || (e.target as HTMLElement).classList.contains('tdot')) { mapSelectedTarget = outName; renderEditor(); } };
+    const top = el('div', 'trowtop');
+    top.appendChild(dot); top.appendChild(out); top.appendChild(del);
+    row.appendChild(top);
+    // Inline mapping preview (like the board-04 aggrid source/expression cell):
+    // a direct $path shows as a green ⇢ chip; a richer expression shows with an
+    // fx marker; an empty mapping shows a dashed hint. Click selects the row.
+    const disp = exprForDisplay(String(fields[outName] || ''));
+    const tmap = el('div', 'tmap');
+    if (!disp.trim()) { tmap.classList.add('empty'); tmap.textContent = 'drag a source field or type ='; }
+    else if (/^\$[\w.]+$/.test(disp)) { tmap.classList.add('direct'); tmap.innerHTML = '<span class="tmi">⇢</span>' + escapeHtml(disp.replace(/^\$/, '')); }
+    else { tmap.classList.add('expr'); tmap.innerHTML = '<span class="tmi fx">fx</span>' + escapeHtml(disp); }
+    tmap.title = String(fields[outName] || '') || 'unmapped';
+    row.appendChild(tmap);
+    row.onclick = (e) => {
+      const t = e.target as HTMLElement;
+      if (t.closest('.tname') || t.closest('.del')) return;
+      mapSelectedTarget = outName; renderEditor();
+    };
     tgtBody.appendChild(row);
   });
   const addZone = el('div', 'maddzone');
@@ -2248,6 +2515,27 @@ function renderMapEditor(node: Node): HTMLElement {
     };
     renderGroups();
     mapBody.appendChild(fnwrap);
+    // Live value (board-04) — the sampled value for a DIRECT source ref when a
+    // preview sample exists. Expressions need a run (there is no client-side
+    // Flogo evaluator), so we only show a value we can honestly derive.
+    const liveWrap = el('div', 'mlive');
+    liveWrap.appendChild(el('div', 'mlivehdr', 'Live value'));
+    const liveDisp = exprForDisplay(String(fields[sel] || ''));
+    const sampleRow = (S.preview && Array.isArray(S.preview.rows) && S.preview.rows.length) ? (S.preview.rows[0] as Record<string, unknown>) : null;
+    const directRef = /^\$([\w]+)$/.exec(liveDisp);
+    let liveVal: string | null = null;
+    if (sampleRow && directRef && directRef[1] in sampleRow) liveVal = JSON.stringify(sampleRow[directRef[1]]);
+    if (liveVal !== null) {
+      liveWrap.appendChild(el('div', 'mliveval', escapeHtml(liveVal)));
+      liveWrap.appendChild(el('div', 'focushint', 'Sampled from the first preview row.'));
+    } else if (!sampleRow) {
+      const pv = el('button', 'btn sm', '⌕ Preview to see live values');
+      pv.onclick = () => doPreview();
+      liveWrap.appendChild(pv);
+    } else {
+      liveWrap.appendChild(el('div', 'focushint', 'Run the Test tab to evaluate this expression on the sample.'));
+    }
+    mapBody.appendChild(liveWrap);
     mapBody.appendChild(el('div', 'focushint', 'Drag a Source field here or type it. = is implicit — $field, upper($field); plain text is a constant.'));
   } else {
     mapBody.appendChild(el('div', 'muted', '<div style="font-size:11px;padding:8px;color:var(--dim)">Select a Target field (or add one) to edit its mapping here.</div>'));
@@ -2258,7 +2546,53 @@ function renderMapEditor(node: Node): HTMLElement {
   mapper.appendChild(tgtPane);
   mapper.appendChild(mapPane);
 
-  f.appendChild(el('div', 'k', 'Field mapping'));
+  // Header row: "Field mapping" label + a Visual/Code segmented toggle (board-04
+  // .modeseg). Code mode shows every target as an aligned `name = expr` line and
+  // is fully editable (parsed back into fields on change).
+  const fmHead = el('div', 'mapfmhead');
+  fmHead.appendChild(el('div', 'k', 'Field mapping'));
+  const modeSeg = el('div', 'mapmodeseg');
+  (['Visual', 'Code'] as const).forEach((mode) => {
+    const key = mode.toLowerCase();
+    const seg = el('span', S.mapMode === key ? 'on' : '', mode);
+    seg.onclick = () => { S.mapMode = key; renderEditor(); };
+    modeSeg.appendChild(seg);
+  });
+  fmHead.appendChild(modeSeg);
+  f.appendChild(fmHead);
+
+  if (S.mapMode === 'code') {
+    const w = order.reduce((mx, k) => Math.max(mx, k.length), 0);
+    const cv = el('div', 'mapcode');
+    const ta = document.createElement('textarea');
+    ta.className = 'mapcodeta';
+    ta.spellcheck = false;
+    ta.value = order.map((k) => `${k.padEnd(w)} = ${exprForDisplay(String(fields[k] || ''))}`).join('\n');
+    ta.rows = Math.max(6, order.length + 1);
+    ta.placeholder = 'one target per line:  field = expression   (e.g. total = multiply($qty,$price))';
+    ta.onchange = () => {
+      const nf: Record<string, string> = {};
+      const no: string[] = [];
+      ta.value.split('\n').forEach((line) => {
+        const t = line.trim();
+        if (!t) return;
+        const eq = t.indexOf('=');
+        const name = (eq >= 0 ? t.slice(0, eq) : t).trim();
+        if (!name || no.includes(name)) return;
+        no.push(name);
+        nf[name] = eq >= 0 ? exprForStore(t.slice(eq + 1)) : '';
+      });
+      target.fields = nf;
+      target.fieldOrder = no;
+      setCfgValue(node, 'fields', nf);
+      renderEditor();
+    };
+    cv.appendChild(ta);
+    cv.appendChild(el('div', 'focushint', 'Every target as a Flogo fx assignment — one per line (name = expression). Edit freely; switch to Visual to map by drag-and-drop.'));
+    f.appendChild(cv);
+    return f;
+  }
+
   if (hasSchema) {
     const allBtn = el('button', 'btn sm mapallbtn', '⧉ Map all fields (passthrough)');
     allBtn.onclick = () => {
@@ -2746,6 +3080,7 @@ function renderAll() {
   renderTabs();
   renderEditor();
   renderStatus();
+  renderPanel();
 }
 
 // ── tabs ──────────────────────────────────────────────────────────────────
@@ -2813,6 +3148,32 @@ function renderTabs() {
   bar.appendChild(acts);
 }
 
+// Workflow mode switcher (Design | Preview | Run | Deploy) — the wireframe's
+// canvas-header tabs. Design is the resting authoring state; Preview / Run /
+// Deploy trigger the corresponding action (reusing the existing handlers).
+function renderModeBar(): HTMLElement {
+  const bar = el('div', 'modebar');
+  const activeMode = S.running ? 'run' : 'design';
+  const modes: Array<{ id: string; label: string; title: string; fn: () => void }> = [
+    { id: 'design', label: 'Design', title: 'Author the pipeline graph', fn: () => { S.active = 'canvas'; renderAll(); } },
+    { id: 'preview', label: 'Preview', title: 'Dry-run: sample rows through the pipeline without writing to the sink', fn: () => doPreview() },
+    { id: 'run', label: 'Run', title: S.running ? 'Stop the running pipeline' : 'Run the pipeline on the engine', fn: () => (S.running ? doStop() : doRun()) },
+    { id: 'deploy', label: 'Deploy', title: 'Generate a Dockerfile + Kubernetes manifest', fn: () => doDeploy() },
+  ];
+  modes.forEach((mo) => {
+    const seg = el('span', 'modeseg-i' + (mo.id === activeMode ? ' on' : ''));
+    seg.textContent = mo.label;
+    seg.title = mo.title;
+    seg.onclick = mo.fn;
+    bar.appendChild(seg);
+  });
+  return bar;
+}
+
+function doDeploy(): void {
+  quickPick('Replicas (sharded StatefulSet)', ['1', '2', '4', '8'], (v) => post({ type: 'deploy', replicas: Number(v) }));
+}
+
 // ── editor / canvas ─────────────────────────────────────────────────────────
 // Remembered scroll offset of the inspector body (.ib), restored after each
 // renderEditor() so field edits don't jump the config panel back to the top.
@@ -2835,9 +3196,10 @@ function renderEditor() {
     return;
   }
   if (t.type === 'canvas') {
-    const sn = (S.selNode === 'dlq' && S.pipe.dlqNode) ? S.pipe.dlqNode : (S.pipe.nodes.find((n) => n.id === S.selNode) || S.pipe.nodes[0]);
+    const sn = findSelNode(S.pipe);
     const snLabel = sn ? (sn.nm && sn.nm !== typeLabel(sn.type) && sn.nm !== sn.type ? `${typeLabel(sn.type)}: ${sn.nm}` : typeLabel(sn.type)) : '';
     bc.innerHTML = `◈ ${escapeHtml(S.pipe.name)} <span class="sep">›</span> ${escapeHtml(snLabel)} <span class="sep">›</span> <span class="chip plain" style="padding:1px 7px">${escapeHtml(S.pipe.mode)}</span>`;
+    bc.appendChild(renderModeBar());
     renderCanvas(m);
   } else {
     bc.innerHTML = tabMeta(t).label;
@@ -2854,11 +3216,907 @@ function renderEditor() {
   }
 }
 
+// ── graph (node + wire) canvas ─────────────────────────────────────────────
+// A read-only DAG view of the same pipeline: the main chain laid out left-to-
+// right with the implicit branches fanning below, drawn with real ports and SVG
+// wires. It reuses the node cards + inspector wiring (clicking a node selects it
+// exactly as on the linear canvas) and is the substrate the wire-authoring steps
+// build on. Toggle it with the "◇ Graph view" pill.
+const GSVG_NS = 'http://www.w3.org/2000/svg' as const;
+// Set while a node is being dragged so the trailing mouseup click doesn't also
+// select it (and open the inspector).
+let _gDragged = false;
+// Set while a link-drag (activity → activity connection) is in progress.
+let _gConnecting = false;
+
+// Manual links (activity connections the user draws) live in doc.graph — the
+// same engine-validated node/edge block the "Promote to graph" pill writes.
+// Drawing a link auto-promotes: if there is no explicit graph yet we derive one
+// first so the new edge joins a complete, valid graph.
+function graphEdgesOf(doc: any): any[] {
+  const g = doc && doc.graph;
+  return g && Array.isArray(g.edges) ? g.edges : [];
+}
+// A graph edge is either the compact array ["from","to"] (a plain link) or the
+// object {from,to,type,value} (a conditional link, Flogo-style). These read
+// either form. Endpoints are "<nodeId>:<port>"; strip the port for the node id.
+function edgeFrom(e: any): string { return Array.isArray(e) ? (e[0] || '') : ((e && e.from) || ''); }
+function edgeTo(e: any): string { return Array.isArray(e) ? (e[1] || '') : ((e && e.to) || ''); }
+function edgeType(e: any): string { return Array.isArray(e) ? '' : ((e && e.type) || ''); }
+function edgeValue(e: any): string { return Array.isArray(e) ? '' : ((e && e.value) || ''); }
+function gEndpointNode(ep: string): string { const i = ep.indexOf(':'); return i < 0 ? ep : ep.slice(0, i); }
+function graphWouldCycle(edges: any[], from: string, to: string): boolean {
+  // Adding from→to makes a cycle iff `to` can already reach `from`. Work on NODE
+  // ids (strip :port) so a stage's in/out ports count as the same node.
+  const adj: Record<string, string[]> = {};
+  for (const e of edges) { const a = gEndpointNode(edgeFrom(e)), b = gEndpointNode(edgeTo(e)); (adj[a] = adj[a] || []).push(b); }
+  const seen = new Set<string>(); const stack = [to];
+  while (stack.length) {
+    const n = stack.pop() as string;
+    if (n === from) return true;
+    if (seen.has(n)) continue; seen.add(n);
+    for (const m of adj[n] || []) stack.push(m);
+  }
+  return false;
+}
+function addGraphLink(from: string, to: string): void {
+  if (from === to) { toast('warn', 'Cannot connect a stage to itself'); return; }
+  const doc = S.doc as any;
+  if (!doc.graph) doc.graph = deriveGraph(S.doc);
+  const edges: any[] = (doc.graph.edges = doc.graph.edges || []);
+  if (edges.some((e) => gEndpointNode(edgeFrom(e)) === from && gEndpointNode(edgeTo(e)) === to)) { toast('warn', 'That link already exists'); return; }
+  if (graphWouldCycle(edges, from, to)) { toast('err', 'That link would create a cycle'); return; }
+  // Port-qualified endpoints, matching deriveGraph: source emits "rows", other
+  // stages emit "out"; every stage receives on "in".
+  const fromKind = ((S.pipe && S.pipe.nodes.find((n) => n.id === from)) || ({} as any)).kind;
+  edges.push([from + ':' + (fromKind === 'source' ? 'rows' : 'out'), to + ':in']);
+  persistAndRebuild();
+  toast('ok', 'Link added — click it to set its type');
+}
+// Set a manual link's TYPE, mirroring Flogo Flow links. Success is the compact
+// array form; condition / no-match / error use the object form so they round-trip
+// and the engine can route on them.
+function setEdgeType(fromEp: string, toEp: string, type: string, value: string): void {
+  const doc = S.doc as any;
+  const edges: any[] = (doc.graph && doc.graph.edges) || [];
+  const idx = edges.findIndex((e) => edgeFrom(e) === fromEp && edgeTo(e) === toEp);
+  if (idx < 0) return;
+  const v = (value || '').trim();
+  let ne: any;
+  if (type === 'expression') ne = { from: fromEp, to: toEp, type: 'expression', value: v };
+  else if (type === 'otherwise') ne = { from: fromEp, to: toEp, type: 'otherwise' };
+  else if (type === 'error') ne = { from: fromEp, to: toEp, type: 'error' };
+  else ne = [fromEp, toEp]; // success / default
+  edges[idx] = ne;
+  persistAndRebuild();
+  const label = type === 'expression' ? 'Condition' : type === 'otherwise' ? 'No-match' : type === 'error' ? 'Error' : 'Success';
+  toast('ok', 'Link set to ' + label);
+}
+function removeGraphLink(fromEp: string, toEp: string): void {
+  const doc = S.doc as any;
+  if (!doc.graph || !Array.isArray(doc.graph.edges)) return;
+  doc.graph.edges = doc.graph.edges.filter((e: any) => !(edgeFrom(e) === fromEp && edgeTo(e) === toEp));
+  persistAndRebuild();
+  toast('warn', 'Link removed');
+}
+function closeEdgeEditor(): void { const p = $('.edgepop'); if (p) p.remove(); document.removeEventListener('mousedown', edgePopAway); }
+function edgePopAway(e: MouseEvent): void { const p = $('.edgepop'); if (p && !p.contains(e.target as HTMLElement)) closeEdgeEditor(); }
+// Click a manual link → a popover to set its TYPE (Flogo-style: Success /
+// Condition / No match / Error) or delete it. The expression field shows only
+// for a Condition link.
+function openEdgeEditor(fromEp: string, toEp: string, ev: MouseEvent): void {
+  ev.stopPropagation();
+  closeEdgeEditor();
+  const cur = graphEdgesOf(S.doc).find((e) => edgeFrom(e) === fromEp && edgeTo(e) === toEp);
+  let sel = cur ? (edgeType(cur) || 'default') : 'default';
+  if (sel === '') sel = 'default';
+  const HINTS: Record<string, string> = {
+    default: 'Success — every row continues along this link.',
+    expression: 'Rows follow this link only when the expression is true.',
+    otherwise: 'Rows from this stage that matched no Condition link.',
+    error: 'Rows that failed at this stage — routed here instead of stopping the run.',
+  };
+  const pop = el('div', 'edgepop');
+  pop.style.left = Math.min(ev.clientX, window.innerWidth - 300) + 'px';
+  pop.style.top = Math.min(ev.clientY, window.innerHeight - 230) + 'px';
+  pop.appendChild(el('div', 'ephdr', 'Link type'));
+  const seg = el('div', 'epseg');
+  const types = [
+    { k: 'default', lbl: 'Success' },
+    { k: 'expression', lbl: 'Condition' },
+    { k: 'otherwise', lbl: 'No match' },
+    { k: 'error', lbl: 'Error' },
+  ];
+  const segBtns: Record<string, HTMLElement> = {};
+  const condWrap = el('div', 'epcond');
+  const inp = document.createElement('input');
+  inp.className = 'epinput'; inp.value = cur ? edgeValue(cur) : '';
+  inp.placeholder = 'e.g. amount > 1000';
+  condWrap.appendChild(inp);
+  const hint = el('div', 'ephint', '');
+  const sync = () => {
+    for (const t of types) segBtns[t.k].className = 'epsegb' + (sel === t.k ? ' on' : '');
+    condWrap.style.display = sel === 'expression' ? 'block' : 'none';
+    hint.textContent = HINTS[sel];
+  };
+  for (const t of types) {
+    const b = el('button', 'epsegb', t.lbl);
+    b.onclick = () => { sel = t.k; sync(); if (sel === 'expression') inp.focus(); };
+    segBtns[t.k] = b; seg.appendChild(b);
+  }
+  pop.appendChild(seg);
+  pop.appendChild(condWrap);
+  const apply = el('button', 'btn sm pri', 'Apply');
+  const doApply = () => {
+    if (sel === 'expression' && !inp.value.trim()) { toast('warn', 'Enter a condition expression'); inp.focus(); return; }
+    setEdgeType(fromEp, toEp, sel, inp.value); closeEdgeEditor();
+  };
+  apply.onclick = doApply;
+  const del = el('button', 'btn sm', '✕ Delete link');
+  del.onclick = () => { removeGraphLink(fromEp, toEp); closeEdgeEditor(); };
+  const row = el('div', 'eprow');
+  row.appendChild(apply); row.appendChild(del);
+  pop.appendChild(row);
+  pop.appendChild(hint);
+  document.body.appendChild(pop);
+  sync();
+  if (sel === 'expression') inp.focus();
+  inp.onkeydown = (e) => { if (e.key === 'Enter') { doApply(); } else if (e.key === 'Escape') { closeEdgeEditor(); } };
+  setTimeout(() => document.addEventListener('mousedown', edgePopAway), 0);
+}
+
+// A backbone (main-chain) link is derived, not stored. Clicking it materialises
+// the explicit graph first (so the edge exists as a real doc.graph entry to
+// edit) then opens the same type popover — letting the user turn the main path
+// into "no match" / condition for a clean divert.
+function editMainEdge(fromEp: string, toEp: string, ev: MouseEvent): void {
+  const doc = S.doc as any;
+  if (!doc.graph) doc.graph = deriveGraph(S.doc);
+  openEdgeEditor(fromEp, toEp, ev);
+}
+
+function gKindCls(kind: string): string {
+  return kind === 'source' ? 's-source' : kind === 'sink' ? 's-sink' : 'tf';
+}
+
+function buildGraphNode(n: Node, i: number, x: number, y: number, w: number): HTMLElement {
+  const nd = el('div', 'gnode node ' + (n.kind === 'source' ? 'src' : n.kind === 'sink' ? 'sink' : 'tf') + (S.selNode === n.id ? ' sel' : ''));
+  nd.style.left = x + 'px'; nd.style.top = y + 'px'; nd.style.width = w + 'px';
+  const icon = nodeIcon(n.kind, n.type);
+  const label = typeLabel(n.type);
+  const hasCustomName = n.nm && n.nm !== label && n.nm !== n.type;
+  const title = hasCustomName ? n.nm : label;
+  const showMeta = n.meta && n.meta !== title && n.meta !== label;
+  nd.innerHTML = `<div class='kind'><span class='kico'>${icon}</span>${n.kind}</div>`
+    + `<div class='nm'>${escapeHtml(title)}</div>`
+    + (showMeta ? `<div class='meta'>${escapeHtml(n.meta)}</div>` : '');
+  nd.tabIndex = 0;
+  nd.dataset.gid = n.id;
+  nd.onclick = () => { if (_gDragged) { _gDragged = false; return; } S.selNode = n.id; S.inspTab = 'Config'; S.inspClosed = false; renderEditor(); };
+  nd.oncontextmenu = (e) => nodeMenu(n, i, e);
+  return nd;
+}
+
+function buildGraphBranchCard(b: DerivedBranch): HTMLElement {
+  const nd = el('div', 'gnode node satellite s-' + b.nodeKind);
+  const icon = nodeIcon(b.nodeKind, b.type);
+  const kindText =
+    b.kind === 'reference' ? 'reference input'
+      : b.kind === 'route' ? 'route → sink'
+        : b.kind === 'default-route' ? 'default → sink'
+          : b.kind === 'reject' ? 'rejects → sink'
+            : 'parse errors → sink';
+  const meta = metaFor(b.nodeKind, b.type, b.cfg);
+  const label = typeLabel(b.type);
+  const showMeta = meta && meta !== b.title && meta !== label;
+  nd.innerHTML = `<div class='kind'><span class='kico'>${icon}</span>${kindText}</div>`
+    + `<div class='nm'>${escapeHtml(b.title)}</div>`
+    + (showMeta ? `<div class='meta'>${escapeHtml(meta)}</div>` : '');
+  nd.tabIndex = 0;
+  nd.title = 'Configured on the ' + (b.ownerIndex === 'source' ? 'source' : 'owning transform') + ' — click to edit.';
+  nd.onclick = () => { if (_gDragged) { _gDragged = false; return; } S.selNode = b.ownerId; S.inspTab = 'Config'; S.inspClosed = false; renderEditor(); };
+  return nd;
+}
+
+function buildGraphDlqCard(dn: Node): HTMLElement {
+  const nd = el('div', 'gnode node catch satellite' + (S.selNode === 'dlq' ? ' sel' : ''));
+  nd.innerHTML = `<div class='kind'>dead-letter (catch)</div><div class='nm'>${escapeHtml(dn.nm)}</div><div class='meta'>${escapeHtml(dn.type)} · ${escapeHtml(dn.meta)}</div>`;
+  nd.tabIndex = 0;
+  nd.title = 'Rows rejected by the sink are captured here — the main pipeline keeps running.';
+  nd.onclick = () => { if (_gDragged) { _gDragged = false; return; } S.selNode = 'dlq'; S.inspTab = 'Config'; S.inspClosed = false; renderEditor(); };
+  nd.oncontextmenu = (e) => dlqMenu(e);
+  return nd;
+}
+
+// Short semantic labels for the derived branch wires, drawn at the wire's
+// midpoint so the graph documents itself (matches the wireframe's edge labels).
+const BR_LABEL: Record<string, string> = {
+  'br-reject': 'reject', 'br-source-error': 'on error', 'br-route': 'route',
+  'br-default-route': 'default', 'br-reference': 'ref', 'br-dlq': 'on fail',
+};
+// A small monospace label next to a port (rows / left / pass), so the graph's
+// fan-in / fan-out reads without opening the inspector.
+function addPortLabel(wrap: HTMLElement, x: number, y: number, label: string, side: 'in' | 'out'): void {
+  const l = el('span', 'plabel ' + side, label);
+  l.style.left = (side === 'in' ? x - 8 : x + 8) + 'px';
+  l.style.top = (y - 7) + 'px';
+  wrap.appendChild(l);
+}
+// Typed-port labels for the main-chain in/out ports (blank = unlabeled).
+function outPortLabel(n: Node): string {
+  if (n.kind === 'source') return 'rows';
+  if (n.type === 'validate' || n.type === 'dq') return 'pass';
+  return '';
+}
+function inPortLabel(n: Node): string {
+  return n.type === 'join' ? 'left' : '';
+}
+
+function graphPort(wrap: HTMLElement, x: number, y: number, cls: string, label?: string, side?: 'in' | 'out'): void {
+  const port = el('span', 'gport gport-' + cls);
+  port.style.left = (x - 5) + 'px';
+  port.style.top = (y - 5) + 'px';
+  wrap.appendChild(port);
+  if (label) addPortLabel(wrap, x, y, label, side || 'in');
+}
+
+function graphEdge(svg: SVGElement, x1: number, y1: number, x2: number, y2: number, cls: string, bow = 0): SVGPathElement {
+  const path = document.createElementNS(GSVG_NS, 'path');
+  const dx = Math.abs(x2 - x1), dy = Math.abs(y2 - y1);
+  let d: string;
+  if (bow !== 0) {
+    // A skip-link that would otherwise lie flat on the main row: bow it clear so
+    // it stays visible and its stroke is clickable (apex ≈ midY + 0.75·bow).
+    const cy = (y1 + y2) / 2 + bow;
+    const c1x = x1 + (x2 - x1) * 0.25, c2x = x1 + (x2 - x1) * 0.75;
+    d = `M ${x1} ${y1} C ${c1x} ${cy}, ${c2x} ${cy}, ${x2} ${y2}`;
+  } else {
+    d = dx >= dy
+      ? `M ${x1} ${y1} C ${(x1 + x2) / 2} ${y1}, ${(x1 + x2) / 2} ${y2}, ${x2} ${y2}`
+      : `M ${x1} ${y1} C ${x1} ${(y1 + y2) / 2}, ${x2} ${(y1 + y2) / 2}, ${x2} ${y2}`;
+  }
+  path.setAttribute('d', d);
+  path.setAttribute('class', 'gedge ' + cls);
+  path.setAttribute('marker-end', 'url(#gah)');
+  svg.appendChild(path);
+  return path;
+}
+
+// Lay out the pipeline as a DAG: main chain across the top row, implicit branches
+// stacked beneath each owner, wired with SVG paths and ports. Read-only for now.
+// A pipeline is "streaming" (unbounded) when its source never ends — Kafka or
+// Kubernetes pod logs. The run overlay then shows a live event rate instead of
+// a bounded read count, and the run is never "completed" until stopped.
+function isStreamingSource(): boolean {
+  const t = S.pipe && S.pipe.nodes[0] ? S.pipe.nodes[0].type : '';
+  return t === 'kafka' || t === 'podlog';
+}
+
+function renderGraphCanvas(cv: HTMLElement): void {
+  const p = S.pipe!;
+  const branchMap = branchesByOwner(p.branches);
+  const W = 200, H = 96, GX = 92, TOP = 28, BW = 186, BH = 78, BGY = 30;
+  const branchTop = TOP + H + 46;
+  // Saved node positions live in a side-car `ui.positions` block so the pipeline
+  // (and any promoted graph) JSON stays clean. Absent = auto-laid-out.
+  const saved: Record<string, { x: number; y: number }> = ((S.doc as any).ui && (S.doc as any).ui.positions) || {};
+
+  // 1) Default auto-layout: main chain across the top, branches stacked below.
+  const pos: Record<string, { x: number; y: number; w: number; h: number }> = {};
+  const xs: number[] = [];
+  let x = 24;
+  for (let i = 0; i < p.nodes.length; i++) { xs.push(x); x += W + GX; }
+  p.nodes.forEach((n, i) => { pos[n.id] = { x: xs[i], y: TOP, w: W, h: H }; });
+
+  const branchList: Array<{ id: string; owner: string; cls: string; flow: 'in' | 'out'; card: HTMLElement; sel: string }> = [];
+  p.nodes.forEach((n) => {
+    if (!S.showBranches) return;
+    let row = 0;
+    const add = (id: string, card: HTMLElement, cls: string, flow: 'in' | 'out', sel: string) => {
+      pos[id] = { x: pos[n.id].x + W / 2 - BW / 2, y: branchTop + row * (BH + BGY), w: BW, h: BH };
+      branchList.push({ id, owner: n.id, cls, flow, card, sel });
+      row++;
+    };
+    (branchMap[n.id] || []).forEach((b) => add(b.id, buildGraphBranchCard(b), 'br-' + b.kind, b.flow, b.ownerId));
+    if (n.id === 'sink' && p.hasDlq && p.dlqNode) add('dlq', buildGraphDlqCard(p.dlqNode), 'br-dlq', 'out', 'dlq');
+  });
+
+  // Extra sink nodes (self-contained graph sinks): lay them out in a lane just
+  // below the deepest branch row; they're draggable and their positions persist.
+  let maxBrRow = 0;
+  if (S.showBranches) {
+    p.nodes.forEach((n) => {
+      const c = (branchMap[n.id] || []).length + (n.id === 'sink' && p.hasDlq && p.dlqNode ? 1 : 0);
+      if (c > maxBrRow) maxBrRow = c;
+    });
+  }
+  const exBandY = branchTop + maxBrRow * (BH + BGY);
+  p.extraNodes.forEach((n, i) => { pos[n.id] = { x: 24 + i * (BW + GX), y: exBandY, w: BW, h: BH }; });
+
+  // Apply saved overrides.
+  for (const id in saved) if (pos[id]) { pos[id].x = saved[id].x; pos[id].y = saved[id].y; }
+
+  // 2) Content size from the furthest node.
+  let cw = 0, ch = 0;
+  for (const id in pos) { cw = Math.max(cw, pos[id].x + pos[id].w); ch = Math.max(ch, pos[id].y + pos[id].h); }
+  const contentW = cw + 24, contentH = ch + 20;
+
+  const wrap = el('div', 'gcanvas');
+  wrap.style.width = contentW + 'px';
+  wrap.style.height = contentH + 'px';
+  wrap.style.setProperty('zoom', String(S.zoom || 1));
+
+  const svg = document.createElementNS(GSVG_NS, 'svg');
+  svg.setAttribute('class', 'gedges');
+  svg.setAttribute('width', String(contentW));
+  svg.setAttribute('height', String(contentH));
+  const defs = document.createElementNS(GSVG_NS, 'defs');
+  const marker = document.createElementNS(GSVG_NS, 'marker');
+  marker.setAttribute('id', 'gah');
+  marker.setAttribute('markerWidth', '9');
+  marker.setAttribute('markerHeight', '9');
+  marker.setAttribute('refX', '7');
+  marker.setAttribute('refY', '3');
+  marker.setAttribute('orient', 'auto');
+  const mpath = document.createElementNS(GSVG_NS, 'path');
+  mpath.setAttribute('d', 'M0,0 L7,3 L0,6 Z');
+  mpath.setAttribute('fill', '#8a929c');
+  marker.appendChild(mpath);
+  defs.appendChild(marker);
+  svg.appendChild(defs);
+  wrap.appendChild(svg);
+
+  // 3) Connection points from the live position map, and a redraw() that repaints
+  // every edge + port — called on each drag frame so wires track the node.
+  const cp = (id: string) => {
+    const q = pos[id];
+    return { inX: q.x, inY: q.y + q.h / 2, outX: q.x + q.w, outY: q.y + q.h / 2, botX: q.x + q.w / 2, botY: q.y + q.h, topX: q.x + q.w / 2, topY: q.y };
+  };
+  // Link-drag (Flogo-style activity connection): press a stage's OUT-port and
+  // drag to another stage; on release we record the edge in doc.graph. A dashed
+  // rubber band tracks the cursor and the hovered target stage is highlighted.
+  const startConnect = (fromId: string, ev: MouseEvent) => {
+    if (ev.button !== 0) return;
+    ev.preventDefault(); ev.stopPropagation();
+    _gConnecting = true;
+    document.body.style.userSelect = 'none';
+    const z = S.zoom || 1;
+    const wrapRect = wrap.getBoundingClientRect();
+    const a = cp(fromId);
+    const rub = document.createElementNS(GSVG_NS, 'path');
+    rub.setAttribute('class', 'gedge grubber');
+    svg.appendChild(rub);
+    let hov: HTMLElement | null = null;
+    const clearHov = () => { if (hov) hov.classList.remove('linktarget'); hov = null; };
+    const targetAt = (cx: number, cy: number): HTMLElement | null => {
+      const el0 = document.elementFromPoint(cx, cy) as HTMLElement | null;
+      const node = el0 ? (el0.closest('.gnode[data-gid]') as HTMLElement | null) : null;
+      return node && node.dataset.gid !== fromId ? node : null;
+    };
+    const move = (m: MouseEvent) => {
+      const lx = (m.clientX - wrapRect.left) / z, ly = (m.clientY - wrapRect.top) / z;
+      rub.setAttribute('d', `M ${a.outX} ${a.outY} C ${(a.outX + lx) / 2} ${a.outY}, ${(a.outX + lx) / 2} ${ly}, ${lx} ${ly}`);
+      const node = targetAt(m.clientX, m.clientY);
+      if (node !== hov) { clearHov(); if (node) { hov = node; node.classList.add('linktarget'); } }
+    };
+    const up = (m: MouseEvent) => {
+      document.removeEventListener('mousemove', move);
+      document.removeEventListener('mouseup', up);
+      document.body.style.userSelect = '';
+      rub.remove(); clearHov(); _gConnecting = false; _gDragged = true;
+      const node = targetAt(m.clientX, m.clientY);
+      if (node && node.dataset.gid) addGraphLink(fromId, node.dataset.gid);
+    };
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', up);
+  };
+  const connectPort = (fromId: string, x: number, y: number, cls: string, label?: string, side?: 'in' | 'out') => {
+    const port = el('span', 'gport gport-' + cls + ' io');
+    port.style.left = (x - 6) + 'px'; port.style.top = (y - 6) + 'px';
+    const cols = columnsOutOf(fromId);
+    port.title = (cols.length ? cols.length + ' cols: ' + cols.slice(0, 10).join(', ') + (cols.length > 10 ? '…' : '') + ' — ' : '') + 'drag to connect to another stage';
+    port.addEventListener('mousedown', (ev) => startConnect(fromId, ev));
+    wrap.appendChild(port);
+    if (label) addPortLabel(wrap, x, y, label, side || 'out');
+  };
+  const redraw = () => {
+    svg.querySelectorAll('.gedge, .gedgelabel, .gedgehit').forEach((e) => e.remove());
+    wrap.querySelectorAll('.gport, .plabel').forEach((e) => e.remove());
+    for (let i = 1; i < p.nodes.length; i++) {
+      const pa = p.nodes[i - 1], pb = p.nodes[i];
+      const a = cp(pa.id), b = cp(pb.id);
+      // The backbone edge is a success link by default, but the user can retype
+      // it (→ no match / condition) — a stored override in doc.graph wins.
+      const fromEp = pa.id + ':' + (pa.kind === 'source' ? 'rows' : 'out');
+      const toEp = pb.id + ':in';
+      const ov = graphEdgesOf(S.doc).find((e) => edgeFrom(e) === fromEp && edgeTo(e) === toEp);
+      const et = ov ? (edgeType(ov) || 'default') : 'default';
+      const etCls = et === 'expression' ? ' cond' : et === 'otherwise' ? ' otherwise' : et === 'error' ? ' error' : '';
+      const cls = etCls ? ('manual' + etCls) : ('main' + (S.running ? ' running' : ''));
+      const mp = graphEdge(svg, a.outX, a.outY, b.inX, b.inY, cls);
+      // Fat transparent hit-path so the backbone link is clickable to set its type.
+      const mhit = document.createElementNS(GSVG_NS, 'path');
+      mhit.setAttribute('d', mp.getAttribute('d') || '');
+      mhit.setAttribute('class', 'gedgehit');
+      mhit.setAttribute('fill', 'none');
+      mhit.setAttribute('stroke', 'transparent');
+      mhit.setAttribute('stroke-width', '14');
+      mhit.style.pointerEvents = 'stroke';
+      mhit.style.cursor = 'pointer';
+      mhit.addEventListener('click', (ev) => editMainEdge(fromEp, toEp, ev as MouseEvent));
+      svg.appendChild(mhit);
+      mp.style.pointerEvents = 'none';
+      const mlbl = et === 'expression' ? edgeValue(ov) : et === 'otherwise' ? 'no match' : et === 'error' ? 'error' : '';
+      if (mlbl) {
+        const label = document.createElementNS(GSVG_NS, 'text');
+        label.setAttribute('x', String((a.outX + b.inX) / 2));
+        label.setAttribute('y', String((a.outY + b.inY) / 2 - 6));
+        label.setAttribute('text-anchor', 'middle');
+        label.setAttribute('class', 'gedgelabel' + (et === 'otherwise' ? ' otherwise' : et === 'error' ? ' error' : ''));
+        label.textContent = mlbl.length > 28 ? mlbl.slice(0, 27) + '…' : mlbl;
+        svg.appendChild(label);
+      }
+    }
+    p.nodes.forEach((n) => {
+      const q = cp(n.id);
+      if (n.kind !== 'source') graphPort(wrap, q.inX, q.inY, gKindCls(n.kind), inPortLabel(n), 'in');
+      if (n.kind !== 'sink') connectPort(n.id, q.outX, q.outY, gKindCls(n.kind), outPortLabel(n), 'out');
+    });
+    p.extraNodes.forEach((n) => { const q = cp(n.id); graphPort(wrap, q.inX, q.inY, gKindCls('sink')); });
+    branchList.forEach((b) => {
+      const o = cp(b.owner), nn = cp(b.id);
+      const ep = b.flow === 'out'
+        ? graphEdge(svg, o.botX, o.botY, nn.topX, nn.topY, b.cls)
+        : graphEdge(svg, nn.topX, nn.topY, o.botX, o.botY, b.cls);
+      graphPort(wrap, o.botX, o.botY, 'branch');
+      graphPort(wrap, nn.topX, nn.topY, 'branch');
+      // Branch links are derived from the owner's config; clicking one selects
+      // the owning stage and opens its config (where the reference / reject /
+      // route / parse-error branch is edited) — mirrors clicking the branch card.
+      const bhit = document.createElementNS(GSVG_NS, 'path');
+      bhit.setAttribute('d', ep.getAttribute('d') || '');
+      bhit.setAttribute('class', 'gedgehit');
+      bhit.setAttribute('fill', 'none');
+      bhit.setAttribute('stroke', 'transparent');
+      bhit.setAttribute('stroke-width', '14');
+      bhit.style.pointerEvents = 'stroke';
+      bhit.style.cursor = 'pointer';
+      bhit.addEventListener('click', () => { S.selNode = b.sel; S.inspTab = 'Config'; S.inspClosed = false; renderEditor(); });
+      svg.appendChild(bhit);
+      ep.style.pointerEvents = 'none';
+      const blab = BR_LABEL[b.cls];
+      if (blab) {
+        const t = document.createElementNS(GSVG_NS, 'text');
+        t.setAttribute('x', String((o.botX + nn.topX) / 2 + 7));
+        t.setAttribute('y', String((o.botY + nn.topY) / 2 + 3));
+        t.setAttribute('text-anchor', 'start');
+        const red = b.cls === 'br-reject' || b.cls === 'br-source-error' || b.cls === 'br-dlq';
+        t.setAttribute('class', 'gedgelabel brlab' + (red ? ' error' : ''));
+        t.textContent = blab;
+        svg.appendChild(t);
+      }
+    });
+    // Manual links (activity connections the user drew) — any doc.graph edge
+    // that isn't part of the derived main-chain / branch structure. Plain links
+    // are dashed blue; conditional links are amber with the expression labelled.
+    // Clicking a link opens its condition/delete popover.
+    const derived = new Set<string>();
+    for (let i = 1; i < p.nodes.length; i++) derived.add(p.nodes[i - 1].id + '>' + p.nodes[i].id);
+    branchList.forEach((b) => derived.add(b.flow === 'out' ? b.owner + '>' + b.id : b.id + '>' + b.owner));
+    graphEdgesOf(S.doc).forEach((e) => {
+      const f = gEndpointNode(edgeFrom(e)), t = gEndpointNode(edgeTo(e));
+      if (!pos[f] || !pos[t] || derived.has(f + '>' + t)) return;
+      const a = cp(f), b = cp(t);
+      const et = edgeType(e) || 'default';
+      const etCls = et === 'expression' ? ' cond' : et === 'otherwise' ? ' otherwise' : et === 'error' ? ' error' : '';
+      // Bow the link below the row so a skip-link that would otherwise lie flat
+      // on the main chain stays visible and clear of the nodes it spans.
+      const span = Math.abs(b.inX - a.outX);
+      const flat = Math.abs(b.inY - a.outY) < 24;
+      const bow = flat ? Math.max(48, Math.min(72, span * 0.12)) : 0;
+      const path = graphEdge(svg, a.outX, a.outY, b.inX, b.inY, 'manual' + etCls, bow);
+      const fromEp = edgeFrom(e), toEp = edgeTo(e);
+      // A fat, transparent hit-path over the thin curve so the link is easy to
+      // click (the visible stroke alone is a 2px target and awkward to hit).
+      const hit = document.createElementNS(GSVG_NS, 'path');
+      hit.setAttribute('d', path.getAttribute('d') || '');
+      hit.setAttribute('class', 'gedgehit');
+      hit.setAttribute('fill', 'none');
+      hit.setAttribute('stroke', 'transparent');
+      hit.setAttribute('stroke-width', '14');
+      hit.style.pointerEvents = 'stroke';
+      hit.style.cursor = 'pointer';
+      hit.addEventListener('click', (ev) => openEdgeEditor(fromEp, toEp, ev as MouseEvent));
+      svg.appendChild(hit);
+      path.style.pointerEvents = 'none';
+      const lblText = et === 'expression' ? edgeValue(e) : et === 'otherwise' ? 'no match' : et === 'error' ? 'error' : '';
+      if (lblText) {
+        const label = document.createElementNS(GSVG_NS, 'text');
+        label.setAttribute('x', String((a.outX + b.inX) / 2));
+        label.setAttribute('y', String((a.outY + b.inY) / 2 + bow * 0.75 - 5));
+        label.setAttribute('text-anchor', 'middle');
+        label.setAttribute('class', 'gedgelabel' + (et === 'otherwise' ? ' otherwise' : et === 'error' ? ' error' : ''));
+        label.textContent = lblText.length > 28 ? lblText.slice(0, 27) + '…' : lblText;
+        svg.appendChild(label);
+      }
+    });
+  };
+
+  // 4) Drag-to-reposition: move the node, repaint wires live, persist on release.
+  const attachDrag = (nd: HTMLElement, id: string) => {
+    nd.addEventListener('mousedown', (ev: MouseEvent) => {
+      if (ev.button !== 0) return;
+      const sx = ev.clientX, sy = ev.clientY, ox = pos[id].x, oy = pos[id].y;
+      let moved = false;
+      const z = S.zoom || 1;
+      const move = (m: MouseEvent) => {
+        const dx = (m.clientX - sx) / z, dy = (m.clientY - sy) / z;
+        if (!moved && Math.abs(dx) + Math.abs(dy) > 3) moved = true;
+        if (moved) {
+          pos[id].x = Math.max(0, ox + dx); pos[id].y = Math.max(0, oy + dy);
+          nd.style.left = pos[id].x + 'px'; nd.style.top = pos[id].y + 'px';
+          redraw();
+        }
+      };
+      const up = () => {
+        document.removeEventListener('mousemove', move);
+        document.removeEventListener('mouseup', up);
+        document.body.style.userSelect = '';
+        if (moved) {
+          _gDragged = true;
+          const doc = S.doc as any;
+          doc.ui = doc.ui || {};
+          doc.ui.positions = doc.ui.positions || {};
+          doc.ui.positions[id] = { x: Math.round(pos[id].x), y: Math.round(pos[id].y) };
+          post({ type: 'save', doc: S.doc });
+        }
+      };
+      document.addEventListener('mousemove', move);
+      document.addEventListener('mouseup', up);
+      document.body.style.userSelect = 'none';
+      ev.preventDefault();
+    });
+  };
+
+  // 5) Render node cards at their positions, then paint the wires.
+  const els: Record<string, HTMLElement> = {};
+  p.nodes.forEach((n, i) => {
+    const nd = buildGraphNode(n, i, pos[n.id].x, pos[n.id].y, W);
+    els[n.id] = nd;
+    attachDrag(nd, n.id);
+    wrap.appendChild(nd);
+  });
+  branchList.forEach((b) => {
+    b.card.style.left = pos[b.id].x + 'px'; b.card.style.top = pos[b.id].y + 'px'; b.card.style.width = BW + 'px';
+    els[b.id] = b.card;
+    attachDrag(b.card, b.id);
+    wrap.appendChild(b.card);
+  });
+  p.extraNodes.forEach((n, i) => {
+    const nd = buildGraphNode(n, i, pos[n.id].x, pos[n.id].y, BW);
+    els[n.id] = nd;
+    attachDrag(nd, n.id);
+    wrap.appendChild(nd);
+  });
+
+  // Design-time validation: ring any node that has an error in the Problems panel
+  // (mirrors the wireframe's "node gets an error badge + appears in Validation").
+  S.issues.forEach((iss) => {
+    if (iss.sev === 'error' && iss.anchor && els[iss.anchor]) els[iss.anchor].classList.add('state-err');
+  });
+
+  // 6) Run overlay — after a run, badge the nodes with the real row counts the
+  // engine reported: read at the source, written at the sink, failed at the DLQ.
+  // Gated on the Counts toggle so the graph can be viewed clean.
+  if (S.ran && S.lastRun && S.showCounts) {
+    const r = S.lastRun;
+    const badge = (id: string, text: string, cls: string) => {
+      const host = els[id];
+      if (host) host.appendChild(el('div', 'grunbadge ' + cls, text));
+    };
+    const stateRing = (id: string, cls: string) => { const h = els[id]; if (h) h.classList.add(cls); };
+    const streaming = isStreamingSource();
+    const rate = (S.running && S.rateRps > 0) ? ' · ' + fmtK(S.rateRps) + '/s' : '';
+    const srcLabel = (n: number) => (streaming ? '≋ ' : '▶ ') + fmtK(n) + (streaming ? ' events' : ' read') + rate;
+    const streamCls = streaming && S.running ? 'in live' : 'in';
+    const gs = r.graphStats;
+    if (gs && gs.length) {
+      // Graph (DAG) run: badge every node with its OWN counts — including extra
+      // sink nodes and per-node error counts the linear overlay can't show.
+      gs.forEach((s) => {
+        if (s.rowsErrored > 0) stateRing(s.id, 'state-warn');
+        if (s.kind === 'source') { badge(s.id, srcLabel(s.rowsOut), streamCls); return; }
+        if (s.kind === 'sink') { badge(s.id, fmtK(s.rowsWritten) + ' written', 'ok'); return; }
+        const txt = fmtK(s.rowsOut) + ' out' + (s.rowsErrored > 0 ? ' · ' + fmtK(s.rowsErrored) + ' err' : '');
+        badge(s.id, txt, s.rowsErrored > 0 ? 'err' : 'in');
+      });
+    } else {
+      badge('source', srcLabel(r.rowsProcessed), streamCls);
+      badge('sink', fmtK(r.rowsWritten) + ' written', 'ok');
+      if (p.hasDlq && r.rowsFailed > 0) { badge('dlq', fmtK(r.rowsFailed) + ' failed', 'err'); stateRing('dlq', 'state-warn'); }
+      // Per-transform throughput when the engine reported per-stage counts and they
+      // align 1:1 with the transform nodes (i.e. no auto-injected schemadrift/hwm).
+      const ss = r.stageStats;
+      if (ss && ss.length) {
+        const txNodes = p.nodes.filter((n) => n.kind === 'transform');
+        if (ss.length === txNodes.length) {
+          txNodes.forEach((n, i) => badge(n.id, fmtK(ss[i].rowsOut) + ' out', 'in'));
+        }
+      }
+    }
+
+    // Per-edge "follow the row" counts: label each wire with the rows that
+    // crossed it. A main-chain edge A→B carries A's output rows; reject / parse-
+    // error branches carry the owner's errored rows. Derived from the same node
+    // stats as the badges, so no engine change is needed.
+    const rowsOut: Record<string, number> = {};
+    const rowsErr: Record<string, number> = {};
+    if (gs && gs.length) {
+      gs.forEach((s) => { rowsOut[s.id] = s.rowsOut || 0; rowsErr[s.id] = s.rowsErrored || 0; });
+    } else {
+      rowsOut['source'] = r.rowsProcessed || 0;
+      const ss2 = r.stageStats;
+      const txNodes2 = p.nodes.filter((n) => n.kind === 'transform');
+      if (ss2 && ss2.length === txNodes2.length) txNodes2.forEach((n, i) => { rowsOut[n.id] = ss2[i].rowsOut; });
+    }
+    const edgeCount = (mx: number, my: number, n: number, cls: string) => {
+      const lab = el('div', 'gedgecount' + (cls ? ' ' + cls : ''), fmtK(n));
+      lab.style.left = mx + 'px'; lab.style.top = my + 'px';
+      wrap.appendChild(lab);
+    };
+    for (let i = 1; i < p.nodes.length; i++) {
+      const from = p.nodes[i - 1], to = p.nodes[i];
+      if (!(from.id in rowsOut)) continue;
+      const a = cp(from.id), b = cp(to.id);
+      edgeCount((a.outX + b.inX) / 2, (a.outY + b.inY) / 2 - 11, rowsOut[from.id], '');
+    }
+    branchList.forEach((br) => {
+      if (br.cls !== 'br-reject' && br.cls !== 'br-source-error') return;
+      const err = rowsErr[br.sel] || rowsErr[br.owner] || 0;
+      if (!err) return;
+      const o = cp(br.owner), nn = cp(br.id);
+      edgeCount((o.botX + nn.topX) / 2, (o.botY + nn.topY) / 2, err, 'err');
+    });
+  }
+
+  redraw();
+  cv.appendChild(wrap);
+
+  // Minimap overview (toggle): a scaled map of the whole graph pinned to the
+  // corner, with a viewport box that tracks scroll; click to recenter.
+  if (S.minimapOpen) {
+    const MMW = 190, MMH = 130;
+    const scale = Math.min(MMW / Math.max(1, contentW), MMH / Math.max(1, contentH));
+    const mm = el('div', 'minimap');
+    mm.style.width = Math.max(60, Math.round(contentW * scale)) + 'px';
+    mm.style.height = Math.max(40, Math.round(contentH * scale)) + 'px';
+    mm.title = 'Minimap — click to jump';
+    Object.keys(pos).forEach((id) => {
+      const q = pos[id];
+      const nn = p.nodes.find((x) => x.id === id);
+      const kind = nn ? nn.kind : (id === 'dlq' ? 'dlq' : 'sink');
+      const r = el('div', 'mmnode ' + (kind === 'source' ? 'src' : kind === 'sink' ? 'sink' : kind === 'dlq' ? 'dlq' : 'tf') + (S.selNode === id ? ' sel' : ''));
+      r.style.left = (q.x * scale) + 'px'; r.style.top = (q.y * scale) + 'px';
+      r.style.width = Math.max(3, q.w * scale) + 'px'; r.style.height = Math.max(2, q.h * scale) + 'px';
+      mm.appendChild(r);
+    });
+    const vp = el('div', 'mmviewport');
+    const updateVp = () => {
+      const z = S.zoom || 1;
+      vp.style.left = (cv.scrollLeft / z * scale) + 'px';
+      vp.style.top = (cv.scrollTop / z * scale) + 'px';
+      vp.style.width = Math.min(MMW, cv.clientWidth / z * scale) + 'px';
+      vp.style.height = Math.min(MMH, cv.clientHeight / z * scale) + 'px';
+    };
+    mm.appendChild(vp);
+    mm.onclick = (e) => {
+      const rect = mm.getBoundingClientRect();
+      const z = S.zoom || 1;
+      const cx = (e.clientX - rect.left) / scale, cy = (e.clientY - rect.top) / scale;
+      cv.scrollTo({ left: cx * z - cv.clientWidth / 2, top: cy * z - cv.clientHeight / 2, behavior: 'smooth' });
+    };
+    cv.addEventListener('scroll', updateVp);
+    cv.appendChild(mm);
+    requestAnimationFrame(updateVp);
+  }
+}
+
+function applyZoom(z: number): void {
+  S.zoom = Math.max(0.4, Math.min(1.6, Math.round(z * 10) / 10));
+  const cvw = $('.gcanvas');
+  if (cvw) cvw.style.setProperty('zoom', String(S.zoom));
+  const lvl = $('.zlvl');
+  if (lvl) lvl.textContent = Math.round(S.zoom * 100) + '%';
+}
+
+// Files whose canvas has already been auto-fitted once, so re-renders never
+// fight a zoom the user has since set.
+const autoFitted = new Set<string>();
+
+// autoFitCanvas shrinks the zoom on first open so a pipeline wider than the
+// viewport is fully visible (competitors open zoomed-to-fit). It never enlarges,
+// runs once per file, and bails when the user has already zoomed.
+function autoFitCanvas(): void {
+  if (autoFitted.has(S.fileName) || S.zoom !== 1) return;
+  autoFitted.add(S.fileName);
+  requestAnimationFrame(() => {
+    const cvEl = $('.canvas'); const gc = $('.gcanvas');
+    if (!cvEl || !gc) return;
+    const cw = parseFloat(gc.style.width) || gc.offsetWidth || 1;
+    const ch = parseFloat(gc.style.height) || gc.offsetHeight || 1;
+    const availW = Math.max(200, cvEl.clientWidth - 48);
+    const availH = Math.max(200, cvEl.clientHeight - gc.offsetTop - 24);
+    if (cw <= availW && ch <= availH) return; // already fits at 100%
+    // Frame the graph, but keep it readable: never auto-shrink below 60% on open.
+    // A long pipeline stays legible and scrolls from its source rather than
+    // becoming a tiny, unreadable diagram lost in the canvas. Use the ⤢ Fit
+    // button for the zoomed-out whole-graph overview.
+    const z = Math.max(0.6, Math.floor(Math.min(1, availW / cw, availH / ch) * 10) / 10);
+    if (z < 1) applyZoom(z);
+  });
+}
+
+
+// ── component palette (left rail) ───────────────────────────────────────────
+// The wireframe's authoring model: a searchable, categorised library of
+// Sources / Transforms / Sinks. Clicking an item adds a node of that type
+// (reusing the same add logic the toolbar pills use). Collapsible to a strip.
+function addFromPalette(kind: string, type: string, pos?: { x: number; y: number }): void {
+  if (kind === 'source') {
+    (S.doc.source as any) = { type, ...defaultConfigFor('source', type) };
+    S.selNode = 'source'; S.inspTab = 'Config'; S.inspClosed = false;
+    persistAndRebuild();
+    toast('ok', `Source → ${typeLabel(type)}`);
+    return;
+  }
+  if (kind === 'sink') {
+    const doc = S.doc as any;
+    if (!doc.graph) doc.graph = deriveGraph(S.doc);
+    doc.graph.nodes = Array.isArray(doc.graph.nodes) ? doc.graph.nodes : [];
+    let n = 1; while (doc.graph.nodes.some((g: any) => g && g.id === 'xsink-' + n)) n++;
+    const id = 'xsink-' + n;
+    doc.graph.nodes.push({ id, kind: 'sink', type, ports: { in: ['in'] }, config: defaultConfigFor('sink', type) });
+    if (pos) {
+      doc.ui = doc.ui || {};
+      doc.ui.positions = doc.ui.positions || {};
+      doc.ui.positions[id] = { x: Math.max(0, Math.round(pos.x - 90)), y: Math.max(0, Math.round(pos.y - 36)) };
+    }
+    S.pipe = buildPipe(S.doc);
+    S.selNode = id; S.inspTab = 'Config'; S.inspClosed = false;
+    post({ type: 'save', doc: S.doc });
+    renderEditor();
+    toast('ok', `Added sink node → ${typeLabel(type)}. Drag a link to it.`);
+    return;
+  }
+  // transform: append before the sink, seeding a valid default config.
+  const doc: any = S.doc;
+  doc.transforms = Array.isArray(doc.transforms) ? doc.transforms : [];
+  const cat = TRANSFORMS.find((x) => x.type === type);
+  const cfg = cat ? JSON.parse(JSON.stringify(cat.cfg)) : {};
+  const tfInsert = doc.transforms.length;
+  if (type === 'map') {
+    const cols = upstreamColumnsAt(tfInsert);
+    if (cols.length) { const f: Record<string, string> = {}; cols.forEach((c) => { f[c] = '=$' + c; }); cfg.fields = f; }
+  }
+  doc.transforms.splice(tfInsert, 0, { type, ...cfg });
+  S.pipe = buildPipe(S.doc);
+  S.selNode = 't' + tfInsert; S.inspTab = 'Config'; S.inspClosed = false;
+  post({ type: 'save', doc: S.doc });
+  renderEditor();
+  toast('ok', `Added ${transformLabel(type)} — configure it in the Inspector →`);
+}
+
+function renderPalette(): HTMLElement {
+  if (!S.paletteOpen) {
+    const strip = el('div', 'complib collapsed');
+    const btn = el('div', 'complib-expand', '⊞');
+    btn.title = 'Show component palette';
+    btn.onclick = () => { S.paletteOpen = true; renderEditor(); };
+    strip.appendChild(btn);
+    return strip;
+  }
+  const pal = el('div', 'complib');
+  const hd = el('div', 'complib-hd', '<span>Components</span>');
+  const col = el('span', 'complib-collapse', '‹');
+  col.title = 'Hide palette';
+  col.onclick = () => { S.paletteOpen = false; renderEditor(); };
+  hd.appendChild(col);
+  pal.appendChild(hd);
+  const bodyEl = el('div', 'complib-body');
+  const hasDlq = !!(S.pipe && S.pipe.hasDlq);
+  const sinkItems = SINK_TYPES.map((t) => ({ type: t, label: typeLabel(t) }));
+  // Dead-letter is a sink-family palette item (matches the wireframe) — clicking
+  // it adds the top-level DLQ catch. Only offered when none exists yet.
+  if (!hasDlq) sinkItems.push({ type: '__dlq__', label: 'Dead-letter (DLQ)' });
+  const cats: Array<{ name: string; kind: string; items: Array<{ type: string; label: string }> }> = [
+    { name: 'Sources', kind: 'source', items: SOURCE_TYPES.map((t) => ({ type: t, label: typeLabel(t) })) },
+    { name: 'Transforms', kind: 'transform', items: TRANSFORMS.map((t) => ({ type: t.type, label: transformLabel(t.type) })) },
+    { name: 'Sinks', kind: 'sink', items: sinkItems },
+  ];
+  const kcls: Record<string, string> = { source: 'src', transform: 'tf', sink: 'sink' };
+  const rebuild = () => {
+    bodyEl.innerHTML = '';
+    const q = (S.paletteQ || '').toLowerCase().trim();
+    cats.forEach((cat) => {
+      const items = cat.items.filter((it) => !q || it.label.toLowerCase().includes(q) || it.type.includes(q));
+      if (!items.length) return;
+      const collapsed = !q && !!S.paletteCat[cat.name];
+      const chd = el('div', 'complib-cat' + (collapsed ? ' collapsed' : ''));
+      chd.innerHTML = `<span class="cc">▾</span><span class="ct"></span><span class="cn"></span>`;
+      (chd.querySelector('.ct') as HTMLElement).textContent = cat.name;
+      (chd.querySelector('.cn') as HTMLElement).textContent = String(items.length);
+      chd.onclick = () => { S.paletteCat[cat.name] = !S.paletteCat[cat.name]; rebuild(); };
+      bodyEl.appendChild(chd);
+      if (collapsed) return;
+      items.forEach((it) => {
+        const isDlq = it.type === '__dlq__';
+        const row = el('div', 'complib-item');
+        row.title = isDlq ? 'Add a dead-letter catch for rows the sink rejects' : 'Click or drag onto the canvas to add ' + it.label;
+        const ico = isDlq ? '⚠' : nodeIcon(cat.kind, it.type);
+        const icoCls = isDlq ? 'dlq' : kcls[cat.kind];
+        const ar = cat.kind === 'transform' ? (TF_ARITY[it.type] || '') : '';
+        row.innerHTML = `<span class="ci ${icoCls}">${ico}</span><span class="cl"></span>` + (ar ? `<span class="carity">${escapeHtml(ar)}</span>` : '');
+        (row.querySelector('.cl') as HTMLElement).textContent = it.label;
+        if (!isDlq) {
+          row.draggable = true;
+          row.ondragstart = (e: DragEvent) => {
+            e.dataTransfer!.setData('text/flogo-comp', JSON.stringify({ kind: cat.kind, type: it.type }));
+            e.dataTransfer!.effectAllowed = 'copy';
+          };
+        }
+        row.onclick = () => { if (isDlq) addDlq(); else addFromPalette(cat.kind, it.type); };
+        bodyEl.appendChild(row);
+      });
+    });
+    if (!bodyEl.children.length) bodyEl.appendChild(el('div', 'complib-empty', 'No components match'));
+  };
+  const search = el('input', 'complib-search') as HTMLInputElement;
+  search.placeholder = 'Search components…';
+  search.value = S.paletteQ || '';
+  search.oninput = () => { S.paletteQ = search.value; rebuild(); };
+  pal.appendChild(search);
+  pal.appendChild(bodyEl);
+  rebuild();
+  return pal;
+}
+
+// Palette drag-and-drop: dropping a component onto the canvas adds it, landing a
+// free sink node at the cursor (source/transform join the auto-laid chain).
+function attachCanvasDrop(cv: HTMLElement): void {
+  const hasComp = (e: DragEvent) => !!e.dataTransfer && Array.from(e.dataTransfer.types).indexOf('text/flogo-comp') >= 0;
+  cv.addEventListener('dragover', (e: DragEvent) => {
+    if (!hasComp(e)) return;
+    e.preventDefault();
+    e.dataTransfer!.dropEffect = 'copy';
+    cv.classList.add('dragover');
+  });
+  cv.addEventListener('dragleave', (e: DragEvent) => {
+    if (e.target === cv) cv.classList.remove('dragover');
+  });
+  cv.addEventListener('drop', (e: DragEvent) => {
+    cv.classList.remove('dragover');
+    if (!hasComp(e)) return;
+    e.preventDefault();
+    let d: { kind: string; type: string };
+    try { d = JSON.parse(e.dataTransfer!.getData('text/flogo-comp')); } catch { return; }
+    if (!d || !d.kind || !d.type) return;
+    const gc = $('.gcanvas');
+    let pos: { x: number; y: number } | undefined;
+    if (gc) {
+      const r = gc.getBoundingClientRect();
+      const z = S.zoom || 1;
+      pos = { x: (e.clientX - r.left) / z, y: (e.clientY - r.top) / z };
+    }
+    addFromPalette(d.kind, d.type, pos);
+  });
+}
+
 function renderCanvas(m: HTMLElement) {
   const p = S.pipe!;
   const c = el('div', 'edcontent');
   const cv = el('div', 'canvas' + (S.running ? ' running' : ''));
   c.appendChild(cv);
+  attachCanvasDrop(cv);
 
   // Pipeline header — editable name + description that live in the pipeline file
   // (doc.name / doc.description). Lets users document the pipeline inline.
@@ -2888,94 +4146,78 @@ function renderCanvas(m: HTMLElement) {
   head.appendChild(descIn);
   cv.appendChild(head);
 
-  const row = el('div', 'flowrow');
-  p.nodes.forEach((n, i) => {
-    if (i > 0) {
-      const cn = el('div', 'conn' + (S.running ? ' flow' : S.ran ? ' live' : ''));
-      const ins = el('div', 'ins', '＋');
-      ins.title = 'Insert transform here';
-      ins.onclick = (e) => { e.stopPropagation(); addTransform(i); };
-      cn.appendChild(ins);
-      cn.onclick = () => addTransform(i);
-      row.appendChild(cn);
-    }
-    const w = [92, 94, 94, 89, 89][i] || 90;
-    const nd = el('div', 'node ' + (n.kind === 'source' ? 'src' : n.kind === 'sink' ? 'sink' : 'tf') + (S.ran ? ' ran' : '') + (S.selNode === n.id ? ' sel' : ''));
-    nd.style.setProperty('--w', w + '%');
-    const icon = n.kind === 'source' ? '⇥' : n.kind === 'sink' ? '⇤' : 'ƒ';
-    // Avoid repeating the same word twice (e.g. a null sink whose name defaults
-    // to its type — "null / null"). The bold title is the custom name when set,
-    // otherwise the friendly type label; the meta line is only shown when it
-    // carries extra detail beyond that title.
-    const label = typeLabel(n.type);
-    const hasCustomName = n.nm && n.nm !== label && n.nm !== n.type;
-    const title = hasCustomName ? n.nm : label;
-    const showMeta = n.meta && n.meta !== title && n.meta !== label;
-    nd.innerHTML = `<div class="kind"><span class="kico">${icon}</span>${n.kind}</div>`
-      + `<div class="nm">${title}</div>`
-      + (showMeta ? `<div class="meta">${n.meta}</div>` : '')
-      + `<div class="thru"><i></i></div>`;
-    nd.tabIndex = 0;
-    nd.onclick = () => { S.selNode = n.id; S.inspTab = 'Config'; S.inspClosed = false; renderEditor(); };
-    nd.oncontextmenu = (e) => nodeMenu(n, i, e);
-    row.appendChild(nd);
-  });
-  row.appendChild(el('div', 'conn'));
-  const add = el('div', 'addnode', '＋');
-  add.title = 'Add transform (before the sink)';
-  add.onclick = () => addTransform(p.nodes.length - 1);
-  row.appendChild(add);
-  // Wrap the flow + catch lane so the DLQ aligns under the sink end of the flow.
-  const wrap = el('div', 'flowwrap');
-  wrap.appendChild(row);
-  cv.appendChild(wrap);
-
-  // DLQ: the pipeline's "catch" — a dead-letter handler that captures rows the
-  // main sink rejects (write failures, post-isolation validate rejects). It is
-  // rendered as an error-handler lane beneath the flow, elbow-connected from the
-  // sink, so it reads as a try/catch rather than a disconnected node.
-  if (p.hasDlq && p.dlqNode) {
-    const dn = p.dlqNode;
-    const br = el('div', 'catchlane');
-    const col = el('div', 'catchcol');
-    col.innerHTML = '<span class="elbow-line"></span><span class="elbow-tag">⚠ on failure → catch</span>';
-    const dnode = el('div', 'node catch' + (S.selNode === 'dlq' ? ' sel' : ''));
-    dnode.innerHTML = `<div class="kind">dead-letter (catch)</div><div class="nm">${escapeHtml(dn.nm)}</div><div class="meta">${escapeHtml(dn.type)} · ${escapeHtml(dn.meta)}</div>`;
-    dnode.tabIndex = 0;
-    dnode.title = 'Rows rejected by the sink are captured here — the main pipeline keeps running.';
-    dnode.onclick = () => { S.selNode = 'dlq'; S.inspTab = 'Config'; S.inspClosed = false; renderEditor(); };
-    dnode.oncontextmenu = (e) => dlqMenu(e);
-    col.appendChild(dnode);
-    br.appendChild(col);
-    wrap.appendChild(br);
-  }
+  // The DAG (node + wire) canvas — the only canvas.
+  renderGraphCanvas(cv);
 
   const hint = el('div', 'canvas-hint pillrow');
-  const dlqPill = p.hasDlq ? '' : '<span class="pill" data-h="dlq">＋ DLQ</span>';
-  hint.innerHTML = '<span class="pill" data-h="src">＋ Source</span><span class="pill" data-h="tf">＋ Transform</span><span class="pill" data-h="sink">＋ Sink</span>' + dlqPill + '<span class="pill">⤢ Fit</span>';
-  (hint.querySelector('[data-h="tf"]') as HTMLElement).onclick = () => addTransform(p.nodes.length - 1);
-  (hint.querySelector('[data-h="src"]') as HTMLElement).onclick = () =>
-    quickPick('Change source type', SOURCE_TYPES, (v) => {
-      (S.doc.source as any) = { type: v, ...defaultConfigFor('source', v) };
-      persistAndRebuild();
-      toast('ok', `Source type → ${typeLabel(v)}`);
-    }, typeLabel);
-  (hint.querySelector('[data-h="sink"]') as HTMLElement).onclick = () =>
-    quickPick('Change sink type', SINK_TYPES, (v) => {
-      (S.doc.sink as any) = { type: v, ...defaultConfigFor('sink', v) };
-      persistAndRebuild();
-      toast('ok', `Sink type → ${typeLabel(v)}`);
-    }, typeLabel);
-  const dlqBtn = hint.querySelector('[data-h="dlq"]') as HTMLElement | null;
-  if (dlqBtn) dlqBtn.onclick = () => addDlq();
+  // View-only canvas toolbar (the wireframe's canvas tools). Adding components is
+  // the palette's job, so there are no ＋ pills here — only view actions + zoom.
+  const brPill = p.branches.length ? `<span class="pill toggle${S.showBranches ? ' on' : ''}" data-h="branches" title="Show or hide the implicit router, join, reject and parse-error branches">⎇ Branches</span>` : '';
+  const countsPill = S.ran ? `<span class="pill toggle${S.showCounts ? ' on' : ''}" data-h="counts" title="Show or hide the row counts from the last run">◔ Counts</span>` : '';
+  const tailPill = isStreamingSource() && !S.running ? '<span class="pill" data-h="tail" title="Start the stream and watch events flow through the graph live">≋ Live Tail</span>' : '';
+  const zoomCluster = '<span class="pilldiv"></span><span class="pill zoomctl" data-h="zoomout" title="Zoom out (⌘−)">−</span><span class="pill zoomctl zlvl" data-h="zoomreset" title="Reset zoom to 100% (⌘0)">' + Math.round((S.zoom || 1) * 100) + '%</span><span class="pill zoomctl" data-h="zoomin" title="Zoom in (⌘+)">＋</span>';
+  hint.innerHTML =
+    '<span class="pill" data-h="fit" title="Zoom to fit the whole graph in view">⤢ Fit</span>'
+    + '<span class="pill" data-h="auto" title="Re-run auto-layout (discards any manual node positions)">▦ Auto-layout</span>'
+    + '<span class="pill" data-h="validate" title="Validate the pipeline configuration">✓ Validate</span>'
+    + tailPill
+    + brPill + countsPill
+    + `<span class="pill toggle${S.minimapOpen ? ' on' : ''}" data-h="minimap" title="Show or hide the minimap overview">◱ Minimap</span>`
+    + zoomCluster;
+  const brBtn = hint.querySelector('[data-h="branches"]') as HTMLElement | null;
+  if (brBtn) brBtn.onclick = () => { S.showBranches = !S.showBranches; renderEditor(); };
+  const countsBtn = hint.querySelector('[data-h="counts"]') as HTMLElement | null;
+  if (countsBtn) countsBtn.onclick = () => { S.showCounts = !S.showCounts; renderEditor(); };
+  const validateBtn = hint.querySelector('[data-h="validate"]') as HTMLElement | null;
+  if (validateBtn) validateBtn.onclick = () => { post({ type: 'validate' }); toast('ok', 'Validating…'); };
+  const tailBtn = hint.querySelector('[data-h="tail"]') as HTMLElement | null;
+  if (tailBtn) tailBtn.onclick = () => doRun();
+  const mmBtn = hint.querySelector('[data-h="minimap"]') as HTMLElement | null;
+  if (mmBtn) mmBtn.onclick = () => { S.minimapOpen = !S.minimapOpen; renderEditor(); };
+  const autoBtn = hint.querySelector('[data-h="auto"]') as HTMLElement | null;
+  if (autoBtn) autoBtn.onclick = () => {
+    const doc = S.doc as any;
+    if (doc.ui && doc.ui.positions) { delete doc.ui.positions; if (!Object.keys(doc.ui).length) delete doc.ui; post({ type: 'save', doc: S.doc }); }
+    S.zoom = 1;
+    renderEditor();
+    toast('ok', 'Reset to auto-layout');
+  };
+  const fitBtn = hint.querySelector('[data-h="fit"]') as HTMLElement | null;
+  if (fitBtn) fitBtn.onclick = () => {
+    // Zoom to fit — respects the current (possibly hand-arranged) layout.
+    S.zoom = 1;
+    renderEditor();
+    let msg = '';
+    const cvEl = $('.canvas'); const gc = $('.gcanvas');
+    if (cvEl && gc) {
+      const cw = parseFloat(gc.style.width) || gc.offsetWidth || 1;
+      const ch = parseFloat(gc.style.height) || gc.offsetHeight || 1;
+      const availW = Math.max(200, cvEl.clientWidth - 48);
+      const availH = Math.max(200, cvEl.clientHeight - gc.offsetTop - 24);
+      const z = Math.max(0.4, Math.floor(Math.min(1, availW / cw, availH / ch) * 10) / 10);
+      if (z < 1) { applyZoom(z); msg = 'Fit to ' + Math.round(z * 100) + '%'; }
+      cvEl.scrollTo({ left: 0, top: 0 });
+    }
+    if (msg) toast('ok', msg);
+  };
+  const zoomIn = hint.querySelector('[data-h="zoomin"]') as HTMLElement | null;
+  if (zoomIn) zoomIn.onclick = () => applyZoom((S.zoom || 1) + 0.1);
+  const zoomOut = hint.querySelector('[data-h="zoomout"]') as HTMLElement | null;
+  if (zoomOut) zoomOut.onclick = () => applyZoom((S.zoom || 1) - 0.1);
+  const zoomReset = hint.querySelector('[data-h="zoomreset"]') as HTMLElement | null;
+  if (zoomReset) zoomReset.onclick = () => applyZoom(1);
   cv.appendChild(hint);
+  m.appendChild(renderPalette());
   m.appendChild(c);
+
+  // First open of a wide pipeline: zoom-to-fit once so the whole DAG is visible.
+  autoFitCanvas();
 
   // Inspector is dismissible; when closed, show a slim reopen tab instead.
   if (S.inspClosed) {
     const reopen = el('div', 'inspreopen');
     reopen.title = 'Show config panel';
-    reopen.innerHTML = '<span>⚙</span>';
+    reopen.innerHTML = '⚙';
     reopen.onclick = () => { S.inspClosed = false; renderEditor(); };
     m.appendChild(reopen);
     return;
@@ -2991,7 +4233,7 @@ function renderCanvas(m: HTMLElement) {
 
   // inspector — the selected node may be the DLQ branch node (not in p.nodes).
   const insp = el('div', 'inspector');
-  const sn = (S.selNode === 'dlq' && p.dlqNode) ? p.dlqNode : (p.nodes.find((n) => n.id === S.selNode) || p.nodes[0]);
+  const sn = findSelNode(p);
   const ih = el('div', 'ih');
   if (sn) {
     // A color-coded kind badge (Source / Transform / Sink / DLQ) so it's obvious
@@ -3008,7 +4250,7 @@ function renderCanvas(m: HTMLElement) {
   insp.appendChild(ih);
   const ib = el('div', 'ib');
   const tabs = el('div', 'tabs');
-  ['Config', 'Schema', 'Test'].forEach((tn) => {
+  ['Config', 'Ports', 'Schema', 'Test'].forEach((tn) => {
     const s = el('span', S.inspTab === tn ? 'on' : '', tn);
     s.onclick = () => { S.inspTab = tn; renderEditor(); };
     tabs.appendChild(s);
@@ -3030,6 +4272,12 @@ function renderCanvas(m: HTMLElement) {
         sel.appendChild(op);
       });
       sel.onchange = () => {
+        if (typeof sn.ref === 'string' && sn.ref.startsWith('xsink-')) {
+          const gn = graphNodeById(S.doc, sn.ref);
+          if (gn) { gn.type = sel.value; gn.config = defaultConfigFor('sink', sel.value); }
+          persistAndRebuild();
+          return;
+        }
         const kind = sn.kind as 'source' | 'sink';
         (S.doc[kind] as any) = { type: sel.value, ...defaultConfigFor(kind, sel.value) };
         persistAndRebuild();
@@ -3062,6 +4310,13 @@ function renderCanvas(m: HTMLElement) {
       typeRow.appendChild(el('span', 'chip plain', transformLabel(sn.type)));
     }
     ib.appendChild(typeRow);
+    if (typeof sn.ref === 'string' && sn.ref.startsWith('xsink-')) {
+      const delRow = el('div', 'insp-type');
+      const delBtn = el('button', 'btn sm', '✕ Delete sink node');
+      delBtn.onclick = () => removeExtraSink(sn.ref as string);
+      delRow.appendChild(delBtn);
+      ib.appendChild(delRow);
+    }
 
     if (sn.kind === 'dlq') {
       ib.appendChild(el('div', 'muted', '<div style="font-size:11.5px;padding:0 0 8px">Rows that still fail after per-row isolation are written here with an error-envelope column — the main sink is unaffected.</div>'));
@@ -3105,6 +4360,9 @@ function renderCanvas(m: HTMLElement) {
       if (boundConn && fam) for (const k of CONN_MANAGED_KEYS[fam] || []) hiddenKeys.add(k);
       Object.entries(sn.cfg).forEach(([k, v]) => {
         if (hiddenKeys.has(k)) return;
+        // fieldOrder is the internal target ordering the mapper manages — it's
+        // reflected in the mapping editor, not hand-edited as a raw JSON array.
+        if (k === 'fieldOrder' && (sn.type === 'map' || sn.type === 'mapper')) return;
         // JDBC: the conflict key only applies to upsert — hide it otherwise, and
         // render it as a column picker rather than a JSON blob.
         const isJdbc = sn.type === 'jdbc';
@@ -3154,6 +4412,8 @@ function renderCanvas(m: HTMLElement) {
         else if (k === 'rules' && sn.type === 'validate') ib.appendChild(renderRulesEditor(sn));
         else if (k === 'expectations' && sn.type === 'dq') ib.appendChild(renderExpectationsEditor(sn));
         else if (k === 'expr' && sn.type === 'filter') ib.appendChild(renderFilterEditor(sn));
+        else if (k === 'errorSink' && sn.kind === 'source') ib.appendChild(renderErrorSinkEditor(sn));
+        else if (k === 'with' && sn.type === 'union') ib.appendChild(renderUnionSourcesEditor(sn));
         else ib.appendChild(renderField(sn, k, v));
       });
 
@@ -3182,6 +4442,8 @@ function renderCanvas(m: HTMLElement) {
       rm.onclick = () => removeDlq();
       ib.appendChild(rm);
     }
+  } else if (S.inspTab === 'Ports') {
+    renderPortsTab(ib, sn);
   } else if (S.inspTab === 'Schema') {
     renderSchemaTab(ib, sn);
   } else {
@@ -3193,6 +4455,66 @@ function renderCanvas(m: HTMLElement) {
   // Restore the previously-remembered scroll position now that the inspector
   // body is in the DOM (see renderEditor()).
   ib.scrollTop = inspScrollTop;
+}
+
+// The columns flowing OUT of a stage (into its downstream edge): source columns
+// walked forward through the transforms up to and including this stage.
+function columnsOutOf(nodeId: string): string[] {
+  const p = S.pipe;
+  if (!p) return [];
+  if (nodeId === 'source') return upstreamColumnsAt(0);
+  const idx = p.nodes.findIndex((n) => n.id === nodeId);
+  if (idx < 0) return [];
+  if (p.nodes[idx].kind === 'sink') return upstreamColumnsAt(Math.max(0, idx - 1));
+  return upstreamColumnsAt(idx);
+}
+
+// The typed ports a stage exposes (arity), for the inspector's Ports tab.
+function portsFor(n: Node): { ins: Array<{ name: string; note?: string }>; outs: Array<{ name: string; note?: string; err?: boolean }> } {
+  const t = n.type;
+  if (n.kind === 'source') return { ins: [], outs: [{ name: 'rows', note: 'emitted records' }] };
+  if (n.kind === 'sink' || n.kind === 'dlq') return { ins: [{ name: 'in' }], outs: [] };
+  if (t === 'validate' || t === 'dq') return { ins: [{ name: 'in' }], outs: [{ name: 'pass', note: 'rows that passed' }, { name: 'reject', note: 'rows that failed the rules', err: true }] };
+  if (t === 'join') return { ins: [{ name: 'left', note: 'main input' }, { name: 'right', note: 'reference input' }], outs: [{ name: 'out', note: 'enriched rows' }] };
+  if (t === 'router' || t === 'split') {
+    const routes = Array.isArray((n.cfg as any)?.routes) ? (n.cfg as any).routes : [];
+    const outs = routes.map((r: any) => ({ name: String(r.name || 'route'), note: r.when ? String(r.when) : undefined }));
+    outs.push({ name: 'default', note: 'unmatched rows' });
+    return { ins: [{ name: 'in' }], outs };
+  }
+  if (t === 'union') return { ins: [{ name: 'in', note: 'primary' }, { name: 'with', note: 'additional sources' }], outs: [{ name: 'out' }] };
+  return { ins: [{ name: 'in' }], outs: [{ name: 'out' }] };
+}
+
+// Ports tab: the stage's in/out arity + the columns flowing out of it.
+function renderPortsTab(ib: HTMLElement, sn: Node): void {
+  const { ins, outs } = portsFor(sn);
+  const sec = (title: string, ports: Array<{ name: string; note?: string; err?: boolean }>) => {
+    const f = el('div', 'fld');
+    f.appendChild(el('div', 'k', title));
+    if (!ports.length) { f.appendChild(el('div', 'hint', 'none')); ib.appendChild(f); return; }
+    ports.forEach((pp) => {
+      const row = el('div', 'portrow' + (pp.err ? ' err' : ''));
+      row.appendChild(el('span', 'pn', escapeHtml(pp.name)));
+      if (pp.note) row.appendChild(el('span', 'pnote', escapeHtml(pp.note)));
+      f.appendChild(row);
+    });
+    ib.appendChild(f);
+  };
+  sec('In ports', ins);
+  sec('Out ports', outs);
+  const cols = columnsOutOf(sn.id);
+  const cf = el('div', 'fld');
+  cf.appendChild(el('div', 'k', 'Output schema'));
+  if (cols.length) {
+    cf.appendChild(el('div', 'hint', cols.length + ' columns flow out of this stage'));
+    const chips = el('div', 'portcols');
+    cols.slice(0, 60).forEach((c) => chips.appendChild(el('span', 'portcol', escapeHtml(c))));
+    cf.appendChild(chips);
+  } else {
+    cf.appendChild(el('div', 'hint', 'Run a preview to see the columns flowing out of this stage.'));
+  }
+  ib.appendChild(cf);
 }
 
 // Infer the column schema visible at a given stage by walking the doc from the
@@ -3825,6 +5147,10 @@ const TRANSFORMS: Array<{ type: string; label: string; cfg: Record<string, unkno
     cfg: { leftKey: 'id', rightKey: 'id', joinType: 'inner', right: { type: 'csv', path: 'reference.csv', hasHeader: true } }
   },
   {
+    type: 'union', label: 'Union — append bounded same-schema sources (UNION ALL)',
+    cfg: { with: [{ type: 'csv', path: 'more-orders.csv', hasHeader: true }] }
+  },
+  {
     type: 'cast', label: 'Cast — convert column types (int / float / decimal / date / …)',
     cfg: { columns: [{ name: 'amount', type: 'decimal' }], onError: 'null' }
   },
@@ -3932,6 +5258,38 @@ function removeDlq() {
   post({ type: 'save', doc: S.doc });
   renderEditor();
   toast('warn', 'Removed DLQ — write failures will only be counted, not routed');
+}
+
+// Add an extra sink node to the graph — a self-contained sink (error / reject /
+// audit destination) that lives only in doc.graph.nodes with its own `config`.
+// Wire a typed link (error / no match / condition) to it and it runs on the
+// graph engine. Auto-promotes so the node has a graph to live in.
+function addExtraSink() {
+  quickPick('Add a sink node — pick a type', SINK_TYPES, (type) => {
+    const doc = S.doc as any;
+    if (!doc.graph) doc.graph = deriveGraph(S.doc);
+    doc.graph.nodes = Array.isArray(doc.graph.nodes) ? doc.graph.nodes : [];
+    let n = 1;
+    while (doc.graph.nodes.some((g: any) => g && g.id === 'xsink-' + n)) n++;
+    const id = 'xsink-' + n;
+    doc.graph.nodes.push({ id, kind: 'sink', type, ports: { in: ['in'] }, config: defaultConfigFor('sink', type) });
+    S.pipe = buildPipe(S.doc);
+    S.selNode = id;
+    S.inspTab = 'Config';
+    S.inspClosed = false;
+    post({ type: 'save', doc: S.doc });
+    renderEditor();
+    toast('ok', `Added sink node → ${typeLabel(type)}. Drag a link to it, then set the link type.`);
+  }, typeLabel);
+}
+function removeExtraSink(id: string) {
+  const doc = S.doc as any;
+  if (doc.graph && Array.isArray(doc.graph.nodes)) doc.graph.nodes = doc.graph.nodes.filter((n: any) => n && n.id !== id);
+  if (doc.graph && Array.isArray(doc.graph.edges)) doc.graph.edges = doc.graph.edges.filter((e: any) => gEndpointNode(edgeFrom(e)) !== id && gEndpointNode(edgeTo(e)) !== id);
+  if (doc.ui && doc.ui.positions) delete doc.ui.positions[id];
+  S.selNode = 'sink';
+  persistAndRebuild();
+  toast('warn', 'Sink node removed');
 }
 function dlqMenu(e: MouseEvent) {
   e.preventDefault();
@@ -4126,6 +5484,134 @@ function renderFleet(wv: HTMLElement) {
 }
 
 // ── status bar ───────────────────────────────────────────────────────────────
+// Bottom Problems panel — an inline, collapsible list of validation issues
+// (matching the wireframe's bottom panel). Clicking an issue jumps to the
+// offending stage on the canvas. The #panel host is created lazily so it works
+// in both the packaged editor HTML and the standalone test harness.
+function renderPanel() {
+  const win = $('.win');
+  if (!win) return;
+  let host = $('#panel');
+  if (!host) {
+    host = el('div', 'panel');
+    host.id = 'panel';
+    const sb = $('#statusbar');
+    if (sb) win.insertBefore(host, sb); else win.appendChild(host);
+  }
+  host.className = 'panel' + (S.panelOpen ? '' : ' collapsed');
+  host.innerHTML = '';
+  const errs = S.issues.filter((i) => i.sev === 'error').length;
+
+  // The bottom strip is a launcher for VS Code's NATIVE panels: Problems, Data
+  // Preview, Output and Terminal all live in real VS Code surfaces (Problems is
+  // populated via diagnostics), so the webview reveals them rather than
+  // re-implementing them. DQ Report is the one view with no native home.
+  const PANELS: Array<{ id: string; label: string; native?: 'problems' | 'preview' | 'output' | 'terminal' }> = [
+    { id: 'problems', label: 'Problems', native: 'problems' },
+    { id: 'preview', label: 'Data Preview', native: 'preview' },
+    { id: 'dq', label: 'DQ Report' },
+    { id: 'output', label: 'Output', native: 'output' },
+    { id: 'terminal', label: 'Terminal', native: 'terminal' },
+  ];
+  const tabs = el('div', 'paneltabs');
+  PANELS.forEach((tb) => {
+    const active = S.panelOpen && S.panelTab === tb.id;
+    const pt = el('div', 'pt' + (active ? ' on' : '') + (tb.id === 'problems' && errs ? ' err' : ''));
+    if (tb.id === 'problems') {
+      pt.innerHTML = 'Problems <span class="cnt"></span>';
+      (pt.querySelector('.cnt') as HTMLElement).textContent = String(S.issues.length);
+    } else {
+      pt.textContent = tb.label;
+    }
+    pt.onclick = () => {
+      // Clicking the already-active tab collapses the panel (old feel).
+      if (tb.id === S.panelTab && S.panelOpen) { S.panelOpen = false; renderPanel(); return; }
+      S.panelTab = tb.id;
+      S.panelOpen = true;
+      // Native-backed tabs reveal the matching VS Code surface.
+      if (tb.native === 'problems') post({ type: 'showProblems' });
+      else if (tb.native === 'preview') post({ type: 'showDataPreview' });
+      else if (tb.native === 'output') post({ type: 'showOutput' });
+      else if (tb.native === 'terminal') post({ type: 'showTerminal' });
+      renderPanel();
+    };
+    tabs.appendChild(pt);
+  });
+  const acts = el('div', 'pacts');
+  const toggle = el('span', '', S.panelOpen ? '⌄' : '⌃');
+  toggle.title = S.panelOpen ? 'Collapse panel' : 'Expand panel';
+  toggle.onclick = () => { S.panelOpen = !S.panelOpen; renderPanel(); };
+  acts.appendChild(toggle);
+  tabs.appendChild(acts);
+  host.appendChild(tabs);
+
+  if (!S.panelOpen) return;
+  const body = el('div', 'panelbody');
+  if (S.panelTab === 'dq') renderDqBody(body);
+  else if (S.panelTab === 'preview') renderNativeLaunchBody(body, 'the Data Preview panel', 'Sampled rows from a dry-run open in the native Data Preview panel beside the editor.', () => post({ type: 'showDataPreview' }));
+  else if (S.panelTab === 'output') renderNativeLaunchBody(body, 'the engine Output', 'The engine boot / run log streams to the “Flogo Data Pipeline” output channel.', () => post({ type: 'showOutput' }));
+  else if (S.panelTab === 'terminal') renderNativeLaunchBody(body, 'the Terminal', 'Run the built pipeline binary or CLI commands in the integrated terminal.', () => post({ type: 'showTerminal' }));
+  else {
+    // Problems live in VS Code's native Problems panel (populated via diagnostics);
+    // the webview summarises the count and re-opens it. Errored stages are also
+    // ringed on the canvas, so you rarely need to leave the graph.
+    const warns = S.issues.length - errs;
+    const desc = S.issues.length
+      ? `${errs} error${errs === 1 ? '' : 's'} and ${warns} warning${warns === 1 ? '' : 's'} — listed in VS Code's Problems panel, with the errored stages ringed on the canvas.`
+      : 'No problems — the pipeline validates cleanly.';
+    renderNativeLaunchBody(body, 'the Problems panel', desc, () => post({ type: 'showProblems' }));
+  }
+  host.appendChild(body);
+}
+
+// DQ Report: a data-quality summary of the last run — rows read/written/rejected
+// overall, plus per-stage reject counts from the graph run's per-node stats.
+function renderDqBody(body: HTMLElement): void {
+  const r = S.lastRun;
+  if (!r) {
+    body.appendChild(el('div', 'muted', '<div style="padding:6px 4px;font-size:12px">Run the pipeline to see a data-quality report — rows read, written and rejected, per stage.</div>'));
+    return;
+  }
+  const read = r.rowsProcessed || 0, wrote = r.rowsWritten || 0, failed = r.rowsFailed || 0;
+  const passRate = read ? Math.round((wrote / read) * 1000) / 10 : 0;
+  const sum = el('div', 'dqsum');
+  sum.innerHTML =
+    `<span class="dqm"><b>${fmtK(read)}</b> read</span>`
+    + `<span class="dqm ok"><b>${fmtK(wrote)}</b> written</span>`
+    + `<span class="dqm err"><b>${fmtK(failed)}</b> rejected</span>`
+    + `<span class="dqm"><b>${passRate}%</b> pass rate</span>`;
+  body.appendChild(sum);
+  const gs = r.graphStats;
+  const rejects = gs ? gs.filter((s) => s.rowsErrored > 0) : [];
+  if (rejects.length && S.pipe) {
+    const tbl = el('div', 'dqtbl');
+    rejects.forEach((s) => {
+      const n = S.pipe!.nodes.find((x) => x.id === s.id);
+      const nm = n ? (n.nm && n.nm !== n.type ? n.nm : transformLabel(n.type)) : s.id;
+      const row = el('div', 'dqrow');
+      row.innerHTML = '<span class="dqn"></span><span class="dqv"></span>';
+      (row.querySelector('.dqn') as HTMLElement).textContent = nm;
+      (row.querySelector('.dqv') as HTMLElement).innerHTML = `${fmtK(s.rowsOut)} passed · <span class="err">${fmtK(s.rowsErrored)} rejected</span>`;
+      row.onclick = () => { S.selNode = s.id; S.inspTab = 'Config'; S.inspClosed = false; S.active = 'canvas'; renderAll(); };
+      tbl.appendChild(row);
+    });
+    body.appendChild(tbl);
+  } else if (!failed) {
+    body.appendChild(el('div', 'muted', '<div style="padding:6px 4px;font-size:12px">No rows were rejected in the last run — clean data.</div>'));
+  }
+}
+
+// A body for the native-backed tabs (Data Preview / Output / Terminal): the
+// webview can't embed these, so it explains where they live and re-opens them.
+function renderNativeLaunchBody(body: HTMLElement, where: string, desc: string, open: () => void): void {
+  const wrap = el('div', 'nativelaunch');
+  wrap.appendChild(el('div', 'nldesc', escapeHtml(desc)));
+  const btn = el('button', 'btn', 'Open ' + where + ' ↗');
+  btn.onclick = open;
+  wrap.appendChild(btn);
+  body.appendChild(wrap);
+}
+
 function renderStatus() {
   const sb = $('#statusbar')!;
   sb.innerHTML = '';
@@ -4471,11 +5957,22 @@ window.addEventListener('message', (ev: MessageEvent<HostToWebview>) => {
       renderStatus();
       renderEditor();
       break;
-    case 'runResult':
+    case 'runResult': {
+      // Track the live event rate (rows/sec) across successive progress updates
+      // so the streaming overlay can show throughput while the run is unbounded.
+      const now = Date.now();
+      const rows = (msg.result && msg.result.rowsProcessed) || 0;
+      if (S.ratePrev) {
+        const dt = (now - S.ratePrev.at) / 1000;
+        const dr = rows - S.ratePrev.rows;
+        if (dt >= 0.1 && dr >= 0) S.rateRps = dr / dt;
+      }
+      S.ratePrev = { rows, at: now };
       S.lastRun = msg.result;
       S.ran = true;
       if (msg.final) {
         S.running = false;
+        S.rateRps = 0; S.ratePrev = null;
         const r = msg.result;
         toast(
           r.status === 'failed' ? 'err' : r.status === 'partial' ? 'warn' : 'ok',
@@ -4486,8 +5983,11 @@ window.addEventListener('message', (ev: MessageEvent<HostToWebview>) => {
       }
       renderTabs();
       renderStatus();
-      if (cur()?.type === 'report' || cur()?.type === 'dlq') renderEditor();
+      // Re-render the canvas too, so the run overlay (per-edge counts + live rate)
+      // updates as progress arrives, not just at the end.
+      if (cur()?.type === 'canvas' || cur()?.type === 'report' || cur()?.type === 'dlq') renderEditor();
       break;
+    }
     case 'runError':
       S.running = false;
       renderTabs();
@@ -4505,6 +6005,9 @@ window.addEventListener('message', (ev: MessageEvent<HostToWebview>) => {
     case 'validationResult':
       S.issues = msg.issues || [];
       renderStatus();
+      renderPanel();
+      // Re-render the canvas so error rings on the affected nodes update.
+      if (cur()?.type === 'canvas') renderEditor();
       break;
     case 'previewResult':
       S.preview = msg.result;
@@ -4718,6 +6221,9 @@ document.addEventListener('keydown', (e) => {
   const mod = e.metaKey || e.ctrlKey;
   if (mod && e.shiftKey && e.key.toLowerCase() === 'p') { e.preventDefault(); openPalette(); }
   else if (mod && e.key.toLowerCase() === 'r' && e.shiftKey) { e.preventDefault(); doRun(); }
+  else if (mod && (e.key === '=' || e.key === '+')) { e.preventDefault(); applyZoom((S.zoom || 1) + 0.1); }
+  else if (mod && e.key === '-') { e.preventDefault(); applyZoom((S.zoom || 1) - 0.1); }
+  else if (mod && e.key === '0') { e.preventDefault(); applyZoom(1); }
   else if (e.key === 'Escape') closeOverlays();
 });
 

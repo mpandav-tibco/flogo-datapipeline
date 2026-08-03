@@ -379,6 +379,27 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 	def := a.def
 	out := &Output{}
 
+	// Honor a context that is already cancelled before any work begins. Without
+	// this the read-ahead goroutine sees the cancelled context, produces nothing,
+	// and the drain loop returns nil — reporting a misleading "completed" run with
+	// zero rows. A caller that aborts pre-flight must get a deterministic failure
+	// so it never mistakes a cancelled run for a successful load.
+	if err := ctx.Err(); err != nil {
+		return out, err
+	}
+
+	// Graph runner: when the pipeline carries a NON-REDUCIBLE DAG — conditional
+	// edges or true fan-out/fan-in that the linear source→transforms→sink chain
+	// cannot express — execute it with the streaming graph runner. A pure linear
+	// chain, even one promoted to an explicit graph block, is NOT diverted here:
+	// it stays on the linear path below and keeps checkpoint, HWM, DQ and
+	// parallel-worker behaviour untouched (graphExecutable returns false for it).
+	if graphExecutable(def) {
+		runLog.Infof("executing via graph runner — non-reducible DAG (%d nodes, %d edges)",
+			len(def.Graph.Nodes), len(def.Graph.Edges))
+		return a.runGraph(ctx, in, runLog, runID)
+	}
+
 	// Echo the effective run configuration so operators can confirm from the run
 	// log which settings were honored (many settings have no other visible
 	// side-effect). Kept to a single line to avoid log noise.
@@ -930,6 +951,11 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 		resumeKey = def.Checkpoint.Key
 	}
 
+	// stageStats for the Studio graph run overlay are collected only from the
+	// single-path txPipeline; the parallel/scaled paths build their own per-worker
+	// pipelines, so per-stage counts are omitted there (the overlay falls back to
+	// the aggregate source/sink/dlq badges).
+	singlePipeline := false
 	switch {
 	case scMode == "sharded" || scMode == "distributed":
 		if err := a.runScaled(ctx, runLog, def, scMode, src, srcCfg, runID, drain); err != nil {
@@ -940,6 +966,7 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 			return out, err
 		}
 	default:
+		singlePipeline = true
 		if err := drain(src, resumeKey); err != nil {
 			return out, err
 		}
@@ -1020,6 +1047,16 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 			}
 			report.PipelineRef = a.ref
 			out.Metadata["dqReport"] = report
+		}
+	}
+
+	// Per-stage row counters for the Studio graph run overlay (single-path runs).
+	if singlePipeline {
+		if stats := txPipeline.StageStats(); len(stats) > 0 {
+			if out.Metadata == nil {
+				out.Metadata = make(map[string]interface{})
+			}
+			out.Metadata["stageStats"] = stats
 		}
 	}
 

@@ -15,6 +15,8 @@ export interface RunResponse {
   startedAt: string;
   finishedAt?: string;
   qualityReport?: { passed: number; failed: number; violations?: string[] };
+  stageStats?: Array<{ name: string; rowsIn: number; rowsOut: number }>;
+  graphStats?: Array<{ id: string; kind: string; rowsIn: number; rowsOut: number; rowsWritten: number; rowsErrored: number }>;
 }
 
 export interface PipelineInfo {

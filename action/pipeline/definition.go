@@ -132,6 +132,18 @@ func (t *TransformDef) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// MarshalJSON emits the full transform config (the flattened Extra map, which
+// already carries "type" plus every stage-specific key). Extra is tagged
+// `json:"-"`, so without this method default struct marshaling would drop all
+// transform configuration — a serialized pipeline would keep only {"type":...}
+// and silently lose filter expressions, mapper fields, dq expectations, etc.
+func (t TransformDef) MarshalJSON() ([]byte, error) {
+	if len(t.Extra) > 0 {
+		return json.Marshal(t.Extra)
+	}
+	return json.Marshal(map[string]interface{}{"type": t.Type})
+}
+
 // SinkDef configures the data sink for the pipeline.
 type SinkDef struct {
 	Type    string                 `json:"type"`              // jdbc | parquet | csv | kafka | null
@@ -148,6 +160,18 @@ func (s *SinkDef) UnmarshalJSON(data []byte) error {
 	}
 	s.Options = raw
 	return nil
+}
+
+// MarshalJSON emits the flattened sink object (type plus every option at the top
+// level, since UnmarshalJSON stores the whole flat object in Options). Without
+// this method default struct marshaling would nest everything under "options",
+// and the reloaded sink — whose UnmarshalJSON reads flat keys — would lose its
+// configuration (e.g. a kafka sink's brokers/topic).
+func (s SinkDef) MarshalJSON() ([]byte, error) {
+	if len(s.Options) > 0 {
+		return json.Marshal(s.Options)
+	}
+	return json.Marshal(map[string]interface{}{"type": s.Type})
 }
 
 // CheckpointDef configures the checkpoint backend.
@@ -383,6 +407,15 @@ type Definition struct {
 	// sink with an error-envelope column added.  When omitted or Type is empty,
 	// failed rows are counted in RowsFailed but not forwarded anywhere.
 	DLQ DLQDef `json:"dlq,omitempty"`
+
+	// Graph is the OPTIONAL explicit DAG topology (nodes + edges), authored in
+	// Studio (or written by hand). It is ADDITIVE: validated when present (unique
+	// node ids, edges reference declared nodes, acyclic). When the graph is
+	// NON-REDUCIBLE (a typed edge, or fan-out/fan-in >= 2) the streaming graph
+	// runner (action/pipeline/graphexec) executes it directly; a reducible or
+	// absent graph runs the linear Source -> Transforms -> Sink model, so every
+	// existing pipeline is unaffected. See graph_run.go (graphExecutable).
+	Graph *GraphDef `json:"graph,omitempty"`
 }
 
 // Defaults is the public alias of defaults, exposed for use by the SDK builder.
@@ -528,6 +561,225 @@ func (d *Definition) validate() error {
 		if cm, _ := d.Source.Options["commitMode"].(string); cm != "checkpoint" {
 			return fmt.Errorf("pipeline definition: a windowed Kafka pipeline with a checkpoint backend requires source.commitMode \"checkpoint\" — the default \"auto\" mode commits Kafka offsets on an independent timer, uncoordinated with the window-state snapshot, so restored windows would not align with the resumed offset (double- or under-counting on restart); set source.commitMode to \"checkpoint\"")
 		}
+	}
+	if d.Graph != nil {
+		if err := d.Graph.validate(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// GraphDef is the OPTIONAL explicit node/edge topology for a pipeline — the DAG
+// authored in Studio. See the Definition.Graph field for how it relates to
+// execution (validated when present, and run by the streaming graph runner when
+// the topology is non-reducible).
+type GraphDef struct {
+	Nodes []GraphNodeDef `json:"nodes,omitempty"`
+	Edges []GraphEdge    `json:"edges,omitempty"`
+}
+
+// GraphPorts names a node's input and output ports (e.g. a router's out ports
+// are its route names; a validate's out ports are "pass" and "reject").
+type GraphPorts struct {
+	In  []string `json:"in,omitempty"`
+	Out []string `json:"out,omitempty"`
+}
+
+// GraphNodeDef is one node in the topology. Beyond the typed id/kind/type/ports,
+// the full node object is preserved verbatim in Extra (like TransformDef) so
+// canvas-authored node config round-trips and is available to the graph runner.
+type GraphNodeDef struct {
+	ID    string                 `json:"id"`
+	Kind  string                 `json:"kind"` // source | transform | sink
+	Type  string                 `json:"type,omitempty"`
+	Ports *GraphPorts            `json:"ports,omitempty"`
+	Extra map[string]interface{} `json:"-"`
+}
+
+func (n *GraphNodeDef) UnmarshalJSON(data []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	n.ID, _ = raw["id"].(string)
+	n.Kind, _ = raw["kind"].(string)
+	n.Type, _ = raw["type"].(string)
+	if p, ok := raw["ports"]; ok {
+		if pb, err := json.Marshal(p); err == nil {
+			var ports GraphPorts
+			if json.Unmarshal(pb, &ports) == nil {
+				n.Ports = &ports
+			}
+		}
+	}
+	n.Extra = raw
+	return nil
+}
+
+// MarshalJSON emits the full node object (the flattened Extra map), so no
+// canvas-authored node config is dropped on re-serialization. Mirrors TransformDef.
+func (n GraphNodeDef) MarshalJSON() ([]byte, error) {
+	if len(n.Extra) > 0 {
+		return json.Marshal(n.Extra)
+	}
+	m := map[string]interface{}{"id": n.ID, "kind": n.Kind}
+	if n.Type != "" {
+		m["type"] = n.Type
+	}
+	if n.Ports != nil {
+		m["ports"] = n.Ports
+	}
+	return json.Marshal(m)
+}
+
+// GraphEdge connects an output of one node to an input of another. The ":port"
+// suffix on an endpoint is optional — a bare "node" refers to its default port.
+//
+// It serializes in two interchangeable forms (Flogo-style links):
+//   - a plain, unconditional link is a compact 2-element array
+//     ["fromNode:port","toNode:port"] (the historical form), and
+//   - a conditional link is an object
+//     {"from":...,"to":...,"type":"expression","value":"<bool expr>"} that is
+//     taken only when the expression is true.
+type GraphEdge struct {
+	From string // source endpoint: "node" or "node:port"
+	To   string // target endpoint: "node" or "node:port"
+	// Type selects the routing role, mirroring Flogo Flow link types:
+	//   "" / "default" — success: every successful row (the main continuation).
+	//   "expression"   — success with condition: rows for which Value is true.
+	//   "otherwise"    — no matching: rows that matched no sibling condition.
+	//   "error"        — failure: rows/batches that errored at the from-node.
+	Type  string
+	Value string // condition expression, when Type == "expression"
+}
+
+// UnmarshalJSON accepts BOTH the legacy 2-element array form and the object
+// form, so existing promoted graphs (all array edges) keep loading unchanged.
+func (e *GraphEdge) UnmarshalJSON(data []byte) error {
+	k := 0
+	for k < len(data) && (data[k] == ' ' || data[k] == '\t' || data[k] == '\n' || data[k] == '\r') {
+		k++
+	}
+	if k < len(data) && data[k] == '[' {
+		var pair []string
+		if err := json.Unmarshal(data, &pair); err != nil {
+			return err
+		}
+		if len(pair) != 2 {
+			return fmt.Errorf("pipeline definition: a graph edge array must have exactly 2 elements [from, to], got %d", len(pair))
+		}
+		e.From, e.To, e.Type, e.Value = pair[0], pair[1], "", ""
+		return nil
+	}
+	var obj struct {
+		From  string `json:"from"`
+		To    string `json:"to"`
+		Type  string `json:"type"`
+		Value string `json:"value"`
+	}
+	if err := json.Unmarshal(data, &obj); err != nil {
+		return err
+	}
+	e.From, e.To, e.Type, e.Value = obj.From, obj.To, obj.Type, obj.Value
+	return nil
+}
+
+// MarshalJSON emits the compact array form for a plain link (clean + back-compat)
+// and the object form for a conditional link.
+func (e GraphEdge) MarshalJSON() ([]byte, error) {
+	if e.Type == "" || e.Type == "default" {
+		return json.Marshal([2]string{e.From, e.To})
+	}
+	return json.Marshal(struct {
+		From  string `json:"from"`
+		To    string `json:"to"`
+		Type  string `json:"type"`
+		Value string `json:"value,omitempty"`
+	}{e.From, e.To, e.Type, e.Value})
+}
+
+// graphEndpointNode returns the node-id part of an edge endpoint
+// ("node:port" -> "node"), without importing strings.
+func graphEndpointNode(endpoint string) string {
+	for i := 0; i < len(endpoint); i++ {
+		if endpoint[i] == ':' {
+			return endpoint[:i]
+		}
+	}
+	return endpoint
+}
+
+// validate checks the graph topology in isolation: every node has a unique,
+// non-empty id and a known kind; every edge endpoint references a declared
+// node; and the directed graph is acyclic (a cycle cannot be topologically
+// executed, so it is a load-time error). It does NOT yet cross-check the graph
+// against source/transforms/sink — the engine executes those, not the graph.
+func (g *GraphDef) validate() error {
+	if len(g.Nodes) == 0 {
+		return fmt.Errorf("pipeline definition: graph.nodes must not be empty when a graph is declared")
+	}
+	indeg := make(map[string]int, len(g.Nodes))
+	for i := range g.Nodes {
+		n := &g.Nodes[i]
+		if n.ID == "" {
+			return fmt.Errorf("pipeline definition: graph.nodes[%d].id is required", i)
+		}
+		if _, dup := indeg[n.ID]; dup {
+			return fmt.Errorf("pipeline definition: graph node id %q is declared more than once", n.ID)
+		}
+		switch n.Kind {
+		case "source", "transform", "sink":
+		default:
+			return fmt.Errorf("pipeline definition: graph node %q has invalid kind %q (want source, transform or sink)", n.ID, n.Kind)
+		}
+		indeg[n.ID] = 0
+	}
+	adj := make(map[string][]string, len(g.Nodes))
+	for i, e := range g.Edges {
+		from := graphEndpointNode(e.From)
+		to := graphEndpointNode(e.To)
+		if from == "" || to == "" {
+			return fmt.Errorf("pipeline definition: graph.edges[%d] must have from and to endpoints, got %q -> %q", i, e.From, e.To)
+		}
+		switch e.Type {
+		case "", "default", "expression", "otherwise", "error":
+		default:
+			return fmt.Errorf("pipeline definition: graph.edges[%d] has invalid type %q (want \"default\", \"expression\", \"otherwise\" or \"error\")", i, e.Type)
+		}
+		if _, ok := indeg[from]; !ok {
+			return fmt.Errorf("pipeline definition: graph.edges[%d] references unknown source node %q", i, from)
+		}
+		if _, ok := indeg[to]; !ok {
+			return fmt.Errorf("pipeline definition: graph.edges[%d] references unknown target node %q", i, to)
+		}
+		if from == to {
+			return fmt.Errorf("pipeline definition: graph node %q has an edge to itself (a cycle)", from)
+		}
+		adj[from] = append(adj[from], to)
+		indeg[to]++
+	}
+	// Kahn topological sort — if we cannot visit every node, there is a cycle.
+	queue := make([]string, 0, len(indeg))
+	for id, deg := range indeg {
+		if deg == 0 {
+			queue = append(queue, id)
+		}
+	}
+	visited := 0
+	for len(queue) > 0 {
+		u := queue[len(queue)-1]
+		queue = queue[:len(queue)-1]
+		visited++
+		for _, v := range adj[u] {
+			indeg[v]--
+			if indeg[v] == 0 {
+				queue = append(queue, v)
+			}
+		}
+	}
+	if visited != len(g.Nodes) {
+		return fmt.Errorf("pipeline definition: graph has a cycle — the node/edge topology must be acyclic (a DAG)")
 	}
 	return nil
 }

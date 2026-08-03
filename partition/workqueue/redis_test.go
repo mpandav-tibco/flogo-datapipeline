@@ -2,6 +2,7 @@ package workqueue
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -18,13 +19,20 @@ func TestRedisQueue_Lifecycle(t *testing.T) {
 		t.Skip("set DP_TEST_REDIS_ADDR to run the Redis work-queue test")
 	}
 	ctx := context.Background()
-	q, err := NewRedisQueue(addr, "flogo:test:wq", "", "redis-qtest")
+	// Unique namespace per run so the test is fully isolated from any prior run's
+	// leftover state (a persistent Redis in CI is shared across runs).
+	q, err := NewRedisQueue(addr, fmt.Sprintf("flogo:test:wq:%d", time.Now().UnixNano()), "", "redis-qtest")
 	if err != nil {
 		t.Fatalf("NewRedisQueue: %v", err)
 	}
 	defer q.Close()
-	// Clean slate.
-	q.client.Del(ctx, q.kItems(), q.kPending(), q.kInProgress())
+	// Clean slate on entry, and full teardown on exit (including the enqueue-lock,
+	// which is not one of the three data keys).
+	cleanup := func() {
+		q.client.Del(ctx, q.kItems(), q.kPending(), q.kInProgress(), q.ns+":enqueue-lock")
+	}
+	cleanup()
+	defer cleanup()
 
 	parts := []source.Partition{{ID: "p0"}, {ID: "p1"}, {ID: "p2"}}
 	if err := q.Enqueue(ctx, parts, 3); err != nil {
@@ -75,12 +83,16 @@ func TestRedisQueue_LeaseReclaim(t *testing.T) {
 		t.Skip("set DP_TEST_REDIS_ADDR to run the Redis work-queue test")
 	}
 	ctx := context.Background()
-	q, err := NewRedisQueue(addr, "flogo:test:wq2", "", "redis-lease")
+	q, err := NewRedisQueue(addr, fmt.Sprintf("flogo:test:wq2:%d", time.Now().UnixNano()), "", "redis-lease")
 	if err != nil {
 		t.Fatalf("NewRedisQueue: %v", err)
 	}
 	defer q.Close()
-	q.client.Del(ctx, q.kItems(), q.kPending(), q.kInProgress())
+	cleanup := func() {
+		q.client.Del(ctx, q.kItems(), q.kPending(), q.kInProgress(), q.ns+":enqueue-lock")
+	}
+	cleanup()
+	defer cleanup()
 
 	if err := q.Enqueue(ctx, []source.Partition{{ID: "p0"}}, 3); err != nil {
 		t.Fatalf("Enqueue: %v", err)

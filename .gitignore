@@ -80,3 +80,10 @@ go.work.sum
 /studio/vscode/bin/
 /studio/vscode/media/dp-src/
 /studio/vscode/dist-vsix/
+
+# Generated enterprise-benchmark datasets & build artifacts (multi-GB, untracked).
+# Excluded so editors/indexers — including the Copilot Chat workspace index —
+# do not read them and OOM ("Worker terminated due to reaching memory limit").
+/examples/23-enterprise-benchmark/data/
+/examples/23-enterprise-benchmark/out/
+/examples/23-enterprise-benchmark/bin/

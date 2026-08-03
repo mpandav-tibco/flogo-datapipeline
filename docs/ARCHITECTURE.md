@@ -28,7 +28,7 @@ add a capability you `Register()` a factory; nothing else in the engine changes.
 |---|---|---|
 | Source | `source.Register` | `csv` `tsv` `parquet` `jdbc` `kafka` `fixedwidth` `xml` `jsonlines` `s3`/`gcs`/`adls` `sectioned` `podlog` |
 | Sink | `sink.Register` | `csv` `jdbc` `parquet` `jsonlines` `kafka` `s3`/`gcs`/`adls` `template` `null` `dlq` |
-| Transform | `transform.Register` | `filter` `map` `validate` `lookup` `parse` `dq` `schemadrift` `hwm` |
+| Transform | `transform.Register` | `filter` `map`/`mapper` `validate` `lookup`/`enrich` `parse` `dq` `schemadrift` `hwm` `cast` `explode` `flatten` `router`/`split` `join` `union` `window` |
 | Checkpoint | per backend | `file` `redis` |
 | Watermark | per backend | `file` `redis` `postgres` |
 | Metrics | per backend | `prometheus` `otel` |
@@ -73,6 +73,20 @@ declare:
 
 The Studio surfaces this as an *Execution mode* selector for clarity, but it simply
 reflects the transform chain.
+
+### Graph (DAG) execution
+
+The linear diagram above is the common case. A pipeline may instead declare an
+explicit **graph** (nodes + edges) for non-linear topologies — multiple sources,
+multiple sinks, or conditional routing. When the graph is **non-reducible** (it has
+a typed edge, or fan-out / fan-in ≥ 2) the engine runs it with a streaming **graph
+runner** ([`action/pipeline/graphexec`](../action/pipeline/graphexec)): one goroutine
+per node, one bounded channel per consumer, so the whole DAG streams concurrently
+with backpressure. A purely linear graph stays on the linear path. **All** transform
+types are supported — the runner injects/harvests the `hwm` watermark, surfaces the
+`dq` gate report, and flushes `window` state — and the reported row counts carry over
+(checkpoint/resume is supported for stateless graphs; rejects ride `error` edges).
+See [Graph (DAG) execution](graph.md).
 
 ## State & durability
 
