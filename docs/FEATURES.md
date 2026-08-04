@@ -23,7 +23,7 @@
 | [`avro`](sources/avro.md) | row-oriented Avro OCF | — |
 | [`jdbc`](sources/jdbc.md) | PostgreSQL / MySQL / SQL Server / Oracle | ✅ |
 | [`kafka`](sources/kafka.md) | consumer-group topic | — |
-| [`s3`, `gcs`, `adls`](sources/objstore.md) | cloud object storage | ✅ |
+| [`s3`, `gcs`, `adls`](sources/objstore.md) | cloud object storage; remote Parquet via range-GET pushdown | ✅ |
 | [`podlog`](sources/podlog.md) | Kubernetes / CRI logs | — |
 
 ## Transforms → [index](transforms.md)

@@ -219,7 +219,7 @@ Production data feeds change over time without notice. The schema drift transfor
 | JSON Lines / NDJSON | Newline-delimited JSON, one object per row |
 | JDBC | SQL query over PostgreSQL, MySQL, SQL Server, or Oracle with keyset-pagination chunking and high-water-mark predicate injection |
 | Kafka | Consumer group-based consumption with offset checkpointing |
-| Cloud Object Store | Files from S3, Google Cloud Storage, or Azure ADLS Gen2 |
+| Cloud Object Store | Files from S3, Google Cloud Storage, or Azure ADLS Gen2; remote Parquet uses range-GET pushdown (footer + selected column chunks only, no whole-object download) |
 | Text Document (sectioned) | Flat files with a key/value header block plus a delimited body table |
 
 ### Sinks (9 + DLQ)
