@@ -41,7 +41,7 @@ Source  →  [ Transform₁ → Transform₂ → … ]  →  Sink
                                            DLQ Sink
 ```
 
-The binary exposes an optional REST API (`/v1/…`) for health checks, triggering runs, and reading run history. It can be embedded in a larger Flogo application or run standalone.
+The binary exposes an optional REST API (`/v1/…`) for health checks, triggering runs, reading run history, and runtime create/replace of pipeline definitions. It can be embedded in a larger Flogo application or run standalone.
 
 Pipelines are not limited to this single chain: when a `.datapipeline` declares a
 non-linear **graph** — multiple sources, multiple sinks, or conditional routing — a
@@ -65,8 +65,10 @@ A custom editor for `.datapipeline` files that gives you:
 - One-click run and stop with streamed status, plus a side-effect-free dry-run
   preview into the native Data Preview panel
 - Pipeline templates to bootstrap new pipelines in seconds
+- **Build & deploy** — export a standalone binary, a Dockerfile, or a deployment
+  bundle (Dockerfile + sharded Kubernetes StatefulSet manifest + README)
 - An organized project layout (`pipelines/`, `connections/`, `data/`) and
-  sidebar views for pipelines and connections
+  sidebar views for pipelines (with per-pipeline run history) and connections
 
 See [`studio/vscode/README.md`](studio/vscode/README.md) for full details.
 
@@ -235,7 +237,7 @@ Production data feeds change over time without notice. The schema drift transfor
 | Null | Discards all rows (benchmarking and dry-run) |
 | **Dead Letter Queue (DLQ)** | Wraps any sink type; captures rejected rows with an error envelope |
 
-### Transforms (14)
+### Transforms (15)
 
 | Transform | What it does |
 |---|---|
@@ -253,6 +255,7 @@ Production data feeds change over time without notice. The schema drift transfor
 | Router / Split | N-way routes rows to different sinks by ordered predicates (conditional split) |
 | Join | Keyed stream-table join enriching the stream from a source-loaded reference dataset |
 | Window | Event-time windowed aggregation (tumbling / sliding / session / global) with watermarks and checkpointed state |
+| Union | Appends one or more bounded secondary datasets into the stream (N→1, `UNION ALL` semantics) |
 
 ### Operational primitives
 
@@ -276,9 +279,9 @@ Ready-to-run templates in the VS Code extension:
 - Mainframe EBCDIC → PostgreSQL
 - Extract & Load only (EL mode, no transforms)
 
-### Examples (21)
+### Examples (24)
 
-Working examples covering every source type, every transform type, incremental loading (with file / Redis / PostgreSQL watermark backends), schema drift, data quality, Prometheus and OpenTelemetry metrics, checkpoint/resume, horizontal scaling (sharded and distributed), Kafka streaming, and a full production pipeline composition.
+Working examples covering every source type, every transform type, incremental loading (with file / Redis / PostgreSQL watermark backends), schema drift, data quality, event-time windowed aggregation, format conversion, Prometheus and OpenTelemetry metrics, checkpoint/resume, horizontal scaling (sharded and distributed), Kafka streaming, and a full production pipeline composition.
 
 ---
 
@@ -286,7 +289,7 @@ Working examples covering every source type, every transform type, incremental l
 
 ### Prerequisites
 
-- Go 1.21+ (to build from source)
+- Go 1.25+ (to build from source)
 - VS Code 1.83+
 
 ### Build the binary
@@ -321,16 +324,14 @@ These are honest work items — not committed roadmap, but the next things we in
 
 ### Engine
 
-- [ ] **Parquet source column pushdown to remote stores** — currently reads all columns when source is S3/GCS-backed Parquet; predicate and column pruning before download
+- [ ] **Parquet pushdown to remote object stores** — an S3/GCS/ADLS-backed Parquet object is spooled whole to a temp file before reading; push the column/predicate pruning down to byte-range reads so only the needed row groups and columns are fetched
 - [ ] **MSSQL and Oracle JDBC drivers** — PostgreSQL, MySQL, SQLite are current; these are the next priority enterprise databases
 - [ ] **SFTP and local directory watch sources** — file-arrival triggered ingestion without cron
 
 ### VS Code extension
 
-- [ ] **Pipeline run history view** — visualise past runs, row counts, durations, and error rates in the sidebar
 - [ ] **Inline validation error highlighting** — surface validate-transform failures as canvas annotations during test runs
-- [ ] **Multi-pipeline workspace support** — run and monitor multiple pipelines from a single VS Code window
-- [ ] **Export to Kubernetes Job manifest** — generate a ready-to-apply K8s Job spec from the current pipeline
+- [ ] **Concurrent multi-pipeline runs** — the sidebar already lists and shows run history for every workspace pipeline; running several at once from one window is the remaining gap
 
 ### Longer-term (not yet scheduled)
 
