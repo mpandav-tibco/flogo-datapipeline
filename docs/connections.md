@@ -23,7 +23,7 @@ Secrets (passwords, keys, tokens) are **never** written to the file.
 
 | Family | Types |
 |---|---|
-| Database (`db`) | PostgreSQL, MySQL, SQLite |
+| Database (`db`) | PostgreSQL, MySQL, SQL Server, Oracle |
 | Stream (`stream`) | Apache Kafka |
 | Object store (`obj`) | Amazon S3, Google Cloud Storage, Azure ADLS Gen2 |
 | HTTP (`http`) | any HTTP endpoint (lookup / enrich) |

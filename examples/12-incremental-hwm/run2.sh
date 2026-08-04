@@ -11,8 +11,8 @@ set -euo pipefail
 PIPELINE="incremental-hwm.datapipeline"
 HWM_FILE="./watermarks/events.hwm"
 
-if [ ! -f "./data/events.db" ]; then
-  echo "ERROR: ./data/events.db not found. Run setup.sh first."
+if ! docker compose exec -T postgres pg_isready -U postgres -d pipelinedemo >/dev/null 2>&1; then
+  echo "ERROR: PostgreSQL is not reachable. Run ./setup.sh first."
   exit 1
 fi
 
@@ -30,13 +30,11 @@ echo "    Watermark BEFORE run:"
 echo "    $(cat "$HWM_FILE")"
 echo ""
 
-TOTAL=$(sqlite3 "./data/events.db" "SELECT COUNT(*) FROM raw_events;")
+TOTAL=$(docker compose exec -T postgres psql -U postgres -d pipelinedemo -tAc "SELECT COUNT(*) FROM raw_events;")
 HWM_VAL=$(python3 -c "import json,sys; d=json.load(open('$HWM_FILE')); print(d.get('value','?'))" 2>/dev/null \
           || cat "$HWM_FILE")
-NEW_COUNT=$(sqlite3 "./data/events.db" \
-  "SELECT COUNT(*) FROM raw_events WHERE created_at > (
-     SELECT json_extract(readfile('$HWM_FILE'), '$.value')
-   );" 2>/dev/null || echo "20")
+NEW_COUNT=$(docker compose exec -T postgres psql -U postgres -d pipelinedemo -tAc \
+  "SELECT COUNT(*) FROM raw_events WHERE created_at > '$HWM_VAL';" 2>/dev/null || echo "20")
 
 echo "    Total rows in table:  $TOTAL"
 echo "    Rows after watermark: $NEW_COUNT  (these will be processed)"

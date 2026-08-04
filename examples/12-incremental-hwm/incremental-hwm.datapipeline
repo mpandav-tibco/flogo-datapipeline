@@ -40,8 +40,8 @@
         "mode": "etl",
         "source": {
           "type": "jdbc",
-          "driver": "sqlite",
-          "dsn": "./data/events.db",
+          "driver": "postgres",
+          "dsn": "postgres://postgres:postgres@localhost:5432/pipelinedemo?sslmode=disable",
           "table": "raw_events",
           "keyColumn": "event_id",
           "batchSize": 200

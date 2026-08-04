@@ -9,8 +9,7 @@ VS Code Studio.
 |---|---|---|
 | Go | 1.22+ | building the engine from source |
 | VS Code | 1.83+ | the visual Studio extension |
-| `sqlite3` CLI | any | examples 09, 10, 18 (optional) |
-| Docker | any | Kafka / full-production examples (optional) |
+| Docker | any | Postgres / Kafka / full-production examples (optional) |
 
 ## 1. Build the engine
 

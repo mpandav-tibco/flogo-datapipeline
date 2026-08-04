@@ -37,7 +37,7 @@ func WithCSVColumns(cols []pipeline.ColumnDef) CSVOption {
 // JDBCOption is a functional option for FromJDBC / ToJDBC builder methods.
 type JDBCOption func(opts map[string]interface{})
 
-// WithJDBCDriver sets the database driver name (e.g. "postgres", "mysql", "sqlite3").
+// WithJDBCDriver sets the database driver name (e.g. "postgres", "mysql", "sqlserver", "oracle").
 func WithJDBCDriver(driver string) JDBCOption {
 	return func(opts map[string]interface{}) { opts["driver"] = driver }
 }

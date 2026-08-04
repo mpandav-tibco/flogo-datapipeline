@@ -39,7 +39,7 @@ func TestDeriveImports_CSVtoS3(t *testing.T) {
 	}
 }
 
-// JDBC sinks pull in their driver; only sqlite forces CGO.
+// JDBC sinks pull in their driver; all bundled drivers are pure Go (never CGO).
 func TestDeriveImports_JDBCDriversAndCGO(t *testing.T) {
 	pg := map[string]interface{}{
 		"source": map[string]interface{}{"type": "csv"},
@@ -53,16 +53,28 @@ func TestDeriveImports_JDBCDriversAndCGO(t *testing.T) {
 		t.Errorf("missing lib/pq in %v", imp)
 	}
 
-	lite := map[string]interface{}{
+	mssql := map[string]interface{}{
 		"source": map[string]interface{}{"type": "csv"},
-		"sink":   map[string]interface{}{"type": "jdbc", "driver": "sqlite"},
+		"sink":   map[string]interface{}{"type": "jdbc", "driver": "sqlserver"},
 	}
-	imp2, cgo2 := DeriveImports(lite)
-	if !cgo2 {
-		t.Error("sqlite must require CGO")
+	impM, cgoM := DeriveImports(mssql)
+	if cgoM {
+		t.Error("sqlserver must not require CGO (go-mssqldb is pure Go)")
 	}
-	if !has(imp2, "github.com/mattn/go-sqlite3") {
-		t.Errorf("missing sqlite driver in %v", imp2)
+	if !has(impM, "github.com/microsoft/go-mssqldb") {
+		t.Errorf("missing go-mssqldb driver in %v", impM)
+	}
+
+	ora := map[string]interface{}{
+		"source": map[string]interface{}{"type": "csv"},
+		"sink":   map[string]interface{}{"type": "jdbc", "driver": "oracle"},
+	}
+	impO, cgoO := DeriveImports(ora)
+	if cgoO {
+		t.Error("oracle must not require CGO (go-ora is pure Go)")
+	}
+	if !has(impO, "github.com/sijms/go-ora/v2") {
+		t.Errorf("missing go-ora driver in %v", impO)
 	}
 }
 

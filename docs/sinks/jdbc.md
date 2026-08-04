@@ -1,6 +1,6 @@
 # JDBC sink — `jdbc`
 
-Bulk-inserts or upserts rows into a relational table (PostgreSQL, MySQL, SQLite), with
+Bulk-inserts or upserts rows into a relational table (PostgreSQL, MySQL, SQL Server, Oracle), with
 optional automatic table creation and column migration. Implemented in
 [`sink/jdbc/sink.go`](../../sink/jdbc/sink.go); registered as `jdbc`.
 
@@ -8,7 +8,7 @@ optional automatic table creation and column migration. Implemented in
 
 | Key | Type | Default | Required | Description |
 |---|---|---|:--:|---|
-| `driver` | string | `postgres` | — | `postgres`, `mysql`, `sqlite3`. |
+| `driver` | string | `postgres` | — | `postgres`, `mysql`, `sqlserver`, `oracle`. |
 | `dsn` | string | — | ✅ | Connection string. Prefer a [connection](../connections.md). |
 | `table` | string | — | ✅ | Target table. |
 | `batchSize` | int | `1000` | — | Rows buffered before a flush. |
@@ -45,4 +45,4 @@ optional automatic table creation and column migration. Implemented in
 ## See also
 
 - [Sinks index](../sinks.md) · [JDBC source](../sources/jdbc.md) · [Schema drift](../transforms/schemadrift.md)
-- Demo: [`examples/10-csv-to-sqlite`](../../examples/10-csv-to-sqlite)
+- Demo: [`examples/17-kafka-streaming`](../../examples/17-kafka-streaming) (Kafka → JDBC upsert sink)

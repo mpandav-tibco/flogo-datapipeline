@@ -1,0 +1,31 @@
+# ---------------------------------------------------------------------------
+# Example 12 — Local PostgreSQL for the incremental high-water-mark demo.
+#
+# Starts a single PostgreSQL 16 instance. setup.sh creates and seeds the
+# raw_events table inside this container; the pipeline connects to it over
+# localhost:5432 using the DSN in incremental-hwm.datapipeline.
+#
+# Quick-start:
+#   ./setup.sh            # starts this container, then creates + seeds raw_events
+#   ./run1.sh             # first pipeline run — full load, writes the watermark
+#   ./add-new-events.sh   # inserts 20 newer rows
+#   ./run2.sh             # incremental delta run — only the new rows are processed
+#   docker compose down -v  # stop the container and drop its data volume
+# ---------------------------------------------------------------------------
+
+services:
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: dp-ex12-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: pipelinedemo
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres -d pipelinedemo" ]
+      interval: 5s
+      timeout: 3s
+      retries: 10

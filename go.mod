@@ -1,6 +1,6 @@
 module github.com/mpandav-tibco/flogo-datapipeline
 
-go 1.25.0
+go 1.25.7
 
 require (
 	// Cloud object-storage backends
@@ -18,7 +18,6 @@ require (
 
 	// Database drivers
 	github.com/lib/pq v1.10.9
-	github.com/mattn/go-sqlite3 v1.14.22
 
 	// Columnar format support
 	github.com/parquet-go/parquet-go v0.23.0
@@ -42,18 +41,23 @@ require (
 
 require (
 	github.com/hamba/avro/v2 v2.31.0
+	github.com/microsoft/go-mssqldb v1.10.0
 	github.com/project-flogo/contrib/trigger/rest v0.10.0
 	github.com/project-flogo/messaging-contrib/kafka v0.0.0-20250805082303-583e5ea77fdf
 	github.com/radovskyb/watcher v1.0.7
+	github.com/sijms/go-ora/v2 v2.9.0
 	github.com/tibco/flogo-general/src/app/General v0.0.0-20260707041701-10199745ae9a
 	golang.org/x/sync v0.21.0
 )
 
 require (
 	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
+	github.com/golang-sql/civil v0.0.0-20220223132316-b832511892a9 // indirect
+	github.com/golang-sql/sqlexp v0.1.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
+	github.com/shopspring/decimal v1.4.0 // indirect
 )
 
 require (
@@ -62,8 +66,8 @@ require (
 	cloud.google.com/go/auth/oauth2adapt v0.2.2 // indirect
 	cloud.google.com/go/compute/metadata v0.3.0 // indirect
 	cloud.google.com/go/iam v1.1.7 // indirect
-	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.11.1 // indirect
-	github.com/Azure/azure-sdk-for-go/sdk/internal v1.5.2 // indirect
+	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.21.1 // indirect
+	github.com/Azure/azure-sdk-for-go/sdk/internal v1.12.0 // indirect
 	github.com/Shopify/sarama v1.26.1 // indirect
 	github.com/andybalholm/brotli v1.1.0 // indirect
 	github.com/araddon/dateparse v0.0.0-20210429162001-6b43995a97de // indirect
@@ -131,11 +135,11 @@ require (
 	go.uber.org/atomic v1.11.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.27.1 // indirect
-	golang.org/x/crypto v0.49.0 // indirect
-	golang.org/x/net v0.52.0 // indirect
+	golang.org/x/crypto v0.50.0 // indirect
+	golang.org/x/net v0.53.0 // indirect
 	golang.org/x/oauth2 v0.21.0 // indirect
-	golang.org/x/sys v0.42.0 // indirect
-	golang.org/x/text v0.35.0
+	golang.org/x/sys v0.43.0 // indirect
+	golang.org/x/text v0.36.0
 	golang.org/x/time v0.5.0 // indirect
 	google.golang.org/genproto v0.0.0-20240401170217-c3f982113cda // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20240701130421-f6361c86f094 // indirect

@@ -1,6 +1,6 @@
 # Example 17 — Kafka Source → JDBC Sink (Streaming ETL)
 
-This example demonstrates how Flogo Data Pipeline consumes a continuous stream of JSON messages from a Kafka topic, applies two transform stages, and writes surviving rows in micro-batches to a SQLite database — all without an intermediate file.
+This example demonstrates how Flogo Data Pipeline consumes a continuous stream of JSON messages from a Kafka topic, applies two transform stages, and writes surviving rows in micro-batches to a PostgreSQL database — all without an intermediate file.
 
 The focus is on the **Kafka source**: consumer groups, timed polling, the difference between streaming and batch behaviour, and the SASL/SCRAM-SHA-512 configuration needed for production brokers.
 
@@ -16,8 +16,8 @@ The focus is on the **Kafka source**: consumer groups, timed polling, the differ
 | Streaming ETL | No intermediate file; Kafka offsets drive backpressure |
 | Filter transform | Drops rows where `temperature <= 0` (sensor offline / calibration zero) |
 | Validate transform (drop) | Rejects rows with null `sensor_id` or temperature outside `[-100, 200]` |
-| JDBC sink (SQLite) | `driver: sqlite`, `onConflict: insert`, `batchSize: 100` |
-| Local Kafka via Docker | `docker-compose.yml` with bitnami/kafka 3.6 + bitnami/zookeeper 3.9 |
+| JDBC sink (PostgreSQL) | `driver: postgres`, `onConflict: insert`, `batchSize: 100` |
+| Local Kafka + PostgreSQL via Docker | `docker-compose.yml` with bitnami/kafka 3.6, bitnami/zookeeper 3.9, postgres 16 |
 | SASL/SCRAM config | Documented for production; not enabled in the demo |
 
 ---
@@ -27,12 +27,10 @@ The focus is on the **Kafka source**: consumer groups, timed polling, the differ
 ```
 17-kafka-streaming/
 ├── kafka-streaming.datapipeline   # Pipeline definition
-├── docker-compose.yml             # Local Kafka + Zookeeper (bitnami images)
+├── docker-compose.yml             # Local Kafka + Zookeeper + PostgreSQL
 ├── produce.sh                     # Publish 20 test messages to the topic
-├── setup.sh                       # Create SQLite target database
-├── verify.sh                      # Query SQLite and confirm row counts
-├── data/
-│   └── sensors.db                 # SQLite database (created by setup.sh)
+├── setup.sh                       # Create the PostgreSQL target table
+├── verify.sh                      # Query PostgreSQL and confirm row counts
 └── README.md
 ```
 
@@ -75,7 +73,7 @@ first poll returns all 20 messages in one batch
 filter drops 2 (temperature = 0)
 validate drops 2 (temperature 250, empty sensor_id)
                     ↓
-16 rows written to SQLite in 1 JDBC batch (batchSize: 100)
+16 rows written to PostgreSQL in 1 JDBC batch (batchSize: 100)
                     ↓
 second poll waits 5 000 ms, returns empty → pipeline idles
 (terminate with Ctrl-C or SIGTERM)
@@ -103,7 +101,7 @@ second poll waits 5 000 ms, returns empty → pipeline idles
 | 19 | S015 | 250 | **Dropped** | Validate: `temperature` max is 200 |
 | 20 | _(empty)_ | 22.0 | **Dropped** | Validate: `sensor_id` notNull fails |
 
-Expected rows in SQLite after the pipeline run: **16**
+Expected rows in PostgreSQL after the pipeline run: **16**
 
 ---
 
@@ -154,13 +152,13 @@ Two rules guard the physical plausibility of each reading:
 
 `onViolation: "drop"` silently discards invalid rows. Switch to `"route"` and add a `dlqSink` if you need to inspect rejected readings (see Common Modifications below).
 
-### 4. Sink — JDBC (SQLite)
+### 4. Sink — JDBC (PostgreSQL)
 
 ```json
 "sink": {
   "type": "jdbc",
-  "driver": "sqlite",
-  "dsn": "./data/sensors.db",
+  "driver": "postgres",
+  "dsn": "postgres://postgres:postgres@localhost:5432/pipelinedemo?sslmode=disable",
   "table": "sensor_readings",
   "batchSize": 100,
   "onConflict": "insert"
@@ -179,8 +177,7 @@ The JDBC sink collects rows in memory until `batchSize` (100) is reached or the 
 
 | Tool | Purpose |
 |---|---|
-| Docker + docker compose | Run local Kafka broker |
-| sqlite3 CLI | Create the target database and run verify queries |
+| Docker + docker compose | Run local Kafka broker + PostgreSQL target |
 | flogo-datapipeline CLI | Execute the pipeline |
 | kcat or kafka-console-producer.sh | Produce test messages (one or the other) |
 
@@ -194,19 +191,20 @@ Wait approximately 15–20 seconds for the broker to become healthy:
 
 ```bash
 docker compose ps
-# NAME         IMAGE                   STATUS
-# kafka        bitnami/kafka:3.6       Up (healthy)
-# zookeeper    bitnami/zookeeper:3.9   Up (healthy)
+# NAME                IMAGE                   STATUS
+# dp-ex17-postgres    postgres:16-alpine      Up (healthy)
+# kafka               bitnami/kafka:3.6       Up (healthy)
+# zookeeper           bitnami/zookeeper:3.9   Up (healthy)
 ```
 
-### Step 2 — Create the SQLite target database
+### Step 2 — Create the PostgreSQL target table
 
 ```bash
 chmod +x setup.sh
 ./setup.sh
 ```
 
-This creates `data/sensors.db` with the `sensor_readings` table and a composite index on `(sensor_id, ts)`.
+`setup.sh` starts the stack (if it is not already running) and creates the `sensor_readings` table in PostgreSQL with a composite index on `(sensor_id, ts)`.
 
 ### Step 3 — Publish test messages
 
@@ -230,7 +228,7 @@ Expected console output:
 [poll]      batch_1  messages_received=20  poll_ms=5000
 [filter]    dropped=2  passed=18
 [validate]  dropped=2  passed=16
-[sink]      jdbc sqlite ./data/sensors.db  rows_written=16  batches=1
+[sink]      jdbc postgres localhost:5432/pipelinedemo  rows_written=16  batches=1
 [poll]      batch_2  messages_received=0   poll_ms=5000  (idle — waiting for more messages)
 ^C
 [shutdown]  consumer offsets committed  group=pipeline-consumer-1
@@ -327,7 +325,7 @@ docker exec kafka kafka-consumer-groups.sh \
 flogo-datapipeline run kafka-streaming.datapipeline
 ```
 
-The broker appends new messages; the consumer picks up from where it left off. You will see another 16 rows inserted (32 total in SQLite).
+The broker appends new messages; the consumer picks up from where it left off. You will see another 16 rows inserted (32 total in PostgreSQL).
 
 ---
 
@@ -453,7 +451,7 @@ Use flogo-datapipeline when you need a **lightweight streaming ETL** that can ru
 |---|---|---|
 | `batchSize` | `100` | Match to `performance.batchSize`; lower = more frequent flushes, lower latency |
 | `onConflict` | `insert` | Use `upsert` + `conflictKey` for at-least-once idempotency after restarts |
-| `driver` | `sqlite` | Use `postgres` or `mysql` for production |
+| `driver` | `postgres` | Production-ready; also supports `mysql` |
 
 ### performance block
 
@@ -477,7 +475,7 @@ Use flogo-datapipeline when you need a **lightweight streaming ETL** that can ru
   ],
   "onViolation": "route",
   "errorSinkType": "csv",
-  "errorSinkConfig": { "path": "./data/rejected_readings.csv" }
+  "errorSinkConfig": { "path": "./rejected_readings.csv" }
 }
 ```
 
@@ -508,7 +506,7 @@ Set `scaling.mode` to `"sharded"` and run one process per partition. Each instan
 "scaling": { "mode": "sharded", "instanceIndex": 0, "instanceCount": 3 }
 ```
 
-### Switch to PostgreSQL sink
+### Use upsert for idempotent loads (production hardening)
 
 ```json
 "sink": {
@@ -528,6 +526,5 @@ Set `scaling.mode` to `"sharded"` and run one process per partition. Each instan
 
 ```bash
 docker compose down          # stop and remove containers
-docker compose down -v       # also remove named volumes (kafka_data, zookeeper_data)
-rm -f ./data/sensors.db      # remove the SQLite database
+docker compose down -v       # also remove named volumes (kafka_data, zookeeper_data, postgres_data)
 ```

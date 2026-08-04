@@ -108,7 +108,7 @@ Connections let you avoid typing DSNs and secrets into pipeline files.
 - Pick a type, name it, and fill in the fields. Secret fields (passwords, keys,
   tokens) are entered as passwords and stored in **VS Code Secret Storage**.
 
-Supported types: **PostgreSQL, MySQL, SQLite** (`db`), **Apache Kafka**
+Supported types: **PostgreSQL, MySQL, SQL Server, Oracle** (`db`), **Apache Kafka**
 (`stream`), **Amazon S3, Google Cloud Storage, Azure ADLS Gen2** (`obj`), and
 **HTTP** (`http`).
 

@@ -21,10 +21,9 @@
 # alternative and exits cleanly.
 #
 # Run order:
-#   1. docker compose up -d   (start Kafka)
-#   2. ./setup.sh             (create SQLite target)
-#   3. ./produce.sh           (inject messages)
-#   4. flogo-datapipeline run kafka-streaming.datapipeline
+#   1. ./setup.sh             (start the stack + create Postgres target)
+#   2. ./produce.sh           (inject messages)
+#   3. flogo-datapipeline run kafka-streaming.datapipeline
 
 set -euo pipefail
 
@@ -194,7 +193,7 @@ echo "  Expected pipeline behaviour:"
 echo "    Messages published  : $TOTAL"
 printf "    Dropped by filter   : $FILTER_DROPPED  (temperature = 0 — msg 17, 18)\n"
 printf "    Dropped by validate : $VALIDATE_DROPPED  (temperature > 200 — msg 19; empty sensor_id — msg 20)\n"
-printf "    Written to SQLite   : $VALID  (./data/sensors.db  table: sensor_readings)\n"
+printf "    Written to Postgres : $VALID  (db pipelinedemo  table: sensor_readings)\n"
 echo ""
 echo "  Next step:"
 echo "    flogo-datapipeline run kafka-streaming.datapipeline"

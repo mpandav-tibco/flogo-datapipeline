@@ -13,9 +13,9 @@ set -euo pipefail
 PIPELINE="incremental-hwm.datapipeline"
 HWM_FILE="./watermarks/events.hwm"
 
-# Verify the database exists.
-if [ ! -f "./data/events.db" ]; then
-  echo "ERROR: ./data/events.db not found. Run setup.sh first."
+# Verify the database is reachable.
+if ! docker compose exec -T postgres pg_isready -U postgres -d pipelinedemo >/dev/null 2>&1; then
+  echo "ERROR: PostgreSQL is not reachable. Run ./setup.sh first."
   exit 1
 fi
 
@@ -31,7 +31,7 @@ fi
 echo ""
 
 # Show how many rows are in the table.
-ROW_COUNT=$(sqlite3 "./data/events.db" "SELECT COUNT(*) FROM raw_events;")
+ROW_COUNT=$(docker compose exec -T postgres psql -U postgres -d pipelinedemo -tAc "SELECT COUNT(*) FROM raw_events;")
 echo "    Rows in raw_events: $ROW_COUNT"
 echo "    Expected rows processed: $ROW_COUNT  (all rows pass — no prior HWM)"
 echo ""

@@ -1,9 +1,10 @@
 # Example 19 — Full Production Pipeline (Kitchen Sink)
 
 **Mode:** ETL (Extract, Transform, Load)
-**Source:** JDBC — SQLite (simulates a production RDBMS claims intake table)
-**Sink:** JDBC — SQLite with upsert (simulates a production enriched claims warehouse)
+**Source:** JDBC — PostgreSQL (production RDBMS claims intake table `raw_claims`)
+**Sink:** JDBC — PostgreSQL with upsert (enriched claims warehouse table `claims_processed`)
 **DLQ Sink:** Null (invalid claims discarded; swap to a DLQ table in production)
+**Database:** A single local PostgreSQL 16 instance (database `pipelinedemo`) holds both tables, started via `docker-compose.yml`.
 **Features demonstrated:** All major pipeline features combined — HWM, validate + DLQ routing, data quality, HTTP lookup enrichment, field mapping, JDBC upsert, file checkpoint, and the interaction between HWM and checkpoint for reliable incremental loads.
 
 ---
@@ -35,19 +36,17 @@ An insurance company receives raw claims from field agents into a `raw_claims` t
 ```
 19-full-production/
 ├── full-production.datapipeline   # Pipeline definition (JSON)
-├── data/
-│   ├── claims.db                  # Source SQLite DB (created by setup.sh)
-│   └── claims_enriched.db         # Sink SQLite DB   (created by setup.sh)
+├── docker-compose.yml             # Local PostgreSQL 16 service (database: pipelinedemo)
 ├── watermarks/                    # HWM state files (written by the engine)
 ├── checkpoints/                   # Checkpoint tokens (written by the engine)
-├── setup.sh                       # Create and seed both databases
+├── setup.sh                       # Start PostgreSQL and seed both tables
 ├── run.sh                         # Execute the pipeline
 ├── add-claims.sh                  # Insert 20 new claims (incremental load demo)
 ├── verify.sh                      # Inspect the enriched output
 └── README.md                      # This file
 ```
 
-> `data/`, `watermarks/`, and `checkpoints/` contents are generated at runtime and are not committed to version control.
+> `watermarks/` and `checkpoints/` contents are generated at runtime and are not committed to version control. The PostgreSQL data lives in a Docker volume managed by `docker-compose.yml`.
 
 ---
 
@@ -58,8 +57,8 @@ An insurance company receives raw claims from field agents into a `raw_claims` t
 │                    full-production.datapipeline                             │
 │                                                                             │
 │  ┌──────────────────┐                                                       │
-│  │   JDBC Source    │  driver: sqlite                                       │
-│  │   claims.db      │  table: raw_claims    keyColumn: claim_id             │
+│  │   JDBC Source    │  driver: postgres                                     │
+│  │   pipelinedemo   │  table: raw_claims    keyColumn: claim_id             │
 │  │   raw_claims     │  batchSize: 500                                       │
 │  └────────┬─────────┘                                                       │
 │           │ 100 rows (80 valid + 20 invalid)                                │
@@ -101,9 +100,9 @@ An insurance company receives raw claims from field agents into a `raw_claims` t
 │           │ 80 rows (canonical output schema)                               │
 │           ▼                                                                 │
 │  ┌──────────────────┐                                                       │
-│  │   JDBC Sink      │  driver: sqlite   table: claims_processed            │
-│  │  claims_          │  onConflict: upsert   conflictKey: [claim_id]       │
-│  │  enriched.db     │  batchSize: 200                                       │
+│  │   JDBC Sink      │  driver: postgres table: claims_processed            │
+│  │  pipelinedemo     │  onConflict: upsert   conflictKey: [claim_id]       │
+│  │  claims_processed│  batchSize: 200                                       │
 │  └──────────────────┘                                                       │
 │                                                                             │
 │  Checkpoint: file   path: ./checkpoints   intervalRows: 500                 │
@@ -115,7 +114,7 @@ An insurance company receives raw claims from field agents into a `raw_claims` t
 
 ## Source Schema
 
-Table `raw_claims` in `./data/claims.db`:
+Table `raw_claims` in the `pipelinedemo` PostgreSQL database:
 
 ```sql
 CREATE TABLE raw_claims (
@@ -141,7 +140,7 @@ CREATE TABLE raw_claims (
 
 ## Sink Schema
 
-Table `claims_processed` in `./data/claims_enriched.db`:
+Table `claims_processed` in the `pipelinedemo` PostgreSQL database:
 
 ```sql
 CREATE TABLE claims_processed (
@@ -332,10 +331,10 @@ In production, set `deleteOnSuccess: true` to keep the `checkpoints/` directory 
 ### Prerequisites
 
 - `flogo-datapipeline` binary on your `PATH`.
-- `sqlite3` CLI on your `PATH`.
+- Docker and Docker Compose (the local PostgreSQL 16 service is defined in `docker-compose.yml`).
 - Network access to `jsonplaceholder.typicode.com` (used by the lookup transform).
 
-### Step 1 — Create the databases
+### Step 1 — Start PostgreSQL and seed both tables
 
 ```bash
 chmod +x setup.sh run.sh add-claims.sh verify.sh
@@ -345,25 +344,31 @@ chmod +x setup.sh run.sh add-claims.sh verify.sh
 Expected output:
 
 ```
-==> Creating source database: ./data/claims.db
+==> Starting PostgreSQL (docker compose up -d) ...
+==> Waiting for PostgreSQL to become ready ...
+    PostgreSQL is ready.
+==> Creating source table raw_claims in database pipelinedemo ...
+
+==> Source table seeded successfully.
 
     Total claims inserted : 100
     Valid claims           : 80  (will be enriched and upserted)
     Invalid claims         : 20 (will be routed to DLQ)
 
     Status breakdown (all rows):
-    status        count
-    ------------  -----
-    APPROVED      26
-    PENDING       38
-    REJECTED      18
-    UNDER_REVIEW  18
+        status    | count
+    --------------+-------
+     APPROVED     |    26
+     PENDING      |    38
+     REJECTED     |    18
+     UNDER_REVIEW |    18
+    (4 rows)
 
     Date range:
     earliest submitted_at: 2025-01-03 08:14:22
     latest   submitted_at: 2025-06-30 17:00:00
 
-==> Creating sink database: ./data/claims_enriched.db
+==> Creating sink table claims_processed in database pipelinedemo ...
     Sink table 'claims_processed' created (empty — will be populated by the pipeline).
 ```
 
@@ -379,7 +384,7 @@ Expected log output:
 
 ```
 INFO  pipeline starting          name=full-production mode=etl
-INFO  jdbc source opened         driver=sqlite dsn=./data/claims.db table=raw_claims
+INFO  jdbc source opened         driver=postgres dsn=postgres://postgres:***@localhost:5432/pipelinedemo table=raw_claims
 INFO  hwm filter                 column=submitted_at backend=file no_watermark=true
 INFO  source batch               page=1 rows=100 last_key=CLM-00000100
 INFO  validate                   rows_checked=100 rows_passed=80 rows_failed=20
@@ -467,6 +472,16 @@ CLM-00000002  7          18000.0     Kurtis Weiss    Telly.Hoeger@billy...  APPR
 ...
 ```
 
+### Teardown
+
+Stop the PostgreSQL container and delete its data volume (all seeded and processed rows are discarded):
+
+```bash
+docker compose down -v
+```
+
+The `watermarks/` and `checkpoints/` directories are left in place; delete them manually or re-run `./setup.sh` to reset them.
+
 ---
 
 ## Adapting for Production
@@ -488,9 +503,9 @@ In this example `dlqSink.type` is `null` for simplicity. In production, route ba
 
 The engine appends a `_violation_reason` column to each DLQ row explaining which rule failed. Operations teams can query this table, fix the source data, and replay the corrected rows.
 
-### Switch to PostgreSQL or MySQL
+### Point at your production database
 
-Change only `driver` and `dsn` in the source and sink:
+The example already uses PostgreSQL locally. To point at a production database (PostgreSQL or MySQL), change only `driver` and `dsn` in the source and sink:
 
 ```json
 "source": {
@@ -503,7 +518,7 @@ Change only `driver` and `dsn` in the source and sink:
 }
 ```
 
-Increase `batchSize` from 500 to 5,000–50,000 for network-attached databases where query round-trips are more expensive than local SQLite reads.
+Increase `batchSize` from 500 to 5,000–50,000 for network-attached databases where query round-trips are more expensive than local database reads.
 
 ### Replace the JSON placeholder lookup with your real policy registry
 
@@ -608,7 +623,7 @@ Each sub-pipeline can be scaled, checkpointed, and monitored independently. The 
 
 | Field | Type | Default | Notes |
 |-------|------|---------|-------|
-| `driver` | `"sqlite"` / `"postgres"` / `"mysql"` | — | Required |
+| `driver` | `"postgres"` / `"mysql"` | — | Required |
 | `dsn` | string | — | Connection string; env var substitution (`${VAR}`) supported |
 | `table` | string | — | Required when `query` is absent |
 | `query` | string | — | Custom SQL; overrides `table`; engine wraps as subquery for keyset pagination |
@@ -687,7 +702,7 @@ Common expression patterns:
 
 | Field | Type | Default | Notes |
 |-------|------|---------|-------|
-| `driver` | `"sqlite"` / `"postgres"` / `"mysql"` | — | Required |
+| `driver` | `"postgres"` / `"mysql"` | — | Required |
 | `dsn` | string | — | Connection string |
 | `table` | string | — | Target table; must exist before the pipeline runs |
 | `batchSize` | int | `5000` | Rows per INSERT/UPSERT batch |

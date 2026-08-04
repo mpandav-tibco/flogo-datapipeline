@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# add-claims.sh — Insert 20 new claims into claims.db with submitted_at timestamps
+# add-claims.sh — Insert 20 new claims into raw_claims with submitted_at timestamps
 #                 AFTER the first-run HWM cutoff (2025-06-30 17:00:00).
 #
 # Purpose:
@@ -23,20 +23,18 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-SOURCE_DB="./data/claims.db"
-
-if [ ! -f "$SOURCE_DB" ]; then
-    echo "ERROR: $SOURCE_DB not found."
+if ! docker compose exec -T postgres pg_isready -U postgres -d pipelinedemo >/dev/null 2>&1; then
+    echo "ERROR: PostgreSQL is not reachable."
     echo "       Run ./setup.sh first."
     exit 1
 fi
 
-BEFORE_COUNT=$(sqlite3 "$SOURCE_DB" "SELECT COUNT(*) FROM raw_claims;")
-echo "==> Adding 20 new claims to $SOURCE_DB (current row count: $BEFORE_COUNT)"
+BEFORE_COUNT=$(docker compose exec -T postgres psql -U postgres -d pipelinedemo -tAc "SELECT COUNT(*) FROM raw_claims;")
+echo "==> Adding 20 new claims to raw_claims (current row count: $BEFORE_COUNT)"
 echo "    New claims have submitted_at = 2025-07-15 (after the HWM cutoff of 2025-06-30)"
 echo ""
 
-sqlite3 "$SOURCE_DB" <<'SQL'
+docker compose exec -T postgres psql -U postgres -d pipelinedemo <<'SQL'
 -- 20 new valid claims — all submitted on 2025-07-15 (post-watermark)
 -- claim_ids CLM-00000101 to CLM-00000120 to avoid conflicts with the first batch.
 -- policy_id 1–10 so the lookup cache can be reused.
@@ -64,14 +62,14 @@ INSERT INTO raw_claims VALUES
   ('CLM-00000120', 10,   250000, 'APPROVED',     '2025-07-14', '2025-07-15 12:45:00', 58);
 SQL
 
-AFTER_COUNT=$(sqlite3 "$SOURCE_DB" "SELECT COUNT(*) FROM raw_claims;")
+AFTER_COUNT=$(docker compose exec -T postgres psql -U postgres -d pipelinedemo -tAc "SELECT COUNT(*) FROM raw_claims;")
 NEW_COUNT=$(( AFTER_COUNT - BEFORE_COUNT ))
 
 echo "    $NEW_COUNT new claims inserted."
-echo "    Source database now has $AFTER_COUNT total rows."
+echo "    Source table now has $AFTER_COUNT total rows."
 echo ""
 echo "    New claims date range:"
-sqlite3 "$SOURCE_DB" \
+docker compose exec -T postgres psql -U postgres -d pipelinedemo -tAc \
     "SELECT '    submitted_at range: ' || MIN(submitted_at) || ' to ' || MAX(submitted_at)
      FROM raw_claims WHERE claim_id BETWEEN 'CLM-00000101' AND 'CLM-00000120';"
 echo ""

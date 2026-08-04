@@ -1,14 +1,15 @@
 // Package jdbc registers a JDBC-style source that reads RecordBatches from any
-// database/sql-compatible database (PostgreSQL, MySQL, SQLite, Oracle via ODBC).
+// database/sql-compatible database (PostgreSQL, MySQL, SQL Server, and Oracle).
 // Import this package with a blank import to activate it:
 //
 //	import _ "github.com/mpandav-tibco/flogo-datapipeline/source/jdbc"
 //
 // The database driver must also be imported separately:
 //
-//	import _ "github.com/lib/pq"             // PostgreSQL
-//	import _ "github.com/go-sql-driver/mysql" // MySQL
-//	import _ "github.com/mattn/go-sqlite3"   // SQLite
+//	import _ "github.com/lib/pq"               // PostgreSQL
+//	import _ "github.com/go-sql-driver/mysql"   // MySQL
+//	import _ "github.com/microsoft/go-mssqldb"  // SQL Server
+//	import _ "github.com/sijms/go-ora/v2"       // Oracle
 //
 // Configuration shape:
 //
@@ -30,6 +31,10 @@
 //   - LIMIT/OFFSET at large offsets is O(N) on Postgres and MySQL because the
 //     engine still scans and discards rows before the offset. For tables > 10M
 //     rows, always set orderKey to enable keyset pagination.
+//   - SQL Server and Oracle page via the SQL:2008 OFFSET/FETCH clause, which is
+//     only valid alongside a stable ORDER BY. In table mode those drivers
+//     therefore require orderKey to be set; supply a raw 'query' (carrying your
+//     own ORDER BY) to bypass that requirement.
 //   - In distributed mode, each instance opens its own connection pool. Total
 //     database connections = instances × MaxOpenConns (4 by default).
 package jdbc
@@ -117,6 +122,17 @@ func newJDBCSource(cfg map[string]interface{}) (source.Source, error) {
 	}
 
 	orderKey, _ := cfg["orderKey"].(string)
+
+	// SQL Server and Oracle paginate with the SQL:2008 OFFSET/FETCH clause, which
+	// is only valid alongside a stable ORDER BY. In table mode we therefore require
+	// an orderKey (it drives keyset pagination and supplies that ORDER BY). Raw
+	// 'query' mode is exempt — the caller owns ordering there.
+	if orderKey == "" && rawQuery == "" {
+		switch driver {
+		case "sqlserver", "mssql", "oracle":
+			return nil, fmt.Errorf("jdbc source: driver %q requires 'orderKey' for reliable pagination (OFFSET/FETCH needs a stable ORDER BY); set orderKey to a unique/primary-key column, or supply a raw 'query' with your own ORDER BY", driver)
+		}
+	}
 
 	batchSize := 5000
 	if bs, ok := cfg["batchSize"].(int); ok && bs > 0 {
@@ -284,9 +300,13 @@ func (s *jdbcSource) Skip(n int64) error {
 		return nil
 	}
 	if s.useKeyset && s.orderKey != "" {
-		// Find the value of orderKey at row n using LIMIT 1 OFFSET n-1.
-		// This single round-trip repositions the keyset cursor cheaply.
-		q := s.baseQuery + sqlutil.LimitClause(s.driver, 1, n-1)
+		// Find the value of orderKey at row n using ORDER BY orderKey + LIMIT 1
+		// OFFSET n-1. This single round-trip repositions the keyset cursor cheaply.
+		// The ORDER BY makes "row n" deterministic and is mandatory for the
+		// OFFSET/FETCH form used by SQL Server and Oracle.
+		q := s.baseQuery +
+			" ORDER BY " + sqlutil.QuoteIdent(s.orderKey, s.driver) +
+			sqlutil.LimitClause(s.driver, 1, n-1)
 		row := s.db.QueryRow(q)
 		vals := make([]interface{}, len(s.schema))
 		ptrs := make([]interface{}, len(s.schema))
@@ -736,8 +756,19 @@ func (s *jdbcSource) OpenPartition(p source.Partition) (source.Source, error) {
 // derive the schema. This approach works across all three drivers and avoids
 // fetching any data rows.
 func (s *jdbcSource) inferSchema() error {
-	// LIMIT 0 returns no rows but populates column metadata.
-	q := s.baseQuery + sqlutil.LimitClause(s.driver, 1, 0)
+	// Fetch column metadata without reading data rows. SQL Server's OFFSET/FETCH
+	// limiter requires an ORDER BY (and Oracle's is non-deterministic without one),
+	// so we can't reuse LimitClause on an unordered probe. Wrapping the base query
+	// in an always-false filter returns zero rows while still exposing full column
+	// metadata, and needs no ORDER BY. A bare (AS-less) subquery alias is valid on
+	// every supported driver.
+	var q string
+	switch s.driver {
+	case "sqlserver", "mssql", "oracle":
+		q = "SELECT * FROM (" + s.baseQuery + ") dp_schema WHERE 1 = 0"
+	default: // postgres, mysql — LIMIT 1 is cheapest and preserves existing behaviour
+		q = s.baseQuery + sqlutil.LimitClause(s.driver, 1, 0)
+	}
 	rows, err := s.db.Query(q)
 	if err != nil {
 		return fmt.Errorf("schema query: %w", err)
@@ -807,10 +838,11 @@ func formatLiteral(v interface{}, driver string) string {
 	case float64:
 		return fmt.Sprintf("%g", n)
 	case time.Time:
-		// ISO-8601 timestamp literal, valid across Postgres/MySQL/SQLite.
+		// ISO-8601 timestamp literal for Postgres/MySQL/SQL Server; Oracle timestamp
+		// keyset keys may need an NLS-compatible format (numeric keys are unaffected).
 		return "'" + n.Format("2006-01-02 15:04:05.999999-07:00") + "'"
 	case []byte:
-		// Treat raw bytes as a hex literal (Postgres, MySQL, SQLite all support this).
+		// Treat raw bytes as a hex literal (Postgres, MySQL, SQL Server all support this).
 		return sqlutil.QuoteLiteral(string(n), driver)
 	default:
 		s := fmt.Sprintf("%v", v)

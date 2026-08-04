@@ -1,8 +1,8 @@
 // Command dp-build compiles a LEAN, per-app binary for a .datapipeline file by
 // linking only the components the app references — the import-driven build model
 // used by Flogo flow and the Flogo agents. It derives the import set with the
-// core `build` package, generates a minimal main.go, and compiles it (CGO only
-// when a CGO-linked driver such as sqlite is used).
+// core `build` package, generates a minimal main.go, and compiles it. Every
+// bundled JDBC driver is pure Go, so these lean binaries build without CGO.
 //
 //	dp-build -f orders.datapipeline -o bin/orders   # build a lean binary
 //	dp-build -f orders.datapipeline -n              # print derived imports only

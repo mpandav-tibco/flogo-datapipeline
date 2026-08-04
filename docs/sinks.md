@@ -13,7 +13,7 @@ registered with `sink.Register(name, …)` ([`sink/sink.go`](../sink/sink.go)); 
 | Type(s) | Writes |
 |---|---|
 | [`csv`, `tsv`](sinks/csv.md) | delimited text, optional header |
-| [`jdbc`](sinks/jdbc.md) | bulk insert / upsert into PostgreSQL / MySQL / SQLite |
+| [`jdbc`](sinks/jdbc.md) | bulk insert / upsert into PostgreSQL / MySQL / SQL Server / Oracle |
 | [`parquet`](sinks/parquet.md) | row-group-aligned Parquet, snappy/gzip/zstd |
 | [`avro`](sinks/avro.md) | row-oriented Avro OCF, snappy/deflate/zstandard/null |
 | [`jsonlines`, `ndjson`](sinks/jsonlines.md) | one JSON object per line |

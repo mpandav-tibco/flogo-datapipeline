@@ -137,11 +137,12 @@ import (
 	_ "github.com/mpandav-tibco/flogo-datapipeline/metrics/prometheus" // Prometheus /metrics scrape endpoint
 
 	// --- Database drivers ---
-	// Import whichever drivers your deployment uses; unused drivers are
-	// trimmed by the linker if CGO is not involved.
-	_ "github.com/go-sql-driver/mysql" // MySQL / MariaDB (pure Go)
-	_ "github.com/lib/pq"              // PostgreSQL (pure Go)
-	_ "github.com/mattn/go-sqlite3"    // SQLite (requires CGO)
+	// Import whichever drivers your deployment uses; unused drivers are trimmed
+	// by the linker. All four are pure Go, so the binary builds without CGO.
+	_ "github.com/go-sql-driver/mysql"  // MySQL / MariaDB (pure Go)
+	_ "github.com/lib/pq"               // PostgreSQL (pure Go)
+	_ "github.com/microsoft/go-mssqldb" // SQL Server (pure Go)
+	_ "github.com/sijms/go-ora/v2"      // Oracle (pure Go)
 
 	// --- Flogo trigger (timer fires the pipeline on a schedule) ---
 	_ "github.com/project-flogo/contrib/trigger/timer"
