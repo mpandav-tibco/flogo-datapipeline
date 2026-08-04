@@ -108,6 +108,66 @@ func TestAvroRoundTrip(t *testing.T) {
 	}
 }
 
+// TestAvroRoundTrip_Decimal verifies decimals are written with the true Avro
+// DECIMAL(38,10) logical type (not a string) and read back as exact typed
+// record.Decimal values, with null preserved through the nullable union.
+func TestAvroRoundTrip_Decimal(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "dec.avro")
+	cols := []record.Column{
+		{Name: "id", Type: record.TypeInt},
+		{Name: "amount", Type: record.TypeDecimal},
+	}
+	mk := func(s string) record.Decimal { d, _ := record.ParseDecimal(s); return d }
+	rows := [][]interface{}{
+		{int64(1), mk("123.45")},
+		{int64(2), mk("-0.05")},
+		{int64(3), mk("1000000.00")},
+		{int64(4), nil}, // null decimal survives the nullable union
+	}
+
+	sk, err := sink.New("avro", map[string]interface{}{"path": path})
+	if err != nil {
+		t.Fatalf("sink.New: %v", err)
+	}
+	if err := sk.WriteBatch(&record.RecordBatch{Columns: cols, Rows: rows}); err != nil {
+		t.Fatalf("WriteBatch: %v", err)
+	}
+	if err := sk.Close(); err != nil {
+		t.Fatalf("sink Close: %v", err)
+	}
+
+	src, err := source.New("avro", map[string]interface{}{"path": path})
+	if err != nil {
+		t.Fatalf("source.New: %v", err)
+	}
+	defer src.Close()
+
+	// The amount column must round-trip as a typed decimal, not a string.
+	if got := src.Schema(); len(got) != 2 || got[1].Type != record.TypeDecimal {
+		t.Fatalf("amount column = %+v, want type decimal (true logical type)", got)
+	}
+
+	batch, err := src.ReadBatch(10)
+	if err != nil && err != io.EOF {
+		t.Fatalf("ReadBatch: %v", err)
+	}
+	if batch.Len() != 4 {
+		t.Fatalf("read %d rows, want 4", batch.Len())
+	}
+	for i, want := range []string{"123.45", "-0.05", "1000000.00"} {
+		got, ok := batch.Value(i, "amount").(record.Decimal)
+		if !ok {
+			t.Fatalf("row %d amount = %v (%T), want record.Decimal", i, batch.Value(i, "amount"), batch.Value(i, "amount"))
+		}
+		if wd := mk(want); got.Cmp(wd) != 0 {
+			t.Errorf("row %d amount = %s, want %s", i, got.String(), wd.String())
+		}
+	}
+	if got := batch.Value(3, "amount"); got != nil {
+		t.Errorf("row3 amount = %v, want nil", got)
+	}
+}
+
 // TestAvroFieldNameSanitized verifies a column name that is not a valid avro
 // identifier is written (and read back) with invalid characters replaced.
 func TestAvroFieldNameSanitized(t *testing.T) {
