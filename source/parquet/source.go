@@ -38,7 +38,7 @@ func init() {
 }
 
 type parquetSource struct {
-	file       *os.File
+	closer     io.Closer
 	pqFile     *parquetgo.File
 	schema     []record.Column
 	colIndices []int   // output column position → parquet leaf column index
@@ -71,25 +71,17 @@ type parquetSource struct {
 }
 
 func newParquetSource(cfg map[string]interface{}) (source.Source, error) {
-	path, _ := cfg["path"].(string)
-	if path == "" {
-		return nil, fmt.Errorf("parquet source: 'path' is required")
+	ra, size, closer, err := openParquetInput(cfg)
+	if err != nil {
+		return nil, err
 	}
 
-	f, err := os.Open(path)
+	pf, err := parquetgo.OpenFile(ra, size)
 	if err != nil {
-		return nil, fmt.Errorf("parquet source: open %q: %w", path, err)
-	}
-	fi, err := f.Stat()
-	if err != nil {
-		f.Close()
-		return nil, fmt.Errorf("parquet source: stat %q: %w", path, err)
-	}
-
-	pf, err := parquetgo.OpenFile(f, fi.Size())
-	if err != nil {
-		f.Close()
-		return nil, fmt.Errorf("parquet source: parse %q: %w", path, err)
+		if closer != nil {
+			closer.Close()
+		}
+		return nil, fmt.Errorf("parquet source: parse: %w", err)
 	}
 
 	// Resolve column names — use declared subset or all schema columns.
@@ -104,7 +96,9 @@ func newParquetSource(cfg map[string]interface{}) (source.Source, error) {
 
 	schema, colIndices, decScales, err := resolveSchema(pf, wantCols)
 	if err != nil {
-		f.Close()
+		if closer != nil {
+			closer.Close()
+		}
 		return nil, err
 	}
 
@@ -137,7 +131,9 @@ func newParquetSource(cfg map[string]interface{}) (source.Source, error) {
 	if fexpr, _ := cfg["filter"].(string); fexpr != "" {
 		pred, err = parseParquetPredicate(fexpr, pf.Schema())
 		if err != nil {
-			f.Close()
+			if closer != nil {
+				closer.Close()
+			}
 			return nil, err
 		}
 		if !seen[pred.leafIndex] {
@@ -148,7 +144,7 @@ func newParquetSource(cfg map[string]interface{}) (source.Source, error) {
 	}
 
 	return &parquetSource{
-		file:        f,
+		closer:      closer,
 		pqFile:      pf,
 		schema:      schema,
 		colIndices:  colIndices,
@@ -159,6 +155,44 @@ func newParquetSource(cfg map[string]interface{}) (source.Source, error) {
 		filter:      pred,
 		parallelism: parallelism,
 	}, nil
+}
+
+// openParquetInput resolves the parquet byte source from config. It accepts
+// either an injected random-access reader ("readerAt" + "size", supplied by the
+// object-store source so remote Parquet is read with range-GET column/row-group
+// pushdown instead of a whole-object download) or a local file "path".
+func openParquetInput(cfg map[string]interface{}) (io.ReaderAt, int64, io.Closer, error) {
+	if ra, ok := cfg["readerAt"].(io.ReaderAt); ok && ra != nil {
+		var size int64
+		switch v := cfg["size"].(type) {
+		case int64:
+			size = v
+		case int:
+			size = int64(v)
+		case float64:
+			size = int64(v)
+		}
+		if size <= 0 {
+			return nil, 0, nil, fmt.Errorf("parquet source: 'size' (>0) is required with 'readerAt'")
+		}
+		closer, _ := cfg["closer"].(io.Closer) // optional
+		return ra, size, closer, nil
+	}
+
+	path, _ := cfg["path"].(string)
+	if path == "" {
+		return nil, 0, nil, fmt.Errorf("parquet source: 'path' is required")
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, 0, nil, fmt.Errorf("parquet source: open %q: %w", path, err)
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, 0, nil, fmt.Errorf("parquet source: stat %q: %w", path, err)
+	}
+	return f, fi.Size(), f, nil
 }
 
 func (s *parquetSource) Schema() []record.Column { return s.schema }
@@ -736,7 +770,10 @@ func (s *parquetSource) Close() error {
 		return nil
 	}
 	s.closed = true
-	return s.file.Close()
+	if s.closer != nil {
+		return s.closer.Close()
+	}
+	return nil
 }
 
 // resolveSchema maps declared column names to parquet schema columns.

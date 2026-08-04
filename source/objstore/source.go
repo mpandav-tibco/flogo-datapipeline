@@ -15,10 +15,12 @@
 // packages (csv, parquet, jsonlines, …) and storage logic in the objstore
 // packages.
 //
-// Parquet note: parquet-go requires an io.ReaderAt (seekable); therefore when
-// format=parquet (or any format with download:true) the object is spooled to a
-// temporary file before the inner source is opened.  Set download:true
-// explicitly in config to force this behaviour for other seekable formats.
+// Parquet note: parquet-go requires an io.ReaderAt (seekable). When the store
+// supports ranged reads (objstore.RangeReader — S3/GCS/ADLS do) and the object
+// size is known, the parquet inner source is handed a range-GET-backed
+// io.ReaderAt so only the footer and the selected column chunks are fetched (no
+// whole-object download). Otherwise, or for other download:true formats, the
+// object is spooled to a temporary file before the inner source is opened.
 //
 // Import with a blank import to activate all three provider registrations:
 //
@@ -45,6 +47,13 @@ import (
 // downloadAlways is the set of inner formats that require random access and
 // therefore must always be spooled to a temp file before opening.
 var downloadAlways = map[string]bool{
+	"parquet": true,
+}
+
+// readerAtCapable is the set of inner formats whose source accepts an injected
+// io.ReaderAt ("readerAt" + "size") and can therefore be read from an object
+// store via range GETs instead of a whole-object download.
+var readerAtCapable = map[string]bool{
 	"parquet": true,
 }
 
@@ -239,7 +248,23 @@ func (s *objstoreSource) openObject(ctx context.Context, obj objstore.Object) (s
 	innerCfg := cloneCfg(s.innerCfg)
 
 	if s.download {
-		// Spool to a temp file so seekable formats (parquet) can random-access.
+		// Range-GET pushdown: for seekable formats (parquet) whose store supports
+		// ranged reads, hand the inner source an io.ReaderAt backed by range GETs
+		// so only the footer and the selected column chunks are fetched — no
+		// whole-object download, no temp file. Requires a known object size.
+		if readerAtCapable[s.innerFormat] {
+			if rr, ok := s.store.(objstore.RangeReader); ok && obj.Size > 0 {
+				innerCfg["readerAt"] = objstore.NewRangeReaderAt(ctx, rr, obj.Key, obj.Size)
+				innerCfg["size"] = obj.Size
+				innerSrc, err := source.New(s.innerFormat, innerCfg)
+				if err != nil {
+					return nil, "", fmt.Errorf("open inner source %q (range) on %q: %w", s.innerFormat, obj.Key, err)
+				}
+				return innerSrc, "", nil
+			}
+		}
+		// Fallback: spool the whole object to a temp file so seekable formats can
+		// random-access it (store lacks ranged reads, or the size is unknown).
 		tmpPath, err := spoolToTempFile(ctx, s.store, obj.Key)
 		if err != nil {
 			return nil, "", fmt.Errorf("spool %q: %w", obj.Key, err)

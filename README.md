@@ -324,7 +324,7 @@ These are honest work items — not committed roadmap, but the next things we in
 
 ### Engine
 
-- [ ] **Parquet pushdown to remote object stores** — an S3/GCS/ADLS-backed Parquet object is spooled whole to a temp file before reading; push the column/predicate pruning down to byte-range reads so only the needed row groups and columns are fetched
+- [ ] **SFTP and local directory watch sources** — file-arrival triggered ingestion without cron
 
 ### VS Code extension
 
