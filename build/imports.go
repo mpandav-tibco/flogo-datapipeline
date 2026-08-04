@@ -27,13 +27,15 @@ const module = "github.com/mpandav-tibco/flogo-datapipeline/"
 var (
 	sourcePkg = map[string]string{
 		"csv": "source/csv", "jsonlines": "source/jsonlines", "parquet": "source/parquet",
+		"avro": "source/avro",
 		"jdbc": "source/jdbc", "kafka": "source/kafka", "fixedwidth": "source/fixedwidth",
 		"xml": "source/xml", "sectioned": "source/sectioned",
 		"s3": "source/objstore", "gcs": "source/objstore", "adls": "source/objstore",
 	}
 	sinkPkg = map[string]string{
 		"null": "sink/null", "parquet": "sink/parquet", "jdbc": "sink/jdbc", "kafka": "sink/kafka",
-		"csv": "sink/csv", "jsonlines": "sink/jsonlines", "template": "sink/template", "dlq": "sink/dlq",
+		"avro": "sink/avro",
+		"csv":  "sink/csv", "jsonlines": "sink/jsonlines", "template": "sink/template", "dlq": "sink/dlq",
 		"s3-sink": "sink/objstore", "gcs-sink": "sink/objstore", "adls-sink": "sink/objstore",
 		"s3": "sink/objstore", "gcs": "sink/objstore", "adls": "sink/objstore",
 	}

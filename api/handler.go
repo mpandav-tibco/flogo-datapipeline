@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -25,7 +26,7 @@ import (
 //	DELETE /v1/pipelines/{ref}/run/{runId}      → handleCancelRun
 //	GET    /v1/pipelines/{ref}/status            → handlePipelineStatus
 //	GET    /v1/pipelines/{ref}/definition        → handlePipelineDefinition
-//	PUT    /v1/pipelines/{ref}                   → stub (501)
+//	PUT    /v1/pipelines/{ref}                   → handleUpdatePipeline
 func (s *Server) handlePipelinesPrefix(w http.ResponseWriter, r *http.Request) {
 	// Strip the /v1/pipelines/ prefix and split the remainder.
 	tail := strings.TrimPrefix(r.URL.Path, "/v1/pipelines/")
@@ -67,10 +68,9 @@ func (s *Server) handlePipelinesPrefix(w http.ResponseWriter, r *http.Request) {
 	case len(parts) == 2 && parts[1] == "definition" && r.Method == http.MethodGet:
 		s.handlePipelineDefinition(w, r, ref)
 
-	// PUT /v1/pipelines/{ref} — future UI write-back, stubbed
+	// PUT /v1/pipelines/{ref} — runtime create/replace of a pipeline definition
 	case len(parts) == 1 && r.Method == http.MethodPut:
-		writeError(w, http.StatusNotImplemented, "not_implemented",
-			"PUT /v1/pipelines/{ref} is not yet implemented")
+		s.handleUpdatePipeline(w, r, ref)
 
 	default:
 		writeError(w, http.StatusNotFound, "not_found",
@@ -378,30 +378,96 @@ func (s *Server) handleTestStage(w http.ResponseWriter, r *http.Request, ref str
 	writeJSON(w, http.StatusOK, res)
 }
 
+// maxDefinitionBytes bounds the PUT /v1/pipelines/{ref} request body so a
+// malformed or hostile payload cannot exhaust memory. Pipeline definitions are
+// small JSON documents; 8 MiB is far above any realistic definition.
+const maxDefinitionBytes = 8 << 20
+
+// handleUpdatePipeline handles PUT /v1/pipelines/{ref}.
+//
+// The request body is a pipeline Definition — the same "data" object a
+// .datapipeline resource carries (source / transforms / sink / observability /
+// graph …). The definition is parsed, defaulted and validated, then atomically
+// swapped into the action registry so subsequent runs use it without an engine
+// restart. When ref is not yet registered the pipeline is created (201 Created);
+// otherwise the existing definition is replaced (200 OK). In-flight runs finish
+// on the previous definition. The response is the updated DefinitionSummary,
+// exactly as GET /v1/pipelines/{ref}/definition would return it.
+func (s *Server) handleUpdatePipeline(w http.ResponseWriter, r *http.Request, ref string) {
+	if r.Body == nil {
+		writeError(w, http.StatusBadRequest, "bad_request", "request body is required")
+		return
+	}
+	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxDefinitionBytes))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", "read request body: "+err.Error())
+		return
+	}
+	if len(raw) == 0 {
+		writeError(w, http.StatusBadRequest, "bad_request", "request body is required")
+		return
+	}
+
+	def := &pipeline.Definition{}
+	if err := json.Unmarshal(raw, def); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request",
+			"invalid pipeline definition: "+err.Error())
+		return
+	}
+	def.Defaults()
+	if err := def.Validate(); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_definition", err.Error())
+		return
+	}
+
+	// Resolve the exact registry key so a replace targets the same entry GET/run
+	// resolve; a brand-new pipeline is created under the canonical ref form.
+	key, existed := resolveActionKey(s.factory.Actions(), ref)
+	if !existed {
+		key = "res://pipeline:" + ref
+	}
+
+	act, err := s.factory.Replace(key, def)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "update_failed", err.Error())
+		return
+	}
+
+	status := http.StatusOK
+	if !existed {
+		status = http.StatusCreated
+	}
+	writeJSON(w, status, act.DefinitionSummary())
+}
+
 // findAction looks up a DataPipelineAction by its resource ref.
 // The ref may be supplied as a bare label (e.g. "daily-tx") or as the full
 // Flogo resource reference (e.g. "res://pipeline:daily-tx"); both forms are tried.
 func (s *Server) findAction(ref string) *pipeline.DataPipelineAction {
 	actions := s.factory.Actions()
-
-	// Direct lookup (exact match).
-	if act, ok := actions[ref]; ok {
-		return act
-	}
-
-	// Try the canonical resource reference form.
-	canonical := "res://pipeline:" + ref
-	if act, ok := actions[canonical]; ok {
-		return act
-	}
-
-	// Try stripping the "res://pipeline:" prefix if the caller sent the full ref.
-	for k, act := range actions {
-		if k == ref || strings.TrimPrefix(k, "res://pipeline:") == ref {
-			return act
-		}
+	if key, ok := resolveActionKey(actions, ref); ok {
+		return actions[key]
 	}
 	return nil
+}
+
+// resolveActionKey resolves a caller-supplied ref (a bare label like "daily-tx"
+// or the full "res://pipeline:daily-tx" reference) to the actual registry key of
+// a registered action, reporting whether one exists.
+func resolveActionKey(actions map[string]*pipeline.DataPipelineAction, ref string) (string, bool) {
+	if _, ok := actions[ref]; ok {
+		return ref, true
+	}
+	canonical := "res://pipeline:" + ref
+	if _, ok := actions[canonical]; ok {
+		return canonical, true
+	}
+	for k := range actions {
+		if strings.TrimPrefix(k, "res://pipeline:") == ref {
+			return k, true
+		}
+	}
+	return "", false
 }
 
 // buildPipelineInfo creates a PipelineInfo for the given action, populating

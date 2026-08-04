@@ -57,17 +57,18 @@ Studio Run Report.
 | Expectation | Checks |
 |---|---|
 | `expectColumnNotNull` | no nulls in a column |
+| `expectColumnUnique` | distinct values (no duplicates) |
 | `expectColumnValuesBetween` | numeric range |
 | `expectColumnValuesInSet` | categorical membership |
-| `expectColumnValuesMatchRegex` | format |
+| `expectColumnMeanBetween` | column mean within a band |
+| `expectColumnStddevBelow` | column standard deviation under a threshold |
 | `expectTableRowCountBetween` | row-count band |
-| `expectTableRowCountNotZero` | non-empty |
 
 ```json
 { "type": "dq", "options": {
     "expectations": [
-      { "kind": "expectColumnNotNull", "column": "id" },
-      { "kind": "expectColumnValuesBetween", "column": "score", "min": 0, "max": 100 }
+      { "type": "expectColumnNotNull", "column": "id" },
+      { "type": "expectColumnValuesBetween", "column": "score", "min": 0, "max": 100 }
     ],
     "onFail": "route",
     "qualityThreshold": 0.95,

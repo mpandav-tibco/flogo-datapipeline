@@ -1,8 +1,11 @@
 package pipeline
 
 import (
+	"context"
 	"fmt"
+	"reflect"
 	"sync"
+	"time"
 
 	"github.com/project-flogo/core/action"
 	"github.com/project-flogo/core/app/resource"
@@ -34,6 +37,12 @@ type Factory struct {
 	mu      sync.RWMutex
 	actions map[string]*DataPipelineAction
 	rm      *resource.Manager
+
+	// replaceMu serialises Replace() so its read-old → build → store →
+	// shutdown-old sequence is atomic. It is deliberately separate from mu so a
+	// (possibly port-binding) rebuild does not block reads (Actions/findAction)
+	// or New().
+	replaceMu sync.Mutex
 }
 
 // Settings holds the action-level settings parsed from the handler config.
@@ -160,6 +169,88 @@ func NewInline(def *Definition, ref string) (*DataPipelineAction, error) {
 		auditor:  aud,
 		lineage:  lin,
 	}, nil
+}
+
+// store inserts or replaces the action for ref, lazily creating the map so a
+// zero-value Factory (e.g. in tests, or before Initialize) is safe to use.
+func (f *Factory) store(ref string, act *DataPipelineAction) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.actions == nil {
+		f.actions = make(map[string]*DataPipelineAction)
+	}
+	f.actions[ref] = act
+}
+
+// Replace atomically swaps the cached action for ref with a freshly built one
+// from def, so subsequent runs use the new definition without an engine
+// restart. It creates the entry when ref is not yet registered. It is used by
+// the REST API PUT /v1/pipelines/{ref} runtime-update path.
+//
+// Observability handling avoids churning the metrics backend's bound port:
+//   - When the new definition's Observability config is unchanged, the existing
+//     recorder/auditor/lineage are transferred to the new action (no rebind, no
+//     dropped exporter), which also preserves metric continuity.
+//   - Otherwise fresh recorders are built first; only after that succeeds is the
+//     previous action shut down. A build failure therefore leaves the previous
+//     action intact (the update is all-or-nothing).
+//
+// In-flight runs holding the previous action pointer complete unaffected.
+func (f *Factory) Replace(ref string, def *Definition) (*DataPipelineAction, error) {
+	if ref == "" {
+		return nil, fmt.Errorf("pipeline factory: ref is required")
+	}
+	if def == nil {
+		return nil, fmt.Errorf("pipeline factory: definition is required")
+	}
+
+	// Serialise concurrent replaces: two simultaneous replaces of the same ref
+	// would otherwise both observe the same previous action and could double-shut
+	// it down or leak a freshly built recorder.
+	f.replaceMu.Lock()
+	defer f.replaceMu.Unlock()
+
+	f.mu.RLock()
+	old := f.actions[ref]
+	f.mu.RUnlock()
+
+	// Fast path: observability unchanged — reuse the live recorders so the
+	// metrics port/exporter is neither rebound nor torn down.
+	if old != nil && reflect.DeepEqual(old.def.Observability, def.Observability) {
+		act := &DataPipelineAction{
+			def:      def,
+			ref:      ref,
+			ioMd:     buildIOMetadata(),
+			recorder: old.recorder,
+			auditor:  old.auditor,
+			lineage:  old.lineage,
+		}
+		f.store(ref, act)
+		flog.Infof("replaced DataPipelineAction for %s (source: %s → sink: %s, observability unchanged)",
+			ref, def.Source.Type, def.Sink.Type)
+		return act, nil
+	}
+
+	// Observability changed (or brand-new ref): build fresh recorders. Because
+	// the config differs, their ports do not collide with the previous action's,
+	// so building before the old action is shut down is safe and gives clean
+	// rollback if the build fails.
+	act, err := NewInline(def, ref)
+	if err != nil {
+		return nil, err
+	}
+
+	f.store(ref, act)
+
+	if old != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = old.Shutdown(ctx)
+		cancel()
+	}
+
+	flog.Infof("replaced DataPipelineAction for %s (source: %s → sink: %s, metrics: %s)",
+		ref, def.Source.Type, def.Sink.Type, metricsLabel(def.Observability.Metrics))
+	return act, nil
 }
 
 // metricsLabel returns a display-friendly label for the metrics backend name.

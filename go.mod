@@ -41,11 +41,19 @@ require (
 )
 
 require (
+	github.com/hamba/avro/v2 v2.31.0
 	github.com/project-flogo/contrib/trigger/rest v0.10.0
 	github.com/project-flogo/messaging-contrib/kafka v0.0.0-20250805082303-583e5ea77fdf
 	github.com/radovskyb/watcher v1.0.7
 	github.com/tibco/flogo-general/src/app/General v0.0.0-20260707041701-10199745ae9a
 	golang.org/x/sync v0.21.0
+)
+
+require (
+	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
+	github.com/json-iterator/go v1.1.12 // indirect
+	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
+	github.com/modern-go/reflect2 v1.0.2 // indirect
 )
 
 require (
@@ -86,7 +94,7 @@ require (
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
-	github.com/golang/snappy v0.0.4 // indirect
+	github.com/golang/snappy v1.0.0 // indirect
 	github.com/google/s2a-go v0.1.7 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.2 // indirect
@@ -101,7 +109,7 @@ require (
 	github.com/jcmturner/gokrb5/v8 v8.4.4 // indirect
 	github.com/jcmturner/rpc/v2 v2.0.3 // indirect
 	github.com/julienschmidt/httprouter v1.3.0 // indirect
-	github.com/klauspost/compress v1.17.9 // indirect
+	github.com/klauspost/compress v1.18.2 // indirect
 	github.com/mattn/go-runewidth v0.0.15 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/olekukonko/tablewriter v0.0.5 // indirect
