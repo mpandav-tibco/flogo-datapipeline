@@ -47,6 +47,7 @@ studio/vscode/*.tgz
 # Example runtime artifacts (keep source data, ignore runtime output)
 examples/*/checkpoints/
 examples/*/watermarks/
+examples/*/out/
 examples/*/data/output.db
 examples/*/data/analytics.db
 examples/*/data/claims_enriched.db

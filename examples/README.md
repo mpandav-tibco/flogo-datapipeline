@@ -22,9 +22,13 @@ These examples demonstrate each feature of flogo-datapipeline independently. Sta
 | 16 | [scaling-sharded](16-scaling-sharded) | Horizontal scaling with sharded partitioning | zero setup |
 | 17 | [kafka-streaming](17-kafka-streaming) | Kafka as streaming source and sink | Docker |
 | 19 | [full-production](19-full-production) | Full production pipeline combining all major features | Docker |
-| 20 | [podlog](20-podlog) | 🚧 Kubernetes pod-log collector (design / WIP — not yet runnable) | — |
+| 20 | [podlog](20-podlog) | Kubernetes pod-log collector — CRI log tailer with multiline stitch and at-least-once delivery | zero setup |
 | 21 | [otel-metrics](21-otel-metrics) | Export pipeline metrics via OpenTelemetry (OTLP/gRPC) | OTel collector |
 | 22 | [format-conversion](22-format-conversion) | Convert between data formats (CSV / JSON / Parquet) | zero setup |
+| 23 | [enterprise-benchmark](23-enterprise-benchmark) | Every source → every sink at scale (53M-row order dataset), all transforms + ELT + reliability showcases | Docker |
+| 24 | [windowed-aggregation](24-windowed-aggregation) | Event-time tumbling-window rollup (avg/max/count) — the `window` transform | zero setup |
+| 25 | [kafka-windowed-stream](25-kafka-windowed-stream) | Continuous Kafka stream → 1-minute event-time windowed rollup | Docker |
+| — | [adidas-log-collection-usecase](adidas-log-collection-usecase) | Use case: container-log collection (podlog → S3) deployed on minikube + MinIO | minikube |
 
 \* Example 08 requires Python/DuckDB to generate the test Parquet data file — see its README.
 
@@ -32,7 +36,7 @@ These examples demonstrate each feature of flogo-datapipeline independently. Sta
 
 - **Go 1.22+** — <https://go.dev/dl/>
 - **flogo-datapipeline binary** — built from this repository (see below)
-- **Docker** — required for examples 12 (Postgres), 17 (Kafka + Postgres), and 19 (full production); available from <https://docs.docker.com/get-docker/>
+- **Docker** — required for the Postgres/Kafka/benchmark examples (12, 17, 19, 23, 25); the adidas use case additionally needs minikube; available from <https://docs.docker.com/get-docker/>
 - **Python 3 + DuckDB** — required to generate test data for example 08; install with `pip install duckdb`
 
 ## Build the Binary

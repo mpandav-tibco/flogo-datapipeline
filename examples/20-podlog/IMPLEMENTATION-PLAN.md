@@ -1,9 +1,11 @@
 # Example 20 — Kubernetes Pod Log Collector (Fluentd Replacement)
 
-> **Status:** Design / implementation plan. This document is the engineering spec for
-> the `podlog` source that replaces the customer's Fluentd + custom-glue log stack.
-> Code under `source/podlog/` (`cri.go`, `positions.go`, `tailer.go`) is partially
-> scaffolded; the remaining work is enumerated in **Section 8 — Work Breakdown**.
+> **Status: ✅ Implemented, tested, and runnable.** This document is the engineering
+> spec for the `podlog` source that replaces the customer's Fluentd + custom-glue log
+> stack. The source (`source/podlog/`) is complete with unit + soak tests, and the
+> example runs end-to-end against the synthetic tree (see [README.md](README.md) and
+> `run.sh`). The design and work-breakdown sections below are retained as the spec of
+> record.
 
 ---
 
@@ -189,11 +191,11 @@ enrichedRecord ──► channel ──► source.ReadBatch() ──► record.R
 
 | File | Responsibility | Status |
 |---|---|---|
-| `cri.go` | CRI line parser + two-level stitcher (partial + multiline) | **scaffolded** |
-| `positions.go` | Crash-safe byte-offset position registry (atomic writes) | **scaffolded** |
-| `tailer.go` | Glob-scan, tail, rotation/truncation detection, enrichment | **scaffolded** |
-| `source.go` | `source.Source` + `CursorProvider` impl; config parse; registration | **TODO** |
-| `source_test.go` | Unit + integration tests (see Section 7) | **TODO** |
+| `cri.go` | CRI line parser + two-level stitcher (partial + multiline) | ✅ done |
+| `positions.go` | Crash-safe byte-offset position registry (atomic writes) | ✅ done |
+| `tailer.go` | Glob-scan, tail, rotation/truncation detection, enrichment | ✅ done |
+| `source.go` | `source.Source` + `CursorProvider` impl; config parse; registration | ✅ done |
+| `source_test.go` | Unit + integration tests (see Section 7) | ✅ done |
 
 ---
 
@@ -363,15 +365,15 @@ On each object roll, write a sidecar manifest so an auditor can reconcile
 | **T1** | `cri.go` — CRI parser + two-level stitcher | — | ✅ scaffolded |
 | **T2** | `positions.go` — atomic byte-offset registry | — | ✅ scaffolded |
 | **T3** | `tailer.go` — glob-scan, tail, rotation/truncation, enrichment | T1,T2 | ✅ scaffolded |
-| **T4** | `source.go` — `Source` + `CursorProvider`, config parse, `init()` registration, post-ack position advance wiring | T1–T3 | **TODO** |
-| **T5** | Multiline `flushIdleMs` timer (emit pending record when a file goes idle) | T3 | **TODO** |
-| **T6** | Register `podlog` blank-import in `cmd/flogo-datapipeline/main.go` | T4 | **TODO** |
-| **T7** | S3/objstore sink: `keyTemplate` macros, size/time roll, manifest sidecar | — | **TODO (verify existing)** |
-| **T8** | Reconciliation metrics (`podlog_*` counters) + Prometheus rule sample | T4 | **TODO** |
-| **T9** | Unit tests: CRI parse, partial reassembly, multiline stitch, rotation, truncation, resume-after-crash | T1–T4 | **TODO** |
-| **T10** | Integration test: synthetic `/var/log/pods` tree → NDJSON, assert read==written | T4–T7 | **TODO** |
-| **T11** | K8s manifests: DaemonSet, RBAC, hostPath mounts, downward-API `NODE_NAME` | T4 | **TODO** |
-| **T12** | Example assets (`20-podlog/`): sample tree, `run.sh`, `verify.sh`, this README | all | in progress |
+| **T4** | `source.go` — `Source` + `CursorProvider`, config parse, `init()` registration, post-ack position advance wiring | T1–T3 | ✅ done |
+| **T5** | Multiline `flushIdleMs` timer (emit pending record when a file goes idle) | T3 | ✅ done |
+| **T6** | Register `podlog` blank-import in `cmd/flogo-datapipeline/main.go` | T4 | ✅ done |
+| **T7** | S3/objstore sink: `keyTemplate` macros, size/time roll, manifest sidecar | — | ✅ done |
+| **T8** | Reconciliation metrics (`podlog_*` counters) + Prometheus rule sample | T4 | ✅ done |
+| **T9** | Unit tests: CRI parse, partial reassembly, multiline stitch, rotation, truncation, resume-after-crash | T1–T4 | ✅ done |
+| **T10** | Integration test: synthetic `/var/log/pods` tree → NDJSON, assert read==written | T4–T7 | ✅ done |
+| **T11** | K8s manifests: DaemonSet, RBAC, hostPath mounts, downward-API `NODE_NAME` | T4 | ✅ done |
+| **T12** | Example assets (`20-podlog/`): sample tree, `run.sh`, `verify.sh`, this README | all | ✅ done |
 
 ### 8.1 Post-ack position advance — the critical wiring (T4)
 
