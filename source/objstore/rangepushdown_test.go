@@ -109,3 +109,90 @@ func TestObjstore_ParquetUsesRangeReads(t *testing.T) {
 		t.Fatal("GetRange was never called — the range-pushdown path was not taken")
 	}
 }
+
+// writeMultiGroupParquet writes an all-int64 parquet with `groups` row groups of
+// `rowsPerGroup` rows each over the given columns.
+func writeMultiGroupParquet(t *testing.T, groups, rowsPerGroup int, cols []string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	group := parquetgo.Group{}
+	for _, c := range cols {
+		group[c] = parquetgo.Optional(parquetgo.Int(64))
+	}
+	w := parquetgo.NewGenericWriter[map[string]interface{}](&buf, parquetgo.NewSchema("t", group))
+	id := 0
+	for g := 0; g < groups; g++ {
+		rows := make([]map[string]interface{}, rowsPerGroup)
+		for i := range rows {
+			m := make(map[string]interface{}, len(cols))
+			for _, c := range cols {
+				m[c] = int64(id)
+			}
+			rows[i] = m
+			id++
+		}
+		if _, err := w.Write(rows); err != nil {
+			t.Fatalf("write group %d: %v", g, err)
+		}
+		if g < groups-1 {
+			if err := w.Flush(); err != nil { // seal this row group
+				t.Fatalf("flush group %d: %v", g, err)
+			}
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("close writer: %v", err)
+	}
+	return buf.Bytes()
+}
+
+// TestObjstore_ParquetRangeReadCount guards against read amplification: reading a
+// projected subset of a multi-row-group object must issue a bounded number of
+// ranged GETs — on the order of row-groups × projected-columns plus footer
+// probing, not one GET per page — and must never fall back to a whole-object
+// GetReader.
+func TestObjstore_ParquetRangeReadCount(t *testing.T) {
+	const groups, rowsPerGroup = 4, 2000
+	cols := []string{"a", "b", "c", "d", "e"} // 5 columns; project 2
+	fake := &countingRangeStore{data: writeMultiGroupParquet(t, groups, rowsPerGroup, cols)}
+	objstore.Register("fakeranged-count", func(map[string]interface{}) (objstore.Store, error) {
+		return fake, nil
+	})
+
+	src, err := newObjstoreSource("fakeranged-count", map[string]interface{}{
+		"prefix":  "*.parquet",
+		"format":  "parquet",
+		"columns": []interface{}{"a", "b"},
+	})
+	if err != nil {
+		t.Fatalf("newObjstoreSource: %v", err)
+	}
+	defer src.Close()
+
+	total := 0
+	for {
+		b, err := src.ReadBatch(256)
+		if b != nil {
+			total += b.Len()
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("ReadBatch: %v", err)
+		}
+	}
+	if total != groups*rowsPerGroup {
+		t.Fatalf("read %d rows, want %d", total, groups*rowsPerGroup)
+	}
+	if fake.getReaders != 0 {
+		t.Fatalf("GetReader called %d times; want 0", fake.getReaders)
+	}
+	gets := atomic.LoadInt64(&fake.getRanges)
+	t.Logf("ranged GETs=%d (%d row groups, projecting 2/%d int64 columns, %d rows)", gets, groups, len(cols), groups*rowsPerGroup)
+	// Coalesced reads issue ~O(row groups × projected columns) GETs plus a few
+	// footer-probe reads. Per-page amplification would push this into the hundreds.
+	if gets > 64 {
+		t.Fatalf("read amplification: %d ranged GETs — expected coalesced O(row_groups × projected_cols)", gets)
+	}
+}
