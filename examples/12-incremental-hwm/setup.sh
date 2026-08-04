@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# setup.sh — Create and seed the events SQLite database.
+# setup.sh — Start PostgreSQL and seed the events table.
 #
 # This script:
-#   1. Creates ./data/events.db with a raw_events table.
-#   2. Inserts 100 events spread across five days in the past, simulating a
+#   1. Starts the local PostgreSQL container (docker compose up -d).
+#   2. Waits for the database to accept connections.
+#   3. Creates the raw_events table (dropping any previous copy first).
+#   4. Inserts 100 events spread across five days in the past, simulating a
 #      historical dataset that existed before the pipeline was first deployed.
 #      50 of those rows have older timestamps (the "pre-existing backlog");
 #      the other 50 have more recent timestamps (the "full initial load").
@@ -12,35 +14,43 @@
 # the first pipeline pass and save the high-water mark.
 #
 # Prerequisites:
-#   sqlite3  must be on PATH  (brew install sqlite / apt-get install sqlite3)
+#   Docker + Docker Compose  (the postgres service is defined in docker-compose.yml)
 
 set -euo pipefail
 
-DB="./data/events.db"
-mkdir -p "$(dirname "$DB")"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
 mkdir -p "./watermarks"
 
-# Remove any pre-existing database so this script is idempotent.
-rm -f "$DB"
+echo "==> Starting PostgreSQL (docker compose up -d) ..."
+docker compose up -d
 
-echo "==> Creating schema in $DB ..."
+echo "==> Waiting for PostgreSQL to become ready ..."
+until docker compose exec -T postgres pg_isready -U postgres -d pipelinedemo >/dev/null 2>&1; do
+  sleep 1
+done
+echo "    PostgreSQL is ready."
 
-sqlite3 "$DB" <<'SQL'
+echo "==> Creating schema in database pipelinedemo ..."
+
+docker compose exec -T postgres psql -U postgres -d pipelinedemo <<'SQL'
+DROP TABLE IF EXISTS raw_events;
 CREATE TABLE raw_events (
-    event_id    INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id    SERIAL  PRIMARY KEY,
     event_type  TEXT    NOT NULL,
     user_id     INTEGER NOT NULL,
     session_id  TEXT    NOT NULL,
     page        TEXT    NOT NULL,
     duration_ms INTEGER NOT NULL,
     status      TEXT    NOT NULL CHECK(status IN ('ok','error','timeout')),
-    created_at  TEXT    NOT NULL   -- ISO-8601 datetime stored as TEXT (SQLite convention)
+    created_at  TEXT    NOT NULL   -- ISO-8601 datetime stored as TEXT (string HWM comparison)
 );
 SQL
 
 echo "==> Inserting 50 older events (2025-06-01 to 2025-06-03) ..."
 
-sqlite3 "$DB" <<'SQL'
+docker compose exec -T postgres psql -U postgres -d pipelinedemo <<'SQL'
 INSERT INTO raw_events (event_type, user_id, session_id, page, duration_ms, status, created_at) VALUES
   ('page_view',  1001, 'sess-aa1', '/home',       142,  'ok',      '2025-06-01 08:01:00'),
   ('page_view',  1002, 'sess-aa2', '/products',   238,  'ok',      '2025-06-01 08:03:22'),
@@ -96,7 +106,7 @@ SQL
 
 echo "==> Inserting 50 more recent events (2025-06-04 to 2025-06-05) ..."
 
-sqlite3 "$DB" <<'SQL'
+docker compose exec -T postgres psql -U postgres -d pipelinedemo <<'SQL'
 INSERT INTO raw_events (event_type, user_id, session_id, page, duration_ms, status, created_at) VALUES
   ('page_view',  1031, 'sess-ad1', '/home',       139,  'ok',      '2025-06-04 08:00:00'),
   ('click',      1031, 'sess-ad1', '/home',        16,  'ok',      '2025-06-04 08:01:00'),
@@ -152,10 +162,13 @@ SQL
 
 echo ""
 echo "==> Database ready."
-sqlite3 "$DB" "SELECT COUNT(*) || ' rows in raw_events' FROM raw_events;"
+docker compose exec -T postgres psql -U postgres -d pipelinedemo -tAc \
+  "SELECT COUNT(*) || ' rows in raw_events' FROM raw_events;"
 echo ""
 echo "    Timestamp range:"
-sqlite3 "$DB" "SELECT '    earliest: ' || MIN(created_at) FROM raw_events;"
-sqlite3 "$DB" "SELECT '    latest:   ' || MAX(created_at) FROM raw_events;"
+docker compose exec -T postgres psql -U postgres -d pipelinedemo -tAc \
+  "SELECT '    earliest: ' || MIN(created_at) FROM raw_events;"
+docker compose exec -T postgres psql -U postgres -d pipelinedemo -tAc \
+  "SELECT '    latest:   ' || MAX(created_at) FROM raw_events;"
 echo ""
 echo "    (No watermark file exists yet — run1.sh will process all 100 rows)"

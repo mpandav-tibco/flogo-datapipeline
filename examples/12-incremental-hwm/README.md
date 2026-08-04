@@ -2,7 +2,7 @@
 
 This example demonstrates **incremental change data capture (CDC) without CDC
 infrastructure** — a pattern that is ubiquitous in nightly delta loads, event
-pipeline back-fills, and audit-log streaming. The pipeline reads from a SQLite
+pipeline back-fills, and audit-log streaming. The pipeline reads from a PostgreSQL
 table that grows over time and uses a **high-water mark (HWM) transform** to
 track the newest row it has seen. On every subsequent run, only rows newer than
 the recorded mark are processed.
@@ -28,12 +28,11 @@ the recorded mark are processed.
 ```
 12-incremental-hwm/
 ├── incremental-hwm.datapipeline   # pipeline definition
-├── setup.sh                       # create + seed events.db (100 rows)
+├── docker-compose.yml             # local PostgreSQL service
+├── setup.sh                       # start Postgres + create/seed raw_events (100 rows)
 ├── run1.sh                        # first run — full load, watermark written
 ├── add-new-events.sh              # insert 20 new rows with newer timestamps
 ├── run2.sh                        # second run — only 20 new rows processed
-├── data/
-│   └── events.db                  # SQLite database (created by setup.sh)
 └── watermarks/
     └── events.hwm                 # watermark file (created by run1.sh)
 ```
@@ -103,13 +102,14 @@ Use full CDC (Debezium, DMS, etc.) when:
 
 ---
 
-## The dataset — `data/events.db`
+## The dataset — `raw_events` (PostgreSQL)
 
-The database is created by `setup.sh` and contains one table:
+The table is created by `setup.sh` inside the PostgreSQL container and holds one
+table:
 
 ```sql
 CREATE TABLE raw_events (
-    event_id    INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id    SERIAL  PRIMARY KEY,
     event_type  TEXT    NOT NULL,  -- 'page_view' | 'click' | 'api_call' | 'checkout'
     user_id     INTEGER NOT NULL,
     session_id  TEXT    NOT NULL,
@@ -137,13 +137,13 @@ After `add-new-events.sh`:
 
 ## Pipeline walkthrough
 
-### 1. Source — JDBC (SQLite)
+### 1. Source — JDBC (PostgreSQL)
 
 ```json
 "source": {
   "type": "jdbc",
-  "driver": "sqlite",
-  "dsn": "./data/events.db",
+  "driver": "postgres",
+  "dsn": "postgres://postgres:postgres@localhost:5432/pipelinedemo?sslmode=disable",
   "table": "raw_events",
   "keyColumn": "event_id",
   "batchSize": 200
@@ -233,17 +233,19 @@ storage. The HWM pattern works with any sink type.
   export PATH="$PATH:$(pwd)"
   ```
 
-- `sqlite3` CLI for the setup and verification scripts:
+- Docker + Docker Compose for the local PostgreSQL service used by the setup
+  and verification scripts:
 
   ```bash
   # macOS
-  brew install sqlite
+  brew install --cask docker
 
   # Debian / Ubuntu
-  sudo apt-get install sqlite3
+  # Install Docker Engine + the Compose plugin:
+  # https://docs.docker.com/engine/install/
 
-  # Windows (Git Bash / WSL)
-  # sqlite3 is typically bundled; if not, download from https://sqlite.org/download.html
+  # Verify the Compose plugin is available
+  docker compose version
   ```
 
 - Run from inside the example directory:
@@ -254,7 +256,7 @@ storage. The HWM pattern works with any sink type.
 
 ### Step-by-step walkthrough
 
-#### Step 1 — Create and seed the database
+#### Step 1 — Start PostgreSQL and seed the database
 
 ```bash
 ./setup.sh
@@ -263,7 +265,10 @@ storage. The HWM pattern works with any sink type.
 Expected output:
 
 ```
-==> Creating schema in ./data/events.db ...
+==> Starting PostgreSQL (docker compose up -d) ...
+==> Waiting for PostgreSQL to become ready ...
+    PostgreSQL is ready.
+==> Creating schema in database pipelinedemo ...
 ==> Inserting 50 older events (2025-06-01 to 2025-06-03) ...
 ==> Inserting 50 more recent events (2025-06-04 to 2025-06-05) ...
 
@@ -295,7 +300,7 @@ Expected output:
 
 --- Running pipeline ---
 [engine] pipeline "incremental-hwm" started
-[source/jdbc] driver=sqlite dsn=./data/events.db table=raw_events keyColumn=event_id
+[source/jdbc] driver=postgres dsn=postgres://postgres:postgres@localhost:5432/pipelinedemo table=raw_events keyColumn=event_id
 [transform/hwm] backend=file path=./watermarks/events.hwm
 [transform/hwm] no prior watermark — all rows will pass
 [sink/null] discarding all rows
@@ -355,7 +360,7 @@ Expected output:
 
 --- Running pipeline ---
 [engine] pipeline "incremental-hwm" started
-[source/jdbc] driver=sqlite dsn=./data/events.db table=raw_events keyColumn=event_id
+[source/jdbc] driver=postgres dsn=postgres://postgres:postgres@localhost:5432/pipelinedemo table=raw_events keyColumn=event_id
 [transform/hwm] backend=file path=./watermarks/events.hwm
 [transform/hwm] loaded watermark: column=created_at value="2025-06-05 15:30:00"
 [transform/hwm] filtering rows with created_at > "2025-06-05 15:30:00"
@@ -404,7 +409,7 @@ After `run2.sh`, the value advances:
 To manually verify which rows would pass the HWM filter in run 2:
 
 ```bash
-sqlite3 ./data/events.db \
+docker compose exec -T postgres psql -U postgres -d pipelinedemo -tAc \
   "SELECT COUNT(*) FROM raw_events WHERE created_at > '2025-06-05 15:30:00';"
 # Expected: 20
 ```
@@ -412,17 +417,18 @@ sqlite3 ./data/events.db \
 To confirm the boundary row (the last row from run 1) is excluded:
 
 ```bash
-sqlite3 ./data/events.db \
+docker compose exec -T postgres psql -U postgres -d pipelinedemo -c \
   "SELECT event_id, created_at FROM raw_events
    WHERE created_at >= '2025-06-05 15:00:00'
    ORDER BY created_at LIMIT 5;"
 ```
 
 ```
-100|2025-06-05 15:30:00   ← boundary row (processed in run 1, excluded in run 2)
-101|2025-06-06 08:00:00   ← first new row (processed in run 2)
-102|2025-06-06 08:01:10
-...
+ event_id |     created_at
+----------+---------------------
+      100 | 2025-06-05 15:30:00   ← boundary row (processed in run 1, excluded in run 2)
+      101 | 2025-06-06 08:00:00   ← first new row (processed in run 2)
+      102 | 2025-06-06 08:01:10
 ```
 
 ---
@@ -432,7 +438,8 @@ sqlite3 ./data/events.db \
 To start over from scratch:
 
 ```bash
-rm -f ./data/events.db ./watermarks/events.hwm
+docker compose down -v            # stop Postgres and drop its data volume
+rm -f ./watermarks/events.hwm
 ./setup.sh
 ```
 
@@ -580,8 +587,8 @@ table:
 ```json
 "sink": {
   "type": "jdbc",
-  "driver": "sqlite",
-  "dsn": "./data/processed_events.db",
+  "driver": "postgres",
+  "dsn": "postgres://postgres:postgres@localhost:5432/pipelinedemo?sslmode=disable",
   "table": "events_processed",
   "batchSize": 200,
   "onConflict": "upsert",
@@ -615,7 +622,7 @@ Enforce data quality on the incoming events before writing them downstream:
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `type` | string | yes | — | `"jdbc"` |
-| `driver` | string | yes | — | `"sqlite"`, `"postgres"`, or `"mysql"` |
+| `driver` | string | yes | — | `"postgres"` or `"mysql"` |
 | `dsn` | string | yes | — | Connection string or file path |
 | `table` | string | yes | — | Source table name |
 | `keyColumn` | string | yes | — | Column used for keyset pagination (must be indexed) |
@@ -669,7 +676,7 @@ The new events were inserted with timestamps that are at or before the
 recorded watermark. Verify the `created_at` values of the new rows:
 
 ```bash
-sqlite3 ./data/events.db \
+docker compose exec -T postgres psql -U postgres -d pipelinedemo -c \
   "SELECT MIN(created_at), MAX(created_at)
    FROM raw_events
    WHERE event_id > 100;"

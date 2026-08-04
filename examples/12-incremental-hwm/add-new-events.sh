@@ -10,11 +10,13 @@
 
 set -euo pipefail
 
-DB="./data/events.db"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
 HWM_FILE="./watermarks/events.hwm"
 
-if [ ! -f "$DB" ]; then
-  echo "ERROR: $DB not found. Run setup.sh first."
+if ! docker compose exec -T postgres pg_isready -U postgres -d pipelinedemo >/dev/null 2>&1; then
+  echo "ERROR: PostgreSQL is not reachable. Run ./setup.sh first."
   exit 1
 fi
 
@@ -28,10 +30,10 @@ echo "==> Current watermark:"
 cat "$HWM_FILE"
 echo ""
 
-BEFORE=$(sqlite3 "$DB" "SELECT COUNT(*) FROM raw_events;")
+BEFORE=$(docker compose exec -T postgres psql -U postgres -d pipelinedemo -tAc "SELECT COUNT(*) FROM raw_events;")
 echo "    Rows before insert: $BEFORE"
 
-sqlite3 "$DB" <<'SQL'
+docker compose exec -T postgres psql -U postgres -d pipelinedemo <<'SQL'
 INSERT INTO raw_events (event_type, user_id, session_id, page, duration_ms, status, created_at) VALUES
   ('page_view',  1061, 'sess-ag1', '/home',       143,  'ok',      '2025-06-06 08:00:00'),
   ('click',      1061, 'sess-ag1', '/home',        18,  'ok',      '2025-06-06 08:01:10'),
@@ -55,7 +57,7 @@ INSERT INTO raw_events (event_type, user_id, session_id, page, duration_ms, stat
   ('page_view',  1072, 'sess-ah2', '/cart',       178,  'ok',      '2025-06-06 14:00:00');
 SQL
 
-AFTER=$(sqlite3 "$DB" "SELECT COUNT(*) FROM raw_events;")
+AFTER=$(docker compose exec -T postgres psql -U postgres -d pipelinedemo -tAc "SELECT COUNT(*) FROM raw_events;")
 NEW=$((AFTER - BEFORE))
 
 echo "    Rows after insert:  $AFTER  (+$NEW new rows)"

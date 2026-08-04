@@ -217,7 +217,7 @@ Production data feeds change over time without notice. The schema drift transfor
 | Avro | Row-oriented Avro Object Container Files (OCF); schema-on-read, header codec auto-detect |
 | XML | Streaming SAX-style XML; one record per named element |
 | JSON Lines / NDJSON | Newline-delimited JSON, one object per row |
-| JDBC | SQL query over PostgreSQL, MySQL, or SQLite with keyset-pagination chunking and high-water-mark predicate injection |
+| JDBC | SQL query over PostgreSQL, MySQL, SQL Server, or Oracle with keyset-pagination chunking and high-water-mark predicate injection |
 | Kafka | Consumer group-based consumption with offset checkpointing |
 | Cloud Object Store | Files from S3, Google Cloud Storage, or Azure ADLS Gen2 |
 | Text Document (sectioned) | Flat files with a key/value header block plus a delimited body table |
@@ -228,7 +228,7 @@ Production data feeds change over time without notice. The schema drift transfor
 |---|---|
 | CSV / TSV | Delimited text files with optional header row |
 | JSON Lines / NDJSON | One JSON object per line |
-| JDBC | Bulk insert / upsert into PostgreSQL, MySQL, or SQLite; configurable conflict strategy, optional auto-migrate |
+| JDBC | Bulk insert / upsert into PostgreSQL, MySQL, SQL Server, or Oracle; configurable conflict strategy, optional auto-migrate |
 | Parquet | Row-group-aligned Parquet output; snappy / gzip / zstd compression |
 | Avro | Row-oriented Avro OCF output; snappy / deflate / zstandard / null, nullable-union schema |
 | Kafka | SyncProducer with configurable acks, compression, and JSON / AVRO serialization |
@@ -325,8 +325,6 @@ These are honest work items — not committed roadmap, but the next things we in
 ### Engine
 
 - [ ] **Parquet pushdown to remote object stores** — an S3/GCS/ADLS-backed Parquet object is spooled whole to a temp file before reading; push the column/predicate pruning down to byte-range reads so only the needed row groups and columns are fetched
-- [ ] **MSSQL and Oracle JDBC drivers** — PostgreSQL, MySQL, SQLite are current; these are the next priority enterprise databases
-- [ ] **SFTP and local directory watch sources** — file-arrival triggered ingestion without cron
 
 ### VS Code extension
 
@@ -335,7 +333,6 @@ These are honest work items — not committed roadmap, but the next things we in
 
 ### Longer-term (not yet scheduled)
 
-- A **lightweight pipeline server** — a small daemon that manages pipeline lifecycle (schedule, retry, run history) without needing a full Flogo server
 - **Visual DQ report viewer** — a canvas panel showing per-field quality scores from the DQ transform output
 - **Pipeline lineage metadata** — expose column-level lineage (what came from where) as a queryable artifact
 

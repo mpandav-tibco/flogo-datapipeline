@@ -5,8 +5,9 @@
 // binary is compiled with ONLY the components its app actually references. Given
 // a pipeline resource's "data" object (or a whole .datapipeline app document),
 // DeriveImports / ImportsForApp return the exact blank-import set — no unused
-// JDBC drivers, Kafka client, or cloud SDKs, and CGO only when a CGO-linked
-// driver (sqlite) is used.
+// JDBC drivers, Kafka client, or cloud SDKs. Every bundled JDBC driver is pure
+// Go, so CGO is never required (the needsCGO hook remains for any future
+// CGO-linked driver).
 //
 // This lets `cmd/dp-build` (and any future app generator or SDK path) produce
 // lean, per-app binaries automatically, the same way `flogo build` does for
@@ -51,10 +52,11 @@ var (
 	}
 	driverPkg = map[string]string{
 		"postgres": "github.com/lib/pq", "postgresql": "github.com/lib/pq",
-		"mysql":  "github.com/go-sql-driver/mysql",
-		"sqlite": "github.com/mattn/go-sqlite3", "sqlite3": "github.com/mattn/go-sqlite3",
+		"mysql":     "github.com/go-sql-driver/mysql",
+		"sqlserver": "github.com/microsoft/go-mssqldb", "mssql": "github.com/microsoft/go-mssqldb",
+		"oracle": "github.com/sijms/go-ora/v2",
 	}
-	cgoDrivers     = map[string]bool{"sqlite": true, "sqlite3": true}
+	cgoDrivers     = map[string]bool{} // all bundled drivers are pure Go; retained for any future CGO driver
 	checkpointPkg  = map[string]string{"file": "checkpoint/file", "redis": "checkpoint/redis"}
 	watermarkPkg   = map[string]string{"file": "watermark/file", "redis": "watermark/redis", "postgres": "watermark/postgres"}
 	metricsPkg     = map[string]string{"prometheus": "metrics/prometheus", "otel": "metrics/otel"}
@@ -163,7 +165,8 @@ func (c *collector) sinkLike(m map[string]interface{}) {
 
 // DeriveImports inspects a single pipeline resource's "data" object and returns
 // the sorted Go import paths a lean binary must blank-import to run it, plus
-// whether the build needs CGO (true only for CGO-linked drivers like sqlite).
+// whether the build needs CGO (currently always false — every bundled driver is
+// pure Go; the flag is retained for any future CGO-linked driver).
 // The pipeline action and the timer trigger are always included so the emitted
 // import set is complete on its own.
 func DeriveImports(data map[string]interface{}) (imports []string, needsCGO bool) {

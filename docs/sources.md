@@ -16,7 +16,7 @@ into the transform chain. Sources are registered with `source.Register(name, …
 | [`csv`, `tsv`](sources/csv.md) | delimited text, optional header | — |
 | [`parquet`](sources/parquet.md) | columnar Parquet, row-group parallel | ✅ |
 | [`avro`](sources/avro.md) | row-oriented Avro OCF (schema-on-read) | — |
-| [`jdbc`](sources/jdbc.md) | SQL query over PostgreSQL / MySQL / SQLite | ✅ |
+| [`jdbc`](sources/jdbc.md) | SQL query over PostgreSQL / MySQL / SQL Server / Oracle | ✅ |
 | [`kafka`](sources/kafka.md) | consumer-group topic consumption | — |
 | [`fixedwidth`, `flatfile`](sources/fixedwidth.md) | positional / EBCDIC mainframe files | — |
 | [`xml`](sources/xml.md) | streaming element-per-record XML | — |
@@ -57,7 +57,7 @@ Row-group predicate/column pushdown, per-row-group partition enumeration, and pa
 row-group resume.
 
 **JDBC** (`jdbc`, *partitionable*) — `driver` (`postgres` default, `mysql`,
-`sqlite3`), `dsn`, and either `table` (+ optional `columns`/`where`/`orderKey`) or a
+`sqlserver`, `oracle`), `dsn`, and either `table` (+ optional `columns`/`where`/`orderKey`) or a
 raw `query`. Keyset pagination (`WHERE orderKey > $last LIMIT N`, safe under
 concurrent inserts) with LIMIT/OFFSET fallback, high-water-mark predicate injection
 for [incremental](reliability.md) loads, connection pooling, and O(1) cursor-based

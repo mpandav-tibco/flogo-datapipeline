@@ -52,14 +52,16 @@ func TestBuildInsertPreservesDecimal(t *testing.T) {
 	}
 }
 
-// TestRecordTypeToSQLDecimal covers the driver-aware DDL: MySQL needs an explicit
-// precision/scale because bare NUMERIC/DECIMAL defaults to (10,0) and truncates
-// the fractional part, whereas Postgres/SQLite NUMERIC is arbitrary-precision.
+// TestRecordTypeToSQLDecimal covers the driver-aware DDL: MySQL and SQL Server need
+// an explicit precision/scale because bare NUMERIC/DECIMAL defaults to (10,0) and
+// truncates the fractional part; Oracle uses NUMBER(38,10); Postgres NUMERIC is
+// arbitrary-precision.
 func TestRecordTypeToSQLDecimal(t *testing.T) {
 	cases := map[string]string{
-		"mysql":    "DECIMAL(38,10)",
-		"postgres": "NUMERIC",
-		"sqlite":   "NUMERIC",
+		"mysql":     "DECIMAL(38,10)",
+		"sqlserver": "DECIMAL(38,10)",
+		"oracle":    "NUMBER(38,10)",
+		"postgres":  "NUMERIC",
 	}
 	for drv, want := range cases {
 		if got := recordTypeToSQL(record.TypeDecimal, drv); got != want {

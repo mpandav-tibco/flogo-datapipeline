@@ -1,21 +1,20 @@
 #!/usr/bin/env bash
-# setup.sh — Create and seed both SQLite databases for the full-production example.
+# setup.sh — Start PostgreSQL and seed both tables for the full-production example.
 #
 # Usage:
 #   chmod +x setup.sh
 #   ./setup.sh
 #
 # Prerequisites:
-#   - sqlite3 CLI must be installed and on your PATH.
-#     macOS : brew install sqlite
-#     Ubuntu: sudo apt-get install sqlite3
-#     RHEL  : sudo yum install sqlite
+#   - Docker + Docker Compose  (the postgres service is defined in docker-compose.yml).
 #   - Run from the directory containing this script (19-full-production/).
 #
 # What this script does:
-#   1. Creates ./data/claims.db           — source database (raw insurance claims).
-#   2. Creates ./data/claims_enriched.db  — sink database (processed claims, initially empty).
-#   3. Inserts 100 raw claims:
+#   1. Starts the local PostgreSQL container (docker compose up -d).
+#   2. Waits for the database to accept connections.
+#   3. Creates the raw_claims source table (dropping any previous copy first).
+#   4. Creates the empty claims_processed sink table (the pipeline populates it).
+#   5. Inserts 100 raw claims into raw_claims:
 #        - 80 valid claims (CLM-00000001 to CLM-00000080):
 #            claim_id format: CLM-XXXXXXXX (exactly 8 digits)
 #            amount: 100 to 9,000,000 (stored as cents; pipeline divides by 100)
@@ -26,8 +25,9 @@
 #            bad_id_01..bad_id_05: claim_id fails the ^CLM-[0-9]{8}$ pattern
 #            BAD-00000001..05: claim_id prefix wrong
 #        - 10 out-of-range amount claims (amount=0 or amount>10,000,000)
-#   4. Creates the empty claims_processed table in claims_enriched.db.
-#   5. Resets the watermark and checkpoint directories.
+#   6. Resets the watermark and checkpoint directories.
+#
+#   Both tables live in the single PostgreSQL database "pipelinedemo".
 
 set -euo pipefail
 
@@ -35,20 +35,26 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 # ── Directories ──────────────────────────────────────────────────────────────
-mkdir -p data watermarks checkpoints
+mkdir -p watermarks checkpoints
 
-SOURCE_DB="./data/claims.db"
-SINK_DB="./data/claims_enriched.db"
-
-# Remove stale artifacts so this script is idempotent
-rm -f "$SOURCE_DB" "$SINK_DB"
+# Remove stale run artifacts so this script is idempotent
 rm -f ./watermarks/*.hwm ./watermarks/*.json
 rm -f ./checkpoints/*.json
 
-echo "==> Creating source database: $SOURCE_DB"
+echo "==> Starting PostgreSQL (docker compose up -d) ..."
+docker compose up -d
 
-sqlite3 "$SOURCE_DB" <<'SQL'
+echo "==> Waiting for PostgreSQL to become ready ..."
+until docker compose exec -T postgres pg_isready -U postgres -d pipelinedemo >/dev/null 2>&1; do
+  sleep 1
+done
+echo "    PostgreSQL is ready."
+
+echo "==> Creating source table raw_claims in database pipelinedemo ..."
+
+docker compose exec -T postgres psql -U postgres -d pipelinedemo <<'SQL'
 -- ── Source schema ────────────────────────────────────────────────────────────
+DROP TABLE IF EXISTS raw_claims;
 CREATE TABLE raw_claims (
     claim_id     TEXT    NOT NULL,   -- Surrogate key; format CLM-XXXXXXXX
     policy_id    INTEGER NOT NULL,   -- FK to policyholder (1–10 for JSONPlaceholder)
@@ -183,30 +189,31 @@ INSERT INTO raw_claims VALUES
 SQL
 
 echo ""
-echo "==> Source database created successfully."
+echo "==> Source table seeded successfully."
 echo ""
-ROW_COUNT=$(sqlite3 "$SOURCE_DB" "SELECT COUNT(*) FROM raw_claims;")
-VALID_COUNT=$(sqlite3 "$SOURCE_DB" "SELECT COUNT(*) FROM raw_claims WHERE claim_id LIKE 'CLM-________' AND LENGTH(claim_id)=12 AND amount >= 1 AND amount <= 10000000;")
+ROW_COUNT=$(docker compose exec -T postgres psql -U postgres -d pipelinedemo -tAc "SELECT COUNT(*) FROM raw_claims;")
+VALID_COUNT=$(docker compose exec -T postgres psql -U postgres -d pipelinedemo -tAc "SELECT COUNT(*) FROM raw_claims WHERE claim_id LIKE 'CLM-________' AND LENGTH(claim_id)=12 AND amount >= 1 AND amount <= 10000000;")
 INVALID_COUNT=$(( ROW_COUNT - VALID_COUNT ))
 echo "    Total claims inserted : $ROW_COUNT"
 echo "    Valid claims           : $VALID_COUNT  (will be enriched and upserted)"
 echo "    Invalid claims         : $INVALID_COUNT (will be routed to DLQ)"
 echo ""
 echo "    Status breakdown (all rows):"
-sqlite3 -column -header "$SOURCE_DB" \
+docker compose exec -T postgres psql -U postgres -d pipelinedemo -c \
     "SELECT status, COUNT(*) AS count FROM raw_claims GROUP BY status ORDER BY status;"
 echo ""
 echo "    Date range:"
-sqlite3 "$SOURCE_DB" \
+docker compose exec -T postgres psql -U postgres -d pipelinedemo -tAc \
     "SELECT '    earliest submitted_at: ' || MIN(submitted_at) FROM raw_claims;"
-sqlite3 "$SOURCE_DB" \
+docker compose exec -T postgres psql -U postgres -d pipelinedemo -tAc \
     "SELECT '    latest   submitted_at: ' || MAX(submitted_at) FROM raw_claims;"
 
-# ── Create sink database with empty target table ────────────────────────────
+# ── Create sink table (empty target) in the same pipelinedemo database ───────
 echo ""
-echo "==> Creating sink database: $SINK_DB"
+echo "==> Creating sink table claims_processed in database pipelinedemo ..."
 
-sqlite3 "$SINK_DB" <<'SQL'
+docker compose exec -T postgres psql -U postgres -d pipelinedemo <<'SQL'
+DROP TABLE IF EXISTS claims_processed;
 CREATE TABLE claims_processed (
     claim_id        TEXT    NOT NULL PRIMARY KEY,
     policy_id       INTEGER NOT NULL,

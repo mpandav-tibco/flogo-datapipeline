@@ -1,14 +1,15 @@
 // Package jdbc registers a JDBC-style sink that writes RecordBatches to any
-// database/sql-compatible database (PostgreSQL, MySQL, SQLite, Oracle via ODBC).
+// database/sql-compatible database (PostgreSQL, MySQL, SQL Server, and Oracle).
 // Import this package with a blank import to activate it:
 //
 //	import _ "github.com/mpandav-tibco/flogo-datapipeline/sink/jdbc"
 //
 // The database driver must also be imported:
 //
-//	import _ "github.com/lib/pq"            // PostgreSQL
-//	import _ "github.com/go-sql-driver/mysql" // MySQL
-//	import _ "github.com/mattn/go-sqlite3"  // SQLite
+//	import _ "github.com/lib/pq"                  // PostgreSQL
+//	import _ "github.com/go-sql-driver/mysql"     // MySQL
+//	import _ "github.com/microsoft/go-mssqldb"    // SQL Server
+//	import _ "github.com/sijms/go-ora/v2"         // Oracle
 package jdbc
 
 import (
@@ -309,17 +310,31 @@ func schemasEqual(a, b []record.Column) bool {
 func recordTypeToSQL(ct record.ColumnType, driver string) string {
 	switch ct {
 	case record.TypeInt:
-		return "BIGINT"
+		switch driver {
+		case "oracle":
+			return "NUMBER(19)" // Oracle has no BIGINT
+		default: // postgres, mysql, sqlserver
+			return "BIGINT"
+		}
 	case record.TypeFloat:
-		return "DOUBLE PRECISION"
+		switch driver {
+		case "mysql", "sqlserver", "mssql":
+			return "FLOAT"
+		case "oracle":
+			return "BINARY_DOUBLE"
+		default:
+			return "DOUBLE PRECISION"
+		}
 	case record.TypeDecimal:
 		// MySQL DECIMAL/NUMERIC without an explicit precision default to (10,0) —
 		// zero fractional digits — which silently truncates. Give it a precision and
-		// scale that cover money and most NUMERIC data. Postgres/SQLite NUMERIC is
+		// scale that cover money and most NUMERIC data. Postgres NUMERIC is
 		// arbitrary-precision, so leave it unbounded there.
 		switch driver {
-		case "mysql":
+		case "mysql", "sqlserver", "mssql":
 			return "DECIMAL(38,10)"
+		case "oracle":
+			return "NUMBER(38,10)"
 		default:
 			return "NUMERIC"
 		}
@@ -327,6 +342,10 @@ func recordTypeToSQL(ct record.ColumnType, driver string) string {
 		switch driver {
 		case "mysql":
 			return "TINYINT(1)"
+		case "sqlserver", "mssql":
+			return "BIT"
+		case "oracle":
+			return "NUMBER(1)" // Oracle has no native boolean in SQL DDL
 		default:
 			return "BOOLEAN"
 		}
@@ -334,6 +353,10 @@ func recordTypeToSQL(ct record.ColumnType, driver string) string {
 		switch driver {
 		case "mysql":
 			return "DATETIME"
+		case "sqlserver", "mssql":
+			return "DATETIME2"
+		case "oracle":
+			return "TIMESTAMP"
 		default:
 			return "TIMESTAMP WITH TIME ZONE"
 		}
@@ -341,6 +364,10 @@ func recordTypeToSQL(ct record.ColumnType, driver string) string {
 		switch driver {
 		case "mysql":
 			return "VARCHAR(65535)"
+		case "sqlserver", "mssql":
+			return "NVARCHAR(MAX)"
+		case "oracle":
+			return "CLOB"
 		default:
 			return "TEXT"
 		}
@@ -362,24 +389,98 @@ func (s *jdbcSink) flush() error {
 	s.buf = s.buf[:0]
 	s.rowsBuffered = 0
 
-	if len(allRows) == 0 {
+	ncols := len(s.columns)
+	if len(allRows) == 0 || ncols == 0 {
 		return nil
 	}
 
-	// Build and execute the bulk INSERT.
-	query, args := s.buildInsert(allRows)
-	if _, err := s.db.Exec(query, args...); err != nil {
-		return fmt.Errorf("jdbc sink: exec insert: %w", err)
+	// Chunk rows so a single statement never exceeds the driver's bind-parameter
+	// limit (rows × columns). SQL Server caps at 2100 parameters, so a wide table
+	// at the default batch size would otherwise fail. When one chunk suffices we
+	// execute it directly; multiple chunks run in a single transaction so a
+	// partial failure rolls back atomically.
+	maxRows := maxRowsPerInsert(s.driver, ncols)
+	if len(allRows) <= maxRows {
+		query, args := s.buildInsert(allRows)
+		if _, err := s.db.Exec(query, args...); err != nil {
+			return fmt.Errorf("jdbc sink: exec insert: %w", err)
+		}
+		return nil
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("jdbc sink: begin tx: %w", err)
+	}
+	for start := 0; start < len(allRows); start += maxRows {
+		end := start + maxRows
+		if end > len(allRows) {
+			end = len(allRows)
+		}
+		query, args := s.buildInsert(allRows[start:end])
+		if _, err := tx.Exec(query, args...); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("jdbc sink: exec insert chunk: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("jdbc sink: commit tx: %w", err)
 	}
 	return nil
 }
 
-// buildInsert constructs a multi-row INSERT statement.
+// maxRowsPerInsert returns the largest number of rows that fit in one statement
+// without exceeding the driver's bind-parameter limit (rows × columns), leaving
+// a small headroom for reserved binds.
+func maxRowsPerInsert(driver string, ncols int) int {
+	if ncols <= 0 {
+		return 1
+	}
+	var maxParams int
+	switch driver {
+	case "sqlserver", "mssql":
+		maxParams = 2100
+	case "oracle":
+		maxParams = 30000 // Oracle's limit is 65535; stay well under
+	default: // postgres, mysql
+		maxParams = 65535
+	}
+	n := (maxParams - 8) / ncols
+	if n < 1 {
+		n = 1
+	}
+	return n
+}
+
+// buildInsert dispatches to the dialect-appropriate statement builder. Postgres,
+// MySQL and SQL Server use a multi-row INSERT (with ON CONFLICT / ON DUPLICATE /
+// MERGE conflict handling); Oracle uses INSERT ALL — or MERGE for upsert/ignore —
+// because it has no multi-row VALUES constructor.
+func (s *jdbcSink) buildInsert(rows [][]interface{}) (string, []interface{}) {
+	mergeable := (s.onConflict == conflictUpsert || s.onConflict == conflictIgnore) && len(s.conflictKey) > 0
+	switch s.driver {
+	case "oracle":
+		if mergeable {
+			return s.buildMerge(rows)
+		}
+		return s.buildInsertAllOracle(rows)
+	case "sqlserver", "mssql":
+		if mergeable {
+			return s.buildMerge(rows)
+		}
+		return s.buildMultiRowInsert(rows)
+	default: // postgres, mysql
+		return s.buildMultiRowInsert(rows)
+	}
+}
+
+// buildMultiRowInsert constructs a multi-row INSERT ... VALUES statement.
 // For Postgres upsert: INSERT ... ON CONFLICT (key) DO UPDATE SET col=EXCLUDED.col
 // For MySQL upsert:    INSERT ... ON DUPLICATE KEY UPDATE col=VALUES(col)
 // For MySQL ignore:    INSERT IGNORE INTO ...
 // For Postgres ignore: INSERT ... ON CONFLICT DO NOTHING
-func (s *jdbcSink) buildInsert(rows [][]interface{}) (string, []interface{}) {
+// SQL Server plain INSERT also uses this path; its upsert/ignore use buildMerge.
+func (s *jdbcSink) buildMultiRowInsert(rows [][]interface{}) (string, []interface{}) {
 	cols := s.columns
 	ncols := len(cols)
 	nrows := len(rows)
@@ -471,6 +572,183 @@ func (s *jdbcSink) buildInsert(rows [][]interface{}) (string, []interface{}) {
 		}
 	}
 
+	return sb.String(), args
+}
+
+// quotedColList returns the sink's columns as a comma-separated, driver-quoted
+// identifier list, e.g. "id","amount" (postgres) or [id],[amount] (sql server).
+func (s *jdbcSink) quotedColList() string {
+	var sb strings.Builder
+	for i, col := range s.columns {
+		if i > 0 {
+			sb.WriteByte(',')
+		}
+		sb.WriteString(sqlutil.QuoteIdent(col, s.driver))
+	}
+	return sb.String()
+}
+
+// buildInsertAllOracle builds an Oracle multi-row INSERT. Oracle has no
+// multi-row VALUES constructor, so each row is a separate INTO clause and the
+// statement is terminated by a mandatory trailing SELECT from dual:
+//
+//	INSERT ALL INTO t (a,b) VALUES (:1,:2) INTO t (a,b) VALUES (:3,:4) SELECT 1 FROM dual
+func (s *jdbcSink) buildInsertAllOracle(rows [][]interface{}) (string, []interface{}) {
+	ncols := len(s.columns)
+	table := sqlutil.QuoteIdent(s.table, s.driver)
+	colList := s.quotedColList()
+
+	var sb strings.Builder
+	sb.WriteString("INSERT ALL")
+	args := make([]interface{}, 0, len(rows)*ncols)
+	p := 1
+	for _, row := range rows {
+		sb.WriteString(" INTO ")
+		sb.WriteString(table)
+		sb.WriteString(" (")
+		sb.WriteString(colList)
+		sb.WriteString(") VALUES (")
+		for c := 0; c < ncols; c++ {
+			if c > 0 {
+				sb.WriteByte(',')
+			}
+			sb.WriteString(sqlutil.Placeholder(p, s.driver))
+			p++
+			var v interface{}
+			if c < len(row) {
+				v = row[c]
+			}
+			args = append(args, v)
+		}
+		sb.WriteByte(')')
+	}
+	sb.WriteString(" SELECT 1 FROM dual")
+	return sb.String(), args
+}
+
+// buildMerge builds a MERGE upsert/ignore statement for SQL Server and Oracle,
+// which have no ON CONFLICT / ON DUPLICATE KEY. The row source differs by dialect
+// — SQL Server uses a VALUES table constructor, Oracle a UNION ALL of SELECTs
+// from dual — but the ON / WHEN MATCHED / WHEN NOT MATCHED structure is shared.
+// conflictIgnore (or a key-only table) omits the WHEN MATCHED UPDATE clause.
+func (s *jdbcSink) buildMerge(rows [][]interface{}) (string, []interface{}) {
+	oracle := s.driver == "oracle"
+	cols := s.columns
+	ncols := len(cols)
+	table := sqlutil.QuoteIdent(s.table, s.driver)
+	colList := s.quotedColList()
+
+	// Non-key columns are the ones an upsert updates (a key column cannot be
+	// updated inside MERGE — it is referenced by the ON clause).
+	var nonKey []string
+	for _, col := range cols {
+		if !contains(s.conflictKey, col) {
+			nonKey = append(nonKey, col)
+		}
+	}
+	doUpdate := s.onConflict == conflictUpsert && len(nonKey) > 0
+
+	args := make([]interface{}, 0, len(rows)*ncols)
+	var sb strings.Builder
+	sb.WriteString("MERGE INTO ")
+	sb.WriteString(table)
+	sb.WriteString(" tgt USING (")
+
+	p := 1
+	if oracle {
+		// (SELECT :1 "A",:2 "B" FROM dual UNION ALL SELECT :3,:4 FROM dual)
+		for r, row := range rows {
+			if r > 0 {
+				sb.WriteString(" UNION ALL ")
+			}
+			sb.WriteString("SELECT ")
+			for c := 0; c < ncols; c++ {
+				if c > 0 {
+					sb.WriteByte(',')
+				}
+				sb.WriteString(sqlutil.Placeholder(p, s.driver))
+				p++
+				if r == 0 { // name source columns via the first SELECT of the UNION
+					sb.WriteByte(' ')
+					sb.WriteString(sqlutil.QuoteIdent(cols[c], s.driver))
+				}
+				var v interface{}
+				if c < len(row) {
+					v = row[c]
+				}
+				args = append(args, v)
+			}
+			sb.WriteString(" FROM dual")
+		}
+		sb.WriteString(") src")
+	} else {
+		// VALUES (@p1,@p2),(@p3,@p4)
+		sb.WriteString("VALUES ")
+		for r, row := range rows {
+			if r > 0 {
+				sb.WriteByte(',')
+			}
+			sb.WriteByte('(')
+			for c := 0; c < ncols; c++ {
+				if c > 0 {
+					sb.WriteByte(',')
+				}
+				sb.WriteString(sqlutil.Placeholder(p, s.driver))
+				p++
+				var v interface{}
+				if c < len(row) {
+					v = row[c]
+				}
+				args = append(args, v)
+			}
+			sb.WriteByte(')')
+		}
+		sb.WriteString(") AS src (")
+		sb.WriteString(colList)
+		sb.WriteByte(')')
+	}
+
+	sb.WriteString(" ON (")
+	for i, k := range s.conflictKey {
+		if i > 0 {
+			sb.WriteString(" AND ")
+		}
+		q := sqlutil.QuoteIdent(k, s.driver)
+		sb.WriteString("tgt.")
+		sb.WriteString(q)
+		sb.WriteString("=src.")
+		sb.WriteString(q)
+	}
+	sb.WriteByte(')')
+
+	if doUpdate {
+		sb.WriteString(" WHEN MATCHED THEN UPDATE SET ")
+		for i, col := range nonKey {
+			if i > 0 {
+				sb.WriteByte(',')
+			}
+			q := sqlutil.QuoteIdent(col, s.driver)
+			sb.WriteString("tgt.")
+			sb.WriteString(q)
+			sb.WriteString("=src.")
+			sb.WriteString(q)
+		}
+	}
+
+	sb.WriteString(" WHEN NOT MATCHED THEN INSERT (")
+	sb.WriteString(colList)
+	sb.WriteString(") VALUES (")
+	for c, col := range cols {
+		if c > 0 {
+			sb.WriteByte(',')
+		}
+		sb.WriteString("src.")
+		sb.WriteString(sqlutil.QuoteIdent(col, s.driver))
+	}
+	sb.WriteByte(')')
+	if !oracle {
+		sb.WriteByte(';') // SQL Server requires MERGE to be terminated with a semicolon
+	}
 	return sb.String(), args
 }
 

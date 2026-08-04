@@ -5,7 +5,7 @@
 #   ./verify.sh
 #
 # Prerequisites:
-#   - sqlite3 must be on your PATH.
+#   - Docker + Docker Compose (the postgres service must be running).
 #   - Run ./setup.sh and ./run.sh at least once before running this script.
 #
 # Output:
@@ -21,16 +21,13 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-SINK_DB="./data/claims_enriched.db"
-SOURCE_DB="./data/claims.db"
-
-if [ ! -f "$SINK_DB" ]; then
-    echo "ERROR: $SINK_DB not found."
+if ! docker compose exec -T postgres pg_isready -U postgres -d pipelinedemo >/dev/null 2>&1; then
+    echo "ERROR: PostgreSQL is not reachable."
     echo "       Run ./setup.sh then ./run.sh before verifying."
     exit 1
 fi
 
-PROCESSED=$(sqlite3 "$SINK_DB" "SELECT COUNT(*) FROM claims_processed;" 2>/dev/null || echo 0)
+PROCESSED=$(docker compose exec -T postgres psql -U postgres -d pipelinedemo -tAc "SELECT COUNT(*) FROM claims_processed;" 2>/dev/null || echo 0)
 
 if [ "$PROCESSED" -eq 0 ]; then
     echo "WARNING: claims_processed is empty — run ./run.sh first."
@@ -39,15 +36,15 @@ fi
 
 echo "============================================================"
 echo "  Verification — Full Production Pipeline"
-echo "  Sink: $SINK_DB"
+echo "  Sink: pipelinedemo.claims_processed (PostgreSQL)"
 echo "============================================================"
 echo ""
 
 # ── 1. Count and status breakdown ────────────────────────────────────────────
 echo "── 1. ROW COUNT & STATUS BREAKDOWN ─────────────────────────"
 echo ""
-sqlite3 -column -header "$SINK_DB" \
-    "SELECT status, COUNT(*) AS claim_count, ROUND(AVG(amount_usd),2) AS avg_usd, ROUND(MIN(amount_usd),2) AS min_usd, ROUND(MAX(amount_usd),2) AS max_usd
+docker compose exec -T postgres psql -U postgres -d pipelinedemo -c \
+    "SELECT status, COUNT(*) AS claim_count, ROUND(AVG(amount_usd)::numeric,2) AS avg_usd, ROUND(MIN(amount_usd)::numeric,2) AS min_usd, ROUND(MAX(amount_usd)::numeric,2) AS max_usd
      FROM claims_processed
      GROUP BY status
      ORDER BY claim_count DESC;"
@@ -58,7 +55,7 @@ echo ""
 # ── 2. Sample enriched rows ──────────────────────────────────────────────────
 echo "── 2. SAMPLE ENRICHED ROWS (first 10) ──────────────────────"
 echo ""
-sqlite3 -column -header "$SINK_DB" \
+docker compose exec -T postgres psql -U postgres -d pipelinedemo -c \
     "SELECT claim_id, policy_id, amount_usd, claimant_name, claimant_email, status
      FROM claims_processed
      ORDER BY claim_id
@@ -68,19 +65,19 @@ echo ""
 # ── 3. Policy distribution ───────────────────────────────────────────────────
 echo "── 3. POLICYHOLDER DISTRIBUTION ────────────────────────────"
 echo ""
-sqlite3 -column -header "$SINK_DB" \
-    "SELECT policy_id, claimant_name, COUNT(*) AS claims, ROUND(SUM(amount_usd),2) AS total_usd
+docker compose exec -T postgres psql -U postgres -d pipelinedemo -c \
+    "SELECT policy_id, claimant_name, COUNT(*) AS claims, ROUND(SUM(amount_usd)::numeric,2) AS total_usd
      FROM claims_processed
-     GROUP BY policy_id
+     GROUP BY policy_id, claimant_name
      ORDER BY total_usd DESC;"
 echo ""
 
 # ── 4. Enrichment quality check ──────────────────────────────────────────────
 echo "── 4. ENRICHMENT QUALITY ────────────────────────────────────"
 echo ""
-UNKNOWN_NAME=$(sqlite3 "$SINK_DB" \
+UNKNOWN_NAME=$(docker compose exec -T postgres psql -U postgres -d pipelinedemo -tAc \
     "SELECT COUNT(*) FROM claims_processed WHERE claimant_name='UNKNOWN';")
-UNKNOWN_EMAIL=$(sqlite3 "$SINK_DB" \
+UNKNOWN_EMAIL=$(docker compose exec -T postgres psql -U postgres -d pipelinedemo -tAc \
     "SELECT COUNT(*) FROM claims_processed WHERE claimant_email='UNKNOWN';")
 echo "    Rows with claimant_name='UNKNOWN'  (lookup returned null): $UNKNOWN_NAME"
 echo "    Rows with claimant_email='UNKNOWN' (lookup returned null): $UNKNOWN_EMAIL"
@@ -98,7 +95,7 @@ echo ""
 echo "── 5. AMOUNT CONVERSION CHECK (cents → dollars) ─────────────"
 echo ""
 # Spot-check CLM-00000001: source amount=250000 cents → sink amount_usd=2500.00
-SPOT_CHECK=$(sqlite3 "$SINK_DB" \
+SPOT_CHECK=$(docker compose exec -T postgres psql -U postgres -d pipelinedemo -tAc \
     "SELECT amount_usd FROM claims_processed WHERE claim_id='CLM-00000001';" 2>/dev/null || echo "N/A")
 echo "    CLM-00000001 source amount: 250000 cents"
 echo "    CLM-00000001 sink amount_usd: $SPOT_CHECK (expected: 2500.0)"
@@ -113,14 +110,14 @@ echo ""
 # ── 6. DLQ accounting ────────────────────────────────────────────────────────
 echo "── 6. DLQ ACCOUNTING ────────────────────────────────────────"
 echo ""
-SOURCE_TOTAL=$(sqlite3 "$SOURCE_DB" "SELECT COUNT(*) FROM raw_claims;" 2>/dev/null || echo "N/A")
+SOURCE_TOTAL=$(docker compose exec -T postgres psql -U postgres -d pipelinedemo -tAc "SELECT COUNT(*) FROM raw_claims;" 2>/dev/null || echo "N/A")
 echo "    Rows in source (raw_claims)     : $SOURCE_TOTAL"
 echo "    Rows in sink   (claims_processed): $PROCESSED"
 echo ""
 echo "    Invalid rows routed to DLQ sink : $(( SOURCE_TOTAL - PROCESSED )) (expected: 20)"
 echo ""
 echo "    Invalid claim_id patterns in source:"
-sqlite3 -column -header "$SOURCE_DB" \
+docker compose exec -T postgres psql -U postgres -d pipelinedemo -c \
     "SELECT claim_id, amount, status
      FROM raw_claims
      WHERE claim_id NOT LIKE 'CLM-________' OR LENGTH(claim_id) != 12
@@ -168,7 +165,7 @@ echo "  Verification complete."
 echo "============================================================"
 echo ""
 echo "  To explore the data interactively:"
-echo "    sqlite3 $SINK_DB"
-echo "    sqlite3> SELECT * FROM claims_processed LIMIT 5;"
-echo "    sqlite3> SELECT COUNT(*), status FROM claims_processed GROUP BY status;"
-echo "    sqlite3> .quit"
+echo "    docker compose exec postgres psql -U postgres -d pipelinedemo"
+echo "    pipelinedemo=# SELECT * FROM claims_processed LIMIT 5;"
+echo "    pipelinedemo=# SELECT COUNT(*), status FROM claims_processed GROUP BY status;"
+echo "    pipelinedemo=# \\q"

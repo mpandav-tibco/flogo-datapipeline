@@ -640,7 +640,7 @@ func quoteIdent(name, driver string) string {
 	switch driver {
 	case "mysql":
 		return "`" + name + "`"
-	default: // postgres, sqlite, etc.
+	default: // postgres, sqlserver, oracle, etc.
 		return `"` + name + `"`
 	}
 }

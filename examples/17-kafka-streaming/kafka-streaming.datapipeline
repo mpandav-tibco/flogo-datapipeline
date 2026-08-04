@@ -2,7 +2,7 @@
   "name": "kafka-streaming",
   "type": "flogo:app",
   "version": "1.0.0",
-  "description": "Streaming ETL: consume JSON messages from a Kafka topic (sensor-data), apply a temperature range filter and field-level validation, then write surviving rows in micro-batches to a SQLite database. Demonstrates the Kafka source (consumer group, timed poll, optional SASL/SCRAM-SHA-512) and how to chain streaming data into a JDBC sink without an intermediate file.",
+  "description": "Streaming ETL: consume JSON messages from a Kafka topic (sensor-data), apply a temperature range filter and field-level validation, then write surviving rows in micro-batches to a PostgreSQL database. Demonstrates the Kafka source (consumer group, timed poll, optional SASL/SCRAM-SHA-512) and how to chain streaming data into a JDBC sink without an intermediate file.",
   "appModel": "1.1.1",
   "imports": [
     "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
@@ -35,7 +35,7 @@
       "id": "pipeline:kafka-streaming",
       "data": {
         "name": "kafka-streaming",
-        "description": "Streaming ETL: consume JSON messages from a Kafka topic (sensor-data), apply a temperature range filter and field-level validation, then write surviving rows in micro-batches to a SQLite database. Demonstrates the Kafka source (consumer group, timed poll, optional SASL/SCRAM-SHA-512) and how to chain streaming data into a JDBC sink without an intermediate file.",
+        "description": "Streaming ETL: consume JSON messages from a Kafka topic (sensor-data), apply a temperature range filter and field-level validation, then write surviving rows in micro-batches to a PostgreSQL database. Demonstrates the Kafka source (consumer group, timed poll, optional SASL/SCRAM-SHA-512) and how to chain streaming data into a JDBC sink without an intermediate file.",
         "version": "1.0.0",
         "mode": "etl",
         "source": {
@@ -69,8 +69,8 @@
         ],
         "sink": {
           "type": "jdbc",
-          "driver": "sqlite",
-          "dsn": "./data/sensors.db",
+          "driver": "postgres",
+          "dsn": "postgres://postgres:postgres@localhost:5432/pipelinedemo?sslmode=disable",
           "table": "sensor_readings",
           "batchSize": 100,
           "onConflict": "insert"

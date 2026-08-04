@@ -19,7 +19,8 @@ func TestQuoteLiteral(t *testing.T) {
 		// quote on MySQL. With escaping, the closing quote stays intact.
 		{"trailing backslash mysql", `x\`, "mysql", `'x\\'`},
 		{"quote after backslash mysql", `x\' OR 1=1 -- `, "mysql", `'x\\'' OR 1=1 -- '`},
-		{"sqlite standard", `x\`, "sqlite3", `'x\'`},
+		{"sqlserver backslash kept literal", `x\`, "sqlserver", `'x\'`},
+		{"oracle backslash kept literal", `x\`, "oracle", `'x\'`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

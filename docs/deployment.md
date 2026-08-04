@@ -38,8 +38,8 @@ Typical footprint vs the all-in-one engine:
 | `kafka → parquet` | ~13.6 MB |
 | _all-in-one engine_ | ~58 MB |
 
-Binaries are CGO-free (statically linked) **unless** the app uses the SQLite driver,
-which requires CGO.
+Binaries are CGO-free (statically linked) — every bundled database driver
+(PostgreSQL, MySQL, SQL Server, Oracle) is pure Go.
 
 ## Container
 

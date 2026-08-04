@@ -298,5 +298,4 @@ The transform has no other configuration fields. All behaviour is determined by 
 | Example | What it shows |
 |---------|---------------|
 | 03 — Validate + DLQ | Field-level validation; route bad rows to a dead-letter queue |
-| 10 — CSV to SQLite | Full ETL with validate + map + JDBC upsert |
 | 08 — Parquet Columnar | Parquet source where column projection is built into the file format |

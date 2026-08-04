@@ -2,30 +2,25 @@
 # setup.sh — Prepare the environment for the Kafka streaming example.
 #
 # What this script does:
-#   1. Creates ./data/ directory.
-#   2. Removes any existing sensors.db so the demo starts clean.
-#   3. Creates ./data/sensors.db with the sensor_readings table.
+#   1. Starts the local stack (Kafka + Zookeeper + PostgreSQL) via docker compose.
+#   2. Waits for PostgreSQL to accept connections.
+#   3. Creates the sensor_readings table in PostgreSQL (dropping any prior copy).
 #   4. Prints a summary and next-step instructions.
 #
 # Prerequisites:
-#   - sqlite3 CLI on PATH
-#   - Docker + docker compose (to start Kafka via docker-compose.yml)
+#   - Docker + Docker Compose (starts Kafka + Zookeeper + PostgreSQL)
 #   - flogo-datapipeline CLI on PATH
 #
 # Run order:
-#   1. docker compose up -d   — start Kafka + Zookeeper
-#   2. ./setup.sh             — create the SQLite target database
-#   3. ./produce.sh           — publish 20 test messages to Kafka
-#   4. flogo-datapipeline run kafka-streaming.datapipeline
-#   5. ./verify.sh            — inspect the rows written to SQLite
+#   1. ./setup.sh             — start the stack + create the Postgres target table
+#   2. ./produce.sh           — publish 20 test messages to Kafka
+#   3. flogo-datapipeline run kafka-streaming.datapipeline
+#   4. ./verify.sh            — inspect the rows written to PostgreSQL
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
-
-DATA_DIR="./data"
-DB_FILE="$DATA_DIR/sensors.db"
 
 echo "========================================"
 echo " Example 17 — Kafka Streaming Setup"
@@ -33,42 +28,29 @@ echo "========================================"
 echo ""
 
 # ---------------------------------------------------------------------------
-# 1. Create data directory
+# 1. Start the local stack (Kafka + Zookeeper + PostgreSQL)
 # ---------------------------------------------------------------------------
-echo "--> Creating $DATA_DIR/ ..."
-mkdir -p "$DATA_DIR"
+echo "--> Starting Kafka + Zookeeper + PostgreSQL (docker compose up -d) ..."
+docker compose up -d
 echo "    OK"
 echo ""
 
 # ---------------------------------------------------------------------------
-# 2. Check for sqlite3
+# 2. Wait for PostgreSQL to become ready
 # ---------------------------------------------------------------------------
-if ! command -v sqlite3 &>/dev/null; then
-  echo "ERROR: sqlite3 not found on PATH."
-  echo ""
-  echo "  Install on macOS  : brew install sqlite"
-  echo "  Install on Ubuntu : apt-get install sqlite3"
-  echo "  Install on Windows: winget install SQLite.SQLite"
-  echo ""
-  exit 1
-fi
-SQLITE_VERSION=$(sqlite3 --version | awk '{print $1}')
-echo "--> sqlite3 $SQLITE_VERSION found"
+echo "--> Waiting for PostgreSQL to become ready ..."
+until docker compose exec -T postgres pg_isready -U postgres -d pipelinedemo >/dev/null 2>&1; do
+  sleep 1
+done
+echo "    PostgreSQL is ready."
 echo ""
 
 # ---------------------------------------------------------------------------
-# 3. Drop and recreate sensors.db
+# 3. Drop and recreate the sensor_readings table
 # ---------------------------------------------------------------------------
-if [ -f "$DB_FILE" ]; then
-  echo "--> Removing existing $DB_FILE ..."
-  rm -f "$DB_FILE"
-  echo "    Done."
-  echo ""
-fi
+echo "--> Creating sensor_readings table in database pipelinedemo ..."
 
-echo "--> Creating $DB_FILE with sensor_readings table ..."
-
-sqlite3 "$DB_FILE" <<'SQL'
+docker compose exec -T postgres psql -U postgres -d pipelinedemo <<'SQL'
 -- sensor_readings: target table for the Kafka streaming pipeline.
 --
 -- Column notes:
@@ -77,27 +59,28 @@ sqlite3 "$DB_FILE" <<'SQL'
 --   temperature — celsius float; filter drops <= 0, validate drops < -100 or > 200
 --   humidity    — percentage float (informational, not validated in this example)
 --   unit        — temperature unit label (always "C" in test data)
---   ts          — ISO-8601 timestamp from the producer (stored as TEXT in SQLite)
+--   ts          — ISO-8601 timestamp from the producer (stored as TEXT)
 --   ingested_at — wall-clock time the row was written by the pipeline (default NOW)
 --
--- No PRIMARY KEY constraint: onConflict:insert in the sink means duplicate
--- Kafka offsets (e.g. after a consumer restart) will produce duplicate rows.
--- Add a PRIMARY KEY on (sensor_id, ts) and switch to onConflict:ignore or
--- onConflict:upsert if idempotent loads are required.
+-- No natural unique key is enforced: onConflict:insert in the sink means
+-- duplicate Kafka offsets (e.g. after a consumer restart) will produce
+-- duplicate rows. Add a UNIQUE constraint on (sensor_id, ts) and switch to
+-- onConflict:ignore or onConflict:upsert if idempotent loads are required.
 
-CREATE TABLE IF NOT EXISTS sensor_readings (
-  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+DROP TABLE IF EXISTS sensor_readings;
+CREATE TABLE sensor_readings (
+  id          SERIAL  PRIMARY KEY,
   sensor_id   TEXT    NOT NULL,
   location    TEXT,
   temperature REAL    NOT NULL,
   humidity    REAL,
   unit        TEXT    DEFAULT 'C',
   ts          TEXT,
-  ingested_at TEXT    DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+  ingested_at TEXT    DEFAULT to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
 );
 
 -- Index for fast queries by sensor and time
-CREATE INDEX IF NOT EXISTS idx_sr_sensor_ts ON sensor_readings (sensor_id, ts);
+CREATE INDEX idx_sr_sensor_ts ON sensor_readings (sensor_id, ts);
 SQL
 
 echo "    Created table: sensor_readings"
@@ -108,11 +91,11 @@ echo ""
 # 4. Verify the schema
 # ---------------------------------------------------------------------------
 echo "--> Schema verification:"
-sqlite3 "$DB_FILE" ".schema sensor_readings" | sed 's/^/    /'
+docker compose exec -T postgres psql -U postgres -d pipelinedemo -c "\d sensor_readings" | sed 's/^/    /'
 echo ""
 
 # ---------------------------------------------------------------------------
-# 5. Check Docker / Kafka status (informational only)
+# 5. Check Kafka broker status (informational only)
 # ---------------------------------------------------------------------------
 echo "--> Kafka broker status:"
 if command -v docker &>/dev/null && docker compose ps 2>/dev/null | grep -q kafka; then
@@ -121,11 +104,11 @@ if command -v docker &>/dev/null && docker compose ps 2>/dev/null | grep -q kafk
   if echo "$KAFKA_STATE" | grep -qi "running\|healthy\|up"; then
     echo "    Broker is UP — you can run ./produce.sh"
   else
-    echo "    Broker is NOT yet running — start it with: docker compose up -d"
+    echo "    Broker is starting — give it ~15 s, then run ./produce.sh"
   fi
 else
   echo "    Docker not available or kafka container not started."
-  echo "    Start Kafka with: docker compose up -d"
+  echo "    Start the stack with: docker compose up -d"
 fi
 echo ""
 
@@ -136,18 +119,17 @@ echo "========================================"
 echo " Setup complete"
 echo "========================================"
 echo ""
-echo "  SQLite database : $DB_FILE"
+echo "  PostgreSQL      : postgres://postgres:postgres@localhost:5432/pipelinedemo"
 echo "  Target table    : sensor_readings (0 rows)"
 echo ""
 echo "  Next steps:"
-echo "    1. docker compose up -d"
-echo "       # wait ~15 s for the broker to become healthy"
-echo "    2. ./produce.sh"
+echo "    1. ./produce.sh"
 echo "       # publishes 20 test messages to topic 'sensor-data'"
-echo "    3. flogo-datapipeline run kafka-streaming.datapipeline"
-echo "       # pipeline polls Kafka, filters, validates, writes to SQLite"
-echo "    4. ./verify.sh"
-echo "       # confirms rows in sensors.db"
+echo "       # (wait ~15 s after setup for the Kafka broker to become healthy)"
+echo "    2. flogo-datapipeline run kafka-streaming.datapipeline"
+echo "       # pipeline polls Kafka, filters, validates, writes to PostgreSQL"
+echo "    3. ./verify.sh"
+echo "       # confirms rows in the sensor_readings table"
 echo ""
 echo "  Expected final row count: 16 (4 messages dropped by transforms)"
 echo ""

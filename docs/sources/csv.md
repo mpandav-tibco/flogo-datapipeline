@@ -51,4 +51,4 @@ reader).
 ## See also
 
 - [Sources index](../sources.md) · [CSV sink](../sinks/csv.md)
-- Demo: [`examples/01-csv-to-null`](../../examples/01-csv-to-null), [`examples/10-csv-to-sqlite`](../../examples/10-csv-to-sqlite)
+- Demo: [`examples/01-csv-to-null`](../../examples/01-csv-to-null), [`examples/02-filter-and-map`](../../examples/02-filter-and-map)

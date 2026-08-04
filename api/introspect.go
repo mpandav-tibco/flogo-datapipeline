@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mpandav-tibco/flogo-datapipeline/internal/sqlutil"
 	"github.com/mpandav-tibco/flogo-datapipeline/objstore"
 	"github.com/mpandav-tibco/flogo-datapipeline/record"
 	"github.com/mpandav-tibco/flogo-datapipeline/source"
@@ -226,7 +227,7 @@ type ColumnInfo struct {
 }
 
 // introspectTables lists user tables for a driver + DSN. Supports postgres,
-// mysql, and sqlite. Uses the standard database/sql drivers registered in main.
+// mysql, SQL Server, and Oracle. Uses the standard database/sql drivers registered in main.
 func introspectTables(driver, dsn string) ([]TableInfo, error) {
 	db, err := sql.Open(driver, dsn)
 	if err != nil {
@@ -249,9 +250,15 @@ func introspectTables(driver, dsn string) ([]TableInfo, error) {
 		         WHERE table_type='BASE TABLE'
 		           AND table_schema NOT IN ('mysql','sys','performance_schema','information_schema')
 		         ORDER BY table_schema, table_name`
-	case "sqlite", "sqlite3":
-		query = `SELECT '' AS table_schema, name AS table_name FROM sqlite_master
-		         WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name`
+	case "sqlserver", "mssql":
+		query = `SELECT table_schema, table_name FROM information_schema.tables
+		         WHERE table_type='BASE TABLE'
+		           AND table_schema NOT IN ('sys','INFORMATION_SCHEMA')
+		         ORDER BY table_schema, table_name`
+	case "oracle":
+		// USER_TABLES lists the connected schema's own tables — the useful default
+		// for a DI connection. USER is Oracle's current-schema pseudo-column.
+		query = `SELECT USER AS table_schema, table_name FROM user_tables ORDER BY table_name`
 	default:
 		return nil, fmt.Errorf("table introspection not supported for driver %q", driver)
 	}
@@ -288,19 +295,14 @@ func introspectColumns(driver, dsn, table string) ([]ColumnInfo, error) {
 	schema, name := splitTable(table)
 
 	switch driver {
-	case "postgres", "pgx", "mysql":
+	case "postgres", "pgx", "mysql", "sqlserver", "mssql":
+		// All expose ANSI information_schema.columns; only the bind placeholder
+		// differs (handled by sqlutil.Placeholder).
 		q := `SELECT column_name, data_type, is_nullable FROM information_schema.columns
-		      WHERE table_name = $1`
+		      WHERE table_name = ` + sqlutil.Placeholder(1, driver)
 		args := []interface{}{name}
-		if driver == "mysql" {
-			q = strings.ReplaceAll(q, "$1", "?")
-		}
 		if schema != "" {
-			if driver == "mysql" {
-				q += " AND table_schema = ?"
-			} else {
-				q += " AND table_schema = $2"
-			}
+			q += " AND table_schema = " + sqlutil.Placeholder(2, driver)
 			args = append(args, schema)
 		}
 		q += " ORDER BY ordinal_position"
@@ -324,22 +326,32 @@ func introspectColumns(driver, dsn, table string) ([]ColumnInfo, error) {
 			return nil, fmt.Errorf("table %q not found or has no columns", table)
 		}
 		return out, nil
-	case "sqlite", "sqlite3":
-		rows, err := db.Query(fmt.Sprintf("PRAGMA table_info(%s)", quoteIdent(name)))
+	case "oracle":
+		// Oracle stores unquoted identifiers upper-cased and exposes column
+		// metadata via ALL_TAB_COLUMNS; NULLABLE is 'Y'/'N'.
+		q := `SELECT column_name, data_type, nullable FROM all_tab_columns
+		      WHERE UPPER(table_name) = UPPER(:1)`
+		args := []interface{}{name}
+		if schema != "" {
+			q += " AND UPPER(owner) = UPPER(:2)"
+			args = append(args, schema)
+		}
+		q += " ORDER BY column_id"
+		rows, err := db.Query(q, args...)
 		if err != nil {
 			return nil, fmt.Errorf("describe table: %w", err)
 		}
 		defer rows.Close()
 		var out []ColumnInfo
 		for rows.Next() {
-			var cid int
-			var col, dbType string
-			var notnull, pk int
-			var dflt sql.NullString
-			if err := rows.Scan(&cid, &col, &dbType, &notnull, &dflt, &pk); err != nil {
+			var col, dbType, nullable string
+			if err := rows.Scan(&col, &dbType, &nullable); err != nil {
 				return nil, err
 			}
-			out = append(out, ColumnInfo{Name: col, Type: mapDBType(dbType), DBType: dbType, Nullable: notnull == 0})
+			out = append(out, ColumnInfo{Name: col, Type: mapDBType(dbType), DBType: dbType, Nullable: nullable == "Y"})
+		}
+		if err := rows.Err(); err != nil {
+			return nil, err
 		}
 		if len(out) == 0 {
 			return nil, fmt.Errorf("table %q not found or has no columns", table)
@@ -357,10 +369,6 @@ func splitTable(table string) (schema, name string) {
 	return "", table
 }
 
-func quoteIdent(s string) string {
-	return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
-}
-
 // mapDBType maps a database column type to a pipeline column type.
 func mapDBType(dbType string) string {
 	t := strings.ToLower(strings.TrimSpace(dbType))
@@ -371,12 +379,12 @@ func mapDBType(dbType string) string {
 	switch {
 	case strings.Contains(t, "int"): // int, integer, bigint, smallint, tinyint
 		return "int"
-	case t == "numeric" || t == "decimal" || t == "money":
-		return "decimal"
+	case t == "numeric" || t == "decimal" || t == "money" || strings.HasPrefix(t, "number"):
+		return "decimal" // Oracle NUMBER, SQL Server MONEY, ANSI NUMERIC/DECIMAL
 	case strings.Contains(t, "float") || strings.Contains(t, "double") || t == "real":
-		return "float"
-	case strings.Contains(t, "bool"):
-		return "bool"
+		return "float" // includes Oracle BINARY_FLOAT/BINARY_DOUBLE
+	case strings.Contains(t, "bool") || t == "bit":
+		return "bool" // SQL Server BIT
 	case strings.Contains(t, "date") || strings.Contains(t, "time"): // date, timestamp, datetime, timestamptz
 		return "date"
 	default:

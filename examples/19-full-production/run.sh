@@ -7,14 +7,14 @@
 #
 # Prerequisites:
 #   - flogo-datapipeline binary must be on your PATH.
-#   - Run ./setup.sh first to create both databases.
+#   - Run ./setup.sh first to start PostgreSQL and seed both tables.
 #   - Network access to jsonplaceholder.typicode.com is required for the lookup transform.
 #     The lookup uses policy_id 1–10, which map to JSONPlaceholder user IDs 1–10.
 #     If the network is unavailable, the lookup onError:null policy will substitute
 #     claimant_name="UNKNOWN" and claimant_email="UNKNOWN" for all rows.
 #
 # What happens on the FIRST run:
-#   1. HWM: no watermark exists yet → all rows in claims.db are candidates.
+#   1. HWM: no watermark exists yet → all rows in raw_claims are candidates.
 #   2. Validate: 20 invalid rows (bad claim_id pattern or out-of-range amount) are
 #      routed to the dlqSink (null — discarded in this example).
 #   3. DQ: measures null-check and range compliance on the 80 remaining valid rows.
@@ -47,15 +47,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 # ── Guards ────────────────────────────────────────────────────────────────────
-if [ ! -f "./data/claims.db" ]; then
-    echo "ERROR: ./data/claims.db not found."
-    echo "       Run ./setup.sh first to create and seed the source database."
-    exit 1
-fi
-
-if [ ! -f "./data/claims_enriched.db" ]; then
-    echo "ERROR: ./data/claims_enriched.db not found."
-    echo "       Run ./setup.sh first to create the sink database."
+if ! docker compose exec -T postgres pg_isready -U postgres -d pipelinedemo >/dev/null 2>&1; then
+    echo "ERROR: PostgreSQL is not reachable."
+    echo "       Run ./setup.sh first to start the database and seed both tables."
     exit 1
 fi
 
@@ -77,8 +71,8 @@ echo "  Full Production Pipeline — Insurance Claims ETL"
 echo "============================================================"
 echo ""
 echo "  Pipeline : full-production.datapipeline"
-echo "  Source   : ./data/claims.db           (JDBC SQLite)"
-echo "  Sink     : ./data/claims_enriched.db  (JDBC SQLite, upsert)"
+echo "  Source   : pipelinedemo.raw_claims       (JDBC PostgreSQL)"
+echo "  Sink     : pipelinedemo.claims_processed (JDBC PostgreSQL, upsert)"
 echo "  DLQ sink : null (invalid claims discarded)"
 echo "  Checkpoint: ./checkpoints/"
 echo "  Watermark : ./watermarks/"
@@ -112,13 +106,13 @@ if [ "$EXIT_CODE" -ne 0 ]; then
 fi
 
 # ── Post-run summary ─────────────────────────────────────────────────────────
-PROCESSED_COUNT=$(sqlite3 "./data/claims_enriched.db" \
+PROCESSED_COUNT=$(docker compose exec -T postgres psql -U postgres -d pipelinedemo -tAc \
     "SELECT COUNT(*) FROM claims_processed;" 2>/dev/null || echo "0")
 
 echo "  Claims processed (cumulative): $PROCESSED_COUNT"
 echo ""
 echo "  Status breakdown in claims_processed:"
-sqlite3 -column -header "./data/claims_enriched.db" \
+docker compose exec -T postgres psql -U postgres -d pipelinedemo -c \
     "SELECT status, COUNT(*) AS count FROM claims_processed GROUP BY status ORDER BY count DESC;" \
     2>/dev/null || echo "  (sink table is empty)"
 echo ""

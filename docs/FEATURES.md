@@ -21,7 +21,7 @@
 | [`sectioned`](sources/sectioned.md) | header block + delimited body | — |
 | [`parquet`](sources/parquet.md) | columnar Parquet | ✅ |
 | [`avro`](sources/avro.md) | row-oriented Avro OCF | — |
-| [`jdbc`](sources/jdbc.md) | PostgreSQL / MySQL / SQLite | ✅ |
+| [`jdbc`](sources/jdbc.md) | PostgreSQL / MySQL / SQL Server / Oracle | ✅ |
 | [`kafka`](sources/kafka.md) | consumer-group topic | — |
 | [`s3`, `gcs`, `adls`](sources/objstore.md) | cloud object storage | ✅ |
 | [`podlog`](sources/podlog.md) | Kubernetes / CRI logs | — |

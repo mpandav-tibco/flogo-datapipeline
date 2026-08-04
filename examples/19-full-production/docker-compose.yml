@@ -1,0 +1,33 @@
+# ---------------------------------------------------------------------------
+# Example 19 — Local PostgreSQL for the full-production insurance-claims ETL.
+#
+# Starts a single PostgreSQL 16 instance. setup.sh creates and seeds BOTH the
+# raw_claims (source) and claims_processed (sink) tables inside this one
+# database; the pipeline connects to it over localhost:5432 using the DSN in
+# full-production.datapipeline.
+#
+# Quick-start:
+#   ./setup.sh              # starts this container, then creates + seeds both tables
+#   ./run.sh                # first pipeline run — full load, writes the watermark
+#   ./add-claims.sh         # inserts 20 newer rows (post-watermark)
+#   ./run.sh                # incremental delta run — only the new rows are processed
+#   ./verify.sh             # inspect the enriched output
+#   docker compose down -v  # stop the container and drop its data volume
+# ---------------------------------------------------------------------------
+
+services:
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: dp-ex19-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: pipelinedemo
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d pipelinedemo"]
+      interval: 5s
+      timeout: 3s
+      retries: 10

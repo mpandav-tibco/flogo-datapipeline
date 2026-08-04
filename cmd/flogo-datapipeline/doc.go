@@ -9,7 +9,7 @@
 // ## Sources
 //
 //   - csv        — delimited text, optional header, configurable separator
-//   - jdbc       — SQL query with keyset-pagination chunking (PostgreSQL, MySQL, SQLite)
+//   - jdbc       — SQL query with keyset-pagination chunking (PostgreSQL, MySQL, SQL Server, Oracle)
 //   - parquet    — Parquet file with row-group parallelism and column/predicate pushdown
 //   - fixedwidth — positional flat files (mainframe / EBCDIC / ASCII, implied decimal)
 //   - xml        — SAX-style streaming XML; one record element per row

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "github.com/lib/pq"
 
 	"github.com/mpandav-tibco/flogo-datapipeline/action/pipeline"
 	"github.com/mpandav-tibco/flogo-datapipeline/sdk"
@@ -277,25 +277,32 @@ func TestBuilder_WithDQ_FriendlyTypesTranslated(t *testing.T) {
 // "notNull" name end-to-end, proving the dq transform's expectation registry
 // accepts the translated type (the failure surfaced by the mismatch above).
 func TestPipeline_Run_WithDQFriendlyType(t *testing.T) {
+	dsn := os.Getenv("DP_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("set DP_TEST_PG_DSN to run the SDK DQ end-to-end pipeline")
+	}
 	dir := t.TempDir()
 	csvPath := filepath.Join(dir, "orders.csv")
 	if err := os.WriteFile(csvPath, []byte("id,amount\n1,100\n2,200\n"), 0o644); err != nil {
 		t.Fatalf("write csv: %v", err)
 	}
-	dbPath := filepath.Join(dir, "orders.db")
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := sql.Open("postgres", dsn)
 	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	if _, err := db.Exec(`CREATE TABLE orders (id TEXT, amount TEXT)`); err != nil {
-		t.Fatalf("create table: %v", err)
+		t.Fatalf("open postgres: %v", err)
 	}
 	defer db.Close()
+	if _, err := db.Exec(`DROP TABLE IF EXISTS sdk_dq_orders`); err != nil {
+		t.Fatalf("drop table: %v", err)
+	}
+	if _, err := db.Exec(`CREATE TABLE sdk_dq_orders (id TEXT, amount TEXT)`); err != nil {
+		t.Fatalf("create table: %v", err)
+	}
+	t.Cleanup(func() { db.Exec(`DROP TABLE IF EXISTS sdk_dq_orders`) })
 
 	resp, err := sdk.NewPipeline("dq-run").
 		FromCSV(csvPath).
 		WithDQ([]sdk.DQExpectation{{Name: "amount present", Type: "notNull", Column: "amount"}}).
-		ToJDBC(dbPath, "orders", sdk.WithJDBCDriver("sqlite3")).
+		ToJDBC(dsn, "sdk_dq_orders", sdk.WithJDBCDriver("postgres")).
 		Run(context.Background())
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -326,30 +333,38 @@ func TestBuilder_KafkaSourceOptions(t *testing.T) {
 	}
 }
 
-// ─── end-to-end pipeline-as-code Run() via serverless SQLite ────────────────
+// ─── end-to-end pipeline-as-code Run() via live Postgres ────────────────────
 
-func TestPipeline_Run_CSVtoSQLite(t *testing.T) {
+func TestPipeline_Run_CSVtoJDBC(t *testing.T) {
+	dsn := os.Getenv("DP_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("set DP_TEST_PG_DSN to run the CSV to JDBC end-to-end pipeline")
+	}
 	dir := t.TempDir()
 	csvPath := filepath.Join(dir, "orders.csv")
 	if err := os.WriteFile(csvPath, []byte("id,name,amount\n1,Alice,100\n2,Bob,-5\n3,Carol,200\n"), 0o644); err != nil {
 		t.Fatalf("write csv: %v", err)
 	}
-	dbPath := filepath.Join(dir, "orders.db")
 
-	// Pre-create the target table (serverless, no external service).
-	db, err := sql.Open("sqlite3", dbPath)
+	// Pre-create the target table.
+	db, err := sql.Open("postgres", dsn)
 	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
+		t.Fatalf("open postgres: %v", err)
 	}
-	if _, err := db.Exec(`CREATE TABLE orders (customer_id TEXT, total TEXT)`); err != nil {
+	defer db.Close()
+	if _, err := db.Exec(`DROP TABLE IF EXISTS sdk_csv_orders`); err != nil {
+		t.Fatalf("drop table: %v", err)
+	}
+	if _, err := db.Exec(`CREATE TABLE sdk_csv_orders (customer_id TEXT, total TEXT)`); err != nil {
 		t.Fatalf("create table: %v", err)
 	}
+	t.Cleanup(func() { db.Exec(`DROP TABLE IF EXISTS sdk_csv_orders`) })
 
-	resp, err := sdk.NewPipeline("csv-to-sqlite").
+	resp, err := sdk.NewPipeline("csv-to-jdbc").
 		FromCSV(csvPath).
 		Filter("amount > 0").
 		Map(map[string]string{"customer_id": "=$id", "total": "=$amount"}).
-		ToJDBC(dbPath, "orders", sdk.WithJDBCDriver("sqlite3")).
+		ToJDBC(dsn, "sdk_csv_orders", sdk.WithJDBCDriver("postgres")).
 		Run(context.Background())
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -361,13 +376,12 @@ func TestPipeline_Run_CSVtoSQLite(t *testing.T) {
 		t.Fatalf("rowsWritten = %d, want 2 (amount>0 keeps Alice, Carol)", resp.RowsWritten)
 	}
 
-	// Confirm the rows actually landed in SQLite.
+	// Confirm the rows actually landed in the target table.
 	var count int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM orders`).Scan(&count); err != nil {
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sdk_csv_orders`).Scan(&count); err != nil {
 		t.Fatalf("count: %v", err)
 	}
 	if count != 2 {
 		t.Fatalf("row count in table = %d, want 2", count)
 	}
-	_ = db.Close()
 }

@@ -1,6 +1,6 @@
 # JDBC source — `jdbc` · *partitionable*
 
-Reads rows from a relational database (PostgreSQL, MySQL, SQLite; Oracle via ODBC) in
+Reads rows from a relational database (PostgreSQL, MySQL, SQL Server, Oracle) in
 **table mode** or with a raw **query**, using keyset pagination for scalable, resumable
 reads. Implemented in [`source/jdbc/source.go`](../../source/jdbc/source.go); registered
 as `jdbc`.
@@ -14,7 +14,7 @@ as `jdbc`.
 
 | Key | Type | Default | Required | Description |
 |---|---|---|:--:|---|
-| `driver` | string | `postgres` | — | `postgres`, `mysql`, `sqlite3`. |
+| `driver` | string | `postgres` | — | `postgres`, `mysql`, `sqlserver`, `oracle`. |
 | `dsn` | string | — | ✅ | Driver connection string. Prefer a [connection](../connections.md) so secrets stay off disk. |
 | `table` | string | — | ✅ (or `query`) | Table to read; combine with `columns`/`where`/`orderKey`. |
 | `query` | string | — | ✅ (or `table`) | Raw `SELECT` (overrides table mode). |
@@ -66,4 +66,4 @@ as `jdbc`.
 ## See also
 
 - [Sources index](../sources.md) · [JDBC sink](../sinks/jdbc.md) · [Reliability & incremental load](../reliability.md)
-- Demo: [`examples/09-jdbc-source-sqlite`](../../examples/09-jdbc-source-sqlite), [`examples/12-incremental-hwm`](../../examples/12-incremental-hwm)
+- Demo: [`examples/12-incremental-hwm`](../../examples/12-incremental-hwm)

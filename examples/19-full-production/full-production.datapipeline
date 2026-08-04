@@ -2,7 +2,7 @@
   "name": "full-production",
   "type": "flogo:app",
   "version": "1.0.0",
-  "description": "Insurance claims ETL reference architecture. Reads raw claims from a SQLite JDBC source, applies incremental high-water mark filtering, validates claim IDs and amounts, measures dataset quality, enriches with policyholder data via HTTP lookup, maps to a canonical output schema, and upserts into a processed claims table. Invalid claims are routed to a dead-letter sink. A file checkpoint enables mid-run resume after failure.",
+  "description": "Insurance claims ETL reference architecture. Reads raw claims from a PostgreSQL JDBC source, applies incremental high-water mark filtering, validates claim IDs and amounts, measures dataset quality, enriches with policyholder data via HTTP lookup, maps to a canonical output schema, and upserts into a processed claims table. Invalid claims are routed to a dead-letter sink. A file checkpoint enables mid-run resume after failure.",
   "appModel": "1.1.1",
   "imports": [
     "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
@@ -35,13 +35,13 @@
       "id": "pipeline:full-production",
       "data": {
         "name": "full-production",
-        "description": "Insurance claims ETL reference architecture. Reads raw claims from a SQLite JDBC source, applies incremental high-water mark filtering, validates claim IDs and amounts, measures dataset quality, enriches with policyholder data via HTTP lookup, maps to a canonical output schema, and upserts into a processed claims table. Invalid claims are routed to a dead-letter sink. A file checkpoint enables mid-run resume after failure.",
+        "description": "Insurance claims ETL reference architecture. Reads raw claims from a PostgreSQL JDBC source, applies incremental high-water mark filtering, validates claim IDs and amounts, measures dataset quality, enriches with policyholder data via HTTP lookup, maps to a canonical output schema, and upserts into a processed claims table. Invalid claims are routed to a dead-letter sink. A file checkpoint enables mid-run resume after failure.",
         "version": "1.0.0",
         "mode": "etl",
         "source": {
           "type": "jdbc",
-          "driver": "sqlite",
-          "dsn": "./data/claims.db",
+          "driver": "postgres",
+          "dsn": "postgres://postgres:postgres@localhost:5432/pipelinedemo?sslmode=disable",
           "table": "raw_claims",
           "keyColumn": "claim_id",
           "batchSize": 500
@@ -137,8 +137,8 @@
         ],
         "sink": {
           "type": "jdbc",
-          "driver": "sqlite",
-          "dsn": "./data/claims_enriched.db",
+          "driver": "postgres",
+          "dsn": "postgres://postgres:postgres@localhost:5432/pipelinedemo?sslmode=disable",
           "table": "claims_processed",
           "batchSize": 200,
           "onConflict": "upsert",
