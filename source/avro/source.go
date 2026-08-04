@@ -119,7 +119,11 @@ func (s *avroSource) ReadBatch(size int) (*record.RecordBatch, error) {
 
 		row := make([]interface{}, len(s.fields))
 		for j, name := range s.fields {
-			row[j] = normalizeAvroValue(obj[name])
+			if s.schema[j].Type == record.TypeDecimal {
+				row[j] = avroDecimalValue(obj[name], s.schema[j].Scale)
+			} else {
+				row[j] = normalizeAvroValue(obj[name])
+			}
 		}
 		batch.Rows = append(batch.Rows, row)
 	}
@@ -149,55 +153,59 @@ func columnsFromSchema(s avro.Schema) ([]record.Column, []string, error) {
 	names := make([]string, len(flds))
 	for i, f := range flds {
 		names[i] = f.Name()
-		cols[i] = record.Column{Name: f.Name(), Type: columnTypeFor(f.Type())}
+		t, scale := avroColumnType(f.Type())
+		cols[i] = record.Column{Name: f.Name(), Type: t, Scale: scale}
 	}
 	return cols, names, nil
 }
 
-// columnTypeFor maps an avro field schema to a record column type, unwrapping a
-// nullable union ["null", T] to T and honouring logical types.
-func columnTypeFor(s avro.Schema) record.ColumnType {
+// avroColumnType maps an avro field schema to a record column type (and, for a
+// decimal logical type, its scale), unwrapping a nullable union ["null", T] to T
+// and honouring logical types.
+func avroColumnType(s avro.Schema) (record.ColumnType, int) {
 	if u, ok := s.(*avro.UnionSchema); ok {
 		for _, t := range u.Types() {
 			if t.Type() != avro.Null {
-				return columnTypeFor(t)
+				return avroColumnType(t)
 			}
 		}
-		return record.TypeAny
+		return record.TypeAny, 0
 	}
 
 	if ls, ok := s.(avro.LogicalTypeSchema); ok {
 		if lg := ls.Logical(); lg != nil {
+			if dec, ok := lg.(*avro.DecimalLogicalSchema); ok {
+				return record.TypeDecimal, dec.Scale()
+			}
 			lt := string(lg.Type())
-			switch {
-			case lt == string(avro.Decimal):
-				return record.TypeDecimal
-			case lt == string(avro.Date) || strings.Contains(lt, "timestamp") || strings.Contains(lt, "time"):
-				return record.TypeDate
+			if lt == string(avro.Date) || strings.Contains(lt, "timestamp") || strings.Contains(lt, "time") {
+				return record.TypeDate, 0
 			}
 		}
 	}
 
 	switch s.Type() {
 	case avro.String:
-		return record.TypeString
+		return record.TypeString, 0
 	case avro.Int, avro.Long:
-		return record.TypeInt
+		return record.TypeInt, 0
 	case avro.Float, avro.Double:
-		return record.TypeFloat
+		return record.TypeFloat, 0
 	case avro.Boolean:
-		return record.TypeBool
+		return record.TypeBool, 0
 	default: // bytes, fixed, enum, record, array, map, null
-		return record.TypeAny
+		return record.TypeAny, 0
 	}
 }
 
 // normalizeAvroValue converts hamba's native decoded values into the plain Go
 // types the pipeline expects downstream. hamba decodes avro bytes/fixed as
-// []byte, decimal logical types as *big.Rat, and date/timestamp logical types
-// as time.Time; these are rendered to strings so generic transforms and text
-// sinks handle them uniformly. All other native types (string, int, int64,
-// float32, float64, bool) pass through unchanged.
+// []byte and date/timestamp logical types as time.Time; these are rendered to
+// strings so generic transforms and text sinks handle them uniformly. Decimal
+// logical values are handled by avroDecimalValue (typed record.Decimal), not
+// here. All other native types (string, int, int64, float32, float64, bool)
+// pass through unchanged; a stray *big.Rat (decimal outside a decimal column)
+// degrades to a 10-dp string.
 func normalizeAvroValue(v interface{}) interface{} {
 	switch t := v.(type) {
 	case nil:
@@ -211,4 +219,19 @@ func normalizeAvroValue(v interface{}) interface{} {
 	default:
 		return v
 	}
+}
+
+// avroDecimalValue converts a decoded decimal-logical value (hamba yields a
+// *big.Rat) into an exact record.Decimal at the column scale, so a TypeDecimal
+// column carries a Decimal value rather than a stringified approximation. A nil
+// stays nil; a non-Rat value falls back to the generic normaliser.
+func avroDecimalValue(v interface{}, scale int) interface{} {
+	r, ok := v.(*big.Rat)
+	if !ok {
+		return normalizeAvroValue(v)
+	}
+	if d, ok := record.ParseDecimal(r.FloatString(scale)); ok {
+		return d
+	}
+	return r.FloatString(scale)
 }

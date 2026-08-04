@@ -84,3 +84,33 @@ func TestPredicateFilterParallel(t *testing.T) {
 		}
 	}
 }
+
+// TestPredicateFilterLargeInt64 guards int64-exact comparison: 2^53 and 2^53+1
+// collapse to the same float64, so a float comparison would mis-match. The
+// filter must select exactly the 2^53+1 row.
+func TestPredicateFilterLargeInt64(t *testing.T) {
+	const a = int64(9007199254740992) // 2^53
+	const b = int64(9007199254740993) // 2^53 + 1 (not representable as float64)
+	cols := []record.Column{{Name: "id", Type: record.TypeInt}}
+	rows := [][]interface{}{{a}, {b}}
+	path := filepath.Join(t.TempDir(), "bigint.parquet")
+	writeTestParquet(t, path, cols, rows, 1_000_000, 0)
+
+	src, err := newParquetSource(map[string]interface{}{
+		"path":                path,
+		"filter":              "id = 9007199254740993",
+		"rowGroupParallelism": 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer src.Close()
+
+	got := readAllRows(t, src, 10)
+	if len(got) != 1 {
+		t.Fatalf("rows = %d, want 1 (exact int64 match, not a float64 collision)", len(got))
+	}
+	if got[0][0] != b {
+		t.Errorf("matched id = %v, want %d", got[0][0], b)
+	}
+}

@@ -120,11 +120,16 @@ func TestAvroSourceLogicalTypes(t *testing.T) {
 	if b.Len() != 1 {
 		t.Fatalf("rows = %d, want 1", b.Len())
 	}
-	// date -> RFC3339 string, decimal -> textual number (normalizeAvroValue).
+	// date -> RFC3339 string; decimal -> typed record.Decimal at the schema scale.
 	if s, ok := b.Value(0, "d").(string); !ok || s == "" {
 		t.Errorf("d value = %v (%T), want a non-empty string", b.Value(0, "d"), b.Value(0, "d"))
 	}
-	if s, ok := b.Value(0, "amt").(string); !ok || s == "" {
-		t.Errorf("amt value = %v (%T), want a string", b.Value(0, "amt"), b.Value(0, "amt"))
+	amtVal, ok := b.Value(0, "amt").(record.Decimal)
+	if !ok {
+		t.Fatalf("amt value = %v (%T), want record.Decimal", b.Value(0, "amt"), b.Value(0, "amt"))
+	}
+	want, _ := record.ParseDecimal("123.45")
+	if amtVal.Cmp(want) != 0 {
+		t.Errorf("amt = %s, want 123.45", amtVal.String())
 	}
 }

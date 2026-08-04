@@ -37,6 +37,12 @@ type Factory struct {
 	mu      sync.RWMutex
 	actions map[string]*DataPipelineAction
 	rm      *resource.Manager
+
+	// replaceMu serialises Replace() so its read-old → build → store →
+	// shutdown-old sequence is atomic. It is deliberately separate from mu so a
+	// (possibly port-binding) rebuild does not block reads (Actions/findAction)
+	// or New().
+	replaceMu sync.Mutex
 }
 
 // Settings holds the action-level settings parsed from the handler config.
@@ -197,6 +203,12 @@ func (f *Factory) Replace(ref string, def *Definition) (*DataPipelineAction, err
 	if def == nil {
 		return nil, fmt.Errorf("pipeline factory: definition is required")
 	}
+
+	// Serialise concurrent replaces: two simultaneous replaces of the same ref
+	// would otherwise both observe the same previous action and could double-shut
+	// it down or leak a freshly built recorder.
+	f.replaceMu.Lock()
+	defer f.replaceMu.Unlock()
 
 	f.mu.RLock()
 	old := f.actions[ref]

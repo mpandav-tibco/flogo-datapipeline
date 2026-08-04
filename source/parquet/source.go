@@ -388,6 +388,8 @@ type parquetPredicate struct {
 	litIsStr  bool
 	litStr    string
 	litNum    float64
+	litIsInt  bool // literal is an exact integer (enables int64-precise comparison)
+	litInt    int64
 	decScale  int32 // filter column's DECIMAL scale, or -1
 }
 
@@ -413,6 +415,10 @@ func parseParquetPredicate(expr string, schema *parquetgo.Schema) (*parquetPredi
 	if len(lit) >= 2 && lit[0] == '\'' && lit[len(lit)-1] == '\'' {
 		p.litStr = lit[1 : len(lit)-1]
 		p.litIsStr = true
+	} else if iv, e := strconv.ParseInt(lit, 10, 64); e == nil {
+		p.litInt = iv
+		p.litIsInt = true
+		p.litNum = float64(iv) // also usable when the column is float
 	} else if num, e := strconv.ParseFloat(lit, 64); e == nil {
 		p.litNum = num
 	} else {
@@ -447,6 +453,13 @@ func (p *parquetPredicate) matchGo(v interface{}) bool {
 	if p.litIsStr {
 		return cmpOrdered(toStr(v), p.litStr, p.op)
 	}
+	// Prefer exact int64 comparison when both the literal and the value are
+	// integral, so values beyond float64's 53-bit mantissa compare exactly.
+	if p.litIsInt {
+		if iv, ok := toInt64(v); ok {
+			return cmpOrdered(iv, p.litInt, p.op)
+		}
+	}
 	f, ok := toFloat64(v)
 	if !ok {
 		return false
@@ -472,9 +485,39 @@ func (p *parquetPredicate) rowGroupMayMatch(rg parquetgo.RowGroup) bool {
 	if err != nil {
 		return true // no page index → cannot prune
 	}
+	if p.litIsStr {
+		return stringRowGroupMayMatch(ci, p.litStr, p.op)
+	}
+	// Use exact int64 statistics when the literal is integral and the column
+	// stores integers; float rounding could otherwise mis-prune a row group whose
+	// bounds exceed float64's exact range and silently drop matching rows.
+	if p.litIsInt && columnStatsAreInt(ci) {
+		return intRowGroupMayMatch(ci, p.litInt, p.op)
+	}
+	return floatRowGroupMayMatch(ci, p.litNum, p.op)
+}
+
+// columnStatsAreInt reports whether the column's statistics use an integer
+// physical kind, determined from the first page carrying usable stats.
+func columnStatsAreInt(ci parquetgo.ColumnIndex) bool {
+	for i := 0; i < ci.NumPages(); i++ {
+		if ci.NullPage(i) {
+			continue
+		}
+		v := ci.MinValue(i)
+		if v.IsNull() {
+			continue
+		}
+		return v.Kind() == parquetgo.Int32 || v.Kind() == parquetgo.Int64
+	}
+	return false
+}
+
+// intRowGroupMayMatch aggregates the row group's int64 min/max across pages and
+// tests the predicate range. Returns true (no prune) if any stat is unusable.
+func intRowGroupMayMatch(ci parquetgo.ColumnIndex, lit int64, op string) bool {
 	have := false
-	var minF, maxF float64
-	var minS, maxS string
+	var lo, hi int64
 	for i := 0; i < ci.NumPages(); i++ {
 		if ci.NullPage(i) {
 			continue
@@ -483,43 +526,92 @@ func (p *parquetPredicate) rowGroupMayMatch(rg parquetgo.RowGroup) bool {
 		if mnv.IsNull() || mxv.IsNull() {
 			continue
 		}
-		if p.litIsStr {
-			mn, mx := parquetValueToStr(mnv), parquetValueToStr(mxv)
-			if !have {
-				minS, maxS, have = mn, mx, true
-			} else {
-				if mn < minS {
-					minS = mn
-				}
-				if mx > maxS {
-					maxS = mx
-				}
-			}
+		mn, ok1 := parquetValueToInt64(mnv)
+		mx, ok2 := parquetValueToInt64(mxv)
+		if !ok1 || !ok2 {
+			return true
+		}
+		if !have {
+			lo, hi, have = mn, mx, true
 		} else {
-			mn, ok1 := parquetValueToFloat(mnv)
-			mx, ok2 := parquetValueToFloat(mxv)
-			if !ok1 || !ok2 {
-				return true
+			if mn < lo {
+				lo = mn
 			}
-			if !have {
-				minF, maxF, have = mn, mx, true
-			} else {
-				if mn < minF {
-					minF = mn
-				}
-				if mx > maxF {
-					maxF = mx
-				}
+			if mx > hi {
+				hi = mx
 			}
 		}
 	}
 	if !have {
 		return true
 	}
-	if p.litIsStr {
-		return rangeMayMatch(minS, maxS, p.litStr, p.op)
+	return rangeMayMatch(lo, hi, lit, op)
+}
+
+// floatRowGroupMayMatch aggregates the row group's float64 min/max across pages
+// and tests the predicate range.
+func floatRowGroupMayMatch(ci parquetgo.ColumnIndex, lit float64, op string) bool {
+	have := false
+	var lo, hi float64
+	for i := 0; i < ci.NumPages(); i++ {
+		if ci.NullPage(i) {
+			continue
+		}
+		mnv, mxv := ci.MinValue(i), ci.MaxValue(i)
+		if mnv.IsNull() || mxv.IsNull() {
+			continue
+		}
+		mn, ok1 := parquetValueToFloat(mnv)
+		mx, ok2 := parquetValueToFloat(mxv)
+		if !ok1 || !ok2 {
+			return true
+		}
+		if !have {
+			lo, hi, have = mn, mx, true
+		} else {
+			if mn < lo {
+				lo = mn
+			}
+			if mx > hi {
+				hi = mx
+			}
+		}
 	}
-	return rangeMayMatch(minF, maxF, p.litNum, p.op)
+	if !have {
+		return true
+	}
+	return rangeMayMatch(lo, hi, lit, op)
+}
+
+// stringRowGroupMayMatch aggregates the row group's string min/max across pages
+// and tests the predicate range.
+func stringRowGroupMayMatch(ci parquetgo.ColumnIndex, lit, op string) bool {
+	have := false
+	var lo, hi string
+	for i := 0; i < ci.NumPages(); i++ {
+		if ci.NullPage(i) {
+			continue
+		}
+		mnv, mxv := ci.MinValue(i), ci.MaxValue(i)
+		if mnv.IsNull() || mxv.IsNull() {
+			continue
+		}
+		mn, mx := parquetValueToStr(mnv), parquetValueToStr(mxv)
+		if !have {
+			lo, hi, have = mn, mx, true
+		} else {
+			if mn < lo {
+				lo = mn
+			}
+			if mx > hi {
+				hi = mx
+			}
+		}
+	}
+	if !have {
+		return true
+	}
+	return rangeMayMatch(lo, hi, lit, op)
 }
 
 // cmpOrdered evaluates `a OP b` for any ordered type.
@@ -584,6 +676,21 @@ func toFloat64(v interface{}) (float64, bool) {
 	}
 }
 
+// toInt64 returns v as an int64 when it is an exact integer Go type, so integral
+// predicates compare without float64 rounding.
+func toInt64(v interface{}) (int64, bool) {
+	switch n := v.(type) {
+	case int64:
+		return n, true
+	case int:
+		return int64(n), true
+	case int32:
+		return int64(n), true
+	default:
+		return 0, false
+	}
+}
+
 func toStr(v interface{}) string {
 	if s, ok := v.(string); ok {
 		return s
@@ -601,6 +708,17 @@ func parquetValueToFloat(v parquetgo.Value) (float64, bool) {
 		return float64(v.Float()), true
 	case parquetgo.Double:
 		return v.Double(), true
+	default:
+		return 0, false
+	}
+}
+
+func parquetValueToInt64(v parquetgo.Value) (int64, bool) {
+	switch v.Kind() {
+	case parquetgo.Int32:
+		return int64(v.Int32()), true
+	case parquetgo.Int64:
+		return v.Int64(), true
 	default:
 		return 0, false
 	}
