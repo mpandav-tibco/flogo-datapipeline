@@ -59,6 +59,70 @@ type Store interface {
 	Close() error
 }
 
+// RangeReader is an optional Store capability: reading a byte range of an object
+// via a single ranged GET. Backends that support HTTP range requests (S3, GCS,
+// ADLS) implement it so seekable formats such as Parquet can be read with
+// column/row-group pushdown — fetching only the footer and the selected column
+// chunks — instead of downloading the whole object to a temp file.
+//
+// Callers should type-assert a Store to RangeReader and fall back to GetReader
+// (whole-object spool) when the assertion fails.
+type RangeReader interface {
+	// GetRange returns a reader over [offset, offset+length) of the object.
+	// The caller must Close the returned reader. length is always > 0.
+	GetRange(ctx context.Context, key string, offset, length int64) (io.ReadCloser, error)
+}
+
+// NewRangeReaderAt adapts a RangeReader into an io.ReaderAt over the object at
+// key, whose total size is size bytes. Each ReadAt is served by an independent
+// ranged GET, so the returned value is safe for concurrent use (matching
+// parquet-go's concurrent column-chunk reads). ctx bounds every underlying
+// request.
+func NewRangeReaderAt(ctx context.Context, rr RangeReader, key string, size int64) io.ReaderAt {
+	return &rangeReaderAt{ctx: ctx, rr: rr, key: key, size: size}
+}
+
+type rangeReaderAt struct {
+	ctx  context.Context
+	rr   RangeReader
+	key  string
+	size int64
+}
+
+// ReadAt implements io.ReaderAt. It clamps the requested range to the object
+// size and honours the io.ReaderAt contract: a short read (fewer than len(p)
+// bytes, only possible at end-of-object) returns io.EOF.
+func (r *rangeReaderAt) ReadAt(p []byte, off int64) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	if off < 0 {
+		return 0, fmt.Errorf("objstore: ReadAt negative offset %d", off)
+	}
+	if off >= r.size {
+		return 0, io.EOF
+	}
+	want := int64(len(p))
+	shortAtEnd := false
+	if off+want > r.size {
+		want = r.size - off
+		shortAtEnd = true
+	}
+	rc, err := r.rr.GetRange(r.ctx, r.key, off, want)
+	if err != nil {
+		return 0, err
+	}
+	defer rc.Close()
+	n, err := io.ReadFull(rc, p[:want])
+	if err == io.ErrUnexpectedEOF {
+		err = io.EOF
+	}
+	if err == nil && shortAtEnd {
+		err = io.EOF
+	}
+	return n, err
+}
+
 // Factory constructs a Store from a generic config map.
 // Keys are provider-specific; secrets must be supplied via environment-variable
 // references (e.g. "accessKeyIdEnv", "secretAccessKeyEnv") rather than inline

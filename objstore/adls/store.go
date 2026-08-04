@@ -200,6 +200,23 @@ func (s *adlsStore) GetReader(ctx context.Context, key string) (io.ReadCloser, e
 	return resp.Body, nil
 }
 
+// GetRange returns a reader over [offset, offset+length) via an ADLS ranged
+// download, so Parquet reads fetch only the footer and the selected column
+// chunks instead of the whole object.
+func (s *adlsStore) GetRange(ctx context.Context, key string, offset, length int64) (io.ReadCloser, error) {
+	blobClient := s.client.ServiceClient().
+		NewContainerClient(s.container).
+		NewBlobClient(key)
+
+	resp, err := blobClient.DownloadStream(ctx, &blob.DownloadStreamOptions{
+		Range: blob.HTTPRange{Offset: offset, Count: length},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("adls store: get range %q [%d,%d): %w", key, offset, offset+length, err)
+	}
+	return resp.Body, nil
+}
+
 // PutWriter implements a streaming upload using an io.Pipe fed into
 // blockblob.UploadStream, which automatically selects block size and
 // parallelism.  The upload is committed when Close is called.

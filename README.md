@@ -219,7 +219,7 @@ Production data feeds change over time without notice. The schema drift transfor
 | JSON Lines / NDJSON | Newline-delimited JSON, one object per row |
 | JDBC | SQL query over PostgreSQL, MySQL, SQL Server, or Oracle with keyset-pagination chunking and high-water-mark predicate injection |
 | Kafka | Consumer group-based consumption with offset checkpointing |
-| Cloud Object Store | Files from S3, Google Cloud Storage, or Azure ADLS Gen2 |
+| Cloud Object Store | Files from S3, Google Cloud Storage, or Azure ADLS Gen2; remote Parquet uses range-GET pushdown (footer + selected column chunks only, no whole-object download) |
 | Text Document (sectioned) | Flat files with a key/value header block plus a delimited body table |
 
 ### Sinks (9 + DLQ)
@@ -324,7 +324,7 @@ These are honest work items — not committed roadmap, but the next things we in
 
 ### Engine
 
-- [ ] **Parquet pushdown to remote object stores** — an S3/GCS/ADLS-backed Parquet object is spooled whole to a temp file before reading; push the column/predicate pruning down to byte-range reads so only the needed row groups and columns are fetched
+- [ ] **SFTP and local directory watch sources** — file-arrival triggered ingestion without cron
 
 ### VS Code extension
 

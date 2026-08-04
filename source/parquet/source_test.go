@@ -1,6 +1,7 @@
 package parquet
 
 import (
+	"bytes"
 	"io"
 	"math/big"
 	"os"
@@ -149,6 +150,56 @@ func newSourceForTest(t *testing.T, path string, parallelism int) *parquetSource
 		t.Fatalf("newParquetSource returned %T, want *parquetSource", src)
 	}
 	return ps
+}
+
+// TestParquetSource_FromReaderAt exercises the injected-io.ReaderAt construction
+// path (used by the object-store source for remote range-GET pushdown): a
+// bytes.Reader over the file bytes stands in for a range-backed reader. The rows
+// read back must match a normal path-based read, and omitting size must error.
+func TestParquetSource_FromReaderAt(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ra.parquet")
+	columns := []record.Column{
+		{Name: "id", Type: record.TypeInt},
+		{Name: "name", Type: record.TypeString},
+	}
+	rows := [][]interface{}{
+		{int64(1), "a"},
+		{int64(2), "b"},
+		{int64(3), "c"},
+	}
+	writeTestParquet(t, path, columns, rows, 2, 0) // two row groups
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read file: %v", err)
+	}
+
+	// bytes.Reader is an io.ReaderAt — inject it exactly as the objstore source
+	// injects a range-GET-backed reader.
+	src, err := newParquetSource(map[string]interface{}{
+		"readerAt": bytes.NewReader(data),
+		"size":     int64(len(data)),
+	})
+	if err != nil {
+		t.Fatalf("newParquetSource(readerAt): %v", err)
+	}
+	defer src.Close()
+
+	got := readAllRows(t, src, 2)
+	if len(got) != 3 {
+		t.Fatalf("readerAt path read %d rows, want 3", len(got))
+	}
+	for i, want := range []int64{1, 2, 3} {
+		if got[i][0] != want {
+			t.Fatalf("row %d id = %v, want %d", i, got[i][0], want)
+		}
+	}
+
+	// A readerAt without a positive size must be rejected.
+	if _, err := newParquetSource(map[string]interface{}{"readerAt": bytes.NewReader(data)}); err == nil {
+		t.Fatal("expected an error when 'size' is missing alongside 'readerAt'")
+	}
 }
 
 // TestSequentialPreservesPositionAcrossBatches is the core regression: with a

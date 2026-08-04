@@ -145,6 +145,17 @@ func (s *gcsStore) GetReader(ctx context.Context, key string) (io.ReadCloser, er
 	return r, nil
 }
 
+// GetRange returns a reader over [offset, offset+length) via a GCS ranged read,
+// so Parquet reads fetch only the footer and the selected column chunks instead
+// of the whole object.
+func (s *gcsStore) GetRange(ctx context.Context, key string, offset, length int64) (io.ReadCloser, error) {
+	r, err := s.client.Bucket(s.bucket).Object(key).NewRangeReader(ctx, offset, length)
+	if err != nil {
+		return nil, fmt.Errorf("gcs store: get range %q [%d,%d): %w", key, offset, offset+length, err)
+	}
+	return r, nil
+}
+
 // PutWriter opens a GCS resumable upload using storage.NewWriter.
 // storage.NewWriter is an io.WriteCloser; calling Close commits the upload.
 // We wrap it in gcsWriter so that Close returns the underlying error.

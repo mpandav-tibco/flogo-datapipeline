@@ -17,7 +17,7 @@ matched object becomes one partition. Implemented in
 |---|---|---|:--:|---|
 | `prefix` | string | — | ✅ | Object glob, e.g. `data/2024/*.parquet`. |
 | `format` | string | — | ✅ | Inner source type: `csv`, `parquet`, `jsonlines`, … Format-specific keys (e.g. `hasHeader`, `delimiter`) are passed through to it. |
-| `download` | bool | format-dependent | — | Spool each object to a temp file before parsing. Always on for `parquet` (needs random access). |
+| `download` | bool | format-dependent | — | Spool each object to a temp file before parsing. Implied for `parquet`; but when the store supports ranged reads (S3/GCS/ADLS) and the object size is known, `parquet` instead uses range GETs — fetching only the footer and the selected column chunks, with no whole-object download or temp file. |
 
 ### S3 keys
 

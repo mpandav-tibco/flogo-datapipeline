@@ -210,6 +210,22 @@ func (s *s3Store) GetReader(ctx context.Context, key string) (io.ReadCloser, err
 	return out.Body, nil
 }
 
+// GetRange returns a reader over [offset, offset+length) via an S3 ranged GET,
+// so Parquet reads fetch only the footer and the selected column chunks instead
+// of the whole object.
+func (s *s3Store) GetRange(ctx context.Context, key string, offset, length int64) (io.ReadCloser, error) {
+	rng := fmt.Sprintf("bytes=%d-%d", offset, offset+length-1)
+	out, err := s.client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(key),
+		Range:  aws.String(rng),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("s3 store: get range %q %s: %w", key, rng, err)
+	}
+	return out.Body, nil
+}
+
 // PutWriter implements multipart upload via an io.Pipe.
 // The upload is committed when the caller calls Close on the returned writer.
 // If the process crashes mid-upload, S3 retains incomplete parts — configure
