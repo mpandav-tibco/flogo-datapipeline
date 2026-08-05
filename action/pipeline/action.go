@@ -1068,7 +1068,14 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 	}
 
 	if def.Checkpoint.DeleteOnSuccess {
-		_ = ckpt.Delete(resumeKey)
+		// A failed delete leaves a stale checkpoint behind, which is harmless in
+		// isolation (a fresh run of a completed pipeline simply doesn't need it,
+		// and any FUTURE run overwrites it before ever reading it) but worth
+		// surfacing rather than silently swallowing, matching saveCheckpoint's
+		// own "warn and continue" pattern below.
+		if err := ckpt.Delete(resumeKey); err != nil {
+			runLog.Warnf("checkpoint delete failed (continuing; a stale checkpoint may remain): %v", err)
+		}
 	} else {
 		saveCheckpoint(runLog, ckpt, resumeKey, def.Source.Type, out.RowsProcessed, src, winOp, math.MaxInt64)
 		a.recorder.CheckpointSaved(a.ref)

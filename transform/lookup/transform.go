@@ -205,6 +205,16 @@ func (l *lookupTransform) fetchWithCache(key string) (map[string]interface{}, er
 	return v.(map[string]interface{}), nil
 }
 
+// fetch issues the enrichment HTTP call for key and decodes the JSON response.
+//
+// Known limitation: the request is created with context.Background(), not a
+// context derived from the pipeline run, because transform.Transform.Apply
+// (see transform/transform.go) takes no context.Context parameter at all —
+// threading one through would mean an interface-level change touching every
+// transform implementation, not just this one. In practice this only means a
+// cancelled pipeline waits for the in-flight request's own client.Timeout
+// (default 5s, see the package doc's "timeoutMs" config) to elapse rather
+// than aborting immediately; it is a bounded delay, not an unbounded hang.
 func (l *lookupTransform) fetch(key string) (map[string]interface{}, error) {
 	// Accept both {keyField} and ${keyField} so users familiar with the source
 	// path templating (which uses ${date}) aren't surprised. Replace the

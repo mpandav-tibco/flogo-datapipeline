@@ -62,6 +62,13 @@ func introspectKafkaTopics(brokers []string, cfg map[string]interface{}) ([]stri
 	if err != nil {
 		return nil, fmt.Errorf("kafka config: %w", err)
 	}
+	// Introspection is a one-off, interactive Studio call (unlike the kafka
+	// source/sink's long-lived connections, which legitimately want
+	// BuildSaramaConfig's shared defaults) — it should fail fast rather than
+	// block for sarama's default Net.DialTimeout (30s) if a broker address is
+	// wrong or unreachable. sc.Admin.Timeout already defaults to a reasonable
+	// 3s (sarama's own default), so only the dial timeout needs tightening.
+	sc.Net.DialTimeout = 8 * time.Second
 	admin, err := sarama.NewClusterAdmin(brokers, sc)
 	if err != nil {
 		return nil, fmt.Errorf("connect to kafka: %w", err)

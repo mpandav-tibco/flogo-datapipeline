@@ -148,6 +148,17 @@ func TestEnterprise_CDC_MultiPartition_KafkaDebeziumToJDBC(t *testing.T) {
 	if out.RowsProcessed != 11 {
 		t.Errorf("RowsProcessed = %d, want 11 (all messages are well-formed)", out.RowsProcessed)
 	}
+	// RowsDeleted must be 1, not 2: the stream has two delete ops (id=5, id=2),
+	// but id=5's delete is immediately superseded by a recreate later in the
+	// SAME flush (batchSize=5000 default, so all 11 messages land in one
+	// flush) — writeBatchWithOp's removeStalePendingDelete cancels id=5's
+	// pending delete out before any SQL runs (see sink/jdbc/sink.go), so only
+	// id=2's delete ever reaches the database as a real DELETE statement.
+	// This is the multipartition counterpart of the delete-then-recreate
+	// ordering fix verified by TestJDBCSink_Live_DeleteThenRecreateSameKey_AllDialects.
+	if out.RowsDeleted != 1 {
+		t.Errorf("RowsDeleted = %d, want 1 (only id=2's delete reaches the DB; id=5's delete is cancelled by its same-flush recreate)", out.RowsDeleted)
+	}
 
 	rows, err := db.Query("SELECT id, name, status FROM " + table + " ORDER BY id")
 	if err != nil {
