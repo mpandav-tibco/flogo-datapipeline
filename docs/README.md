@@ -30,6 +30,7 @@ dead-letter branch) as one self-contained binary — no JVM, no cluster, no SaaS
 - [Reliability & incremental load](reliability.md) — checkpoint/resume and high-water-mark watermarks
 - [Scaling & coordination](scaling.md) — single / sharded / distributed execution
 - [Data quality](data-quality.md) — validation rules, DQ expectations, schema drift, and DLQ routing
+- [Data contracts](data-contracts.md) — a portable schema + quality + SLA artifact, checked at design time and run time
 
 ## Operate
 

@@ -167,13 +167,19 @@ Throughput and memory knobs.
 `metrics` (`prometheus` \| `otel`), backend `options`, and a `stallSeconds`
 threshold. See [Observability](observability.md).
 
+## `contract` (optional)
+
+A portable **data contract** for the pipeline's output — schema + data-quality
++ SLA bundled as one versioned artifact, checked at both design time
+(`-validate`) and run time. See [Data contracts](data-contracts.md).
+
 ## Run output
 
 Every run returns a summary ([`action/pipeline/action.go`](../action/pipeline/action.go)):
 
 | Field | Meaning |
 |---|---|
-| `status` | `completed` \| `partial` \| `failed` |
+| `status` | `completed` \| `partial` \| `failed` — `partial` also covers a completed run that breached a [contract](data-contracts.md)'s `maxDurationMs` SLA |
 | `rowsProcessed` | rows read from the source |
 | `rowsWritten` | rows written to the sink |
 | `rowsFailed` | rows routed to the DLQ / errored |
