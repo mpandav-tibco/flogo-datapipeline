@@ -21,7 +21,7 @@ export KAFKA_TEST_BROKER    ?= localhost:9092
 export DP_TEST_GCS_ENDPOINT ?= http://127.0.0.1:4443/storage/v1/
 export DP_TEST_AZURITE_URL  ?= http://127.0.0.1:10000/devstoreaccount1
 
-.PHONY: help build vet test test-unit test-integration test-integration-up test-integration-down
+.PHONY: help build vet test test-unit test-extension-example test-integration test-integration-up test-integration-down
 
 help: ## List available targets
 	@grep -hE '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | sort | \
@@ -38,6 +38,9 @@ test: ## Run the whole suite (live tests skip without backends)
 
 test-unit: ## Run the fast unit tests only (excludes the integration package)
 	go test $$(go list ./... | grep -v /integration)
+
+test-extension-example: ## Build & test the out-of-tree example plugin module
+	cd examples/extension-plugin && GOWORK=off go test ./...
 
 test-integration-up: ## Start the live backends and block until they are ready
 	$(COMPOSE) up -d
