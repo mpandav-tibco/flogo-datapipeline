@@ -27,6 +27,12 @@ de-duplication so repeated keys hit the cache, not the network. Implemented in
 - HTTP `404` returns nils (not an error); other `4xx`/`5xx` and decode failures trigger
   `onError`.
 - The outbound URL is subject to [SSRF protection](../security.md).
+- **Known limitation:** an in-flight lookup request isn't cancelled early if the
+  pipeline run itself is cancelled — it runs to its own `timeoutMs` (default
+  5000ms) before the transform notices. This is a bounded delay (not a hang),
+  and a full fix would require threading `context.Context` through every
+  transform's `Apply` method, not just this one; see the doc comment on
+  `lookupTransform.fetch` in [`transform/lookup/transform.go`](../../transform/lookup/transform.go).
 
 ## Example
 

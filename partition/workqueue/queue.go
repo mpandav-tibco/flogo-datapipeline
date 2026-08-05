@@ -84,6 +84,16 @@ type WorkQueue interface {
 
 // MemoryQueue is an in-process work queue for development and single-instance
 // pipelines. Not suitable for distributed use — state is lost on restart.
+//
+// items has no eviction policy — entries are only ever added (by Enqueue),
+// never removed, even after Complete/Fail. This is safe in practice: a fresh
+// MemoryQueue is constructed per pipeline run (see scaling.BuildQueue) and
+// scoped to that run's own partition count, so it is bounded by one run's
+// partition count and reclaimed by the GC once the run finishes — it is not
+// a long-lived singleton that accumulates across runs. Genuinely long-lived,
+// unbounded-scale distributed coordination should use RedisQueue or
+// PostgresQueue instead (both have lease/TTL-based cleanup), which is what
+// production deployments are documented to use (see docs/scaling.md).
 type MemoryQueue struct {
 	mu    sync.Mutex
 	items map[string]*WorkItem
