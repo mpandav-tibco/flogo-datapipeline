@@ -96,13 +96,13 @@ Three enterprise-governance gaps shipped this cycle. Each obeys the doctrine
 
 ## 5. Track A — Transforms
 
-Current set (15): `filter`, `map`, `validate`, `lookup/enrich` (HTTP), `parse`,
+Current set (16): `filter`, `map`, `validate`, `lookup/enrich` (HTTP), `parse`,
 `hwm`, `schemadrift`, `dq`, `cast`, `explode`, `flatten`, `join`, `union`, `window`,
-`router/split`.
+`router/split`, `broadcast/tee`.
 
 ### Tier 1 — highest value, pure map
 
-✅ **Shipped:** dataset / broadcast **`join`**, **`explode`**, **`flatten`**, **`cast`**, conditional **`router` / `split`**.
+✅ **Shipped:** dataset / broadcast **`join`**, **`explode`**, **`flatten`**, **`cast`**, conditional **`router` / `split`**, unconditional fan-out **`broadcast` / `tee`** (write every row to N additional sinks, "read once, stream anywhere").
 
 Remaining:
 

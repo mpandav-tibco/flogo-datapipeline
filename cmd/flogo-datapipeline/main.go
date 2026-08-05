@@ -114,6 +114,7 @@ import (
 	_ "github.com/mpandav-tibco/flogo-datapipeline/transform/mapper" // Field projection / rename / derive
 
 	// Additional transforms (gap-08)
+	_ "github.com/mpandav-tibco/flogo-datapipeline/transform/broadcast"   // Fan-out ("tee") — write every row to N additional sinks unconditionally
 	_ "github.com/mpandav-tibco/flogo-datapipeline/transform/cast"        // Column type casting
 	_ "github.com/mpandav-tibco/flogo-datapipeline/transform/dq"          // Data-quality expectations with pass-rate thresholds
 	_ "github.com/mpandav-tibco/flogo-datapipeline/transform/explode"     // Expand an array column into one row per element

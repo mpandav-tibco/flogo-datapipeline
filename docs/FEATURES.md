@@ -7,7 +7,7 @@
 > metrics, scaling, pipeline definition). Everything is code-derived from the
 > `init()`/`Register(...)` calls and config structs.
 
-**At a glance:** 12 source families · 10 sink families (incl. DLQ) · 15 transforms ·
+**At a glance:** 12 source families · 10 sink families (incl. DLQ) · 16 transforms ·
 2 checkpoint backends · 3 watermark backends · 2 metrics backends · 3 scaling modes.
 
 ## Sources → [index](sources.md)
@@ -43,6 +43,7 @@
 | [`explode`](transforms/explode.md) | expand an array column into one row per element |
 | [`flatten`](transforms/flatten.md) | flatten nested-object columns into dotted columns |
 | [`router`, `split`](transforms/router.md) | N-way route rows to different sinks by predicate (conditional split) |
+| [`broadcast`, `tee`](transforms/broadcast.md) | fan out every row to N additional sinks unconditionally, then continue downstream |
 | [`join`](transforms/join.md) | keyed stream-table join against a source-loaded reference dataset |
 | [`window`](transforms/window.md) | event-time windowed aggregation (tumbling / sliding / session / global) |
 | [`union`](transforms/union.md) | append bounded secondary datasets (N→1, `UNION ALL`) |
