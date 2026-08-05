@@ -127,12 +127,22 @@ services:
       KAFKA_LISTENER_NAME_MTLS_SSL_TRUSTSTORE_TYPE: "PEM"
       KAFKA_LISTENER_NAME_MTLS_SSL_TRUSTSTORE_LOCATION: "/etc/kafka/secrets/ca.crt"
       KAFKA_LISTENER_NAME_MTLS_SSL_CLIENT_AUTH: "required"
-      # --- CLIENTSASL: SASL/PLAIN over plaintext, no TLS ---
-      KAFKA_SASL_ENABLED_MECHANISMS: "PLAIN"
+      # --- CLIENTSASL: SASL/PLAIN and SASL/SCRAM over plaintext, no TLS.
+      # SCRAM credentials aren't static JAAS entries (unlike PLAIN) — they
+      # live in cluster metadata and must be created after the broker is up,
+      # e.g.: docker compose exec kafka /opt/kafka/bin/kafka-configs.sh
+      #   --bootstrap-server localhost:9092 --alter --add-config
+      #   'SCRAM-SHA-256=[password=testpass256]' --entity-type users
+      #   --entity-name testuser256
+      KAFKA_SASL_ENABLED_MECHANISMS: "PLAIN,SCRAM-SHA-256,SCRAM-SHA-512"
       KAFKA_LISTENER_NAME_CLIENTSASL_PLAIN_SASL_JAAS_CONFIG: >-
         org.apache.kafka.common.security.plain.PlainLoginModule required
         username="admin" password="admin-secret"
         user_admin="admin-secret" user_testuser="testpass123";
+      KAFKA_LISTENER_NAME_CLIENTSASL_SCRAM-SHA-256_SASL_JAAS_CONFIG: >-
+        org.apache.kafka.common.security.scram.ScramLoginModule required;
+      KAFKA_LISTENER_NAME_CLIENTSASL_SCRAM-SHA-512_SASL_JAAS_CONFIG: >-
+        org.apache.kafka.common.security.scram.ScramLoginModule required;
 
   gcs:
     image: fsouza/fake-gcs-server:latest

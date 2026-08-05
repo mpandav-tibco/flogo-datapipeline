@@ -261,6 +261,81 @@ func TestKafkaSource_SASLPlain_Live(t *testing.T) {
 	}
 }
 
+// TestKafkaSource_SASLScram256_Live proves the source authenticates over
+// SASL/SCRAM-SHA-256 with valid credentials and streams messages correctly —
+// a distinct code path from PLAIN (kafkautil.BuildSaramaConfig wires a
+// SCRAMClientGeneratorFunc via xdg-go/scram for SCRAM mechanisms). The SCRAM
+// user is provisioned dynamically in cluster metadata (not a static JAAS
+// entry like PLAIN) by `make test-integration-up` via kafka-configs.sh;
+// KAFKA_TEST_SCRAM_USER/KAFKA_TEST_SCRAM_PASSWORD must match what was
+// provisioned (Makefile defaults: testuser256/testpass256).
+func TestKafkaSource_SASLScram256_Live(t *testing.T) {
+	broker := os.Getenv("KAFKA_TEST_SASL_BROKER")
+	plainBroker := os.Getenv("KAFKA_TEST_BROKER")
+	user := os.Getenv("KAFKA_TEST_SCRAM_USER")
+	pass := os.Getenv("KAFKA_TEST_SCRAM_PASSWORD")
+	if broker == "" || plainBroker == "" || user == "" || pass == "" {
+		t.Skip("set KAFKA_TEST_SASL_BROKER, KAFKA_TEST_BROKER, KAFKA_TEST_SCRAM_USER, KAFKA_TEST_SCRAM_PASSWORD to run this live SCRAM-SHA-256 test (provisioned by `make test-integration-up`)")
+	}
+	const n = 5
+	ts := time.Now().UnixNano()
+	topic := fmt.Sprintf("dp-scram-%d", ts)
+	group := fmt.Sprintf("dp-scram-grp-%d", ts)
+
+	setupCfg := sarama.NewConfig()
+	setupCfg.Version = sarama.V2_6_0_0
+	setupCfg.Producer.Return.Successes = true
+	admin, err := sarama.NewClusterAdmin([]string{plainBroker}, setupCfg)
+	if err != nil {
+		t.Fatalf("cluster admin (plaintext setup): %v", err)
+	}
+	defer admin.Close()
+	if err := admin.CreateTopic(topic, &sarama.TopicDetail{NumPartitions: 1, ReplicationFactor: 1}, false); err != nil {
+		t.Fatalf("create topic: %v", err)
+	}
+	t.Cleanup(func() { _ = admin.DeleteTopic(topic) })
+
+	prod, err := sarama.NewSyncProducer([]string{plainBroker}, setupCfg)
+	if err != nil {
+		t.Fatalf("producer (plaintext setup): %v", err)
+	}
+	for i := 1; i <= n; i++ {
+		val, _ := json.Marshal(map[string]interface{}{"id": i})
+		if _, _, perr := prod.SendMessage(&sarama.ProducerMessage{Topic: topic, Value: sarama.ByteEncoder(val)}); perr != nil {
+			t.Fatalf("produce %d: %v", i, perr)
+		}
+	}
+	_ = prod.Close()
+
+	const passwordEnv = "DP_TEST_KAFKA_SCRAM_PASSWORD"
+	t.Setenv(passwordEnv, pass)
+
+	src, err := newKafkaSource(map[string]interface{}{
+		"brokers": broker, "topic": topic, "groupId": group,
+		"startOffset": "earliest", "deserializer": "json", "pollTimeoutMs": 2000,
+		"saslMechanism": "SCRAM-SHA-256", "saslUser": user, "saslPasswordEnv": passwordEnv,
+	})
+	if err != nil {
+		t.Fatalf("newKafkaSource (SASL/SCRAM-SHA-256): %v", err)
+	}
+	defer src.Close()
+
+	total := 0
+	deadline := time.Now().Add(20 * time.Second)
+	for total < n && time.Now().Before(deadline) {
+		b, rerr := src.ReadBatch(10)
+		if rerr != nil {
+			t.Fatalf("ReadBatch: %v", rerr)
+		}
+		if b != nil {
+			total += b.Len()
+		}
+	}
+	if total != n {
+		t.Fatalf("SASL/SCRAM-SHA-256 streamed %d messages, want %d", total, n)
+	}
+}
+
 // TestKafkaSource_SASLPlain_WrongPassword_Live proves a wrong password is
 // rejected with a clear error, not silently allowed or hung.
 func TestKafkaSource_SASLPlain_WrongPassword_Live(t *testing.T) {
