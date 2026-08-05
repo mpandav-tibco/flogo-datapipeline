@@ -43,12 +43,13 @@ jobs:
         run: make vet
 
       - name: Lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v7
         with:
           # Pinned to a v2.x release: .golangci.yml uses the v2 config format
           # (see its own header comment), which golangci-lint v1.x cannot
           # parse. Verified locally against this exact config (0 issues)
-          # with golangci-lint v2.12.2 before wiring this in.
+          # with golangci-lint v2.12.2 before wiring this in. Requires
+          # golangci-lint-action v7+ — v6 hard-rejects any v2.x version string.
           version: v2.12.2
 
       - name: Unit tests (live-gated tests skip cleanly without backends)
