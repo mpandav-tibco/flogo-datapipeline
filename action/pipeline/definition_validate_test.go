@@ -174,6 +174,57 @@ func TestValidateContract(t *testing.T) {
 		}
 	})
 
+	t.Run("reconciliation alone (with both queries) is a valid, enforceable contract", func(t *testing.T) {
+		d := base()
+		d.Contract = &ContractDef{Reconciliation: &ReconciliationDef{
+			Enabled: true, SourceCountQuery: "SELECT COUNT(*) FROM a", SinkCountQuery: "SELECT COUNT(*) FROM b",
+		}}
+		if err := d.Validate(); err != nil {
+			t.Errorf("reconciliation-only contract should be valid: %v", err)
+		}
+	})
+
+	t.Run("reconciliation missing sourceCountQuery/sinkCountQuery is rejected", func(t *testing.T) {
+		d := base()
+		d.Contract = &ContractDef{Reconciliation: &ReconciliationDef{Enabled: true, SinkCountQuery: "SELECT COUNT(*) FROM b"}}
+		if err := d.Validate(); err == nil {
+			t.Error("expected an error when sourceCountQuery is missing")
+		}
+		d = base()
+		d.Contract = &ContractDef{Reconciliation: &ReconciliationDef{Enabled: true, SourceCountQuery: "SELECT COUNT(*) FROM a"}}
+		if err := d.Validate(); err == nil {
+			t.Error("expected an error when sinkCountQuery is missing")
+		}
+	})
+
+	t.Run("reconciliation invalid onMismatch is rejected", func(t *testing.T) {
+		d := base()
+		d.Contract = &ContractDef{Reconciliation: &ReconciliationDef{
+			Enabled: true, SourceCountQuery: "SELECT COUNT(*) FROM a", SinkCountQuery: "SELECT COUNT(*) FROM b", OnMismatch: "bogus",
+		}}
+		if err := d.Validate(); err == nil {
+			t.Error("expected an error for an invalid reconciliation.onMismatch")
+		}
+	})
+
+	t.Run("reconciliation negative maxDriftPct is rejected", func(t *testing.T) {
+		d := base()
+		d.Contract = &ContractDef{Reconciliation: &ReconciliationDef{
+			Enabled: true, SourceCountQuery: "SELECT COUNT(*) FROM a", SinkCountQuery: "SELECT COUNT(*) FROM b", MaxDriftPct: -0.1,
+		}}
+		if err := d.Validate(); err == nil {
+			t.Error("expected an error for a negative maxDriftPct")
+		}
+	})
+
+	t.Run("disabled reconciliation with no other contract fields is still an empty contract", func(t *testing.T) {
+		d := base()
+		d.Contract = &ContractDef{Reconciliation: &ReconciliationDef{Enabled: false, SourceCountQuery: "x", SinkCountQuery: "y"}}
+		if err := d.Validate(); err == nil {
+			t.Error("expected an error: a disabled reconciliation block declares nothing to enforce")
+		}
+	})
+
 	t.Run("schema cross-check: matching source.columns passes", func(t *testing.T) {
 		d := base()
 		d.Source.Columns = []ColumnDef{{Name: "id", Type: "int"}, {Name: "amount", Type: "decimal"}}

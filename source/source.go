@@ -50,6 +50,22 @@ type Committer interface {
 	Commit(processedRows int64) error
 }
 
+// Reconciler is an optional Source interface for sources that can run an
+// independent trust-verification query against their own already-open
+// connection — separate from the pipeline's normal ReadBatch path — used by
+// a data contract's optional post-run reconciliation check (see
+// action/pipeline's ContractDef.Reconciliation): comparing an independently
+// queried source row count against the sink's, to catch cases where the
+// pipeline's own internal counters (RowsProcessed/RowsWritten) don't actually
+// reflect what ended up at either end (e.g. a bug silently dropping rows).
+// Only jdbc implements this today; other source types simply don't.
+type Reconciler interface {
+	// ReconciliationCount runs query (typically "SELECT COUNT(*) FROM ...")
+	// against the source's own connection and returns the single integer
+	// result. Must not affect the source's own read position/cursor.
+	ReconciliationCount(query string) (int64, error)
+}
+
 // PartitionableSource extends Source with the ability to enumerate and open
 // independent sub-ranges of the data, enabling multi-instance parallel reads.
 // Not all formats support partitioning; the pipeline falls back to single-

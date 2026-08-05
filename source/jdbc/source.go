@@ -104,6 +104,7 @@ type jdbcCursor struct {
 
 // Ensure the interface is satisfied at compile time.
 var _ source.PartitionableSource = (*jdbcSource)(nil)
+var _ source.Reconciler = (*jdbcSource)(nil)
 
 // newJDBCSource constructs a jdbcSource from a config map.
 func newJDBCSource(cfg map[string]interface{}) (source.Source, error) {
@@ -569,6 +570,19 @@ func (s *jdbcSource) Close() error {
 		return nil
 	}
 	return s.db.Close()
+}
+
+// ReconciliationCount implements source.Reconciler: runs query (typically
+// "SELECT COUNT(*) FROM ...") against this source's own connection —
+// independent of the ReadBatch/keyset-pagination path — and returns the
+// single integer result. Used by a data contract's optional post-run
+// reconciliation check, not by normal reads.
+func (s *jdbcSource) ReconciliationCount(query string) (int64, error) {
+	var n int64
+	if err := s.db.QueryRow(query).Scan(&n); err != nil {
+		return 0, fmt.Errorf("jdbc source: reconciliation query: %w", err)
+	}
+	return n, nil
 }
 
 // Cursor returns a JSON snapshot of the current read position.

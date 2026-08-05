@@ -401,6 +401,50 @@ type ContractDef struct {
 	// the run summary / audit log / lineage rather than silently reporting
 	// "completed". Zero (default) means no duration SLA.
 	MaxDurationMs int64 `json:"maxDurationMs,omitempty"`
+
+	// Reconciliation configures an optional post-run trust-verification check:
+	// independently querying the source and sink's OWN row counts (bypassing
+	// the pipeline's internal RowsProcessed/RowsWritten counters entirely) and
+	// comparing them — catching cases where the pipeline's own accounting
+	// doesn't reflect what's actually at either end. Nil means disabled.
+	Reconciliation *ReconciliationDef `json:"reconciliation,omitempty"`
+}
+
+// ReconciliationDef configures a data contract's optional post-run
+// reconciliation check (see ContractDef.Reconciliation). Only sources/sinks
+// implementing source.Reconciler / sink.Reconciler support this — today, only
+// jdbc. A source/sink type that doesn't implement it is skipped with a
+// warning at run time (documented scope limit, not silently missing).
+//
+// Example:
+//
+//	"reconciliation": {
+//	  "enabled": true,
+//	  "sourceCountQuery": "SELECT COUNT(*) FROM orders",
+//	  "sinkCountQuery": "SELECT COUNT(*) FROM orders_replica",
+//	  "maxDriftPct": 0.001,
+//	  "onMismatch": "fail"
+//	}
+type ReconciliationDef struct {
+	Enabled bool `json:"enabled,omitempty"`
+	// SourceCountQuery / SinkCountQuery are raw SQL queries (typically
+	// "SELECT COUNT(*) FROM ...") run against the source's / sink's own
+	// connection independently of the pipeline's normal read/write path.
+	// Both are REQUIRED when Enabled — there is no auto-derivation from
+	// source.table/sink.table in this version (a deliberate scope limit: an
+	// arbitrary raw query, e.g. with a WHERE clause matching the pipeline's
+	// own filter, is more broadly useful than a naive unconditional COUNT).
+	SourceCountQuery string `json:"sourceCountQuery,omitempty"`
+	SinkCountQuery   string `json:"sinkCountQuery,omitempty"`
+	// MaxDriftPct is the allowed relative difference between the two counts,
+	// e.g. 0.01 = 1%. Zero (default) requires an EXACT match.
+	MaxDriftPct float64 `json:"maxDriftPct,omitempty"`
+	// OnMismatch: "warn" (default) logs the mismatch but leaves the run's
+	// status untouched; "fail" reclassifies an otherwise-"completed" run to
+	// "partial" (same non-aborting convention as MaxDurationMs — the
+	// reconciliation query only runs after the pipeline has already finished
+	// writing, so there is nothing left to abort).
+	OnMismatch string `json:"onMismatch,omitempty"`
 }
 
 // ObservabilityDef configures the metrics backend for a pipeline.
@@ -557,6 +601,9 @@ func (d *Definition) defaults() {
 		if d.Contract.OnViolation == "" {
 			d.Contract.OnViolation = "route" // matches the dq transform's own default (onFail)
 		}
+		if d.Contract.Reconciliation != nil && d.Contract.Reconciliation.Enabled && d.Contract.Reconciliation.OnMismatch == "" {
+			d.Contract.Reconciliation.OnMismatch = "warn"
+		}
 	}
 }
 
@@ -619,8 +666,23 @@ func (d *Definition) validate() error {
 		default:
 			return fmt.Errorf("pipeline definition: contract.onViolation must be 'route', 'fail', 'warn', or 'drop', got %q", d.Contract.OnViolation)
 		}
-		if len(d.Contract.Expectations) == 0 && len(d.Contract.Schema) == 0 && d.Contract.MaxDurationMs == 0 {
-			return fmt.Errorf("pipeline definition: contract is present but declares nothing to enforce (set schema, expectations, and/or maxDurationMs)")
+		reconciliationEnabled := d.Contract.Reconciliation != nil && d.Contract.Reconciliation.Enabled
+		if len(d.Contract.Expectations) == 0 && len(d.Contract.Schema) == 0 && d.Contract.MaxDurationMs == 0 && !reconciliationEnabled {
+			return fmt.Errorf("pipeline definition: contract is present but declares nothing to enforce (set schema, expectations, maxDurationMs, and/or reconciliation)")
+		}
+		if reconciliationEnabled {
+			switch d.Contract.Reconciliation.OnMismatch {
+			case "", "warn", "fail":
+				// valid
+			default:
+				return fmt.Errorf("pipeline definition: contract.reconciliation.onMismatch must be 'warn' or 'fail', got %q", d.Contract.Reconciliation.OnMismatch)
+			}
+			if d.Contract.Reconciliation.SourceCountQuery == "" || d.Contract.Reconciliation.SinkCountQuery == "" {
+				return fmt.Errorf("pipeline definition: contract.reconciliation is enabled but requires both sourceCountQuery and sinkCountQuery")
+			}
+			if d.Contract.Reconciliation.MaxDriftPct < 0 {
+				return fmt.Errorf("pipeline definition: contract.reconciliation.maxDriftPct must be >= 0, got %v", d.Contract.Reconciliation.MaxDriftPct)
+			}
 		}
 		// Design-time schema cross-check: only possible when the source ALSO
 		// declares an explicit schema (Source.Columns) — a source that
