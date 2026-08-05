@@ -337,6 +337,72 @@ type DLQDef struct {
 	OnFull string `json:"onFull,omitempty"`
 }
 
+// ContractDef declares a portable "data contract" for the pipeline's output —
+// a single, versioned artifact bundling schema + data-quality rules + an SLA,
+// in the spirit of the Linux Foundation's Open Data Contract Standard (ODCS):
+// a producer-consumer agreement stating what the pipeline promises to deliver.
+//
+// This does NOT add new runtime machinery — it formalizes primitives the
+// engine already has (typed schema via ColumnDef, the dq transform's own
+// expectation engine, and the stallSeconds SLA) into one artifact that's
+// checked at BOTH design time (Validate(), so a broken contract is a CI
+// failure via the -validate CLI flag, not a runtime surprise) and run time.
+//
+// Example JSON:
+//
+//	"contract": {
+//	  "version": "1.2.0",
+//	  "schema": [{"name":"order_id","type":"int"},{"name":"amount","type":"decimal"}],
+//	  "expectations": [{"name":"amount not null","type":"expectColumnNotNull","column":"amount"}],
+//	  "qualityThreshold": 0.99,
+//	  "onViolation": "fail",
+//	  "maxDurationMs": 300000
+//	}
+type ContractDef struct {
+	// Version is an informational contract version string (e.g. semver),
+	// carried through for audit/documentation purposes only — not enforced.
+	Version string `json:"version,omitempty"`
+
+	// Schema is the contract's expected OUTPUT column list. When BOTH this and
+	// Source.Columns are declared, Validate() cross-checks them at design
+	// time (name+type must match, order-independent) — catching config drift
+	// before the pipeline ever runs. A contract Schema declared without
+	// Source.Columns is NOT checked at design time (the source's schema isn't
+	// known until the run starts, e.g. it's introspected from a database or
+	// inferred from the first record) — this is a documented scope limit, not
+	// a silent gap.
+	Schema []ColumnDef `json:"schema,omitempty"`
+
+	// Expectations, QualityThreshold, OnViolation, ErrorSinkType and
+	// ErrorSinkConfig reuse the dq transform's own config vocabulary exactly
+	// (expectations/qualityThreshold/onFail/errorSinkType/errorSinkConfig) —
+	// see transform/dq. When Expectations is non-empty, the engine
+	// auto-appends a dq transform stage built from these fields to the END of
+	// the transform chain (after any user-declared transforms, validating
+	// what's about to reach the sink) UNLESS the pipeline already has an
+	// explicit dq stage — so contract authors don't hand-write the same dq
+	// stage the contract already declares, and a pipeline with its own
+	// (possibly different) dq gate is never double-gated.
+	Expectations []interface{} `json:"expectations,omitempty"`
+	// QualityThreshold is the overall score in [0,1] below which OnViolation
+	// fires. Zero means use dq's own default (0.95).
+	QualityThreshold float64 `json:"qualityThreshold,omitempty"`
+	// OnViolation is dq's "onFail" vocabulary: "route" | "fail" | "warn" | "drop".
+	// Empty means dq's own default ("route").
+	OnViolation     string                 `json:"onViolation,omitempty"`
+	ErrorSinkType   string                 `json:"errorSinkType,omitempty"`
+	ErrorSinkConfig map[string]interface{} `json:"errorSinkConfig,omitempty"`
+
+	// MaxDurationMs is an optional SLA ceiling on total run wall-clock time.
+	// Checked AFTER the run completes (there is no cheap way to preempt a
+	// pipeline mid-batch); exceeding it does not abort an in-progress run, but
+	// the completed run's status is set to "partial" (matching the existing
+	// RowsFailed-causes-partial convention) so the SLA breach is visible in
+	// the run summary / audit log / lineage rather than silently reporting
+	// "completed". Zero (default) means no duration SLA.
+	MaxDurationMs int64 `json:"maxDurationMs,omitempty"`
+}
+
 // ObservabilityDef configures the metrics backend for a pipeline.
 // Set "metrics" to "prometheus", "otel", or "none" (default).
 // The corresponding backend sub-package must be imported (blank import) for the
@@ -408,6 +474,12 @@ type Definition struct {
 	// failed rows are counted in RowsFailed but not forwarded anywhere.
 	DLQ DLQDef `json:"dlq,omitempty"`
 
+	// Contract declares an optional portable "data contract" (schema + data
+	// quality + SLA bundled as one artifact) for this pipeline's output. Nil
+	// means no contract — existing pipelines are entirely unaffected. See
+	// ContractDef.
+	Contract *ContractDef `json:"contract,omitempty"`
+
 	// Graph is the OPTIONAL explicit DAG topology (nodes + edges), authored in
 	// Studio (or written by hand). It is ADDITIVE: validated when present (unique
 	// node ids, edges reference declared nodes, acyclic). When the graph is
@@ -478,6 +550,14 @@ func (d *Definition) defaults() {
 	if d.DLQ.Type != "" && d.DLQ.OnFull == "" {
 		d.DLQ.OnFull = "block"
 	}
+	if d.Contract != nil {
+		if d.Contract.QualityThreshold == 0 {
+			d.Contract.QualityThreshold = 0.95 // matches the dq transform's own default
+		}
+		if d.Contract.OnViolation == "" {
+			d.Contract.OnViolation = "route" // matches the dq transform's own default (onFail)
+		}
+	}
 }
 
 func (d *Definition) validate() error {
@@ -530,6 +610,37 @@ func (d *Definition) validate() error {
 			// valid
 		default:
 			return fmt.Errorf("pipeline definition: dlq.onFull must be 'block' or 'drop', got %q", d.DLQ.OnFull)
+		}
+	}
+	if d.Contract != nil {
+		switch d.Contract.OnViolation {
+		case "", "route", "fail", "warn", "drop":
+			// valid — same vocabulary as the dq transform's onFail
+		default:
+			return fmt.Errorf("pipeline definition: contract.onViolation must be 'route', 'fail', 'warn', or 'drop', got %q", d.Contract.OnViolation)
+		}
+		if len(d.Contract.Expectations) == 0 && len(d.Contract.Schema) == 0 && d.Contract.MaxDurationMs == 0 {
+			return fmt.Errorf("pipeline definition: contract is present but declares nothing to enforce (set schema, expectations, and/or maxDurationMs)")
+		}
+		// Design-time schema cross-check: only possible when the source ALSO
+		// declares an explicit schema (Source.Columns) — a source that
+		// introspects (jdbc) or infers (csv auto-detect, jsonlines, kafka
+		// json) its schema at runtime has nothing to compare against yet, so
+		// that case is intentionally NOT checked here (see ContractDef.Schema).
+		if len(d.Contract.Schema) > 0 && len(d.Source.Columns) > 0 {
+			srcByName := make(map[string]ColumnDef, len(d.Source.Columns))
+			for _, c := range d.Source.Columns {
+				srcByName[c.Name] = c
+			}
+			for _, want := range d.Contract.Schema {
+				got, ok := srcByName[want.Name]
+				if !ok {
+					return fmt.Errorf("pipeline definition: contract violation — schema declares column %q which source.columns does not have", want.Name)
+				}
+				if want.Type != "" && got.Type != "" && want.Type != got.Type {
+					return fmt.Errorf("pipeline definition: contract violation — column %q type %q does not match source.columns type %q", want.Name, want.Type, got.Type)
+				}
+			}
 		}
 	}
 	// Keyed windowed aggregation requires co-partitioned input: every record for

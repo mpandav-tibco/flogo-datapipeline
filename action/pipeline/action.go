@@ -118,6 +118,29 @@ func newRunLog(pipelineRef, runID string) corelog.Logger {
 	return corelog.ChildLoggerWithFields(flog, fields...)
 }
 
+// finalizeStatus applies the standard runErr/RowsFailed status rules, then
+// the contract's optional MaxDurationMs SLA check (see ContractDef). The SLA
+// check only reclassifies an otherwise-"completed" run — an already
+// failed/partial run isn't further changed. Shared by RunDirect and Run's
+// goroutine so this decision (and the SLA check specifically) has exactly one
+// implementation instead of being duplicated and drifting.
+func (a *DataPipelineAction) finalizeStatus(runLog corelog.Logger, out *Output, runErr error) {
+	switch {
+	case runErr != nil:
+		out.Status = "failed"
+		out.Error = runErr.Error()
+	case out.RowsFailed > 0:
+		out.Status = "partial"
+	default:
+		out.Status = "completed"
+	}
+	if out.Status == "completed" && a.def.Contract != nil && a.def.Contract.MaxDurationMs > 0 && out.DurationMs > a.def.Contract.MaxDurationMs {
+		out.Status = "partial"
+		runLog.Warnf("contract SLA violation: run took %dms, exceeding maxDurationMs=%d — the run's data is otherwise complete and correct, only marked \"partial\" to surface the SLA breach",
+			out.DurationMs, a.def.Contract.MaxDurationMs)
+	}
+}
+
 // RunDirect executes the pipeline synchronously in the calling goroutine and
 // returns its Output. It is used by the REST API server for synchronous run
 // requests (async=false) and by the SDK inline Run() path.
@@ -137,14 +160,9 @@ func (a *DataPipelineAction) RunDirect(ctx context.Context, in *Input) (*Output,
 	out, runErr := a.executePipeline(ctx, in, runLog, runID)
 	out.DurationMs = time.Since(start).Milliseconds()
 
+	a.finalizeStatus(runLog, out, runErr)
 	if runErr != nil {
-		out.Status = "failed"
-		out.Error = runErr.Error()
 		runLog.Errorf("pipeline run failed after %dms: %v", out.DurationMs, runErr)
-	} else if out.RowsFailed > 0 {
-		out.Status = "partial"
-	} else {
-		out.Status = "completed"
 	}
 	runLog.Infof("pipeline run %s — processed=%d written=%d failed=%d dropped=%d deleted=%d duration=%dms",
 		out.Status, out.RowsProcessed, out.RowsWritten, out.RowsFailed, out.RowsDropped, out.RowsDeleted, out.DurationMs)
@@ -184,14 +202,9 @@ func (a *DataPipelineAction) Run(
 		totalDur := time.Since(start)
 		out.DurationMs = totalDur.Milliseconds()
 
+		a.finalizeStatus(runLog, out, runErr)
 		if runErr != nil {
-			out.Status = "failed"
-			out.Error = runErr.Error()
 			runLog.Errorf("pipeline run failed after %dms: %v", out.DurationMs, runErr)
-		} else if out.RowsFailed > 0 {
-			out.Status = "partial"
-		} else {
-			out.Status = "completed"
 		}
 		runLog.Infof("pipeline run %s — processed=%d written=%d failed=%d dropped=%d deleted=%d duration=%dms",
 			out.Status, out.RowsProcessed, out.RowsWritten, out.RowsFailed, out.RowsDropped, out.RowsDeleted, out.DurationMs)
@@ -544,6 +557,36 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 	if inFlightTransforms {
 		for _, td := range def.Transforms {
 			transformCfgs = append(transformCfgs, td.Extra)
+		}
+	}
+
+	// Auto-append a dq transform stage built from the contract's expectations,
+	// after any user-declared transforms (validating what's about to reach the
+	// sink) — UNLESS the pipeline already has an explicit dq stage, so a
+	// pipeline with its own (possibly different) dq gate is never
+	// double-gated. See ContractDef.Expectations.
+	if inFlightTransforms && def.Contract != nil && len(def.Contract.Expectations) > 0 {
+		hasExplicitDQ := false
+		for _, td := range def.Transforms {
+			if td.Type == "dq" {
+				hasExplicitDQ = true
+				break
+			}
+		}
+		if !hasExplicitDQ {
+			contractDQCfg := map[string]interface{}{
+				"type":             "dq",
+				"expectations":     def.Contract.Expectations,
+				"qualityThreshold": def.Contract.QualityThreshold,
+				"onFail":           def.Contract.OnViolation,
+			}
+			if def.Contract.ErrorSinkType != "" {
+				contractDQCfg["errorSinkType"] = def.Contract.ErrorSinkType
+				contractDQCfg["errorSinkConfig"] = def.Contract.ErrorSinkConfig
+			}
+			transformCfgs = append(transformCfgs, contractDQCfg)
+		} else {
+			runLog.Infof("contract.expectations declared but the pipeline already has an explicit dq transform — not auto-appending a second gate")
 		}
 	}
 

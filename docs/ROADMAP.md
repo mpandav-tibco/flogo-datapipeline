@@ -67,7 +67,7 @@ We will **not** build these. Writing them down is the point.
 
 | Horizon | Theme | Highlights |
 |---|---|---|
-| **Delivered** | Foundation + top transforms + streaming + governance | ✅ typed-schema / decimal fidelity · ✅ bounded-state backend (windowing spill store) · ✅ **dataset / broadcast join** · ✅ **explode / flatten** · ✅ **cast** · ✅ event-time **windowing** (tumbling/session/global, checkpoint-resume) · ✅ **conditional router / split** · ✅ **audit log** · ✅ **lineage (OpenLineage)** · ✅ schema-registry **read** (Avro consume) · ✅ dry-run preview · ✅ OOTB packaging (lean `dp-build`, distroless) |
+| **Delivered** | Foundation + top transforms + streaming + governance | ✅ typed-schema / decimal fidelity · ✅ bounded-state backend (windowing spill store) · ✅ **dataset / broadcast join** · ✅ **explode / flatten** · ✅ **cast** · ✅ event-time **windowing** (tumbling/session/global, checkpoint-resume) · ✅ **conditional router / split** · ✅ unconditional fan-out **broadcast / tee** · ✅ **audit log** · ✅ **lineage (OpenLineage)** · ✅ **data contracts** (schema + dq + SLA) · ✅ schema-registry **read** (Avro consume) · ✅ dry-run preview · ✅ OOTB packaging (lean `dp-build`, distroless) |
 | **Now** | Governance + adoption | ✅ **paginated REST/API source** · ⬜ **mask / PII policy** · ⬜ field **encryption** · ⬜ Transform-SDK parity + conformance kit + golden-pipeline CI |
 | **Next** | Enterprise transforms + adoption | ⬜ **keyed dedup** · ⬜ **partial aggregate (combiner)** · ⬜ field **encryption** · ⬜ Avro **produce** · ⬜ `--dry-run` / validate CI mode · ⬜ further connector expansions (native warehouse / lakehouse sinks, MongoDB) |
 | **Later** | Differentiation + platform | ⬜ surrogate-key / sequence · ⬜ partition window fns · ⬜ warehouse & lakehouse connectors (Snowflake / BigQuery / Redshift, Iceberg / Delta) · ⬜ Helm / K8s operator + published images · ⬜ CDC-as-source + delete-capable sink |
@@ -175,6 +175,8 @@ More transforms is *not* the main gap between us and "credible ETL tool." These 
    distroless Dockerfile + K8s Job/CronJob/StatefulSet guidance + Studio manifest
    generation. ⬜ Helm chart · K8s operator/CRD · published images.
 6. **Security & governance.** ✅ Secret references; ✅ **audit log**;
+   ✅ **data contracts** (portable schema + dq + SLA artifact, checked at design
+   time via `-validate` and at run time — see [docs/data-contracts.md](data-contracts.md));
    ⬜ field **masking/PII** policy transform; ⬜ field **encryption**.
 
 ---

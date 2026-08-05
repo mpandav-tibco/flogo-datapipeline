@@ -137,3 +137,78 @@ func TestValidateRejectsNegativePerformanceValues(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateContract(t *testing.T) {
+	base := func() *Definition {
+		return &Definition{Source: SourceDef{Type: "csv"}, Sink: SinkDef{Type: "jsonlines"}}
+	}
+
+	t.Run("nil contract is valid (existing pipelines unaffected)", func(t *testing.T) {
+		d := base()
+		if err := d.Validate(); err != nil {
+			t.Errorf("nil contract should be valid: %v", err)
+		}
+	})
+
+	t.Run("empty contract (nothing to enforce) is rejected", func(t *testing.T) {
+		d := base()
+		d.Contract = &ContractDef{}
+		if err := d.Validate(); err == nil {
+			t.Error("expected an error for a contract that declares nothing to enforce")
+		}
+	})
+
+	t.Run("invalid onViolation is rejected", func(t *testing.T) {
+		d := base()
+		d.Contract = &ContractDef{MaxDurationMs: 1000, OnViolation: "bogus"}
+		if err := d.Validate(); err == nil {
+			t.Error("expected an error for an invalid onViolation")
+		}
+	})
+
+	t.Run("maxDurationMs alone is a valid, enforceable contract", func(t *testing.T) {
+		d := base()
+		d.Contract = &ContractDef{MaxDurationMs: 60000}
+		if err := d.Validate(); err != nil {
+			t.Errorf("maxDurationMs-only contract should be valid: %v", err)
+		}
+	})
+
+	t.Run("schema cross-check: matching source.columns passes", func(t *testing.T) {
+		d := base()
+		d.Source.Columns = []ColumnDef{{Name: "id", Type: "int"}, {Name: "amount", Type: "decimal"}}
+		d.Contract = &ContractDef{Schema: []ColumnDef{{Name: "amount", Type: "decimal"}}}
+		if err := d.Validate(); err != nil {
+			t.Errorf("contract schema matching source.columns should be valid: %v", err)
+		}
+	})
+
+	t.Run("schema cross-check: missing column is a contract violation", func(t *testing.T) {
+		d := base()
+		d.Source.Columns = []ColumnDef{{Name: "id", Type: "int"}}
+		d.Contract = &ContractDef{Schema: []ColumnDef{{Name: "amount", Type: "decimal"}}}
+		if err := d.Validate(); err == nil {
+			t.Error("expected a contract violation: source.columns has no 'amount' column")
+		}
+	})
+
+	t.Run("schema cross-check: type mismatch is a contract violation", func(t *testing.T) {
+		d := base()
+		d.Source.Columns = []ColumnDef{{Name: "amount", Type: "string"}}
+		d.Contract = &ContractDef{Schema: []ColumnDef{{Name: "amount", Type: "decimal"}}}
+		if err := d.Validate(); err == nil {
+			t.Error("expected a contract violation: amount is 'string' in source.columns but 'decimal' in the contract")
+		}
+	})
+
+	t.Run("schema cross-check is skipped when source.columns is not declared", func(t *testing.T) {
+		// The source's schema isn't known at design time (introspected/inferred
+		// at runtime) — a contract schema alone (no source.columns) must not be
+		// rejected; it's simply unchecked until runtime.
+		d := base()
+		d.Contract = &ContractDef{Schema: []ColumnDef{{Name: "amount", Type: "decimal"}}}
+		if err := d.Validate(); err != nil {
+			t.Errorf("contract schema without source.columns should be valid (unchecked at design time): %v", err)
+		}
+	})
+}
