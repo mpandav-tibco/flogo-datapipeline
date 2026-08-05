@@ -1,0 +1,68 @@
+{
+  "name": "orders-rest-to-jsonlines",
+  "type": "flogo:app",
+  "version": "1.0.0",
+  "description": "Pulls a page-paginated 'orders' list from a local REST fixture API and lands it as newline-delimited JSON.",
+  "appModel": "1.1.1",
+  "imports": [
+    "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+    "github.com/project-flogo/contrib/trigger/timer"
+  ],
+  "triggers": [
+    {
+      "id": "pipeline-timer",
+      "ref": "github.com/project-flogo/contrib/trigger/timer",
+      "settings": {
+        "repeating": true,
+        "startDelay": 0,
+        "interval": 86400000
+      },
+      "handlers": [
+        {
+          "settings": {},
+          "action": {
+            "ref": "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+            "settings": {
+              "pipelineRef": "res://pipeline:orders-rest-to-jsonlines"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "resources": [
+    {
+      "id": "pipeline:orders-rest-to-jsonlines",
+      "data": {
+        "name": "orders-rest-to-jsonlines",
+        "description": "Pulls a page-paginated 'orders' list from a local REST fixture API and lands it as newline-delimited JSON.",
+        "version": "1.0.0",
+        "mode": "el",
+        "source": {
+          "type": "rest",
+          "url": "http://localhost:8089/orders",
+          "pagination": {
+            "type": "page",
+            "pageParam": "page",
+            "pageSizeParam": "limit",
+            "pageSize": 10
+          },
+          "columns": [
+            { "name": "id", "type": "int" },
+            { "name": "customer", "type": "string" },
+            { "name": "amount", "type": "float" },
+            { "name": "status", "type": "string" }
+          ]
+        },
+        "sink": {
+          "type": "jsonlines",
+          "path": "./out/orders.jsonl"
+        },
+        "performance": {
+          "batchSize": 5000,
+          "maxMemoryMB": 512
+        }
+      }
+    }
+  ]
+}

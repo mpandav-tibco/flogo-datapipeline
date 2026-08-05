@@ -30,7 +30,7 @@ var (
 		"csv": "source/csv", "jsonlines": "source/jsonlines", "parquet": "source/parquet",
 		"avro": "source/avro",
 		"jdbc": "source/jdbc", "kafka": "source/kafka", "fixedwidth": "source/fixedwidth",
-		"xml": "source/xml", "sectioned": "source/sectioned",
+		"xml": "source/xml", "sectioned": "source/sectioned", "rest": "source/rest",
 		"s3": "source/objstore", "gcs": "source/objstore", "adls": "source/objstore",
 	}
 	sinkPkg = map[string]string{
