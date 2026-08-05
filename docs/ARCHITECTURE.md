@@ -60,19 +60,19 @@ The `datapipeline:` action ([`action/pipeline/action.go`](../action/pipeline/act
 6. Saves checkpoints and advances the watermark as configured.
 7. Emits metrics throughout and returns a run summary.
 
-### ETL / ELT / EL is emergent
+### ETL / ELT / EL execution mode
 
-There is no mode switch in the engine — the shape follows from which transforms you
-declare:
+A top-level `mode` field (`etl` | `el` | `elt`, default `etl`) selects the
+execution strategy:
 
-| Mode | Shape | Use |
+| Mode | Shape | Behaviour |
 |---|---|---|
-| **ETL** | source → transforms → sink | clean / enrich before load |
-| **ELT** | source → minimal transform → sink; logic in the target DB | load raw, transform in-database |
-| **EL** | source → sink (no transforms) | bulk copy / format conversion |
+| **etl** (default) | source → transforms → sink | transforms run in-flight (clean / enrich before load) |
+| **el** | source → sink | in-flight transforms bypassed; declared transforms ignored (warning logged) |
+| **elt** | source → sink; logic in the target DB | raw load like `el`; transforms expected to run in-target, not in-flight (notice logged) |
 
-The Studio surfaces this as an *Execution mode* selector for clarity, but it simply
-reflects the transform chain.
+The Studio surfaces this as an *Execution mode* selector that writes the `mode`
+field.
 
 ### Graph (DAG) execution
 

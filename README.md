@@ -210,17 +210,17 @@ Production data feeds change over time without notice. The schema drift transfor
 
 | Source | What it reads |
 |---|---|
-| CSV | Delimited text files with optional header row; configurable separator |
-| TSV | Tab-separated variant of CSV |
+| CSV / TSV | Delimited text files with optional header row; configurable separator (TSV is the tab-separated variant) |
 | Fixed-Width (EBCDIC) | Positional flat files from mainframe systems; EBCDIC-037/500 encoding, implied decimal support |
 | Parquet | Columnar Parquet files with row-group parallelism and column/predicate pushdown |
 | Avro | Row-oriented Avro Object Container Files (OCF); schema-on-read, header codec auto-detect |
 | XML | Streaming SAX-style XML; one record per named element |
 | JSON Lines / NDJSON | Newline-delimited JSON, one object per row |
 | JDBC | SQL query over PostgreSQL, MySQL, SQL Server, or Oracle with keyset-pagination chunking and high-water-mark predicate injection |
-| Kafka | Consumer group-based consumption with offset checkpointing |
+| Kafka | Consumer group-based consumption with offset checkpointing; JSON, Avro (Confluent Schema Registry), or raw deserialization |
 | Cloud Object Store | Files from S3, Google Cloud Storage, or Azure ADLS Gen2; remote Parquet uses range-GET pushdown (footer + selected column chunks only, no whole-object download) |
 | Text Document (sectioned) | Flat files with a key/value header block plus a delimited body table |
+| Kubernetes Pod Logs (podlog) | Kubernetes / CRI container logs; one record per log line |
 
 ### Sinks (9 + DLQ)
 
@@ -231,7 +231,7 @@ Production data feeds change over time without notice. The schema drift transfor
 | JDBC | Bulk insert / upsert into PostgreSQL, MySQL, SQL Server, or Oracle; configurable conflict strategy, optional auto-migrate |
 | Parquet | Row-group-aligned Parquet output; snappy / gzip / zstd compression |
 | Avro | Row-oriented Avro OCF output; snappy / deflate / zstandard / null, nullable-union schema |
-| Kafka | SyncProducer with configurable acks, compression, and JSON / AVRO serialization |
+| Kafka | SyncProducer with configurable acks and compression; JSON serialization (Avro sink serialization is not yet implemented and falls back to JSON) |
 | Cloud Object Store | S3, GCS, or Azure Blob; output key supports date/uuid macros |
 | Template | Go `text/template` rendering for fixed-width and legacy layouts |
 | Null | Discards all rows (benchmarking and dry-run) |
@@ -281,7 +281,7 @@ Ready-to-run templates in the VS Code extension:
 
 ### Examples (24)
 
-Working examples covering every source type, every transform type, incremental loading (with file / Redis / PostgreSQL watermark backends), schema drift, data quality, event-time windowed aggregation, format conversion, Prometheus and OpenTelemetry metrics, checkpoint/resume, horizontal scaling (sharded and distributed), Kafka streaming, and a full production pipeline composition.
+Working examples covering the common source families and transforms, incremental loading (with file / Redis / PostgreSQL watermark backends), schema drift, data quality, event-time windowed aggregation, format conversion, Prometheus and OpenTelemetry metrics, checkpoint/resume, horizontal scaling (sharded and distributed), Kafka streaming, and a full production pipeline composition.
 
 ---
 

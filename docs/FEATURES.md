@@ -78,14 +78,14 @@ Source  →  [ Transform₁ → Transform₂ → … ]  →  Sink
 
 The action (`action/pipeline`) streams the source in `RecordBatch`es of
 `performance.batchSize` rows through the transform chain into the sink, saving
-checkpoints and advancing watermarks as configured. There is no explicit
-ETL/ELT/EL switch — the *mode* is emergent from which transforms you declare:
+checkpoints and advancing watermarks as configured. An explicit top-level
+`mode` (`etl` | `el` | `elt`, default `etl`) selects the execution strategy:
 
-| Mode | Shape | Typical use |
+| Mode | Shape | Behaviour |
 |---|---|---|
-| **ETL** | Source → transforms → Sink | filter/map/validate/dq before load |
-| **ELT** | Source → minimal transform → Sink, logic in DB | load raw, transform in-database |
-| **EL** | Source → Sink (no transforms) | bulk copy, format conversion |
+| **etl** (default) | Source → transforms → Sink | transforms run in-flight (filter / map / validate / dq before load) |
+| **el** | Source → Sink | in-flight transforms are bypassed; rows are written exactly as read (any declared transforms are ignored, with a warning) |
+| **elt** | Source → Sink, then transform in-target | raw load like `el`; declared transforms are expected to run in the target system, not in-flight (a notice is logged) |
 
 For **non-linear** topologies — multiple sources, multiple sinks, or conditional
 routing — a pipeline can also declare an explicit **graph**; a streaming
@@ -208,7 +208,8 @@ Components may emit custom metrics via the `Counter`/`Gauge` escape hatch.
 
 Work-queue implementations: **MemoryQueue** (in-process dev/test), **RedisQueue**
 (multi-instance; items HASH + pending LIST + inprogress ZSET, Lua CAS claim),
-**🚧 PostgresQueue** (`FOR UPDATE SKIP LOCKED`, design-stage).
+**PostgresQueue** (multi-instance; `SELECT … FOR UPDATE SKIP LOCKED` claim with
+lease / heartbeat / retry, and a transaction-level advisory lock on enqueue).
 
 ---
 

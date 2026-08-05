@@ -95,12 +95,13 @@ flowchart LR
 ## 5. Stream-only pipelines
 
 A **pure streaming pipeline is the primary case**, not a special mode. Because
-*mode is emergent from the source* (bounded vs unbounded), a stream-only pipeline
-is simply an unbounded source + the `window` operator + a sink, driven by a
-long-running trigger. The window operator is identical to the batch case — it just
-never sees an EOF, so windows fire on watermark/triggers as event time advances.
-Embedding windowing as a *transform* does **not** trap it in batch mode: the chain
-is mode-agnostic (like today's engine has no ETL/EL switch — mode is emergent).
+whether a run is **bounded (batch) or unbounded (streaming)** follows from the
+source, a stream-only pipeline is simply an unbounded source + the `window`
+operator + a sink, driven by a long-running trigger. The window operator is
+identical to the batch case — it just never sees an EOF, so windows fire on
+watermark/triggers as event time advances. Embedding windowing as a *transform*
+does **not** trap it in batch mode: the chain is agnostic to whether the source is
+bounded or unbounded.
 
 **Composition** — an unbounded source (Kafka `mode:"streaming"`, or `podlog`)
 driven by the **startup-hook** trigger (fires once on boot, runs forever — the same

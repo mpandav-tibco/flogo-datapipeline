@@ -78,7 +78,7 @@ and `partitionsPerClaim` sit at the `scaling` top level.
 |---|---|
 | **MemoryQueue** | in-process dev / test |
 | **RedisQueue** | multi-instance; items HASH + pending LIST + inprogress ZSET, Lua CAS claim |
-| 🚧 **PostgresQueue** | `FOR UPDATE SKIP LOCKED`, design-stage |
+| **PostgresQueue** | multi-instance; `SELECT … FOR UPDATE SKIP LOCKED` claim with lease / heartbeat / retry, advisory-lock enqueue |
 
 ## State backends with scale
 
