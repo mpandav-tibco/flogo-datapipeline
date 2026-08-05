@@ -81,10 +81,10 @@ func nodeResolveType(def *Definition, n GraphNodeDef) (string, bool) {
 	if _, ok := selfContainedConfig(n); ok {
 		return n.Type, true
 	}
-	switch {
-	case n.ID == "source":
+	switch n.ID {
+	case "source":
 		return def.Source.Type, true
-	case n.ID == "sink":
+	case "sink":
 		return def.Sink.Type, true
 	default:
 		idx, ok := transformIndex(n.ID)
@@ -147,12 +147,12 @@ func (a *DataPipelineAction) buildExecGraph(in *Input) (*graphexec.Graph, error)
 		if cfg, ok := selfContainedConfig(n); ok {
 			node.Cfg = cfg
 		} else {
-			switch {
-			case n.ID == "source":
+			switch n.ID {
+			case "source":
 				node.Kind = graphexec.KindSource
 				node.Type = def.Source.Type
 				node.Cfg = a.buildSourceConfig(in)
-			case n.ID == "sink":
+			case "sink":
 				node.Kind = graphexec.KindSink
 				node.Type = def.Sink.Type
 				node.Cfg = def.Sink.Options
