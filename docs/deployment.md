@@ -14,6 +14,25 @@ go build -o flogo-datapipeline ./cmd/flogo-datapipeline
 ./flogo-datapipeline -f my.datapipeline
 ```
 
+### TIBCO General hooks (App Startup/Shutdown triggers)
+
+The plain build above has no private dependencies and works from any clone —
+including CI. It omits two OOTB triggers, App Startup and App Shutdown (the
+correct driver for a long-running streaming source such as the podlog tailer,
+and for final flush/cleanup on stop, respectively): these live in
+`github.com/tibco/flogo-general`, a TIBCO-internal module not published to any
+public Go proxy — it ships only inside the TIBCO Flogo VS Code extension.
+
+To build the complete binary with those two triggers registered, you need the
+extension installed locally and a `go.work` with a `replace` directive pointing
+at its bundled source (see `go.work`'s own comment for the exact path), then:
+
+```bash
+go build -tags tibco_hooks -o flogo-datapipeline ./cmd/flogo-datapipeline
+```
+
+See `cmd/flogo-datapipeline/tibco_hooks.go` for the full rationale.
+
 ## Lean per-app binary (`dp-build`)
 
 For production you ship a binary that links **only** the components a specific pipeline

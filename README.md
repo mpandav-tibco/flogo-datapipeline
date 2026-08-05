@@ -25,6 +25,11 @@ cd flogo-datapipeline
 go build -o flogo-datapipeline ./cmd/flogo-datapipeline/
 ```
 
+> This default build has no private dependencies and works from a plain clone.
+> It omits the OOTB App Startup/App Shutdown triggers (a TIBCO-internal module) —
+> see [Deployment](docs/deployment.md#tibco-general-hooks-app-startupshutdown-triggers)
+> if you need those.
+
 ### Run an example
 
 ```bash
