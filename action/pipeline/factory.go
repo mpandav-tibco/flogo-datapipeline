@@ -244,7 +244,9 @@ func (f *Factory) Replace(ref string, def *Definition) (*DataPipelineAction, err
 
 	if old != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		_ = old.Shutdown(ctx)
+		if shutErr := old.Shutdown(ctx); shutErr != nil {
+			flog.Warnf("replace %s: old action shutdown failed (continuing; new action is already live): %v", ref, shutErr)
+		}
 		cancel()
 	}
 

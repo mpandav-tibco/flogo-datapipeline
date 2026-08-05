@@ -74,5 +74,6 @@ func TestAttrsOddCountPanics(t *testing.T) {
 			t.Fatal("expected panic on odd key/value count")
 		}
 	}()
+	//lint:ignore SA5012 deliberately odd to exercise the panic-on-malformed-input path
 	_ = attrs("only-one-key")
 }
