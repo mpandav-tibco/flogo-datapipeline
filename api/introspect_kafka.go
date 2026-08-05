@@ -31,7 +31,7 @@ func (s *Server) handleIntrospectKafkaTopics(w http.ResponseWriter, r *http.Requ
 		Brokers []string               `json:"brokers"`
 		Config  map[string]interface{} `json:"config"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := json.NewDecoder(limitBody(w, r)).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON: "+err.Error())
 		return
 	}
@@ -106,7 +106,7 @@ func (s *Server) handleIntrospectSchemaRegistry(w http.ResponseWriter, r *http.R
 		Subject string `json:"subject"`
 		Topic   string `json:"topic"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := json.NewDecoder(limitBody(w, r)).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON: "+err.Error())
 		return
 	}

@@ -58,7 +58,7 @@ An insurance company receives raw claims from field agents into a `raw_claims` t
 │                                                                             │
 │  ┌──────────────────┐                                                       │
 │  │   JDBC Source    │  driver: postgres                                     │
-│  │   pipelinedemo   │  table: raw_claims    keyColumn: claim_id             │
+│  │   pipelinedemo   │  table: raw_claims    orderKey: claim_id              │
 │  │   raw_claims     │  batchSize: 500                                       │
 │  └────────┬─────────┘                                                       │
 │           │ 100 rows (80 valid + 20 invalid)                                │
@@ -513,7 +513,7 @@ The example already uses PostgreSQL locally. To point at a production database (
   "driver": "postgres",
   "dsn": "${CLAIMS_SOURCE_DSN}",
   "table": "raw_claims",
-  "keyColumn": "claim_id",
+  "orderKey": "claim_id",
   "batchSize": 5000
 }
 ```
@@ -627,7 +627,7 @@ Each sub-pipeline can be scaled, checkpointed, and monitored independently. The 
 | `dsn` | string | — | Connection string; env var substitution (`${VAR}`) supported |
 | `table` | string | — | Required when `query` is absent |
 | `query` | string | — | Custom SQL; overrides `table`; engine wraps as subquery for keyset pagination |
-| `keyColumn` | string | — | Must be a unique, indexed, monotonically increasing column |
+| `orderKey` | string | — | Must be a unique, indexed, monotonically increasing column |
 | `batchSize` | int | `5000` | Rows per paginated SELECT |
 | `partitions` | int | `1` | Parallel read workers |
 

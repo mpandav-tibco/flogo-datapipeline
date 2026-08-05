@@ -14,6 +14,25 @@ import (
 	"github.com/mpandav-tibco/flogo-datapipeline/transform"
 )
 
+// maxJSONRequestBytes bounds every JSON request body this API decodes (run
+// params, preview/sampleinput/teststage bodies, introspection requests) other
+// than the pipeline-definition upload (which has its own, separately
+// documented maxDefinitionBytes limit below). Without a cap, a client on a
+// fast connection could send an arbitrarily large body — e.g. millions of
+// "rows" to /teststage — that json.Decode buffers into memory in full BEFORE
+// any row-count truncation runs, regardless of http.Server's time-bound
+// ReadTimeout (which only limits how long the read may take, not its size).
+// 8 MiB is far above any realistic control-plane payload for this API.
+const maxJSONRequestBytes = 8 << 20
+
+// limitBody wraps r.Body with http.MaxBytesReader so json.NewDecoder cannot
+// buffer more than maxJSONRequestBytes; Decode then fails with a clear
+// "http: request body too large" error instead of the process buffering an
+// unbounded body in memory.
+func limitBody(w http.ResponseWriter, r *http.Request) io.Reader {
+	return http.MaxBytesReader(w, r.Body, maxJSONRequestBytes)
+}
+
 // handlePipelinesPrefix is the catch-all handler for all /v1/pipelines/{ref}
 // sub-paths. It demultiplexes by method and path suffix.
 //
@@ -128,7 +147,7 @@ func (s *Server) handleRunPipeline(w http.ResponseWriter, r *http.Request, ref s
 
 	var req PipelineRunRequest
 	if r.Body != nil && r.ContentLength != 0 {
-		dec := json.NewDecoder(r.Body)
+		dec := json.NewDecoder(limitBody(w, r))
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, "bad_request",
@@ -317,7 +336,7 @@ func (s *Server) handleSampleInput(w http.ResponseWriter, r *http.Request, ref s
 		Stage int `json:"stage"`
 		Limit int `json:"limit"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := json.NewDecoder(limitBody(w, r)).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON body: "+err.Error())
 		return
 	}
@@ -356,7 +375,7 @@ func (s *Server) handleTestStage(w http.ResponseWriter, r *http.Request, ref str
 		Columns []string                 `json:"columns"`
 		Rows    []map[string]interface{} `json:"rows"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := json.NewDecoder(limitBody(w, r)).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON body: "+err.Error())
 		return
 	}

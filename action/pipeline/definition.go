@@ -493,6 +493,26 @@ func (d *Definition) validate() error {
 	default:
 		return fmt.Errorf("pipeline definition: mode must be 'etl', 'el', or 'elt'")
 	}
+	// defaults() only fills in ZERO values, so a negative Performance field
+	// (a typo, e.g. "batchSize": -5) would otherwise reach the engine as-is —
+	// surfacing as a confusing runtime panic (e.g. a negative channel buffer
+	// depth) instead of a clear error at load time. Zero is always valid here
+	// (defaults() fills it in); only negative values are rejected.
+	for _, f := range []struct {
+		name string
+		val  int
+	}{
+		{"performance.batchSize", d.Performance.BatchSize},
+		{"performance.transformWorkers", d.Performance.TransformWorkers},
+		{"performance.sourceBufferBatches", d.Performance.SourceBufferBatches},
+		{"performance.sinkBufferBatches", d.Performance.SinkBufferBatches},
+		{"performance.maxMemoryMB", d.Performance.MaxMemoryMB},
+		{"performance.rowGroupParallelism", d.Performance.RowGroupParallelism},
+	} {
+		if f.val < 0 {
+			return fmt.Errorf("pipeline definition: %s must be >= 0, got %d", f.name, f.val)
+		}
+	}
 	if d.Incremental.Mode == "hwm" {
 		if d.Incremental.Column == "" {
 			return fmt.Errorf("pipeline definition: incremental.column is required when mode is 'hwm'")

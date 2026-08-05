@@ -51,9 +51,12 @@ import (
 	"github.com/mpandav-tibco/flogo-datapipeline/internal/sqlutil"
 	"github.com/mpandav-tibco/flogo-datapipeline/record"
 	"github.com/mpandav-tibco/flogo-datapipeline/source"
+	corelog "github.com/project-flogo/core/support/log"
 )
 
 func init() { source.Register("jdbc", newJDBCSource) }
+
+var jlog = corelog.ChildLogger(corelog.RootLogger(), "jdbc-source")
 
 // jdbcSource reads rows from a SQL table or arbitrary query in batches.
 // It supports two pagination strategies:
@@ -135,11 +138,24 @@ func newJDBCSource(cfg map[string]interface{}) (source.Source, error) {
 	}
 
 	batchSize := 5000
-	if bs, ok := cfg["batchSize"].(int); ok && bs > 0 {
-		batchSize = bs
-	} else if bs, ok := cfg["batchSize"].(float64); ok && bs > 0 {
-		// JSON unmarshals numbers as float64.
-		batchSize = int(bs)
+	if bsRaw, ok := cfg["batchSize"]; ok {
+		switch bs := bsRaw.(type) {
+		case int:
+			if bs > 0 {
+				batchSize = bs
+			} else {
+				jlog.Warnf("jdbc source: 'batchSize' %v is invalid (must be a positive number); using default %d", bsRaw, batchSize)
+			}
+		case float64:
+			// JSON unmarshals numbers as float64.
+			if bs > 0 {
+				batchSize = int(bs)
+			} else {
+				jlog.Warnf("jdbc source: 'batchSize' %v is invalid (must be a positive number); using default %d", bsRaw, batchSize)
+			}
+		default:
+			jlog.Warnf("jdbc source: 'batchSize' %v has an unsupported type %T; using default %d", bsRaw, bsRaw, batchSize)
+		}
 	}
 
 	db, err := sql.Open(driver, dsn)
