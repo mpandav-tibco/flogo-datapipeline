@@ -8,7 +8,9 @@ A lightweight, embeddable data pipeline engine built on the [Project Flogo](http
 > [sources](docs/sources.md), [sinks](docs/sinks.md), [transforms](docs/transforms.md),
 > [reliability](docs/reliability.md), [scaling](docs/scaling.md),
 > [observability](docs/observability.md), the [REST API](docs/rest-api.md), and
-> [deployment](docs/deployment.md). Each source, transform, and sink also has its own
+> [deployment](docs/deployment.md); to add your own sources, sinks, or transforms
+> see [extending the engine](docs/extending.md). Each source, transform, and sink
+> also has its own
 > **per-activity page** under [docs/sources/](docs/sources/), [docs/transforms/](docs/transforms/),
 > and [docs/sinks/](docs/sinks/); the [Feature matrix](docs/FEATURES.md) links them all.
 
