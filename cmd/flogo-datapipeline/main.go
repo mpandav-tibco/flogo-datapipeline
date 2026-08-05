@@ -79,6 +79,10 @@ import (
 	// position registry. See examples/20-podlog.
 	_ "github.com/mpandav-tibco/flogo-datapipeline/source/podlog"
 
+	// Generic paginated HTTP/REST API source (page / offset / cursor pagination,
+	// bearer/basic/apikey auth). See examples/27-rest-api-source.
+	_ "github.com/mpandav-tibco/flogo-datapipeline/source/rest"
+
 	// --- Sinks ---
 	// Relational sinks (round 1)
 	_ "github.com/mpandav-tibco/flogo-datapipeline/sink/jdbc" // JDBC upsert / insert sink

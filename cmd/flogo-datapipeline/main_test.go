@@ -28,7 +28,7 @@ func TestBinaryRegistersSources(t *testing.T) {
 		"csv", "tsv", "jdbc",
 		"avro", "fixedwidth", "flatfile", "jsonlines", "ndjson",
 		"parquet", "sectioned", "xml",
-		"kafka", "podlog",
+		"kafka", "podlog", "rest",
 	} {
 		if !got[format] {
 			t.Errorf("source format %q is not registered in the binary — is source/%s blank-imported in main.go?", format, format)

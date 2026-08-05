@@ -1,6 +1,6 @@
 # Flogo Data Pipeline — Roadmap
 
-> Status: living document · Last updated: 2026-07-27
+> Status: living document · Last updated: 2026-08-05
 >
 > This roadmap is deliberately **opinionated**. Its primary job is not to list
 > everything we *could* build — it is to protect what the tool *is* and make it
@@ -68,11 +68,18 @@ We will **not** build these. Writing them down is the point.
 | Horizon | Theme | Highlights |
 |---|---|---|
 | **Delivered** | Foundation + top transforms + streaming + governance | ✅ typed-schema / decimal fidelity · ✅ bounded-state backend (windowing spill store) · ✅ **dataset / broadcast join** · ✅ **explode / flatten** · ✅ **cast** · ✅ event-time **windowing** (tumbling/session/global, checkpoint-resume) · ✅ **conditional router / split** · ✅ **audit log** · ✅ **lineage (OpenLineage)** · ✅ schema-registry **read** (Avro consume) · ✅ dry-run preview · ✅ OOTB packaging (lean `dp-build`, distroless) |
-| **Now** | Governance + adoption | ⬜ **mask / PII policy** · ⬜ field **encryption** · ⬜ Transform-SDK parity + conformance kit + golden-pipeline CI |
-| **Next** | Enterprise transforms + adoption | ⬜ **keyed dedup** · ⬜ **partial aggregate (combiner)** · ⬜ field **encryption** · ⬜ Avro **produce** · ⬜ `--dry-run` / validate CI mode · ⬜ first connector expansions (REST/API source, MongoDB) |
+| **Now** | Governance + adoption | ✅ **paginated REST/API source** · ⬜ **mask / PII policy** · ⬜ field **encryption** · ⬜ Transform-SDK parity + conformance kit + golden-pipeline CI |
+| **Next** | Enterprise transforms + adoption | ⬜ **keyed dedup** · ⬜ **partial aggregate (combiner)** · ⬜ field **encryption** · ⬜ Avro **produce** · ⬜ `--dry-run` / validate CI mode · ⬜ further connector expansions (native warehouse / lakehouse sinks, MongoDB) |
 | **Later** | Differentiation + platform | ⬜ surrogate-key / sequence · ⬜ partition window fns · ⬜ warehouse & lakehouse connectors (Snowflake / BigQuery / Redshift, Iceberg / Delta) · ⬜ Helm / K8s operator + published images · ⬜ CDC-as-source + delete-capable sink |
 
 ---
+
+## Current cycle — shipped (2026-08-05)
+
+| # | Item | Delivered |
+|---|---|---|
+| 1 | ✅ **Paginated REST/API source** | A generic `rest` source (`source/rest`) pulling a JSON array from any HTTP(S) endpoint: page / offset / cursor pagination (including a full next-page-link style), bearer / basic / apikey auth (credentials always from an env var), a `dataPath` to locate the record array inside a nested response, retry-with-backoff on 429/5xx, and explicit-or-inferred schema. The first generic connector for the #1 requested connector class in DI evaluations. See [`docs/sources/rest.md`](sources/rest.md) and [`examples/27-rest-api-source`](../examples/27-rest-api-source). |
+| 2 | ✅ **Public plugin (extension) SDK + author guide** | `extension/` — a documented, stable facade over the source/sink/transform registries so third parties can add plugins in their own Go module without editing the engine. See [`docs/extending.md`](extending.md) and the out-of-tree [`examples/extension-plugin`](../examples/extension-plugin). (Distinct from the Track B.1 pipeline-as-code `sdk/` builder gap, which still lags the engine.) |
 
 ## Current cycle — shipped (2026-07-27)
 
@@ -150,9 +157,9 @@ about protecting it.
 
 More transforms is *not* the main gap between us and "credible ETL tool." These are.
 
-1. **Connector breadth — the long pole.** Paginated REST/API source; native
-   warehouse sinks (Snowflake / BigQuery / Redshift); lakehouse (Iceberg / Delta);
-   MongoDB. Reuse Flogo connectors where possible.
+1. **Connector breadth — the long pole.** ✅ Paginated REST/API source; ⬜ native
+   warehouse sinks (Snowflake / BigQuery / Redshift); ⬜ lakehouse (Iceberg / Delta);
+   ⬜ MongoDB. Reuse Flogo connectors where possible.
 2. **Schema & lineage.** ✅ Schema-registry **read** (Avro/Confluent consume +
    `/v1/introspect/schema-registry`); ✅ evolution policy (`schemadrift`); ⬜ Avro
    **produce** is still a JSON stub. ✅ **lineage emission** (OpenLineage) —

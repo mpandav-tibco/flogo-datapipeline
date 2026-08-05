@@ -19,7 +19,7 @@ dead-letter branch) as one self-contained binary — no JVM, no cluster, no SaaS
 
 ## Build pipelines
 
-- [Sources](sources.md) — 11 source families (CSV, Parquet, Avro, JDBC, Kafka, XML, object store, …)
+- [Sources](sources.md) — 12 source families (CSV, Parquet, Avro, JDBC, Kafka, XML, object store, REST/API, …)
 - [Sinks](sinks.md) — 9 sink families plus the Dead-Letter Queue
 - [Transforms](transforms.md) — filter, map, validate, lookup, parse, DQ, schema drift, HWM, cast, explode, flatten, router/split, join, union, and event-time windowing — plus the expression language
 - [Connections](connections.md) — reusable `*.fgconn` credentials with secrets in Secret Storage

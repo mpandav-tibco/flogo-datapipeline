@@ -24,6 +24,7 @@ into the transform chain. Sources are registered with `source.Register(name, …
 | [`s3`, `gcs`, `adls`](sources/objstore.md) | files from cloud object storage | ✅ |
 | [`sectioned`](sources/sectioned.md) | header block + delimited body table | — |
 | [`podlog`](sources/podlog.md) | Kubernetes / CRI container logs | — |
+| [`rest`](sources/rest.md) | paginated JSON from an HTTP(S) API | — |
 
 ## File sources
 
@@ -83,6 +84,16 @@ delegated to the inner source. Credentials come from a bound
 stack-trace reassembly, namespace filters, and a crash-safe position registry.
 Registered and runnable but tracked as work-in-progress (see
 [`examples/20-podlog`](../examples/20-podlog)).
+
+## Generic HTTP
+
+**REST/API** (`rest`) — pulls a JSON array of records from an HTTP(S) endpoint:
+`url`, `authType` (`bearer`/`basic`/`apikey`, credentials from an env var),
+`dataPath` (locate the array inside a nested response), and a `pagination` block
+(`page`/`offset`/`cursor`, the last via a response-provided cursor value or a full
+next-page link). Retries 429/5xx with backoff. The first generic connector for
+**any** paginated JSON API, not tied to a specific vendor (see
+[`examples/27-rest-api-source`](../examples/27-rest-api-source)).
 
 ## See also
 

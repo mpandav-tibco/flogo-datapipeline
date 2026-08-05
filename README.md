@@ -2,7 +2,7 @@
 
 A lightweight, embeddable **data pipeline engine** built on the [Project Flogo](https://github.com/project-flogo/core) runtime, with a **visual authoring experience inside VS Code**.
 
-**Single static Go binary** · **visual VS Code editor** · **11 sources** · **10 sinks** (incl. DLQ) · **15 transforms** · checkpoint / watermark / schema-drift / data-quality / DLQ · Prometheus + OpenTelemetry · sharded & distributed scaling
+**Single static Go binary** · **visual VS Code editor** · **12 sources** · **10 sinks** (incl. DLQ) · **15 transforms** · checkpoint / watermark / schema-drift / data-quality / DLQ · Prometheus + OpenTelemetry · sharded & distributed scaling
 
 ![The Flogo Data Pipeline VS Code Studio](docs/images/studio-editor.png)
 
@@ -80,7 +80,7 @@ See [`studio/vscode/README.md`](studio/vscode/README.md) for full details.
 
 ## What is available today
 
-### Sources (11)
+### Sources (12)
 
 | Source | What it reads |
 |---|---|
@@ -95,6 +95,7 @@ See [`studio/vscode/README.md`](studio/vscode/README.md) for full details.
 | Cloud Object Store | Files from S3, Google Cloud Storage, or Azure ADLS Gen2; remote Parquet uses range-GET pushdown (footer + selected column chunks only, no whole-object download) |
 | Text Document (sectioned) | Flat files with a key/value header block plus a delimited body table |
 | Kubernetes Pod Logs (podlog) | Kubernetes / CRI container logs; one record per log line |
+| REST/API | Generic paginated HTTP(S) JSON API; page / offset / cursor pagination, bearer / basic / apikey auth |
 
 ### Sinks (9 + DLQ)
 

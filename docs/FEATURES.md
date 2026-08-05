@@ -7,7 +7,7 @@
 > metrics, scaling, pipeline definition). Everything is code-derived from the
 > `init()`/`Register(...)` calls and config structs.
 
-**At a glance:** 11 source families · 10 sink families (incl. DLQ) · 15 transforms ·
+**At a glance:** 12 source families · 10 sink families (incl. DLQ) · 15 transforms ·
 2 checkpoint backends · 3 watermark backends · 2 metrics backends · 3 scaling modes.
 
 ## Sources → [index](sources.md)
@@ -25,6 +25,7 @@
 | [`kafka`](sources/kafka.md) | consumer-group topic | — |
 | [`s3`, `gcs`, `adls`](sources/objstore.md) | cloud object storage; remote Parquet via range-GET pushdown | ✅ |
 | [`podlog`](sources/podlog.md) | Kubernetes / CRI logs | — |
+| [`rest`](sources/rest.md) | paginated JSON from an HTTP(S) API | — |
 
 ## Transforms → [index](transforms.md)
 
