@@ -43,7 +43,15 @@ type Output struct {
 	// (e.g. schemadrift policy=drop, or a filter that eliminated all rows in a
 	// batch). Dropped rows are distinct from RowsFailed: a failure indicates a
 	// processing error; a drop is a deliberate policy decision.
-	RowsDropped int64  `md:"rowsDropped"`
+	RowsDropped int64 `md:"rowsDropped"`
+	// RowsDeleted counts rows a delete-capable sink (e.g. the jdbc sink's
+	// opColumn/CDC-target mode) actually removed from the destination, as
+	// opposed to inserted/upserted. Distinct from RowsWritten, which counts
+	// all rows submitted to the sink regardless of operation type — without
+	// this, a CDC run of "900 updates + 100 deletes" and one of "1000 plain
+	// inserts" are indistinguishable from RowsWritten alone. Always 0 for
+	// sinks with no delete concept (the common case).
+	RowsDeleted int64  `md:"rowsDeleted"`
 	DurationMs  int64  `md:"durationMs"`
 	Status      string `md:"status"`
 	Error       string `md:"error"`
@@ -60,6 +68,7 @@ func (o *Output) ToMap() map[string]interface{} {
 		"rowsWritten":   o.RowsWritten,
 		"rowsFailed":    o.RowsFailed,
 		"rowsDropped":   o.RowsDropped,
+		"rowsDeleted":   o.RowsDeleted,
 		"durationMs":    o.DurationMs,
 		"status":        o.Status,
 		"error":         o.Error,
@@ -87,6 +96,7 @@ func buildIOMetadata() *metadata.IOMetadata {
 			"rowsWritten":   data.NewTypedValue(data.TypeInt, int64(0)),
 			"rowsFailed":    data.NewTypedValue(data.TypeInt, int64(0)),
 			"rowsDropped":   data.NewTypedValue(data.TypeInt, int64(0)),
+			"rowsDeleted":   data.NewTypedValue(data.TypeInt, int64(0)),
 			"durationMs":    data.NewTypedValue(data.TypeInt, int64(0)),
 			"status":        data.NewTypedValue(data.TypeString, ""),
 			"error":         data.NewTypedValue(data.TypeString, ""),

@@ -31,6 +31,24 @@ type Sink interface {
 type Stats struct {
 	RowsWritten int64
 	RowsFailed  int64
+	// RowsDeleted counts rows a delete-capable sink (e.g. the jdbc sink's
+	// opColumn mode) actually removed from the destination — distinct from
+	// RowsWritten, which counts rows submitted to WriteBatch regardless of
+	// whether they were inserted/upserted or deleted. -1 means "not tracked"
+	// (the sink doesn't implement StatsReporter, or has no delete concept).
+	RowsDeleted int64
+}
+
+// StatsReporter is an optional Sink interface for sinks that track
+// operation-level statistics beyond a single write count — most notably a
+// delete-capable/CDC-target sink's insert-vs-delete breakdown. The engine
+// queries this after Close(), if implemented, to enrich lineage/audit output,
+// so a CDC run's "N rows deleted" is visible instead of folded into an
+// undifferentiated RowsWritten total (a plain aggregate count cannot tell
+// "1000 inserts" apart from "500 inserts + 500 deletes" otherwise). Sinks
+// without a delete concept simply do not implement this.
+type StatsReporter interface {
+	SinkStats() Stats
 }
 
 // Factory constructs a Sink from a generic config map.

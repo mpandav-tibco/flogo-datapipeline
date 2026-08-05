@@ -178,6 +178,7 @@ Every run returns a summary ([`action/pipeline/action.go`](../action/pipeline/ac
 | `rowsWritten` | rows written to the sink |
 | `rowsFailed` | rows routed to the DLQ / errored |
 | `rowsDropped` | rows dropped by a filter / policy |
+| `rowsDeleted` | rows removed via a delete-capable sink (e.g. jdbc `opColumn`); `0` when not applicable |
 | `durationMs` | wall-clock run time |
 | `error` | failure message, if any |
 | `metadata` | extra detail, including the `dqReport` when a DQ transform ran |

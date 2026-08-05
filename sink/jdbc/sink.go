@@ -91,6 +91,13 @@ type jdbcSink struct {
 	// deleted then recreated) would still be DELETEd, because flushMixed always
 	// runs all deletes after all inserts regardless of the true arrival order.
 	deleteBufKeys map[string]int // key string -> index into deleteBuf
+
+	// rowsDeleted is the running total of rows actually removed by delete-
+	// capable mode's DELETE statements (sql.Result.RowsAffected(), summed
+	// across every committed flush) — exposed via SinkStats for lineage/audit.
+	// Only incremented after a flush's transaction actually COMMITS, so a
+	// rolled-back flush (see the transaction-atomicity test) never inflates it.
+	rowsDeleted int64
 }
 
 func newJDBCSink(cfg map[string]interface{}) (sink.Sink, error) {
@@ -683,6 +690,7 @@ func (s *jdbcSink) flushMixed() error {
 		return nil
 	}
 
+	var flushDeleted int64
 	tx, err := s.db.Begin()
 	if err != nil {
 		return fmt.Errorf("jdbc sink: begin tx: %w", err)
@@ -718,9 +726,13 @@ func (s *jdbcSink) flushMixed() error {
 				end = len(allKeys)
 			}
 			query, args := s.buildDelete(allKeys[start:end])
-			if _, err := tx.Exec(query, args...); err != nil {
+			result, err := tx.Exec(query, args...)
+			if err != nil {
 				_ = tx.Rollback()
 				return fmt.Errorf("jdbc sink: exec delete chunk: %w", err)
+			}
+			if n, aerr := result.RowsAffected(); aerr == nil {
+				flushDeleted += n
 			}
 		}
 	}
@@ -728,6 +740,7 @@ func (s *jdbcSink) flushMixed() error {
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("jdbc sink: commit tx: %w", err)
 	}
+	s.rowsDeleted += flushDeleted
 	return nil
 }
 
@@ -1208,6 +1221,18 @@ func (s *jdbcSink) Close() error {
 	flushErr := s.flush()
 	dbErr := s.db.Close()
 	return errors.Join(flushErr, dbErr)
+}
+
+// SinkStats implements sink.StatsReporter. RowsDeleted is only meaningful in
+// delete-capable mode (opColumn set); RowsWritten/RowsFailed are left at -1
+// ("not tracked" — the pipeline already tracks an aggregate RowsWritten count
+// independently of this sink).
+func (s *jdbcSink) SinkStats() sink.Stats {
+	rd := int64(-1)
+	if s.opColumn != "" {
+		rd = s.rowsDeleted
+	}
+	return sink.Stats{RowsWritten: -1, RowsFailed: -1, RowsDeleted: rd}
 }
 
 func contains(slice []string, s string) bool {

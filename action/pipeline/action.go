@@ -146,8 +146,8 @@ func (a *DataPipelineAction) RunDirect(ctx context.Context, in *Input) (*Output,
 	} else {
 		out.Status = "completed"
 	}
-	runLog.Infof("pipeline run %s — processed=%d written=%d failed=%d dropped=%d duration=%dms",
-		out.Status, out.RowsProcessed, out.RowsWritten, out.RowsFailed, out.RowsDropped, out.DurationMs)
+	runLog.Infof("pipeline run %s — processed=%d written=%d failed=%d dropped=%d deleted=%d duration=%dms",
+		out.Status, out.RowsProcessed, out.RowsWritten, out.RowsFailed, out.RowsDropped, out.RowsDeleted, out.DurationMs)
 	a.auditRunFinish(runID, out)
 	a.lineageFinish(runID, out)
 
@@ -193,8 +193,8 @@ func (a *DataPipelineAction) Run(
 		} else {
 			out.Status = "completed"
 		}
-		runLog.Infof("pipeline run %s — processed=%d written=%d failed=%d dropped=%d duration=%dms",
-			out.Status, out.RowsProcessed, out.RowsWritten, out.RowsFailed, out.RowsDropped, out.DurationMs)
+		runLog.Infof("pipeline run %s — processed=%d written=%d failed=%d dropped=%d deleted=%d duration=%dms",
+			out.Status, out.RowsProcessed, out.RowsWritten, out.RowsFailed, out.RowsDropped, out.RowsDeleted, out.DurationMs)
 		a.auditRunFinish(runID, out)
 		a.lineageFinish(runID, out)
 
@@ -280,6 +280,7 @@ func (a *DataPipelineAction) auditRunFinish(runID string, out *Output) {
 		"rowsWritten":   out.RowsWritten,
 		"rowsFailed":    out.RowsFailed,
 		"rowsDropped":   out.RowsDropped,
+		"rowsDeleted":   out.RowsDeleted,
 		"durationMs":    out.DurationMs,
 		"error":         out.Error,
 	})
@@ -328,12 +329,13 @@ func (a *DataPipelineAction) sinkDataset() lineage.Dataset {
 // lineageStart emits an OpenLineage START event naming the source and sink datasets.
 func (a *DataPipelineAction) lineageStart(runID string) {
 	a.lineage.Emit(lineage.Event{
-		Type:     lineage.Start,
-		RunID:    runID,
-		Job:      a.ref,
-		Inputs:   []lineage.Dataset{a.sourceDataset()},
-		Outputs:  []lineage.Dataset{a.sinkDataset()},
-		RowCount: -1,
+		Type:        lineage.Start,
+		RunID:       runID,
+		Job:         a.ref,
+		Inputs:      []lineage.Dataset{a.sourceDataset()},
+		Outputs:     []lineage.Dataset{a.sinkDataset()},
+		RowCount:    -1,
+		RowsDeleted: -1,
 	})
 }
 
@@ -343,13 +345,25 @@ func (a *DataPipelineAction) lineageFinish(runID string, out *Output) {
 	if out.Status == "failed" {
 		evType = lineage.Fail
 	}
+	// -1 tells the emitter to omit the CDC-stats facet entirely: only a
+	// delete-capable sink (signalled by out.Metadata["cdcStats"], set in
+	// executePipelineImpl right after the sink reports its stats) populates
+	// this, so a plain insert/upsert-only pipeline's lineage output isn't
+	// cluttered with an always-zero "rowsDeleted" field.
+	rowsDeleted := int64(-1)
+	if out.Metadata != nil {
+		if _, ok := out.Metadata["cdcStats"]; ok {
+			rowsDeleted = out.RowsDeleted
+		}
+	}
 	a.lineage.Emit(lineage.Event{
-		Type:     evType,
-		RunID:    runID,
-		Job:      a.ref,
-		Inputs:   []lineage.Dataset{a.sourceDataset()},
-		Outputs:  []lineage.Dataset{a.sinkDataset()},
-		RowCount: out.RowsWritten,
+		Type:        evType,
+		RunID:       runID,
+		Job:         a.ref,
+		Inputs:      []lineage.Dataset{a.sourceDataset()},
+		Outputs:     []lineage.Dataset{a.sinkDataset()},
+		RowCount:    out.RowsWritten,
+		RowsDeleted: rowsDeleted,
 	})
 }
 
@@ -1024,6 +1038,24 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 		return out, fmt.Errorf("sink close: %w", err)
 	}
 	sinkClosed = true
+
+	// Delete-capable/CDC-target sinks (e.g. jdbc's opColumn mode) optionally
+	// report a rows-deleted count distinct from RowsWritten, so lineage/audit
+	// output for a CDC run shows "N rows deleted" instead of folding deletes
+	// into an undifferentiated write total. Sinks without a delete concept
+	// simply don't implement StatsReporter, so out.RowsDeleted stays 0 and no
+	// lineage facet is emitted for it (out.Metadata["cdcStats"] is the signal
+	// lineageFinish uses to decide whether the sink is delete-capable at all,
+	// distinct from "delete-capable but zero deletes this run").
+	if reporter, ok := snk.(sink.StatsReporter); ok {
+		if st := reporter.SinkStats(); st.RowsDeleted >= 0 {
+			out.RowsDeleted = st.RowsDeleted
+			if out.Metadata == nil {
+				out.Metadata = make(map[string]interface{})
+			}
+			out.Metadata["cdcStats"] = map[string]interface{}{"rowsDeleted": st.RowsDeleted}
+		}
+	}
 
 	if def.Checkpoint.DeleteOnSuccess {
 		_ = ckpt.Delete(resumeKey)
