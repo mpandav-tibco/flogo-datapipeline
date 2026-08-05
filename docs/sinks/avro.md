@@ -17,10 +17,11 @@ as `avro`.
 
 - The schema is derived from the first batch. Every field is a **nullable union**
   `["null", T]` (default `null`), so any cell may be null.
-- **Type mapping:** int→`long`, float→`double`, bool→`boolean`; string, date, decimal and
-  `any` are written as `string` (dates/decimals in their textual form) so consumers need no
-  logical-type support. Values are coerced to the exact branch type; a value that cannot be
-  coerced is written as `null`.
+- **Type mapping:** int→`long`, float→`double`, bool→`boolean`, decimal→the native Avro
+  **`decimal` logical type** (`bytes`, fixed `DECIMAL(38,10)` — matching the parquet and JDBC
+  sinks, so decimals keep full precision and read back as typed decimals rather than strings);
+  string, date and `any` are written as `string` (dates in their textual form). Values are
+  coerced to the exact branch type; a value that cannot be coerced is written as `null`.
 - **Field names** must be valid Avro identifiers (`[A-Za-z_][A-Za-z0-9_]*`); any other
   character in a column name is replaced with `_`.
 

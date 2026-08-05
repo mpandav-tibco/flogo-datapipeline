@@ -22,6 +22,7 @@ package avro
 import (
 	"errors"
 	"fmt"
+	"math/big"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -172,27 +173,38 @@ func buildAvroSchema(recordName string, fields []string, types []record.ColumnTy
 		b.WriteString(`{"name":`)
 		b.WriteString(strconv.Quote(fields[i]))
 		b.WriteString(`,"type":["null",`)
-		b.WriteString(strconv.Quote(avroTypeFor(types[i])))
+		b.WriteString(avroFieldTypeJSON(types[i]))
 		b.WriteString(`],"default":null}`)
 	}
 	b.WriteString(`]}`)
 	return b.String()
 }
 
-// avroTypeFor maps a record column type to the avro primitive used in the
-// written schema. Dates, decimals and untyped values are written as strings to
-// preserve their value without depending on avro logical-type support in the
-// consumer.
-func avroTypeFor(t record.ColumnType) string {
+// Decimals are written with the Avro decimal logical type at a fixed
+// DECIMAL(38,10), matching the parquet and JDBC sinks so a value keeps full
+// precision and round-trips as a typed decimal rather than a string.
+const (
+	avroDecimalPrecision       = 38
+	avroDecimalScale     int32 = 10
+)
+
+// avroFieldTypeJSON returns the avro type JSON for a record column type, used as
+// the non-null branch of each field's ["null", T] union. Decimals use the true
+// DECIMAL(38,10) logical type (bytes + precision/scale) so a downstream avro
+// reader — including this pipeline's own avro source — decodes them as exact
+// decimals; dates and untyped values remain strings.
+func avroFieldTypeJSON(t record.ColumnType) string {
 	switch t {
 	case record.TypeInt:
-		return "long"
+		return `"long"`
 	case record.TypeFloat:
-		return "double"
+		return `"double"`
 	case record.TypeBool:
-		return "boolean"
-	default: // string, date, decimal, any
-		return "string"
+		return `"boolean"`
+	case record.TypeDecimal:
+		return fmt.Sprintf(`{"type":"bytes","logicalType":"decimal","precision":%d,"scale":%d}`, avroDecimalPrecision, avroDecimalScale)
+	default: // string, date, any
+		return `"string"`
 	}
 }
 
@@ -248,7 +260,21 @@ func coerceForAvro(t record.ColumnType, v interface{}) interface{} {
 		default:
 			return nil
 		}
-	default: // string / date / decimal / any -> stringify
+	case record.TypeDecimal:
+		d, ok := record.ToDecimal(v)
+		if !ok {
+			return nil
+		}
+		// Normalise to the schema scale (DECIMAL(38,10)) with the same
+		// half-away-from-zero rounding as the parquet/JDBC sinks, then hand the
+		// exact rational to the hamba decimal codec, which encodes the unscaled
+		// big-endian two's-complement bytes.
+		rat, ok := new(big.Rat).SetString(d.Round(avroDecimalScale).String())
+		if !ok {
+			return nil
+		}
+		return rat
+	default: // string / date / any -> stringify
 		if str, ok := v.(string); ok {
 			return str
 		}
