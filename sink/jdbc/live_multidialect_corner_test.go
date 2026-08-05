@@ -412,3 +412,179 @@ func TestJDBCSink_Live_SchemaDriftWithOpColumn_AllDialects(t *testing.T) {
 		})
 	}
 }
+
+// TestJDBCSink_Live_DeleteThenRecreateSameKey_AllDialects regression-tests
+// bug #5 (the delete-then-recreate ordering bug in writeBatchWithOp /
+// flushMixed) against EVERY live dialect, not just Postgres — the bug was
+// originally found and the fix verified only via Postgres (the multi-
+// partition CDC integration test). The fix itself is dialect-agnostic Go
+// buffer logic (removeStalePendingDelete runs before any dialect-specific SQL
+// is built), but four of the five bugs found this session were dialect-
+// specific SQL syntax issues, so "the fix is dialect-agnostic so it should
+// just work on MERGE-based dialects too" is exactly the kind of assumption
+// this session has repeatedly shown to be worth verifying rather than trusting.
+//
+// Sequence within ONE flush (nothing forcing an intermediate flush in
+// between): create id=1 -> delete id=1 -> re-create id=1 with a different
+// value. Without the fix, flushMixed's fixed insert-then-delete statement
+// order would apply the stale delete AFTER the re-create's insert/MERGE,
+// wiping the row back out.
+func TestJDBCSink_Live_DeleteThenRecreateSameKey_AllDialects(t *testing.T) {
+	for _, d := range liveDialects(t) {
+		d := d
+		t.Run(d.driver, func(t *testing.T) {
+			db, err := sql.Open(sqlDriverName(d.driver), d.dsn)
+			if err != nil {
+				t.Fatalf("open: %v", err)
+			}
+			defer db.Close()
+			table := fmt.Sprintf("dp_del_recreate_%d", time.Now().UnixNano())
+			qt := sqlutil.QuoteIdent(table, d.driver)
+			t.Cleanup(func() { _, _ = db.Exec("DROP TABLE " + qt) })
+
+			sk, err := newJDBCSink(map[string]interface{}{
+				"driver": d.driver, "dsn": d.dsn, "table": table,
+				"autoMigrate": true, "onConflict": "upsert", "conflictKey": []interface{}{"id"},
+				"opColumn": "__op", "batchSize": 100, // large enough that nothing auto-flushes between WriteBatch calls
+			})
+			if err != nil {
+				t.Fatalf("newJDBCSink: %v", err)
+			}
+			cols := []record.Column{
+				{Name: "id", Type: record.TypeInt}, {Name: "status", Type: record.TypeString}, {Name: "__op", Type: record.TypeString},
+			}
+			// Also seed an UNRELATED row (id=2) that is never touched, to
+			// confirm the delete-then-recreate handling for id=1 doesn't
+			// disturb anything else in the same flush.
+			if err := sk.WriteBatch(&record.RecordBatch{Columns: cols, Rows: [][]interface{}{
+				{int64(1), "open", "c"},
+				{int64(2), "untouched", "c"},
+			}}); err != nil {
+				t.Fatalf("WriteBatch (create id=1,id=2): %v", err)
+			}
+			if err := sk.WriteBatch(&record.RecordBatch{Columns: cols, Rows: [][]interface{}{
+				{int64(1), "", "d"}, // delete id=1
+			}}); err != nil {
+				t.Fatalf("WriteBatch (delete id=1): %v", err)
+			}
+			if err := sk.WriteBatch(&record.RecordBatch{Columns: cols, Rows: [][]interface{}{
+				{int64(1), "recreated", "c"}, // re-create id=1, same flush, no Flush() in between
+			}}); err != nil {
+				t.Fatalf("WriteBatch (re-create id=1): %v", err)
+			}
+			if err := sk.Close(); err != nil {
+				t.Fatalf("Close (delete-then-recreate in one flush must not wipe the re-create): %v", err)
+			}
+
+			idCol := sqlutil.QuoteIdent("id", d.driver)
+			statusCol := sqlutil.QuoteIdent("status", d.driver)
+			var status string
+			if err := db.QueryRow("SELECT " + statusCol + " FROM " + qt + " WHERE " + idCol + " = 1").Scan(&status); err != nil {
+				t.Fatalf("select id=1 (must be present — the re-create must survive): %v", err)
+			}
+			if status != "recreated" {
+				t.Errorf("id=1 status = %q, want %q", status, "recreated")
+			}
+
+			var count int
+			if err := db.QueryRow("SELECT COUNT(*) FROM " + qt).Scan(&count); err != nil {
+				t.Fatalf("count: %v", err)
+			}
+			if count != 2 {
+				t.Errorf("row count = %d, want 2 (id=1 recreated, id=2 untouched)", count)
+			}
+		})
+	}
+}
+
+// TestJDBCSink_Live_TransactionAtomicity_AllDialects proves flushMixed's "both
+// the upsert buffer and the delete buffer run in ONE transaction" guarantee
+// actually holds under a REAL forced failure: a batch containing both a valid
+// DELETE and an upsert row that violates a NOT NULL constraint must roll back
+// EVERYTHING — the delete must NOT have taken effect either — rather than
+// partially applying the delete while the insert fails. This exercises the
+// tx.Rollback() path in flushMixed with a genuine database-rejected statement,
+// not just a code-review assumption that the wrapping is correct.
+func TestJDBCSink_Live_TransactionAtomicity_AllDialects(t *testing.T) {
+	for _, d := range liveDialects(t) {
+		d := d
+		t.Run(d.driver, func(t *testing.T) {
+			db, err := sql.Open(sqlDriverName(d.driver), d.dsn)
+			if err != nil {
+				t.Fatalf("open: %v", err)
+			}
+			defer db.Close()
+			table := fmt.Sprintf("dp_tx_atomic_%d", time.Now().UnixNano())
+			qt := sqlutil.QuoteIdent(table, d.driver)
+			t.Cleanup(func() { _, _ = db.Exec("DROP TABLE " + qt) })
+
+			idT, statusT := "BIGINT", "VARCHAR(100) NOT NULL"
+			if d.driver == "oracle" {
+				idT, statusT = "NUMBER(19)", "VARCHAR2(100) NOT NULL"
+			}
+			create := fmt.Sprintf("CREATE TABLE %s (%s %s PRIMARY KEY, %s %s)",
+				qt, sqlutil.QuoteIdent("id", d.driver), idT, sqlutil.QuoteIdent("status", d.driver), statusT)
+			if _, err := db.Exec(create); err != nil {
+				t.Fatalf("pre-create table (with NOT NULL status): %v", err)
+			}
+
+			sk, err := newJDBCSink(map[string]interface{}{
+				"driver": d.driver, "dsn": d.dsn, "table": table,
+				"autoMigrate": false, "onConflict": "upsert", "conflictKey": []interface{}{"id"},
+				"opColumn": "__op",
+			})
+			if err != nil {
+				t.Fatalf("newJDBCSink: %v", err)
+			}
+			cols := []record.Column{
+				{Name: "id", Type: record.TypeInt}, {Name: "status", Type: record.TypeString}, {Name: "__op", Type: record.TypeString},
+			}
+			// Seed two valid rows in their own flush.
+			if err := sk.WriteBatch(&record.RecordBatch{Columns: cols, Rows: [][]interface{}{
+				{int64(1), "keep-me", "c"}, {int64(2), "also-keep", "c"},
+			}}); err != nil {
+				t.Fatalf("WriteBatch (seed): %v", err)
+			}
+			if err := sk.Flush(); err != nil {
+				t.Fatalf("Flush (seed): %v", err)
+			}
+
+			// One flush containing BOTH a valid delete (id=1) AND an upsert
+			// row that violates the NOT NULL constraint (id=3, status=nil).
+			// If flushMixed's transaction wrapping is correct, NEITHER takes
+			// effect: id=1 must still be present, id=3 must not exist.
+			err = sk.WriteBatch(&record.RecordBatch{Columns: cols, Rows: [][]interface{}{
+				{int64(1), "", "d"},  // valid delete
+				{int64(3), nil, "c"}, // violates NOT NULL — must fail the whole tx
+			}})
+			closeErr := sk.Close()
+			if err == nil && closeErr == nil {
+				t.Fatal("expected a NOT NULL constraint violation to surface (from WriteBatch or Close), got no error from either")
+			}
+			t.Logf("got expected error: WriteBatch=%v Close=%v", err, closeErr)
+
+			idCol := sqlutil.QuoteIdent("id", d.driver)
+			var stillPresent int
+			if qerr := db.QueryRow("SELECT COUNT(*) FROM " + qt + " WHERE " + idCol + " = 1").Scan(&stillPresent); qerr != nil {
+				t.Fatalf("count id=1: %v", qerr)
+			}
+			if stillPresent != 1 {
+				t.Errorf("id=1 must STILL be present (the delete must have rolled back along with the failed insert), got count=%d", stillPresent)
+			}
+			var id3Present int
+			if qerr := db.QueryRow("SELECT COUNT(*) FROM " + qt + " WHERE " + idCol + " = 3").Scan(&id3Present); qerr != nil {
+				t.Fatalf("count id=3: %v", qerr)
+			}
+			if id3Present != 0 {
+				t.Errorf("id=3 must NOT be present (its insert violated NOT NULL), got count=%d", id3Present)
+			}
+			var total int
+			if qerr := db.QueryRow("SELECT COUNT(*) FROM " + qt).Scan(&total); qerr != nil {
+				t.Fatalf("count total: %v", qerr)
+			}
+			if total != 2 {
+				t.Errorf("total row count = %d, want 2 (id=1,id=2 unchanged \u2014 the whole failed flush must have rolled back atomically)", total)
+			}
+		})
+	}
+}

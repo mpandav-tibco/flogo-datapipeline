@@ -82,6 +82,15 @@ type jdbcSink struct {
 	opColumn     string
 	deleteValues []string
 	deleteBuf    [][]interface{} // buffered conflictKey value tuples pending DELETE
+
+	// deleteBufKeys indexes deleteBuf by conflictKey string (see
+	// jdbcRowKeyString) so a later upsert row for the same key within the same
+	// flush can find and remove its now-stale pending delete in O(1) instead of
+	// rescanning deleteBuf. Without this, a delete followed by a re-create for
+	// the same key before the next flush (a legitimate CDC sequence — a row
+	// deleted then recreated) would still be DELETEd, because flushMixed always
+	// runs all deletes after all inserts regardless of the true arrival order.
+	deleteBufKeys map[string]int // key string -> index into deleteBuf
 }
 
 func newJDBCSink(cfg map[string]interface{}) (sink.Sink, error) {
@@ -284,6 +293,18 @@ func (s *jdbcSink) writeBatchWithOp(batch *record.RecordBatch) error {
 		}
 		keyIdx[i] = idx
 	}
+	// Position of each conflictKey column within colIdx/s.columns, so an
+	// upsert row's key can be extracted for the stale-pending-delete check
+	// below without a second name lookup.
+	keyPosInCols := make([]int, len(s.conflictKey))
+	for i, name := range s.conflictKey {
+		for j, col := range s.columns {
+			if col == name {
+				keyPosInCols[i] = j
+				break
+			}
+		}
+	}
 
 	upserted := 0
 	for _, row := range batch.Rows {
@@ -292,12 +313,24 @@ func (s *jdbcSink) writeBatchWithOp(batch *record.RecordBatch) error {
 			for i, idx := range keyIdx {
 				key[i] = row[idx]
 			}
-			s.deleteBuf = append(s.deleteBuf, key)
+			s.appendPendingDelete(key)
 			continue
 		}
 		rowCopy := make([]interface{}, len(colIdx))
 		for i, idx := range colIdx {
 			rowCopy[i] = row[idx]
+		}
+		// A later create/update for the same key supersedes any pending
+		// delete for it buffered earlier in this same flush (e.g. a row
+		// deleted then re-created before the next checkpoint) — remove it so
+		// flushMixed's fixed insert-then-delete statement order doesn't wipe
+		// the re-create back out.
+		if len(s.deleteBufKeys) > 0 {
+			key := make([]interface{}, len(keyPosInCols))
+			for i, pos := range keyPosInCols {
+				key[i] = rowCopy[pos]
+			}
+			s.removeStalePendingDelete(key)
 		}
 		s.buf = append(s.buf, rowCopy)
 		upserted++
@@ -308,6 +341,53 @@ func (s *jdbcSink) writeBatchWithOp(batch *record.RecordBatch) error {
 		return s.flush()
 	}
 	return nil
+}
+
+// appendPendingDelete buffers a conflictKey tuple for DELETE and indexes it in
+// deleteBufKeys so a later upsert row for the same key (see
+// removeStalePendingDelete) can find and remove it in O(1).
+func (s *jdbcSink) appendPendingDelete(key []interface{}) {
+	if s.deleteBufKeys == nil {
+		s.deleteBufKeys = make(map[string]int)
+	}
+	k := deleteKeyString(key)
+	// A duplicate delete for the same key within one flush is harmless (the
+	// DELETE statement is idempotent), so just keep the existing index.
+	if _, exists := s.deleteBufKeys[k]; !exists {
+		s.deleteBufKeys[k] = len(s.deleteBuf)
+		s.deleteBuf = append(s.deleteBuf, key)
+	}
+}
+
+// removeStalePendingDelete removes key's pending delete (if any) from
+// deleteBuf via a swap-with-last-element removal (delete order is
+// inconsequential for buildDelete's OR-of-ANDs statement), keeping
+// deleteBufKeys consistent with the swap.
+func (s *jdbcSink) removeStalePendingDelete(key []interface{}) {
+	k := deleteKeyString(key)
+	idx, ok := s.deleteBufKeys[k]
+	if !ok {
+		return
+	}
+	last := len(s.deleteBuf) - 1
+	if idx != last {
+		s.deleteBuf[idx] = s.deleteBuf[last]
+		s.deleteBufKeys[deleteKeyString(s.deleteBuf[idx])] = idx
+	}
+	s.deleteBuf = s.deleteBuf[:last]
+	delete(s.deleteBufKeys, k)
+}
+
+// deleteKeyString renders an already-extracted conflictKey value tuple (in
+// conflictKey column order) as a single comparable string, using the same
+// NUL-separated form as jdbcRowKeyString so no combination of stringified
+// values can collide across a key-column boundary.
+func deleteKeyString(key []interface{}) string {
+	var sb strings.Builder
+	for _, v := range key {
+		fmt.Fprintf(&sb, "%v\x00", v)
+	}
+	return sb.String()
 }
 
 // stripColumn returns cols with the named column removed (order preserved).
@@ -630,6 +710,7 @@ func (s *jdbcSink) flushMixed() error {
 	if len(s.deleteBuf) > 0 {
 		allKeys := s.deleteBuf
 		s.deleteBuf = s.deleteBuf[:0]
+		s.deleteBufKeys = nil
 		maxRows := maxRowsPerInsert(s.driver, len(s.conflictKey))
 		for start := 0; start < len(allKeys); start += maxRows {
 			end := start + maxRows
