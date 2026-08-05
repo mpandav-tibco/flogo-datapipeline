@@ -18,6 +18,9 @@ export DP_TEST_ORACLE_DSN   ?= oracle://dpuser:FlogoPass123@localhost:11521/FREE
 export DP_TEST_S3_ENDPOINT  ?= http://localhost:9000
 export DP_TEST_REDIS_ADDR   ?= 127.0.0.1:16379
 export KAFKA_TEST_BROKER    ?= localhost:9092
+export KAFKA_TEST_MTLS_BROKER ?= localhost:9094
+export KAFKA_TEST_SASL_BROKER ?= localhost:9095
+export KAFKA_TEST_CERTS_DIR ?= $(CURDIR)/.kafka-certs
 export DP_TEST_GCS_ENDPOINT ?= http://127.0.0.1:4443/storage/v1/
 export DP_TEST_AZURITE_URL  ?= http://127.0.0.1:10000/devstoreaccount1
 
@@ -43,6 +46,7 @@ test-extension-example: ## Build & test the out-of-tree example plugin module
 	cd examples/extension-plugin && GOWORK=off go test ./...
 
 test-integration-up: ## Start the live backends and block until they are ready
+	@[ -f .kafka-certs/ca.crt ] || ./scripts/gen-kafka-test-certs.sh
 	$(COMPOSE) up -d
 	@echo ">> waiting for Postgres..."
 	@i=0; until $(COMPOSE) exec -T postgres pg_isready -U postgres -d dp -q 2>/dev/null; do \

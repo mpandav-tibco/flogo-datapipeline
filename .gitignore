@@ -88,3 +88,6 @@ go.work.sum
 /examples/23-enterprise-benchmark/data/
 /examples/23-enterprise-benchmark/out/
 /examples/23-enterprise-benchmark/bin/
+
+# Generated Kafka SASL/TLS test certificates (scripts/gen-kafka-test-certs.sh)
+/.kafka-certs/
