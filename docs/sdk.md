@@ -18,10 +18,21 @@ result, err := sdk.NewPipeline("daily-load").
 
 | Stage | Methods |
 |---|---|
-| **Sources** | `FromCSV` `FromJDBC` `FromKafka` `FromParquet` `FromXML` `FromJSONLines` `FromFixedWidth` `FromObjectStore` |
-| **Transforms** | `Filter` `Map` `Lookup` / `Enrich` `Validate` `DQ` `SchemaDrift` `Parse` |
-| **Sinks** | `ToJDBC` `ToKafka` `ToParquet` `ToCSV` `ToJSONLines` `ToObjectStore` `ToTemplate` `ToNull` |
+| **Sources** | `FromCSV` `FromJDBC` `FromKafka` |
+| **Transforms** | `Filter` `Map` `Validate` `WithDQ` `WithHWM` `WithDLQ` `WithMetrics` |
+| **Sinks** | `ToJDBC` `ToKafka` `ToS3` |
 | **Terminal** | `Build()` · `MarshalJSON()` · `Run(ctx)` |
+
+The builder deliberately covers the most common ETL/CDC patterns (SQL, Kafka, CSV,
+object storage) rather than every source/sink/transform the engine supports — see
+[`sdk/builder.go`](../sdk/builder.go) for the current, authoritative list. For a
+type the builder doesn't wrap yet (e.g. the `parquet`, `xml`, `jsonlines`,
+`fixedwidth`, or REST sources; the `parquet`, `csv`, `jsonlines`, `template`, or
+`null` sinks; the `lookup`, `schemadrift`, or `parse` transforms), either call
+`Build()` and mutate the returned `*pipeline.Definition` directly (it's the same
+struct a `.datapipeline` file deserialises into — see
+[Pipeline file](pipeline-file.md)), or write the `SourceDef` / `SinkDef` /
+`TransformDef` JSON by hand.
 
 - `Build()` returns the `Definition` for inspection or embedding.
 - `MarshalJSON()` serializes to the same JSON a `.datapipeline` carries — write it to a
