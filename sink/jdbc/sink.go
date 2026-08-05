@@ -10,6 +10,18 @@
 //	import _ "github.com/go-sql-driver/mysql"     // MySQL
 //	import _ "github.com/microsoft/go-mssqldb"    // SQL Server
 //	import _ "github.com/sijms/go-ora/v2"         // Oracle
+//
+// # Delete-capable mode (opColumn)
+//
+// Set "opColumn" to a metadata column present in every batch (but not itself a
+// target-table column, e.g. a Debezium-style "__op" field written by the kafka
+// source's cdc-envelope deserializer) whose value classifies each row. Rows
+// whose opColumn value matches (case-insensitively) one of "deleteValues"
+// (default ["d", "delete"]) are DELETEd by "conflictKey" instead of written;
+// every other row is inserted/upserted as usual. Requires a non-empty
+// conflictKey. This turns a periodic full/incremental refresh into a true
+// mirror of the source table — rows removed upstream are removed here too —
+// without requiring a full CDC pipeline.
 package jdbc
 
 import (
@@ -59,6 +71,17 @@ type jdbcSink struct {
 	// as warnings and silently dropped so the INSERT remains valid.
 	// autoMigrate is intended for use together with schemadrift policy=additive.
 	autoMigrate bool
+
+	// opColumn, when set, turns on delete-capable mode: it names a metadata
+	// column (present in every incoming batch but NOT a target-table column,
+	// e.g. a Debezium-style "__op" field) whose value classifies each row as an
+	// upsert or a delete. Rows whose opColumn value matches (case-insensitively)
+	// one of deleteValues are DELETEd by conflictKey instead of written; every
+	// other row is inserted/upserted as usual. Requires a non-empty conflictKey
+	// (the delete needs a key to delete BY). See writeBatchWithOp / flushMixed.
+	opColumn     string
+	deleteValues []string
+	deleteBuf    [][]interface{} // buffered conflictKey value tuples pending DELETE
 }
 
 func newJDBCSink(cfg map[string]interface{}) (sink.Sink, error) {
@@ -74,18 +97,6 @@ func newJDBCSink(cfg map[string]interface{}) (sink.Sink, error) {
 	if table == "" {
 		return nil, fmt.Errorf("jdbc sink: 'table' is required")
 	}
-
-	db, err := sql.Open(driver, dsn)
-	if err != nil {
-		return nil, fmt.Errorf("jdbc sink: open db: %w", err)
-	}
-	if err := db.Ping(); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("jdbc sink: ping db: %w", err)
-	}
-	// Tune connection pool for batch writes.
-	db.SetMaxOpenConns(4)
-	db.SetMaxIdleConns(2)
 
 	batchSize := 1000
 	if bs, ok := cfg["batchSize"].(int); ok && bs > 0 {
@@ -111,14 +122,48 @@ func newJDBCSink(cfg map[string]interface{}) (sink.Sink, error) {
 		autoMigrate = am
 	}
 
+	// Validate config that doesn't need a connection BEFORE opening one, so a
+	// misconfigured opColumn/conflictKey fails fast without a network round trip.
+	opColumn, _ := cfg["opColumn"].(string)
+	var deleteValues []string
+	if dv, ok := cfg["deleteValues"].([]interface{}); ok {
+		for _, v := range dv {
+			if s, ok := v.(string); ok {
+				deleteValues = append(deleteValues, s)
+			}
+		}
+	}
+	if opColumn != "" {
+		if len(conflictKey) == 0 {
+			return nil, fmt.Errorf("jdbc sink: 'opColumn' requires a non-empty 'conflictKey' (deletes need a key to delete by)")
+		}
+		if len(deleteValues) == 0 {
+			deleteValues = []string{"d", "delete"}
+		}
+	}
+
+	db, err := sql.Open(driver, dsn)
+	if err != nil {
+		return nil, fmt.Errorf("jdbc sink: open db: %w", err)
+	}
+	if err := db.Ping(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("jdbc sink: ping db: %w", err)
+	}
+	// Tune connection pool for batch writes.
+	db.SetMaxOpenConns(4)
+	db.SetMaxIdleConns(2)
+
 	return &jdbcSink{
-		db:          db,
-		table:       table,
-		batchSize:   batchSize,
-		conflictKey: conflictKey,
-		onConflict:  onConflict,
-		driver:      driver,
-		autoMigrate: autoMigrate,
+		db:           db,
+		table:        table,
+		batchSize:    batchSize,
+		conflictKey:  conflictKey,
+		onConflict:   onConflict,
+		driver:       driver,
+		autoMigrate:  autoMigrate,
+		opColumn:     opColumn,
+		deleteValues: deleteValues,
 	}, nil
 }
 
@@ -132,6 +177,9 @@ func newJDBCSink(cfg map[string]interface{}) (sink.Sink, error) {
 // policy=additive), reconcileSchema is called to either issue ALTER TABLE
 // statements (autoMigrate:true) or drop the extra columns (autoMigrate:false).
 func (s *jdbcSink) WriteBatch(batch *record.RecordBatch) error {
+	if s.opColumn != "" {
+		return s.writeBatchWithOp(batch)
+	}
 	if len(s.schema) == 0 {
 		// First batch: copy schema and column names before the caller can call
 		// record.Put, which nils batch.Columns. A direct assignment would leave
@@ -181,6 +229,112 @@ func (s *jdbcSink) WriteBatch(batch *record.RecordBatch) error {
 		return s.flush()
 	}
 	return nil
+}
+
+// writeBatchWithOp is WriteBatch's delete-capable path (opColumn configured).
+// It mirrors WriteBatch's schema-capture/reconcile logic exactly, but against
+// a "logical" column list with opColumn removed (opColumn is metadata, not a
+// target-table column) and splits rows by opColumn's value into the upsert
+// buffer (s.buf, written by the existing insert/upsert machinery unchanged)
+// and the delete buffer (s.deleteBuf, a conflictKey value tuple per deleted
+// row, flushed by flushMixed via buildDelete).
+//
+// Row values are gathered by COLUMN NAME (batch.ColIndex), not position: unlike
+// the plain path's positional prefix-copy, opColumn's position within
+// batch.Columns is arbitrary, so a name-indexed gather is required to place
+// values into s.columns/s.conflictKey order correctly.
+func (s *jdbcSink) writeBatchWithOp(batch *record.RecordBatch) error {
+	logicalCols := stripColumn(batch.Columns, s.opColumn)
+
+	if len(s.schema) == 0 {
+		s.schema = make([]record.Column, len(logicalCols))
+		copy(s.schema, logicalCols)
+		s.columns = make([]string, len(logicalCols))
+		for i, col := range logicalCols {
+			s.columns[i] = col.Name
+		}
+		if s.autoMigrate {
+			if err := s.ensureTable(); err != nil {
+				return err
+			}
+		}
+	} else if len(logicalCols) != len(s.schema) || !schemasEqual(s.schema, logicalCols) {
+		if err := s.reconcileSchema(&record.RecordBatch{Columns: logicalCols}); err != nil {
+			return err
+		}
+	}
+
+	opIdx := batch.ColIndex(s.opColumn)
+	if opIdx < 0 {
+		return fmt.Errorf("jdbc sink: opColumn %q not present in batch", s.opColumn)
+	}
+	colIdx := make([]int, len(s.columns))
+	for i, name := range s.columns {
+		idx := batch.ColIndex(name)
+		if idx < 0 {
+			return fmt.Errorf("jdbc sink: column %q (from the sink's known schema) missing in batch", name)
+		}
+		colIdx[i] = idx
+	}
+	keyIdx := make([]int, len(s.conflictKey))
+	for i, name := range s.conflictKey {
+		idx := batch.ColIndex(name)
+		if idx < 0 {
+			return fmt.Errorf("jdbc sink: conflictKey column %q missing in batch", name)
+		}
+		keyIdx[i] = idx
+	}
+
+	upserted := 0
+	for _, row := range batch.Rows {
+		if isDeleteOp(row[opIdx], s.deleteValues) {
+			key := make([]interface{}, len(keyIdx))
+			for i, idx := range keyIdx {
+				key[i] = row[idx]
+			}
+			s.deleteBuf = append(s.deleteBuf, key)
+			continue
+		}
+		rowCopy := make([]interface{}, len(colIdx))
+		for i, idx := range colIdx {
+			rowCopy[i] = row[idx]
+		}
+		s.buf = append(s.buf, rowCopy)
+		upserted++
+	}
+	s.rowsBuffered += upserted
+
+	if s.rowsBuffered+len(s.deleteBuf) >= s.batchSize {
+		return s.flush()
+	}
+	return nil
+}
+
+// stripColumn returns cols with the named column removed (order preserved).
+func stripColumn(cols []record.Column, name string) []record.Column {
+	out := make([]record.Column, 0, len(cols))
+	for _, c := range cols {
+		if c.Name != name {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// isDeleteOp reports whether v (opColumn's value for a row) matches one of
+// deleteValues, case-insensitively. Non-string values (including nil, e.g. a
+// row whose opColumn was never set) are never treated as deletes.
+func isDeleteOp(v interface{}, deleteValues []string) bool {
+	s, ok := v.(string)
+	if !ok {
+		return false
+	}
+	for _, dv := range deleteValues {
+		if strings.EqualFold(s, dv) {
+			return true
+		}
+	}
+	return false
 }
 
 // reconcileSchema brings the sink's known schema into alignment with the
@@ -241,14 +395,28 @@ func (s *jdbcSink) reconcileSchema(batch *record.RecordBatch) error {
 		return fmt.Errorf("jdbc sink: pre-migration flush: %w", err)
 	}
 
-	// Issue ALTER TABLE ... ADD COLUMN for each new column.
+	// Issue an ALTER TABLE ADD for each new column. "ADD COLUMN" is the
+	// PostgreSQL/MySQL form; SQL Server and Oracle both use bare "ADD" — on
+	// SQL Server "COLUMN" is not valid there ("Incorrect syntax near the
+	// keyword 'COLUMN'"), and on Oracle "COLUMN" is a reserved word that
+	// cannot appear in that position (ORA-03050: invalid identifier).
 	for _, col := range newCols {
 		sqlType := recordTypeToSQL(col.Type, s.driver)
-		stmt := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s",
-			sqlutil.QuoteIdent(s.table, s.driver),
-			sqlutil.QuoteIdent(col.Name, s.driver),
-			sqlType,
-		)
+		var stmt string
+		switch s.driver {
+		case "sqlserver", "mssql", "oracle":
+			stmt = fmt.Sprintf("ALTER TABLE %s ADD %s %s",
+				sqlutil.QuoteIdent(s.table, s.driver),
+				sqlutil.QuoteIdent(col.Name, s.driver),
+				sqlType,
+			)
+		default: // postgres, mysql
+			stmt = fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s",
+				sqlutil.QuoteIdent(s.table, s.driver),
+				sqlutil.QuoteIdent(col.Name, s.driver),
+				sqlType,
+			)
+		}
 		jlog.Infof("jdbc sink table=%q: autoMigrate — %s", s.table, stmt)
 		if _, err := s.db.Exec(stmt); err != nil {
 			return fmt.Errorf("jdbc sink: alter table add column %q: %w", col.Name, err)
@@ -266,6 +434,15 @@ func (s *jdbcSink) reconcileSchema(batch *record.RecordBatch) error {
 // true so that a not-yet-existing target table is created automatically (the
 // Studio "auto-migrate table" toggle). Existing tables are left untouched;
 // subsequent additive columns are handled by reconcileSchema's ALTER TABLE path.
+//
+// When conflictKey is set, the CREATE TABLE also declares it as the PRIMARY
+// KEY. This is required for Postgres's "ON CONFLICT (col) DO ..." — Postgres
+// rejects that clause with "no unique or exclusion constraint matching the ON
+// CONFLICT specification" unless the target columns already have one — and is
+// harmless (indeed correct) for the other three dialects too, whose upsert
+// forms (ON DUPLICATE KEY UPDATE / MERGE) don't strictly require it. Without
+// this, autoMigrate:true + onConflict:upsert/ignore against a table that does
+// not yet exist would always fail on Postgres on the very first upsert.
 func (s *jdbcSink) ensureTable() error {
 	if len(s.schema) == 0 {
 		return nil
@@ -277,10 +454,40 @@ func (s *jdbcSink) ensureTable() error {
 			recordTypeToSQL(col.Type, s.driver),
 		)
 	}
-	stmt := fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s (%s)",
+	if len(s.conflictKey) > 0 {
+		quoted := make([]string, len(s.conflictKey))
+		for i, k := range s.conflictKey {
+			quoted[i] = sqlutil.QuoteIdent(k, s.driver)
+		}
+		cols = append(cols, fmt.Sprintf("PRIMARY KEY (%s)", strings.Join(quoted, ", ")))
+	}
+	createStmt := fmt.Sprintf("CREATE TABLE %s (%s)",
 		sqlutil.QuoteIdent(s.table, s.driver),
 		strings.Join(cols, ", "),
 	)
+	// "CREATE TABLE IF NOT EXISTS" is a PostgreSQL/MySQL extension — it is NOT
+	// valid T-SQL (SQL Server rejects it with "Incorrect syntax near 'IF'")
+	// and is only supported on very recent Oracle releases (23c+), so relying
+	// on it would silently break autoMigrate on older-but-still-common Oracle
+	// versions. Each dialect gets its own guarded/portable form instead.
+	var stmt string
+	switch s.driver {
+	case "sqlserver", "mssql":
+		stmt = fmt.Sprintf("IF OBJECT_ID(N'%s', N'U') IS NULL EXEC(N'%s')",
+			strings.ReplaceAll(s.table, "'", "''"),
+			strings.ReplaceAll(createStmt, "'", "''"),
+		)
+	case "oracle":
+		stmt = fmt.Sprintf(
+			"BEGIN EXECUTE IMMEDIATE '%s'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -955 THEN RAISE; END IF; END;",
+			strings.ReplaceAll(createStmt, "'", "''"),
+		)
+	default: // postgres, mysql
+		stmt = fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s (%s)",
+			sqlutil.QuoteIdent(s.table, s.driver),
+			strings.Join(cols, ", "),
+		)
+	}
 	jlog.Infof("jdbc sink table=%q: autoMigrate — %s", s.table, stmt)
 	if _, err := s.db.Exec(stmt); err != nil {
 		return fmt.Errorf("jdbc sink: create table %q: %w", s.table, err)
@@ -379,13 +586,174 @@ func (s *jdbcSink) Flush() error {
 	return s.flush()
 }
 
+// flush dispatches to the plain insert-only path (the historical, unchanged
+// behavior when opColumn is not configured) or the delete-capable path.
 func (s *jdbcSink) flush() error {
+	if s.opColumn != "" {
+		return s.flushMixed()
+	}
+	return s.flushInsertsOnly()
+}
+
+// flushMixed flushes both the upsert buffer and the delete buffer. When both
+// are non-empty they run in one transaction, so a batch containing both
+// upserts and deletes commits or rolls back as a single unit of work.
+func (s *jdbcSink) flushMixed() error {
+	if len(s.buf) == 0 && len(s.deleteBuf) == 0 {
+		return nil
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("jdbc sink: begin tx: %w", err)
+	}
+
+	if len(s.buf) > 0 {
+		allRows := s.dedupUpsertRows(s.buf)
+		s.buf = s.buf[:0]
+		s.rowsBuffered = 0
+		ncols := len(s.columns)
+		maxRows := maxRowsPerInsert(s.driver, ncols)
+		for start := 0; start < len(allRows); start += maxRows {
+			end := start + maxRows
+			if end > len(allRows) {
+				end = len(allRows)
+			}
+			query, args := s.buildInsert(allRows[start:end])
+			if _, err := tx.Exec(query, args...); err != nil {
+				_ = tx.Rollback()
+				return fmt.Errorf("jdbc sink: exec insert chunk: %w", err)
+			}
+		}
+	}
+
+	if len(s.deleteBuf) > 0 {
+		allKeys := s.deleteBuf
+		s.deleteBuf = s.deleteBuf[:0]
+		maxRows := maxRowsPerInsert(s.driver, len(s.conflictKey))
+		for start := 0; start < len(allKeys); start += maxRows {
+			end := start + maxRows
+			if end > len(allKeys) {
+				end = len(allKeys)
+			}
+			query, args := s.buildDelete(allKeys[start:end])
+			if _, err := tx.Exec(query, args...); err != nil {
+				_ = tx.Rollback()
+				return fmt.Errorf("jdbc sink: exec delete chunk: %w", err)
+			}
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("jdbc sink: commit tx: %w", err)
+	}
+	return nil
+}
+
+// buildDelete builds a DELETE FROM ... WHERE (k1=? AND k2=?) OR (k1=? AND ...)
+// statement for a chunk of conflictKey value tuples. The OR-of-ANDs form (vs.
+// a row-value "(k1,k2) IN (...)" constructor) is deliberate: it is the one
+// syntax all four supported dialects accept identically — SQL Server has no
+// row-value IN constructor at all, unlike Postgres/MySQL/Oracle.
+func (s *jdbcSink) buildDelete(keys [][]interface{}) (string, []interface{}) {
+	var sb strings.Builder
+	sb.WriteString("DELETE FROM ")
+	sb.WriteString(sqlutil.QuoteIdent(s.table, s.driver))
+	sb.WriteString(" WHERE ")
+	args := make([]interface{}, 0, len(keys)*len(s.conflictKey))
+	p := 1
+	for i, key := range keys {
+		if i > 0 {
+			sb.WriteString(" OR ")
+		}
+		sb.WriteString("(")
+		for j, col := range s.conflictKey {
+			if j > 0 {
+				sb.WriteString(" AND ")
+			}
+			sb.WriteString(sqlutil.QuoteIdent(col, s.driver))
+			sb.WriteString(" = ")
+			sb.WriteString(sqlutil.Placeholder(p, s.driver))
+			p++
+			args = append(args, key[j])
+		}
+		sb.WriteString(")")
+	}
+	return sb.String(), args
+}
+
+// dedupUpsertRows keeps only the LAST occurrence of each conflictKey value
+// tuple in rows, when onConflict is "upsert". This is not a data-loss
+// shortcut — it is required for correctness: Postgres rejects "ON CONFLICT DO
+// UPDATE" statements that would affect the same conflict target twice
+// ("ON CONFLICT DO UPDATE command cannot affect row a second time"), which a
+// naive multi-row upsert hits the moment two changes to the SAME key are
+// buffered in the same flush — the routine shape of a real change-data-capture
+// stream (e.g. a row created then updated again before the next checkpoint).
+// Keeping only the most recent write for each key within the flush yields the
+// exact same final database state a row-by-row apply would produce, since an
+// earlier buffered row for that key is already superseded before this
+// statement runs. "ignore"/"insert" modes are left untouched: Postgres's
+// restriction is specific to DO UPDATE (DO NOTHING has no such restriction,
+// and plain INSERT should legitimately surface a duplicate-key error).
+func (s *jdbcSink) dedupUpsertRows(rows [][]interface{}) [][]interface{} {
+	if s.onConflict != conflictUpsert || len(s.conflictKey) == 0 || len(rows) < 2 {
+		return rows
+	}
+
+	keyIdx := make([]int, 0, len(s.conflictKey))
+	for _, name := range s.conflictKey {
+		for i, col := range s.columns {
+			if col == name {
+				keyIdx = append(keyIdx, i)
+				break
+			}
+		}
+	}
+	if len(keyIdx) != len(s.conflictKey) {
+		return rows // conflictKey not found in s.columns — leave as-is; let the DB surface any real error
+	}
+
+	keys := make([]string, len(rows))
+	lastIdx := make(map[string]int, len(rows))
+	for i, row := range rows {
+		keys[i] = jdbcRowKeyString(row, keyIdx)
+		lastIdx[keys[i]] = i
+	}
+	if len(lastIdx) == len(rows) {
+		return rows // no duplicate keys in this flush — the common case, zero extra allocation
+	}
+
+	out := make([][]interface{}, 0, len(lastIdx))
+	for i, row := range rows {
+		if lastIdx[keys[i]] == i {
+			out = append(out, row)
+		}
+	}
+	return out
+}
+
+// jdbcRowKeyString renders the conflictKey column values of one row as a
+// single comparable string, using a NUL separator so no combination of
+// stringified values can collide across different key-column boundaries.
+func jdbcRowKeyString(row []interface{}, keyIdx []int) string {
+	var sb strings.Builder
+	for _, idx := range keyIdx {
+		fmt.Fprintf(&sb, "%v\x00", row[idx])
+	}
+	return sb.String()
+}
+
+func (s *jdbcSink) flushInsertsOnly() error {
 	if len(s.buf) == 0 {
 		return nil
 	}
 
 	// s.buf already contains sink-owned [][]interface{} rows; use directly.
-	allRows := s.buf
+	// dedupUpsertRows keeps only the last occurrence of each conflictKey value
+	// within this flush — see its doc comment for why that is required for
+	// correctness, not just an optimisation.
+	allRows := s.dedupUpsertRows(s.buf)
 	s.buf = s.buf[:0]
 	s.rowsBuffered = 0
 

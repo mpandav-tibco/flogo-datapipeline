@@ -3,10 +3,13 @@ package api
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -95,18 +98,39 @@ type Server struct {
 
 	// cancels maps runId -> cancelEntry so DELETE /…/run/{runId} can cancel in-flight runs.
 	cancels sync.Map // map[string]*cancelEntry
+
+	// tokens holds the configured API credentials (from DP_API_TOKEN), each
+	// compared in constant time. Empty means authentication is disabled — the
+	// server's historical, still-default behavior. See requireAuth.
+	tokens []string
 }
 
 const ringCap = 100
 
+// apiTokenEnvVar is the environment variable that opts the management API into
+// authentication. Unset or empty (the default) leaves the API open, matching
+// the documented "bind it to loopback or a trusted network" guidance in
+// docs/security.md. Set it to enable a shared-secret gate — a comma-separated
+// list of tokens is accepted so a credential can be rotated without downtime
+// (add the new token, roll callers over, then remove the old one).
+const apiTokenEnvVar = "DP_API_TOKEN"
+
 // NewServer constructs a Server that shares the factory's action cache.
 // listenAddr is the TCP address to listen on (e.g. ":8888").
+//
+// If the DP_API_TOKEN environment variable is set (non-empty, optionally
+// comma-separated for rotation), every request except GET /v1/health must
+// present a matching credential via "Authorization: Bearer <token>" or
+// "X-Api-Key: <token>" — otherwise the API remains open, as documented in
+// docs/security.md. This is a shared-secret gate, not RBAC/multi-tenancy; for
+// anything beyond that, front the API with a real gateway.
 func NewServer(factory *pipeline.Factory, listenAddr string) *Server {
 	s := &Server{
 		factory:    factory,
 		listenAddr: listenAddr,
 		rings:      make(map[string]*ringBuffer),
 		running:    make(map[string]string),
+		tokens:     parseAPITokens(os.Getenv(apiTokenEnvVar)),
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/health", s.handleHealth)
@@ -122,12 +146,68 @@ func NewServer(factory *pipeline.Factory, listenAddr string) *Server {
 	s.mux = mux
 	s.httpSrv = &http.Server{
 		Addr:         listenAddr,
-		Handler:      mux,
+		Handler:      s.requireAuth(mux),
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 0, // unbounded — synchronous runs may take arbitrarily long
 		IdleTimeout:  120 * time.Second,
 	}
 	return s
+}
+
+// parseAPITokens splits a comma-separated credential list, trimming whitespace
+// and dropping empty segments. A nil/empty result means auth is disabled.
+func parseAPITokens(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	var out []string
+	for _, tok := range strings.Split(raw, ",") {
+		if tok = strings.TrimSpace(tok); tok != "" {
+			out = append(out, tok)
+		}
+	}
+	return out
+}
+
+// requireAuth wraps next with the DP_API_TOKEN shared-secret check. GET
+// /v1/health always passes through unauthenticated (so container/K8s liveness
+// probes never need a credential). When no tokens are configured, every
+// request passes through — the historical, still-default behavior.
+func (s *Server) requireAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if len(s.tokens) == 0 || r.URL.Path == "/v1/health" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if !s.hasValidToken(r) {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="flogo-datapipeline"`)
+			writeError(w, http.StatusUnauthorized, "unauthorized", "missing or invalid API credential")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// hasValidToken extracts a credential from "Authorization: Bearer <token>" or
+// "X-Api-Key: <token>" and compares it, in constant time, against every
+// configured token. Constant-time comparison avoids leaking how many leading
+// characters matched through response-timing side channels.
+func (s *Server) hasValidToken(r *http.Request) bool {
+	cred := r.Header.Get("X-Api-Key")
+	if cred == "" {
+		if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
+			cred = strings.TrimPrefix(auth, "Bearer ")
+		}
+	}
+	if cred == "" {
+		return false
+	}
+	for _, tok := range s.tokens {
+		if subtle.ConstantTimeCompare([]byte(cred), []byte(tok)) == 1 {
+			return true
+		}
+	}
+	return false
 }
 
 // Start registers all routes and begins serving HTTP in the calling goroutine.

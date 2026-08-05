@@ -15,9 +15,34 @@ flogo-datapipeline -f my-pipeline.datapipeline -port 9080
 | `-f` | `$PIPELINE_FILE` | path to the `.datapipeline` app (required) |
 | `-port` | `0` (off) | REST management API port (e.g. `9080`); wins over `-api-addr` |
 | `-api-addr` | `$PIPELINE_API_ADDR` | REST API TCP address (e.g. `:8888`) |
+| `-validate` | `false` | validate the pipeline definition(s) and exit \u2014 no engine boot, no triggers, no source/sink/DB/Kafka connections |
 
 Without `-port` / `-api-addr` the engine runs the pipeline (driven by its triggers)
 and exits when done; the REST API is not started.
+
+## Validating in CI (`-validate`)
+
+`-validate` checks every `pipeline:` resource's definition \u2014 required fields and
+cross-field rules (`Definition.Defaults()` + `Validate()`, the same check the REST
+API's `PUT /v1/pipelines/{ref}` uses) \u2014 and exits **without** starting the engine,
+any trigger, or any source/sink connection. Safe to run against every
+`.datapipeline` in a repo as a CI gate, with no test infrastructure required:
+
+```bash
+flogo-datapipeline -f my-pipeline.datapipeline -validate
+# OK       pipeline:my-pipeline (source=csv sink=jdbc)
+# 1 pipeline definition(s) valid
+echo $?  # 0
+
+flogo-datapipeline -f broken.datapipeline -validate
+# INVALID  pipeline:broken: source.type is required
+# 1/1 pipeline definition(s) invalid
+echo $?  # 1
+```
+
+This is config-shape validation only (it does not open a database/Kafka
+connection or confirm a table/topic exists) \u2014 pair it with the Studio's dry-run
+preview or a real run against test infrastructure for end-to-end confidence.
 
 ## Environment variables
 

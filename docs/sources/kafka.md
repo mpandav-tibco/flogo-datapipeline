@@ -21,8 +21,9 @@ Consumes a Kafka topic as a consumer group, in continuous **streaming** mode or 
 | `stopOffset` | int64 | — | — | **Batch:** stop when any partition reaches this offset. |
 | `stopTimestamp` | string (RFC3339) | — | — | **Batch:** stop when a message timestamp ≥ this. |
 | `stopAtCurrentEnd` | bool | `false` | — | **Batch:** drain to each partition's end-of-log snapshotted at open. |
-| `deserializer` | string | `json` | — | `json`, `avro`, or `raw`. |
+| `deserializer` | string | `json` | — | `json`, `avro`, `raw`, or `debezium`. |
 | `schemaRegistryURL` | string | — | — | Confluent Schema Registry (required for `avro`). |
+| `opColumnName` | string | `__op` | — | `debezium` only: metadata column carrying the change type (`c`/`u`/`d`/`r`). |
 | `pollMs` | int | `500` | — | Poll window in milliseconds. |
 | `batchSize` | int | `1000` | — | Messages per batch (internal buffer = `batchSize × 2`). |
 | `saslMechanism` | string | — | — | `PLAIN`, `SCRAM-SHA-256`, `SCRAM-SHA-512`. |
@@ -33,11 +34,45 @@ Consumes a Kafka topic as a consumer group, in continuous **streaming** mode or 
 ## Behavior
 
 - **Deserializers:** `json` → object; `raw` → `{key, value}` strings; `avro` → Confluent
-  wire format (magic byte + schema ID + Avro binary) resolved against the registry.
+  wire format (magic byte + schema ID + Avro binary) resolved against the registry;
+  `debezium` → a Debezium / Kafka Connect change-event envelope (see below).
 - **Batch mode** requires at least one of `stopOffset`, `stopTimestamp`, or
   `stopAtCurrentEnd`; the first condition met wins. Use it for one-shot backfills.
 - Offsets auto-commit (~1 s); `Flush` waits to guarantee the final commit.
 - Deserialization errors are logged (WARN) and skipped.
+
+## Consuming CDC change streams (`deserializer: "debezium"`)
+
+Rather than this engine implementing CDC capture itself, the `debezium`
+deserializer lets it **consume** a real change stream captured by
+[Debezium](https://debezium.io) (or anything emitting the same Kafka Connect
+envelope): compose with the ecosystem's CDC engine instead of duplicating it.
+
+For each message it accepts either the "unwrapped" envelope
+(`connect.json.converter.schemas.enable=false`) or the default "wrapped" form
+(nested under a top-level `payload` key alongside `schema`), and flattens it to
+a row: the changed record's columns (`after` for create/update/snapshot,
+`before` for a delete — `after` is null on a delete, so `before` is the only
+place the deleted row's key survives) plus a metadata column (`opColumnName`,
+default `__op`) carrying the raw op code `c`/`u`/`d`/`r`.
+
+Pair it with the [JDBC sink](../sinks/jdbc.md)'s `opColumn` delete-capable mode
+(same default column name and the same `"d"`/`"delete"` vocabulary) to mirror
+upstream inserts, updates, **and deletes** into a target table — a working
+CDC-to-target pipeline without this engine ever performing log-based capture.
+A raw Kafka tombstone (the log-compaction delete marker: an empty value with no
+envelope) is skipped with a warning — the preceding `op:"d"` envelope message
+already carried the full delete.
+
+```json
+{
+  "type": "kafka",
+  "brokers": "localhost:9092",
+  "topic": "dbserver1.inventory.customers",
+  "groupId": "dp-cdc-consumer",
+  "deserializer": "debezium"
+}
+```
 
 ## Example — streaming JSON
 

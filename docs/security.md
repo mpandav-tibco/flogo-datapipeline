@@ -57,9 +57,12 @@ centralize.
 
 ## The REST API
 
-The management [REST API](rest-api.md) is off unless you set a port, and has no
-built-in authentication — bind it to loopback or a trusted network, or front it with
-your own gateway. Do not expose it directly to the internet.
+The management [REST API](rest-api.md) is off unless you set a port. By default it
+has **no** authentication — bind it to loopback or a trusted network, or front it
+with your own gateway; do not expose it directly to the internet. Set `DP_API_TOKEN`
+to require a bearer token / API key on every request except `GET /v1/health` (see
+[REST API → Authentication](rest-api.md#authentication-optional)). This is a
+shared-secret gate, not RBAC/multi-tenancy.
 
 ## See also
 

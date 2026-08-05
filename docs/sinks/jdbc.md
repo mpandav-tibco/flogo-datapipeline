@@ -14,7 +14,36 @@ optional automatic table creation and column migration. Implemented in
 | `batchSize` | int | `1000` | — | Rows buffered before a flush. |
 | `onConflict` | string | `insert` | — | `insert`, `upsert`, or `ignore`. |
 | `conflictKey` | `[]string` | — | upsert | Key columns for the upsert match. |
-| `autoMigrate` | bool | `false` | — | `CREATE TABLE IF NOT EXISTS` on first batch and `ALTER TABLE … ADD COLUMN` for new columns. |
+| `autoMigrate` | bool | `false` | — | `CREATE TABLE IF NOT EXISTS` on first batch and `ALTER TABLE … ADD COLUMN` for new columns. When `conflictKey` is set, the created table also declares it as the `PRIMARY KEY` (required for Postgres's upsert; harmless elsewhere). |
+| `opColumn` | string | — | — | Turns on delete-capable mode (see below). Requires a non-empty `conflictKey`. |
+| `deleteValues` | `[]string` | `["d", "delete"]` | — | `opColumn` values (case-insensitive) that mean "delete this row" instead of upsert. |
+
+## Delete-capable mode (`opColumn`)
+
+Set `opColumn` to a metadata column present in every batch — but **not** itself a
+target-table column — whose value classifies each row. Rows whose `opColumn` value
+matches one of `deleteValues` are `DELETE`d by `conflictKey` instead of written; every
+other row is inserted/upserted as usual. A batch that mixes upserts and deletes
+commits both in **one transaction**, so a partial failure rolls back atomically.
+
+This turns a periodic full/incremental refresh into a true mirror of the source table
+— rows removed upstream are removed here too — **without requiring a full CDC
+pipeline**. Pair it with the [kafka source](../sources/kafka.md)'s Debezium-envelope
+deserializer to consume real CDC change streams, or with any source that emits an
+op/status column of its own.
+
+```json
+{
+  "type": "jdbc",
+  "driver": "postgres",
+  "dsn": "host=db dbname=app user=etl sslmode=disable",
+  "table": "customers",
+  "onConflict": "upsert",
+  "conflictKey": ["customer_id"],
+  "opColumn": "__op",
+  "deleteValues": ["d"]
+}
+```
 
 ## Behavior
 

@@ -28,6 +28,31 @@ in-memory ring buffer.
 `{ref}` is the Flogo resource reference, e.g. `res://pipeline:daily-tx` (URL-encode
 the `:` and `/`).
 
+## Authentication (optional)
+
+The API is open by default — the same "bind it to loopback or a trusted network"
+posture described in [Security](security.md). Set `DP_API_TOKEN` to require a
+credential on every request **except** `GET /v1/health` (so container/Kubernetes
+liveness probes never need one):
+
+```bash
+export DP_API_TOKEN="a-long-random-secret"
+./flogo-datapipeline -f my.datapipeline -port 9080
+```
+
+Present the credential as either header:
+
+```
+Authorization: Bearer a-long-random-secret
+X-Api-Key: a-long-random-secret
+```
+
+A request without a matching credential gets `401 Unauthorized`. `DP_API_TOKEN`
+accepts a comma-separated list so a credential can be rotated without downtime
+(add the new token, roll callers over, then remove the old one). This is a
+shared-secret gate, not RBAC/multi-tenancy — for anything beyond that, front the
+API with a real gateway.
+
 ## Health
 
 ```bash
