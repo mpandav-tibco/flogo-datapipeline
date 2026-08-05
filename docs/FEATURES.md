@@ -231,8 +231,9 @@ lease / heartbeat / retry, and a transaction-level advisory lock on enqueue).
 
 **Run output** (`action/pipeline/action.go`): `status` (`completed` | `partial` |
 `failed`), `rowsProcessed`, `rowsWritten`, `rowsFailed`, `rowsDropped`,
-`durationMs`, `error`, `metadata` (includes `dqReport`). `RunDirect` provides
-synchronous execution for the REST API and SDK.
+`rowsDeleted` (delete-capable sinks, e.g. jdbc `opColumn`), `durationMs`, `error`,
+`metadata` (includes `dqReport`). `RunDirect` provides synchronous execution for
+the REST API and SDK.
 
 ---
 

@@ -32,6 +32,16 @@ pipeline**. Pair it with the [kafka source](../sources/kafka.md)'s Debezium-enve
 deserializer to consume real CDC change streams, or with any source that emits an
 op/status column of its own.
 
+**Observability:** delete-capable mode reports how many rows were actually deleted
+(via `sql.Result.RowsAffected()`, not just how many delete rows were buffered — a
+delete targeting a key that no longer exists doesn't inflate the count) through
+`Output.RowsDeleted` (also logged as `deleted=N` in the pipeline-run log line and
+`pipeline.run.finished` audit events), and as a custom OpenLineage output-dataset
+facet (`datapipeline_cdcStats`, key `rowsDeleted`) when [lineage](../observability.md#lineage-openlineage) is
+enabled. This distinguishes a CDC run's inserts from its deletes — without it, a run
+of "900 updates + 100 deletes" and one of "1000 plain inserts" both show as
+`rowsWritten=1000`, indistinguishable from each other.
+
 ```json
 {
   "type": "jdbc",

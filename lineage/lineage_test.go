@@ -127,6 +127,41 @@ func TestBuildCompleteEventStats(t *testing.T) {
 	}
 }
 
+// TestBuildCompleteEventCdcStats verifies the custom CDC-stats facet is
+// attached when RowsDeleted >= 0 (a delete-capable sink reporting a real
+// count), and absent entirely for a plain pipeline (RowsDeleted omitted,
+// defaulting to -1) — the facet must not clutter every lineage event with an
+// always-zero "rowsDeleted" for sinks with no delete concept.
+func TestBuildCompleteEventCdcStats(t *testing.T) {
+	cs := &captureSink{}
+	e := &emitter{namespace: "ns", sink: cs}
+
+	// A delete-capable run: 900 written, 100 of which were deletes.
+	e.Emit(Event{Type: Complete, RunID: "r1", Job: "j", Outputs: []Dataset{{Namespace: "jdbc", Name: "orders"}}, RowCount: 900, RowsDeleted: 100})
+	done := decode(t, cs.events[0])
+	out0 := done["outputs"].([]interface{})[0].(map[string]interface{})
+	facets := out0["facets"].(map[string]interface{})
+	cdcStats, ok := facets["datapipeline_cdcStats"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("datapipeline_cdcStats facet missing: %+v", facets)
+	}
+	if rd, _ := cdcStats["rowsDeleted"].(float64); rd != 100 {
+		t.Errorf("rowsDeleted = %v, want 100", cdcStats["rowsDeleted"])
+	}
+
+	// A plain (non-delete-capable) run: RowsDeleted omitted (-1) — no facet.
+	cs2 := &captureSink{}
+	e2 := &emitter{namespace: "ns", sink: cs2}
+	e2.Emit(Event{Type: Complete, RunID: "r2", Job: "j", Outputs: []Dataset{{Namespace: "jdbc", Name: "orders"}}, RowCount: 500, RowsDeleted: -1})
+	done2 := decode(t, cs2.events[0])
+	out0b := done2["outputs"].([]interface{})[0].(map[string]interface{})
+	if facets2, ok := out0b["facets"].(map[string]interface{}); ok {
+		if _, has := facets2["datapipeline_cdcStats"]; has {
+			t.Error("datapipeline_cdcStats facet must be absent when RowsDeleted is omitted (-1)")
+		}
+	}
+}
+
 // TestFailEventType maps a failed run to a FAIL event via the emitter build.
 func TestFailEventType(t *testing.T) {
 	cs := &captureSink{}

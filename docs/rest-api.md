@@ -96,6 +96,7 @@ curl -X POST 'localhost:9080/v1/pipelines/res%3A%2F%2Fpipeline%3Adaily-tx/run' \
 {
   "runId": "9f3c…", "status": "completed",
   "rowsProcessed": 100000, "rowsWritten": 99850, "rowsFailed": 150, "rowsDropped": 0,
+  "rowsDeleted": 0,
   "durationMs": 1840,
   "startedAt": "2026-07-16T09:00:00Z", "finishedAt": "2026-07-16T09:00:01Z",
   "qualityReport": { "passed": 6, "failed": 0 }

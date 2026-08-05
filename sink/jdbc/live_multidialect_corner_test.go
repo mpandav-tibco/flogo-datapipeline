@@ -588,3 +588,74 @@ func TestJDBCSink_Live_TransactionAtomicity_AllDialects(t *testing.T) {
 		})
 	}
 }
+
+// TestJDBCSink_Live_SinkStats_RowsDeleted_AllDialects proves SinkStats()
+// (the sink.StatsReporter implementation feeding lineage/audit's CDC
+// observability) reports the REAL number of rows removed via
+// sql.Result.RowsAffected(), not just the number of delete rows buffered —
+// specifically, a delete targeting a key that does NOT exist must NOT
+// inflate the count (0 rows affected), while a delete of a real row must.
+func TestJDBCSink_Live_SinkStats_RowsDeleted_AllDialects(t *testing.T) {
+	for _, d := range liveDialects(t) {
+		d := d
+		t.Run(d.driver, func(t *testing.T) {
+			db, err := sql.Open(sqlDriverName(d.driver), d.dsn)
+			if err != nil {
+				t.Fatalf("open: %v", err)
+			}
+			defer db.Close()
+			table := fmt.Sprintf("dp_sinkstats_%d", time.Now().UnixNano())
+			qt := sqlutil.QuoteIdent(table, d.driver)
+			t.Cleanup(func() { _, _ = db.Exec("DROP TABLE " + qt) })
+
+			skRaw, err := newJDBCSink(map[string]interface{}{
+				"driver": d.driver, "dsn": d.dsn, "table": table,
+				"autoMigrate": true, "onConflict": "upsert", "conflictKey": []interface{}{"id"},
+				"opColumn": "__op",
+			})
+			if err != nil {
+				t.Fatalf("newJDBCSink: %v", err)
+			}
+			sk := skRaw.(*jdbcSink)
+			cols := []record.Column{
+				{Name: "id", Type: record.TypeInt}, {Name: "v", Type: record.TypeString}, {Name: "__op", Type: record.TypeString},
+			}
+			// Seed 2 real rows.
+			if err := sk.WriteBatch(&record.RecordBatch{Columns: cols, Rows: [][]interface{}{
+				{int64(1), "a", "c"}, {int64(2), "b", "c"},
+			}}); err != nil {
+				t.Fatalf("WriteBatch (seed): %v", err)
+			}
+			if err := sk.Flush(); err != nil {
+				t.Fatalf("Flush (seed): %v", err)
+			}
+			if st := sk.SinkStats(); st.RowsDeleted != 0 {
+				t.Errorf("after seed (no deletes yet): RowsDeleted = %d, want 0", st.RowsDeleted)
+			}
+
+			// Delete id=1 (real) and id=999 (does not exist) in one flush.
+			if err := sk.WriteBatch(&record.RecordBatch{Columns: cols, Rows: [][]interface{}{
+				{int64(1), "", "d"}, {int64(999), "", "d"},
+			}}); err != nil {
+				t.Fatalf("WriteBatch (delete real+nonexistent): %v", err)
+			}
+			if err := sk.Close(); err != nil {
+				t.Fatalf("Close: %v", err)
+			}
+
+			// Only id=1 actually existed, so RowsAffected must count exactly 1
+			// — not 2 (the number of delete rows buffered) and not 0.
+			if st := sk.SinkStats(); st.RowsDeleted != 1 {
+				t.Errorf("RowsDeleted = %d, want 1 (only id=1 existed; id=999's delete must not inflate the count)", st.RowsDeleted)
+			}
+
+			var count int
+			if err := db.QueryRow("SELECT COUNT(*) FROM " + qt).Scan(&count); err != nil {
+				t.Fatalf("count: %v", err)
+			}
+			if count != 1 {
+				t.Errorf("row count = %d, want 1 (id=2 remains)", count)
+			}
+		})
+	}
+}

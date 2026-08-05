@@ -58,7 +58,7 @@ run emits structured JSON records (one object per line — JSONL) for its lifecy
 | Event | Emitted | Key fields |
 |---|---|---|
 | `pipeline.run.started` | at run start | `runId`, `pipeline`, `source`, `sink`, `transforms[]`, `scaling`, `checkpoint`, `incremental` |
-| `pipeline.run.finished` | at run end | `runId`, `pipeline`, `status`, `rowsProcessed`, `rowsWritten`, `rowsFailed`, `rowsDropped`, `durationMs`, `error` |
+| `pipeline.run.finished` | at run end | `runId`, `pipeline`, `status`, `rowsProcessed`, `rowsWritten`, `rowsFailed`, `rowsDropped`, `rowsDeleted` (delete-capable sinks only), `durationMs`, `error` |
 
 Every record also carries an `event` name and a UTC `ts` timestamp.
 
@@ -96,7 +96,7 @@ Each run emits two standard `RunEvent`s:
 | Event | Emitted | Carries |
 |---|---|---|
 | `START` | at run start | `run.runId`, `job`, input (source) + output (sink) datasets with schema facets |
-| `COMPLETE` / `FAIL` | at run end | the same datasets; `COMPLETE` adds an `outputStatistics` facet with the written `rowCount` |
+| `COMPLETE` / `FAIL` | at run end | the same datasets; `COMPLETE` adds an `outputStatistics` facet with the written `rowCount`, plus a custom `datapipeline_cdcStats` facet (`rowsDeleted`) when the sink is delete-capable (e.g. [jdbc's `opColumn` mode](sinks/jdbc.md#delete-capable-mode-opcolumn)) — distinguishing a CDC run's deletes from its inserts, which a plain `rowCount` cannot. |
 
 The engine's run id is mapped to a stable UUID so `START` and `COMPLETE` share one
 run. Lineage is **off by default**. Enable it per pipeline:
@@ -129,8 +129,8 @@ blocking or failing the pipeline. Dataset names are non-secret identifiers
 ## Run summary vs metrics
 
 Metrics are the *time-series* view. Each run also returns a one-shot **summary**
-(`status`, `rowsProcessed`, `rowsWritten`, `rowsFailed`, `rowsDropped`, `durationMs`,
-`metadata.dqReport`) via the [REST API](rest-api.md) and the Studio Run Report — see
+(`status`, `rowsProcessed`, `rowsWritten`, `rowsFailed`, `rowsDropped`, `rowsDeleted`,
+`durationMs`, `metadata.dqReport`) via the [REST API](rest-api.md) and the Studio Run Report — see
 [Pipeline file → Run output](pipeline-file.md#run-output).
 
 ## See also

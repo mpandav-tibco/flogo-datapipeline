@@ -41,6 +41,12 @@ const (
 	schemaFacetURL   = "https://openlineage.io/spec/2-0-2/OpenLineage.json#/$defs/SchemaDatasetFacet"
 	outStatsFacetURL = "https://openlineage.io/spec/2-0-2/OpenLineage.json#/$defs/OutputStatisticsOutputDatasetFacet"
 	defaultNamespace = "flogo-datapipeline"
+	// cdcStatsFacetSchemaURL documents this repo's own custom facet, following
+	// OpenLineage's custom-facet naming convention (a distinct project prefix +
+	// PascalCase name + entity, key "{prefix}_{name}" in snake/camelCase) rather
+	// than overloading the standard OutputStatistics facet, which has no
+	// operation-type breakdown (verified against OpenLineage's own facet spec).
+	cdcStatsFacetSchemaURL = producer + "/blob/main/lineage/lineage.go#DatapipelineCdcStatsOutputDatasetFacet"
 )
 
 var llog = corelog.ChildLogger(corelog.RootLogger(), "lineage")
@@ -75,6 +81,12 @@ type Event struct {
 	Inputs   []Dataset
 	Outputs  []Dataset
 	RowCount int64 // output row count for Complete; negative = omit
+	// RowsDeleted is the number of rows a delete-capable/CDC-target sink (the
+	// jdbc sink's opColumn mode) actually removed, distinct from RowCount
+	// (which is the sink's total write count, insert+update+delete combined).
+	// Negative = omit entirely (the sink has no delete concept) — 0 is a
+	// meaningful value (a delete-capable run that happened to delete nothing).
+	RowsDeleted int64
 }
 
 // Emitter sends OpenLineage run events. Emission is best-effort and must never
@@ -194,8 +206,26 @@ func (e *emitter) build(ev Event) olEvent {
 		Run:       olRun{RunID: uuidFromString(ev.RunID)},
 		Job:       olJob{Namespace: e.namespace, Name: job},
 		Inputs:    e.datasets(ev.Inputs, false, -1),
-		Outputs:   e.datasets(ev.Outputs, ev.Type == Complete, ev.RowCount),
+		Outputs:   e.datasets2(ev.Outputs, ev.Type == Complete, ev.RowCount, ev.RowsDeleted),
 	}
+}
+
+// datasets2 wraps datasets to additionally attach the custom CDC-stats facet
+// when rowsDeleted >= 0 — kept as a thin wrapper (rather than adding more
+// parameters to the widely-used datasets helper) so the START event's plain
+// datasets(...) call site above is untouched.
+func (e *emitter) datasets2(ds []Dataset, withStats bool, rowCount, rowsDeleted int64) []olDataset {
+	out := e.datasets(ds, withStats, rowCount)
+	if !withStats || rowsDeleted < 0 {
+		return out
+	}
+	for i := range out {
+		if out[i].Facets == nil {
+			out[i].Facets = &olFacets{}
+		}
+		out[i].Facets.CdcStats = &olCdcStats{Producer: producer, SchemaURL: cdcStatsFacetSchemaURL, RowsDeleted: rowsDeleted}
+	}
+	return out
 }
 
 func (e *emitter) datasets(ds []Dataset, withStats bool, rowCount int64) []olDataset {
@@ -270,6 +300,10 @@ type olDataset struct {
 type olFacets struct {
 	Schema           *olSchemaFacet `json:"schema,omitempty"`
 	OutputStatistics *olOutStats    `json:"outputStatistics,omitempty"`
+	// CdcStats is a custom (non-standard) OpenLineage facet, keyed
+	// "datapipeline_cdcStats" per OpenLineage's own custom-facet naming
+	// convention — see cdcStatsFacetSchemaURL's comment.
+	CdcStats *olCdcStats `json:"datapipeline_cdcStats,omitempty"`
 }
 
 type olSchemaFacet struct {
@@ -287,6 +321,16 @@ type olOutStats struct {
 	Producer  string `json:"_producer"`
 	SchemaURL string `json:"_schemaURL"`
 	RowCount  int64  `json:"rowCount"`
+}
+
+// olCdcStats is a custom OpenLineage output-dataset facet reporting the
+// number of rows a delete-capable/CDC-target sink actually deleted this run —
+// see cdcStatsFacetSchemaURL's comment for why this is custom rather than a
+// reuse of the standard OutputStatistics facet.
+type olCdcStats struct {
+	Producer    string `json:"_producer"`
+	SchemaURL   string `json:"_schemaURL"`
+	RowsDeleted int64  `json:"rowsDeleted"`
 }
 
 // --- transports ---
