@@ -72,15 +72,16 @@ Endpoints and payloads: [REST API](rest-api.md).
 
 ## Execution mode (ETL / ELT / EL)
 
-The mode is **emergent** from the transform chain — there is no engine switch:
+A top-level `mode` field (`etl` | `el` | `elt`, default `etl`) selects the
+execution strategy:
 
-| Mode | Declare |
-|---|---|
-| **ETL** | source → transforms → sink |
-| **ELT** | source → minimal transform → sink; heavy logic in the target DB |
-| **EL** | source → sink, no transforms |
+| Mode | Declare | Behaviour |
+|---|---|---|
+| **etl** (default) | source → transforms → sink | transforms run in-flight |
+| **el** | source → sink | in-flight transforms are bypassed; declared transforms are ignored (warning logged) |
+| **elt** | source → sink; heavy logic in the target DB | raw load like `el`; transforms are expected to run in-target, not in-flight (notice logged) |
 
-The Studio's *Execution mode* selector simply reflects this. See
+The Studio's *Execution mode* selector writes this `mode` field. See
 [Architecture](ARCHITECTURE.md).
 
 ## Performance tuning
