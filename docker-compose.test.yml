@@ -82,9 +82,10 @@ services:
     # standard JVM-based image so the CLIENTSASL listener actually works;
     # slower container startup (~10s vs ~5s) is an acceptable one-time cost.
     image: apache/kafka:4.1.0
-    ports: [ "9092:9092", "9094:9094", "9095:9095" ]
-    # MTLS (:9094, mutual TLS) and CLIENTSASL (:9095, SASL/PLAIN) are
-    # additional listeners for the live SASL/TLS adversarial tests
+    ports: [ "9092:9092", "9094:9094", "9095:9095", "9096:9096" ]
+    # MTLS (:9094, mutual TLS), CLIENTSASL (:9095, SASL/PLAIN + SCRAM), and
+    # CLIENTSASLTLS (:9096, SASL_SSL — encrypted transport + SASL auth
+    # combined) are additional listeners for the live SASL/TLS adversarial tests
     # (source/kafka/sasl_tls_test.go) — PLAINTEXT (:9092) stays untouched so
     # every other test keeps working unmodified.
     #
@@ -110,11 +111,11 @@ services:
     environment:
       KAFKA_NODE_ID: "1"
       KAFKA_PROCESS_ROLES: "broker,controller"
-      KAFKA_LISTENERS: "PLAINTEXT://:9092,CONTROLLER://:9093,MTLS://:9094,CLIENTSASL://:9095"
-      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://localhost:9092,MTLS://localhost:9094,CLIENTSASL://localhost:9095"
+      KAFKA_LISTENERS: "PLAINTEXT://:9092,CONTROLLER://:9093,MTLS://:9094,CLIENTSASL://:9095,CLIENTSASLTLS://:9096"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://localhost:9092,MTLS://localhost:9094,CLIENTSASL://localhost:9095,CLIENTSASLTLS://localhost:9096"
       KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
       KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,MTLS:SSL,CLIENTSASL:SASL_PLAINTEXT"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,MTLS:SSL,CLIENTSASL:SASL_PLAINTEXT,CLIENTSASLTLS:SASL_SSL"
       KAFKA_CONTROLLER_QUORUM_VOTERS: "1@localhost:9093"
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: "0"
@@ -143,6 +144,28 @@ services:
         org.apache.kafka.common.security.scram.ScramLoginModule required;
       KAFKA_LISTENER_NAME_CLIENTSASL_SCRAM-SHA-512_SASL_JAAS_CONFIG: >-
         org.apache.kafka.common.security.scram.ScramLoginModule required;
+      # --- CLIENTSASLTLS: SASL_SSL — SASL/PLAIN auth over an encrypted (TLS)
+      # transport, the standard production combination. ssl.client.auth is
+      # "none" (not "required" like MTLS): SASL already authenticates the
+      # client, so TLS here provides encryption + server authentication only
+      # (the more common real-world SASL_SSL deployment shape).
+      KAFKA_LISTENER_NAME_CLIENTSASLTLS_SSL_KEYSTORE_TYPE: "PEM"
+      KAFKA_LISTENER_NAME_CLIENTSASLTLS_SSL_KEYSTORE_LOCATION: "/etc/kafka/secrets/server.keystore.pem"
+      KAFKA_LISTENER_NAME_CLIENTSASLTLS_SSL_TRUSTSTORE_TYPE: "PEM"
+      KAFKA_LISTENER_NAME_CLIENTSASLTLS_SSL_TRUSTSTORE_LOCATION: "/etc/kafka/secrets/ca.crt"
+      KAFKA_LISTENER_NAME_CLIENTSASLTLS_SSL_CLIENT_AUTH: "none"
+      # Restrict this listener to just PLAIN: without this override it
+      # inherits the GLOBAL KAFKA_SASL_ENABLED_MECHANISMS (which also lists
+      # SCRAM-SHA-256/512 for the CLIENTSASL listener above), and Kafka then
+      # expects a JAAS entry for every inherited mechanism on THIS listener
+      # too — since only PLAIN's is provided here, broker startup fails with
+      # "Could not find a 'clientsasltls.KafkaServer' entry in the JAAS
+      # configuration" (verified 2026-08-05).
+      KAFKA_LISTENER_NAME_CLIENTSASLTLS_SASL_ENABLED_MECHANISMS: "PLAIN"
+      KAFKA_LISTENER_NAME_CLIENTSASLTLS_PLAIN_SASL_JAAS_CONFIG: >-
+        org.apache.kafka.common.security.plain.PlainLoginModule required
+        username="admin" password="admin-secret"
+        user_admin="admin-secret" user_testuser="testpass123";
 
   gcs:
     image: fsouza/fake-gcs-server:latest

@@ -16,10 +16,14 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/IBM/sarama"
+
+	"github.com/mpandav-tibco/flogo-datapipeline/source"
 )
 
 // TestKafkaSource_CheckpointRestartRoundTrip_Live proves the full crash/restart
@@ -348,5 +352,257 @@ func toInt64(v interface{}) int64 {
 		return int64(n)
 	default:
 		return -1
+	}
+}
+
+// TestKafkaSource_ConsumerGroupRebalance_Live proves a mid-run rebalance
+// (triggered by a SECOND consumer instance joining the SAME group while the
+// first is actively reading — the normal way a pipeline scales out or a
+// crashed instance's replacement rejoins) does not cause PERMANENT message
+// loss. With default commitMode=auto, TRANSIENT re-delivery of a message
+// that was read but not yet auto-committed at the moment its partition gets
+// reassigned is expected, standard at-least-once Kafka behavior — not a bug
+// — so this test asserts every id is seen AT LEAST once across both
+// instances combined, not exactly once.
+func TestKafkaSource_ConsumerGroupRebalance_Live(t *testing.T) {
+	broker := os.Getenv("KAFKA_TEST_BROKER")
+	if broker == "" {
+		t.Skip("set KAFKA_TEST_BROKER to run this live test")
+	}
+	const numPartitions = 4
+	const total = 40
+
+	ts := time.Now().UnixNano()
+	topic := fmt.Sprintf("dp-rebalance-%d", ts)
+	group := fmt.Sprintf("dp-rebalance-grp-%d", ts)
+
+	pc := sarama.NewConfig()
+	pc.Version = sarama.V2_1_0_0
+	pc.Producer.Return.Successes = true
+	pc.Producer.Partitioner = sarama.NewRoundRobinPartitioner
+
+	admin, err := sarama.NewClusterAdmin([]string{broker}, pc)
+	if err != nil {
+		t.Fatalf("cluster admin: %v", err)
+	}
+	defer admin.Close()
+	if err := admin.CreateTopic(topic, &sarama.TopicDetail{NumPartitions: numPartitions, ReplicationFactor: 1}, false); err != nil {
+		t.Fatalf("create topic: %v", err)
+	}
+	t.Cleanup(func() { _ = admin.DeleteTopic(topic) })
+
+	prod, err := sarama.NewSyncProducer([]string{broker}, pc)
+	if err != nil {
+		t.Fatalf("producer: %v", err)
+	}
+	for i := 1; i <= total; i++ {
+		val, _ := json.Marshal(map[string]interface{}{"id": i})
+		if _, _, perr := prod.SendMessage(&sarama.ProducerMessage{Topic: topic, Value: sarama.ByteEncoder(val)}); perr != nil {
+			t.Fatalf("produce %d: %v", i, perr)
+		}
+	}
+	_ = prod.Close()
+
+	srcA, err := newKafkaSource(map[string]interface{}{
+		"brokers": broker, "topic": topic, "groupId": group,
+		"startOffset": "earliest", "deserializer": "json", "pollTimeoutMs": 500,
+	})
+	if err != nil {
+		t.Fatalf("newKafkaSource (instance A): %v", err)
+	}
+	defer srcA.Close()
+
+	var mu sync.Mutex
+	seen := make(map[int]int)
+	readLoop := func(src source.Source, stop <-chan struct{}) {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			b, rerr := src.ReadBatch(10)
+			if rerr != nil {
+				return
+			}
+			if b == nil {
+				continue
+			}
+			idIdx := b.ColIndex("id")
+			mu.Lock()
+			for _, row := range b.Rows {
+				seen[int(toInt64(row[idIdx]))]++
+			}
+			mu.Unlock()
+		}
+	}
+
+	stopA := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() { defer wg.Done(); readLoop(srcA, stopA) }()
+
+	// Let A read for a bit on its own, then a SECOND instance joins the same
+	// group — sarama triggers a rebalance, redistributing partitions between
+	// A and B mid-run.
+	time.Sleep(1500 * time.Millisecond)
+
+	srcB, err := newKafkaSource(map[string]interface{}{
+		"brokers": broker, "topic": topic, "groupId": group,
+		"startOffset": "earliest", "deserializer": "json", "pollTimeoutMs": 500,
+	})
+	if err != nil {
+		close(stopA)
+		wg.Wait()
+		t.Fatalf("newKafkaSource (instance B, triggers rebalance): %v", err)
+	}
+	stopB := make(chan struct{})
+	wg.Add(1)
+	go func() { defer wg.Done(); readLoop(srcB, stopB) }()
+
+	// Give both instances time to finish draining after the rebalance
+	// settles (partition reassignment + resumed consumption).
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		n := len(seen)
+		mu.Unlock()
+		if n >= total {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+
+	close(stopA)
+	close(stopB)
+	wg.Wait()
+	_ = srcB.Close()
+
+	if len(seen) != total {
+		t.Fatalf("saw %d distinct ids across both instances after the rebalance, want %d (permanent loss across the rebalance)", len(seen), total)
+	}
+	dupCount := 0
+	for id := 1; id <= total; id++ {
+		if seen[id] == 0 {
+			t.Errorf("id=%d was never delivered by either instance (permanent loss)", id)
+		} else if seen[id] > 1 {
+			dupCount++
+		}
+	}
+	if dupCount > 0 {
+		t.Logf("NOTE: %d ids were re-delivered around the rebalance boundary (%d total occurrences) — expected at-least-once behavior with commitMode=auto, not a bug", dupCount, len(seen))
+	}
+}
+
+// TestKafkaSource_SustainedConcurrentProduceConsume_Live proves the source
+// correctly drains a topic that is being produced to WHILE it is actively
+// consuming (every other live test in this package pre-produces a static
+// message set before any ReadBatch call) — the realistic shape of a genuine
+// production streaming pipeline, and the one place a subtle race in the
+// ConsumeClaim -> msgCh -> ReadBatch pipeline (backpressure, channel
+// closing, partition claim timing) would most plausibly surface.
+func TestKafkaSource_SustainedConcurrentProduceConsume_Live(t *testing.T) {
+	broker := os.Getenv("KAFKA_TEST_BROKER")
+	if broker == "" {
+		t.Skip("set KAFKA_TEST_BROKER to run this live test")
+	}
+	const numPartitions = 2
+	const produceDuration = 4 * time.Second
+	const produceInterval = 15 * time.Millisecond
+
+	ts := time.Now().UnixNano()
+	topic := fmt.Sprintf("dp-sustained-%d", ts)
+	group := fmt.Sprintf("dp-sustained-grp-%d", ts)
+
+	pc := sarama.NewConfig()
+	pc.Version = sarama.V2_1_0_0
+	pc.Producer.Return.Successes = true
+	pc.Producer.Partitioner = sarama.NewRoundRobinPartitioner
+
+	admin, err := sarama.NewClusterAdmin([]string{broker}, pc)
+	if err != nil {
+		t.Fatalf("cluster admin: %v", err)
+	}
+	defer admin.Close()
+	if err := admin.CreateTopic(topic, &sarama.TopicDetail{NumPartitions: numPartitions, ReplicationFactor: 1}, false); err != nil {
+		t.Fatalf("create topic: %v", err)
+	}
+	t.Cleanup(func() { _ = admin.DeleteTopic(topic) })
+
+	// Open the source FIRST (before any message exists), matching a real
+	// streaming deployment where the consumer is already running when
+	// production starts/continues.
+	src, err := newKafkaSource(map[string]interface{}{
+		"brokers": broker, "topic": topic, "groupId": group,
+		"startOffset": "earliest", "deserializer": "json", "pollTimeoutMs": 300,
+	})
+	if err != nil {
+		t.Fatalf("newKafkaSource: %v", err)
+	}
+	defer src.Close()
+
+	var produced atomic.Int64
+	produceDone := make(chan struct{})
+	go func() {
+		defer close(produceDone)
+		prod, perr := sarama.NewSyncProducer([]string{broker}, pc)
+		if perr != nil {
+			t.Errorf("producer: %v", perr)
+			return
+		}
+		defer prod.Close()
+		id := 0
+		deadline := time.Now().Add(produceDuration)
+		for time.Now().Before(deadline) {
+			id++
+			val, _ := json.Marshal(map[string]interface{}{"id": id})
+			if _, _, serr := prod.SendMessage(&sarama.ProducerMessage{Topic: topic, Value: sarama.ByteEncoder(val)}); serr != nil {
+				t.Errorf("produce %d: %v", id, serr)
+				return
+			}
+			produced.Add(1)
+			time.Sleep(produceInterval)
+		}
+	}()
+
+	seen := make(map[int]bool)
+	// Keep reading well past produceDuration to drain everything sent while
+	// consuming was already in progress.
+	overallDeadline := time.Now().Add(produceDuration + 15*time.Second)
+	for time.Now().Before(overallDeadline) {
+		select {
+		case <-produceDone:
+			// Producer finished — do a few more empty-poll rounds to make
+			// sure the tail of the stream has been fully drained, then stop.
+			if int64(len(seen)) >= produced.Load() {
+				goto drainedEnough
+			}
+		default:
+		}
+		b, rerr := src.ReadBatch(50)
+		if rerr != nil {
+			t.Fatalf("ReadBatch: %v", rerr)
+		}
+		if b != nil {
+			idIdx := b.ColIndex("id")
+			for _, row := range b.Rows {
+				seen[int(toInt64(row[idIdx]))] = true
+			}
+		}
+	}
+drainedEnough:
+
+	want := int(produced.Load())
+	if want == 0 {
+		t.Fatal("producer goroutine reported 0 messages sent — test setup failure")
+	}
+	if len(seen) != want {
+		missing := 0
+		for id := 1; id <= want; id++ {
+			if !seen[id] {
+				missing++
+			}
+		}
+		t.Fatalf("consumed %d distinct ids while %d were produced under sustained concurrent load (%d missing)", len(seen), want, missing)
 	}
 }
