@@ -14,9 +14,9 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: FlogoPass123
       POSTGRES_DB: dp
-    ports: ["15432:5432"]
+    ports: [ "15432:5432" ]
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d dp"]
+      test: [ "CMD-SHELL", "pg_isready -U postgres -d dp" ]
       interval: 5s
       timeout: 3s
       retries: 30
@@ -27,7 +27,7 @@ services:
       ACCEPT_EULA: "Y"
       MSSQL_SA_PASSWORD: "Flogo-Pass-123"
       MSSQL_PID: Developer
-    ports: ["11433:1433"]
+    ports: [ "11433:1433" ]
 
   oracle:
     image: gvenzl/oracle-free:slim
@@ -35,42 +35,42 @@ services:
       ORACLE_PASSWORD: FlogoPass123
       APP_USER: dpuser
       APP_USER_PASSWORD: FlogoPass123
-    ports: ["11521:1521"]
+    ports: [ "11521:1521" ]
     healthcheck:
-      test: ["CMD", "healthcheck.sh"]
+      test: [ "CMD", "healthcheck.sh" ]
       interval: 10s
       timeout: 5s
       retries: 40
 
   minio:
     image: minio/minio:latest
-    command: ["server", "/data", "--console-address", ":9001"]
+    command: [ "server", "/data", "--console-address", ":9001" ]
     environment:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
-    ports: ["9000:9000", "9001:9001"]
+    ports: [ "9000:9000", "9001:9001" ]
 
   # One-shot: create the bucket the S3 tests expect. Idempotent (-p).
   minio-init:
     image: minio/mc:latest
-    depends_on: [minio]
+    depends_on: [ minio ]
     restart: "no"
-    entrypoint: ["/bin/sh", "-c"]
+    entrypoint: [ "/bin/sh", "-c" ]
     command:
       - "until mc alias set loc http://minio:9000 minioadmin minioadmin; do sleep 1; done; mc mb -p loc/dp-test-bucket; echo bucket-ready"
 
   redis:
     image: redis:7-alpine
-    ports: ["16379:6379"]
+    ports: [ "16379:6379" ]
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: [ "CMD", "redis-cli", "ping" ]
       interval: 5s
       timeout: 3s
       retries: 20
 
   kafka:
     image: apache/kafka-native:4.1.0
-    ports: ["9092:9092"]
+    ports: [ "9092:9092" ]
     environment:
       KAFKA_NODE_ID: "1"
       KAFKA_PROCESS_ROLES: "broker,controller"
@@ -84,10 +84,10 @@ services:
 
   gcs:
     image: fsouza/fake-gcs-server:latest
-    command: ["-scheme", "http", "-public-host", "127.0.0.1:4443", "-port", "4443"]
-    ports: ["4443:4443"]
+    command: [ "-scheme", "http", "-public-host", "127.0.0.1:4443", "-port", "4443" ]
+    ports: [ "4443:4443" ]
 
   azurite:
     image: mcr.microsoft.com/azure-storage/azurite:latest
-    command: ["azurite-blob", "--blobHost", "0.0.0.0", "--blobPort", "10000", "--skipApiVersionCheck"]
-    ports: ["10000:10000"]
+    command: [ "azurite-blob", "--blobHost", "0.0.0.0", "--blobPort", "10000", "--skipApiVersionCheck" ]
+    ports: [ "10000:10000" ]
