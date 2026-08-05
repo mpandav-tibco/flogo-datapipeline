@@ -157,7 +157,9 @@ about protecting it.
 
 More transforms is *not* the main gap between us and "credible ETL tool." These are.
 
-1. **Connector breadth — the long pole.** ✅ Paginated REST/API source; ⬜ native
+1. **Connector breadth — the long pole.** ✅ Paginated REST/API source; ✅ generic
+   REST/API sink ("reverse ETL" — push pipeline data to any HTTP(S) API, per-row
+   or batch, mirroring the source's auth vocabulary); ⬜ native
    warehouse sinks (Snowflake / BigQuery / Redshift); ⬜ lakehouse (Iceberg / Delta);
    ⬜ MongoDB. Reuse Flogo connectors where possible.
 2. **Schema & lineage.** ✅ Schema-registry **read** (Avro/Confluent consume +

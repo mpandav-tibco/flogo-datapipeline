@@ -20,6 +20,7 @@ registered with `sink.Register(name, …)` ([`sink/sink.go`](../sink/sink.go)); 
 | [`kafka`](sinks/kafka.md) | producer with configurable acks & serialization |
 | [`s3`, `gcs`, `adls`](sinks/objstore.md) (+ `-sink`) | cloud object storage with key macros |
 | [`template`](sinks/template.md) | Go `text/template` rendering (fixed-width / legacy) |
+| [`rest`](sinks/rest.md) | HTTP(S) API push, per-row or batch JSON ("reverse ETL") |
 | [`null`, `discard`](sinks/null.md) | drops all rows (benchmarking / dry-run) |
 | [`dlq`](sinks/dlq.md) | wraps any sink; captures rejected rows |
 

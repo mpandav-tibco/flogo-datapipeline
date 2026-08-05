@@ -2,7 +2,7 @@
 
 A lightweight, embeddable **data pipeline engine** built on the [Project Flogo](https://github.com/project-flogo/core) runtime, with a **visual authoring experience inside VS Code**.
 
-**Single static Go binary** · **visual VS Code editor** · **12 sources** · **10 sinks** (incl. DLQ) · **15 transforms** · checkpoint / watermark / schema-drift / data-quality / DLQ · Prometheus + OpenTelemetry · sharded & distributed scaling
+**Single static Go binary** · **visual VS Code editor** · **12 sources** · **11 sinks** (incl. DLQ) · **16 transforms** · checkpoint / watermark / schema-drift / data-quality / DLQ · Prometheus + OpenTelemetry · sharded & distributed scaling
 
 ![The Flogo Data Pipeline VS Code Studio](docs/images/studio-editor.png)
 

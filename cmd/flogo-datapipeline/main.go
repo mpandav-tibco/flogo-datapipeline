@@ -108,6 +108,11 @@ import (
 	// Dead-letter queue sink (gap-07): write-time row isolation + DLQ routing.
 	_ "github.com/mpandav-tibco/flogo-datapipeline/sink/dlq"
 
+	// Generic HTTP/REST API sink ("reverse ETL"): pushes rows to any HTTP(S)
+	// endpoint as JSON (per-row or whole-batch), with the same auth vocabulary
+	// (none/bearer/basic/apikey) as source/rest. See docs/sinks/rest.md.
+	_ "github.com/mpandav-tibco/flogo-datapipeline/sink/rest"
+
 	// --- Transforms ---
 	// Core transforms (round 1)
 	_ "github.com/mpandav-tibco/flogo-datapipeline/transform/filter" // Row-level boolean filter
