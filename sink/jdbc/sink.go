@@ -115,8 +115,12 @@ func newJDBCSink(cfg map[string]interface{}) (sink.Sink, error) {
 	}
 
 	batchSize := 1000
-	if bs, ok := cfg["batchSize"].(int); ok && bs > 0 {
-		batchSize = bs
+	if bsRaw, ok := cfg["batchSize"]; ok {
+		if bs, ok := bsRaw.(int); ok && bs > 0 {
+			batchSize = bs
+		} else {
+			jlog.Warnf("jdbc sink: 'batchSize' %v is invalid (must be a positive int); using default %d", bsRaw, batchSize)
+		}
 	}
 
 	onConflict := conflictInsert

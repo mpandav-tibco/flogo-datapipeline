@@ -100,3 +100,40 @@ func TestValidateRequiresCheckpointCommitForWindowedKafka(t *testing.T) {
 		t.Errorf("windowed file source with checkpoint should be valid regardless of commitMode: %v", err)
 	}
 }
+
+func TestValidateRejectsNegativePerformanceValues(t *testing.T) {
+	base := func() *Definition {
+		return &Definition{Source: SourceDef{Type: "csv"}, Sink: SinkDef{Type: "jsonlines"}}
+	}
+	// Zero is always valid (defaults() fills it in) — only negative is rejected.
+	d := base()
+	if err := d.Validate(); err != nil {
+		t.Errorf("all-zero Performance should be valid (defaults fill it in): %v", err)
+	}
+	// A representative positive config should also be valid.
+	d = base()
+	d.Performance = PerformanceDef{BatchSize: 5000, TransformWorkers: 4, SourceBufferBatches: 4, SinkBufferBatches: 4, MaxMemoryMB: 512, RowGroupParallelism: 4}
+	if err := d.Validate(); err != nil {
+		t.Errorf("a valid positive Performance config should pass: %v", err)
+	}
+	cases := []struct {
+		name string
+		perf PerformanceDef
+	}{
+		{"negative batchSize", PerformanceDef{BatchSize: -5}},
+		{"negative transformWorkers", PerformanceDef{TransformWorkers: -1}},
+		{"negative sourceBufferBatches", PerformanceDef{SourceBufferBatches: -1}},
+		{"negative sinkBufferBatches", PerformanceDef{SinkBufferBatches: -1}},
+		{"negative maxMemoryMB", PerformanceDef{MaxMemoryMB: -512}},
+		{"negative rowGroupParallelism", PerformanceDef{RowGroupParallelism: -4}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			d := base()
+			d.Performance = c.perf
+			if err := d.Validate(); err == nil {
+				t.Fatalf("expected a validation error for %s, got nil", c.name)
+			}
+		})
+	}
+}

@@ -29,7 +29,7 @@ func (s *Server) handleIntrospectTables(w http.ResponseWriter, r *http.Request) 
 		Driver string `json:"driver"`
 		DSN    string `json:"dsn"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := json.NewDecoder(limitBody(w, r)).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON: "+err.Error())
 		return
 	}
@@ -58,7 +58,7 @@ func (s *Server) handleIntrospectColumns(w http.ResponseWriter, r *http.Request)
 		DSN    string `json:"dsn"`
 		Table  string `json:"table"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := json.NewDecoder(limitBody(w, r)).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON: "+err.Error())
 		return
 	}
@@ -88,7 +88,7 @@ func (s *Server) handleIntrospectSourceSchema(w http.ResponseWriter, r *http.Req
 		Type   string                 `json:"type"`
 		Config map[string]interface{} `json:"config"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := json.NewDecoder(limitBody(w, r)).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON: "+err.Error())
 		return
 	}
@@ -117,7 +117,7 @@ func (s *Server) handleIntrospectObjects(w http.ResponseWriter, r *http.Request)
 		Provider string                 `json:"provider"`
 		Config   map[string]interface{} `json:"config"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := json.NewDecoder(limitBody(w, r)).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON: "+err.Error())
 		return
 	}

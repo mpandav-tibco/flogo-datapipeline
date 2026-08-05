@@ -110,7 +110,7 @@ def src_jsonl(path="./data/orders.jsonl"):
 
 def src_pg():
     return {"type": "jdbc", "driver": "postgres", "dsn": PG_DSN, "table": "orders_raw",
-            "keyColumn": "order_id", "batchSize": 5000, "partitions": 4}
+            "orderKey": "order_id", "batchSize": 5000, "partitions": 4}
 
 
 def src_kafka(group):

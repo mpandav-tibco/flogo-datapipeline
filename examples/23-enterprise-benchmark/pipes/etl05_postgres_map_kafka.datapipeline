@@ -43,7 +43,7 @@
      "driver": "postgres",
      "dsn": "postgres://postgres:bench@localhost:5433/warehouse?sslmode=disable",
      "table": "orders_raw",
-     "keyColumn": "order_id",
+     "orderKey": "order_id",
      "batchSize": 5000,
      "partitions": 4
     },

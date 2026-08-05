@@ -43,7 +43,7 @@
           "driver": "postgres",
           "dsn": "postgres://postgres:postgres@localhost:5432/pipelinedemo?sslmode=disable",
           "table": "raw_claims",
-          "keyColumn": "claim_id",
+          "orderKey": "claim_id",
           "batchSize": 500
         },
         "transforms": [

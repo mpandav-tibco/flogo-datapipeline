@@ -135,9 +135,18 @@ func (m *mapperTransform) Apply(in *record.RecordBatch) (*record.RecordBatch, er
 	out := record.Get()
 	out.Rows = make([][]interface{}, 0, in.Len())
 
+	// Rows are carved out of ONE flat backing array (one allocation for the
+	// whole batch) instead of one make([]interface{}, width) per row, cutting
+	// GC pressure on high-throughput pipelines. Safe because every row-slice
+	// is created with len==cap (the three-index slice expression) and is only
+	// ever populated by index (outRow[j] = ...), never appended to — so two
+	// adjacent rows can never alias into each other's slots, now or if this
+	// code changes later (an append past cap always reallocates).
+	width := len(m.fieldExprs)
+	buf := make([]interface{}, in.Len()*width)
 	for i := range in.Rows {
 		row := in.RowMap(i)
-		outRow := make([]interface{}, len(m.fieldExprs))
+		outRow := buf[i*width : (i+1)*width : (i+1)*width]
 		for j, fe := range m.fieldExprs {
 			outRow[j] = fe.eval(row)
 		}

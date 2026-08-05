@@ -18,7 +18,7 @@ the recorded mark are processed.
 | First-run semantics | No watermark file = no lower bound; all rows pass through |
 | Watermark advancement | After each run the file is updated to the MAX value seen |
 | Incremental CDC pattern | Only rows with `created_at > last_hwm` are processed |
-| JDBC source with keyset pagination | `keyColumn: "event_id"` for reliable ordered reads |
+| JDBC source with keyset pagination | `orderKey: "event_id"` for reliable ordered reads |
 | ETL mode with null sink | Transform chain runs; output is discarded (swap for real sink) |
 
 ---
@@ -145,7 +145,7 @@ After `add-new-events.sh`:
   "driver": "postgres",
   "dsn": "postgres://postgres:postgres@localhost:5432/pipelinedemo?sslmode=disable",
   "table": "raw_events",
-  "keyColumn": "event_id",
+  "orderKey": "event_id",
   "batchSize": 200
 }
 ```
@@ -300,7 +300,7 @@ Expected output:
 
 --- Running pipeline ---
 [engine] pipeline "incremental-hwm" started
-[source/jdbc] driver=postgres dsn=postgres://postgres:postgres@localhost:5432/pipelinedemo table=raw_events keyColumn=event_id
+[source/jdbc] driver=postgres dsn=postgres://postgres:postgres@localhost:5432/pipelinedemo table=raw_events orderKey=event_id
 [transform/hwm] backend=file path=./watermarks/events.hwm
 [transform/hwm] no prior watermark — all rows will pass
 [sink/null] discarding all rows
@@ -360,7 +360,7 @@ Expected output:
 
 --- Running pipeline ---
 [engine] pipeline "incremental-hwm" started
-[source/jdbc] driver=postgres dsn=postgres://postgres:postgres@localhost:5432/pipelinedemo table=raw_events keyColumn=event_id
+[source/jdbc] driver=postgres dsn=postgres://postgres:postgres@localhost:5432/pipelinedemo table=raw_events orderKey=event_id
 [transform/hwm] backend=file path=./watermarks/events.hwm
 [transform/hwm] loaded watermark: column=created_at value="2025-06-05 15:30:00"
 [transform/hwm] filtering rows with created_at > "2025-06-05 15:30:00"
@@ -625,7 +625,7 @@ Enforce data quality on the incoming events before writing them downstream:
 | `driver` | string | yes | — | `"postgres"` or `"mysql"` |
 | `dsn` | string | yes | — | Connection string or file path |
 | `table` | string | yes | — | Source table name |
-| `keyColumn` | string | yes | — | Column used for keyset pagination (must be indexed) |
+| `orderKey` | string | yes | — | Column used for keyset pagination (must be indexed) |
 | `batchSize` | int | no | `1000` | Rows per page in the keyset cursor |
 | `partitions` | int | no | `1` | Parallel read partitions (requires unique key distribution) |
 
