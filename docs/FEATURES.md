@@ -7,7 +7,7 @@
 > metrics, scaling, pipeline definition). Everything is code-derived from the
 > `init()`/`Register(...)` calls and config structs.
 
-**At a glance:** 12 source families · 10 sink families (incl. DLQ) · 16 transforms ·
+**At a glance:** 12 source families · 11 sink families (incl. DLQ) · 16 transforms ·
 2 checkpoint backends · 3 watermark backends · 2 metrics backends · 3 scaling modes.
 
 ## Sources → [index](sources.md)
@@ -62,6 +62,7 @@ Plus the shared [expression-language reference](transforms/expression-language.m
 | [`kafka`](sinks/kafka.md) | producer with acks & serialization |
 | [`template`](sinks/template.md) | Go text/template (fixed-width / legacy) |
 | [`s3`, `gcs`, `adls`](sinks/objstore.md) | cloud object storage (macros, rolling) |
+| [`rest`](sinks/rest.md) | HTTP(S) API push, per-row or batch JSON ("reverse ETL") |
 | [`null`, `discard`](sinks/null.md) | drop all rows |
 | [`dlq`](sinks/dlq.md) | wrap any sink; capture rejects |
 
