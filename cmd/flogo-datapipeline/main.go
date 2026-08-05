@@ -32,10 +32,12 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -169,9 +171,12 @@ func main() {
 	// -f <path>    path to the .datapipeline file (a flogo:app JSON) — same pattern as flogo-agent
 	// -port <n>    API server port (set by the VSCode extension binary manager)
 	// -api-addr    full TCP addr override (e.g. :8888); -port takes precedence if both set
+	// -validate    check the pipeline definition(s) and exit — no engine boot, no triggers,
+	//              no source/sink/DB/Kafka connections. Safe to run in CI.
 	appFile := flag.String("f", "", "Path to the .datapipeline app file (required)")
 	apiPort := flag.Int("port", 0, "API server port (e.g. 9080)")
 	apiAddr := flag.String("api-addr", "", "API server TCP address (e.g. :8888); overridden by -port")
+	validateOnly := flag.Bool("validate", false, "Validate the pipeline definition(s) and exit (no engine boot, no I/O)")
 	flag.Parse()
 
 	if *appFile == "" {
@@ -179,7 +184,7 @@ func main() {
 	}
 	if *appFile == "" {
 		fmt.Fprintln(os.Stderr, "flogo-datapipeline: -f <path> is required")
-		fmt.Fprintln(os.Stderr, "Usage: flogo-datapipeline -f my-pipeline.datapipeline [-port 9080]")
+		fmt.Fprintln(os.Stderr, "Usage: flogo-datapipeline -f my-pipeline.datapipeline [-port 9080] [-validate]")
 		os.Exit(1)
 	}
 
@@ -196,6 +201,10 @@ func main() {
 	// default value). Lets one .datapipeline run per-environment via env vars /
 	// ConfigMaps, matching the flogo-agents / Flogo app-property model.
 	appJSON = appprops.Resolve(appJSON)
+
+	if *validateOnly {
+		os.Exit(runValidate(*appFile, appJSON))
+	}
 
 	// -port wins over -api-addr and env var
 	if *apiPort > 0 {
@@ -275,4 +284,66 @@ func main() {
 		os.Exit(1)
 	}
 	os.Exit(0)
+}
+
+// appResource is the minimal shape needed to locate "pipeline:" resources in a
+// .datapipeline (flogo:app) document, without depending on the full Flogo
+// resource/app config types (which require a running engine to decode via
+// their registered resource.Loader).
+type appResource struct {
+	ID   string          `json:"id"`
+	Data json.RawMessage `json:"data"`
+}
+
+type appDoc struct {
+	Resources []appResource `json:"resources"`
+}
+
+// runValidate parses appJSON and validates every "pipeline:" resource's
+// Definition: Defaults() then Validate() — config-shape checks only (required
+// fields, cross-field rules, e.g. HWM mode requiring onConflict:upsert). It
+// does NOT construct the engine, start any trigger, or open any source/sink
+// connection (no DB, no Kafka, no filesystem I/O beyond reading appFile
+// itself) — safe to run in CI against every .datapipeline in a repo. Prints a
+// per-pipeline result and returns the process exit code: 0 if every pipeline
+// definition found is valid, 1 otherwise (including "no pipeline found").
+func runValidate(path, appJSON string) int {
+	var doc appDoc
+	if err := json.Unmarshal([]byte(appJSON), &doc); err != nil {
+		fmt.Fprintf(os.Stderr, "flogo-datapipeline: validate %s: parse app JSON: %v\n", path, err)
+		return 1
+	}
+
+	var found, failed int
+	for _, res := range doc.Resources {
+		if !strings.HasPrefix(res.ID, pipeline.ResType+":") {
+			continue
+		}
+		found++
+
+		def := &pipeline.Definition{}
+		if err := json.Unmarshal(res.Data, def); err != nil {
+			fmt.Printf("INVALID  %s: parse definition: %v\n", res.ID, err)
+			failed++
+			continue
+		}
+		def.Defaults()
+		if err := def.Validate(); err != nil {
+			fmt.Printf("INVALID  %s: %v\n", res.ID, err)
+			failed++
+			continue
+		}
+		fmt.Printf("OK       %s (source=%s sink=%s)\n", res.ID, def.Source.Type, def.Sink.Type)
+	}
+
+	if found == 0 {
+		fmt.Fprintf(os.Stderr, "flogo-datapipeline: validate %s: no %q resources found\n", path, pipeline.ResType)
+		return 1
+	}
+	if failed > 0 {
+		fmt.Printf("%d/%d pipeline definition(s) invalid\n", failed, found)
+		return 1
+	}
+	fmt.Printf("%d pipeline definition(s) valid\n", found)
+	return 0
 }

@@ -13,8 +13,9 @@
 //	groupId           string    Consumer group ID (required)
 //	startOffset       string    "earliest" | "latest" | int64 string (default "latest")
 //	pollTimeoutMs     int       Poll window in milliseconds (alias: pollMs; default 500)
-//	deserializer      string    "json" | "avro" | "raw" (default "json")
+//	deserializer      string    "json" | "avro" | "raw" | "debezium" (default "json")
 //	schemaRegistryURL string    Confluent Schema Registry URL (avro only)
+//	opColumnName      string    debezium only: metadata column carrying the op (default "__op")
 //	mode              string    "streaming" | "batch" (default "streaming")
 //	stopOffset        int64     Batch mode: stop when this offset is reached per partition
 //	stopTimestamp     string    Batch mode: stop when message timestamp >= this RFC3339 value
@@ -123,7 +124,8 @@ type kafkaSourceConfig struct {
 	groupID      string
 	startOffset  int64 // sarama.OffsetNewest, sarama.OffsetOldest, or explicit
 	pollMs       int
-	deserializer string    // "json" | "avro" | "raw"
+	deserializer string    // "json" | "avro" | "raw" | "debezium"
+	opColumnName string    // debezium only: metadata column carrying the op ("c"|"u"|"d"|"r")
 	mode         string    // "streaming" | "batch"
 	stopOffset   int64     // batch mode: stop at this offset (0 = not set)
 	stopTS       time.Time // batch mode: stop at or after this timestamp (zero = not set)
@@ -662,6 +664,11 @@ func (ks *kafkaSource) chooseDeserializer() func(key, value []byte) (map[string]
 		}
 	case "raw":
 		return rawDeserialize
+	case "debezium":
+		opCol := ks.cfg.opColumnName
+		return func(key, value []byte) (map[string]interface{}, error) {
+			return debeziumDeserialize(opCol, key, value)
+		}
 	default:
 		return jsonDeserialize
 	}
@@ -682,6 +689,59 @@ func rawDeserialize(key, value []byte) (map[string]interface{}, error) {
 		"key":   string(key),
 		"value": string(value),
 	}, nil
+}
+
+// debeziumDeserialize decodes a Debezium / Kafka Connect change-event envelope
+// — either the "unwrapped" form (schemas.enable=false: the envelope fields are
+// top-level) or the "wrapped" form (schemas.enable=true, the default: the
+// envelope is nested under a top-level "payload" key alongside a "schema"
+// key) — and flattens it to a plain row: the changed record's columns
+// ("after" for create/update/snapshot, "before" for a delete, matching
+// Debezium's own op semantics) plus a metadata column (opColumn, default
+// "__op") carrying the raw op code ("c"|"u"|"d"|"r").
+//
+// This lets the kafka source consume a real CDC change stream (captured by
+// Debezium, Kafka Connect, or anything emitting the same envelope) without
+// this engine implementing CDC capture itself — compose with the ecosystem's
+// CDC engine rather than duplicate it. Pair this deserializer with the jdbc
+// sink's opColumn delete-capable mode (same default column name and the same
+// "d"/"delete" vocabulary) to mirror upstream inserts, updates, AND deletes
+// into a target table.
+//
+// A raw Kafka tombstone (a delete's log-compaction marker: an empty value with
+// no envelope at all) is NOT decodable here — Debezium's own op="d" envelope
+// message already carries the full delete, so the tombstone is redundant for
+// this purpose and is reported as an error (skipped, with a warning logged by
+// the caller) rather than silently dropped.
+func debeziumDeserialize(opColumn string, _, value []byte) (map[string]interface{}, error) {
+	if len(value) == 0 {
+		return nil, fmt.Errorf("debezium: empty value (a raw Kafka tombstone; the preceding op=%q envelope message already carries the delete)", "d")
+	}
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(value, &parsed); err != nil {
+		return nil, fmt.Errorf("debezium: decode envelope: %w", err)
+	}
+	envelope := parsed
+	if payload, ok := parsed["payload"].(map[string]interface{}); ok {
+		envelope = payload // Kafka Connect JSON converter with schemas.enable=true
+	}
+
+	op, _ := envelope["op"].(string)
+	field := "after"
+	if op == "d" {
+		field = "before"
+	}
+	data, _ := envelope[field].(map[string]interface{})
+	if data == nil {
+		return nil, fmt.Errorf("debezium: envelope has no %q field for op %q", field, op)
+	}
+
+	out := make(map[string]interface{}, len(data)+1)
+	for k, v := range data {
+		out[k] = v
+	}
+	out[opColumn] = op
+	return out, nil
 }
 
 // avroDeserialize decodes a Confluent wire-format Avro message.
@@ -1084,11 +1144,15 @@ func parseSourceConfig(cfg map[string]interface{}) (*kafkaSourceConfig, error) {
 
 	if d, ok := cfg["deserializer"].(string); ok && d != "" {
 		switch d {
-		case "json", "avro", "raw":
+		case "json", "avro", "raw", "debezium":
 			kc.deserializer = d
 		default:
-			return nil, fmt.Errorf("deserializer %q must be 'json', 'avro', or 'raw'", d)
+			return nil, fmt.Errorf("deserializer %q must be 'json', 'avro', 'raw', or 'debezium'", d)
 		}
+	}
+	kc.opColumnName = "__op"
+	if oc, ok := cfg["opColumnName"].(string); ok && oc != "" {
+		kc.opColumnName = oc
 	}
 
 	if m, ok := cfg["mode"].(string); ok && m != "" {
