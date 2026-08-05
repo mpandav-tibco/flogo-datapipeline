@@ -617,6 +617,16 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 	// counters stay single-threaded (no data race) while transforms use N cores.
 	// When the constraints don't hold we keep transform single-threaded; reads
 	// are still overlapped with transform+write by the read-ahead goroutine.
+	//
+	// Note this exclusion list deliberately does NOT test for a delete-capable/
+	// CDC-target sink (e.g. jdbc's opColumn mode, sink.StatsReporter). That's
+	// safe by construction, not by omission: only transform.Apply runs on the
+	// worker goroutines above — the sink write itself (rowLevelWrite, called
+	// from process() below) always runs on the single collector goroutine that
+	// drains resCh in order, so a sink's internal counters (e.g. jdbcSink's
+	// rowsDeleted) never see concurrent access regardless of transformWorkers.
+	// See TestEnterprise_CDC_DeleteCapableSink_ParallelTransformWorkers
+	// (integration package), which runs under -race to prove it.
 	txWorkers := def.Performance.TransformWorkers
 	if txWorkers < 1 {
 		txWorkers = 1

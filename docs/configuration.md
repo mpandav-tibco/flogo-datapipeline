@@ -171,8 +171,14 @@ Set under `performance` in the file (see [Pipeline file](pipeline-file.md)):
 
 - **`batchSize`** — larger batches amortise per-batch overhead but raise memory;
   `5000` is a good default. Bulk JDBC / Parquet loads benefit from 10k–50k.
-- **`transformWorkers`** — raise for CPU-heavy transforms (`lookup`, `dq`); keep at
-  `1` when row order must be preserved.
+- **`transformWorkers`** — raise for CPU-heavy transforms (`lookup`, `dq`); output
+  order is preserved either way (the engine reassembles worker results in read
+  order), but it's only actually engaged when the pipeline has no HWM/DQ/window/
+  schemadrift accumulator and no checkpointing (all of which need an ordered,
+  single-threaded cursor) — otherwise the engine logs why it fell back to
+  single-threaded transform and keeps running correctly. Safe with delete-capable
+  sinks (e.g. jdbc's `opColumn` mode): the sink write itself is never
+  parallelized, only the transform stage is.
 - **`sourceBufferBatches` / `sinkBufferBatches`** — read-ahead / write buffering to
   smooth bursty stages.
 - **`maxMemoryMB`** — hard ceiling; the source blocks (backpressure) rather than
