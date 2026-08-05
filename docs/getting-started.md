@@ -23,6 +23,11 @@ This produces the **all-in-one** engine binary (~58 MB) with every source, sink,
 and transform compiled in — ideal for development and for running any example. For
 a lean, per-app production binary, see [Deployment](deployment.md).
 
+> This default build has no private dependencies and works from a plain clone. It
+> omits the OOTB App Startup/App Shutdown triggers (a TIBCO-internal module) — see
+> [Deployment](deployment.md#tibco-general-hooks-app-startupshutdown-triggers) if you
+> need those.
+
 > On Windows, use `-o flogo-datapipeline.exe`.
 
 ## 2. Run an example

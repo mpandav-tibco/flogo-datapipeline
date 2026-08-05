@@ -682,7 +682,7 @@ func rangeMayMatch[T int64 | float64 | string](min, max, lit T, op string) bool 
 	case "=":
 		return min <= lit && lit <= max
 	case "!=":
-		return !(min == max && min == lit)
+		return min != max || min != lit
 	}
 	return true
 }

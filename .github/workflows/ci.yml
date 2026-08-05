@@ -1,0 +1,75 @@
+name: CI
+
+# Two jobs, matching the Makefile's own targets exactly (no CI-only logic):
+#   1. build-lint-unit: build + vet + golangci-lint + unit tests. Fast, runs on
+#      every push/PR — live-gated tests skip cleanly since no DP_TEST_*/
+#      KAFKA_TEST_* backends are configured here.
+#   2. integration: brings up the full docker-compose.test.yml stack
+#      (Postgres/SQL Server/Oracle/Kafka with MTLS/SASL/SASL_SSL listeners)
+#      and runs the ENTIRE suite (including every live-gated test) with
+#      -race, via `make test-integration-race`. This is the regression net
+#      for the live-infra adversarial test suite built up over this
+#      project's history — without it, those tests only ever run when a
+#      human remembers to invoke `make test-integration` locally.
+#
+# The broker-restart resilience test (source/kafka/broker_restart_test.go)
+# stays skipped here by design: it requires KAFKA_TEST_BROKER_CONTAINER,
+# which is deliberately NOT set by test-integration-up/this workflow, since
+# that test restarts the shared broker mid-run and is meant to be run in
+# isolation, not as part of a full-suite CI run.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch: {}
+
+jobs:
+  build-lint-unit:
+    name: Build, vet, lint, unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        run: make build
+
+      - name: Vet
+        run: make vet
+
+      - name: Lint
+        uses: golangci/golangci-lint-action@v7
+        with:
+          # Pinned to a v2.x release: .golangci.yml uses the v2 config format
+          # (see its own header comment), which golangci-lint v1.x cannot
+          # parse. Verified locally against this exact config (0 issues)
+          # with golangci-lint v2.12.2 before wiring this in. Requires
+          # golangci-lint-action v7+ — v6 hard-rejects any v2.x version string.
+          version: v2.12.2
+
+      - name: Unit tests (live-gated tests skip cleanly without backends)
+        run: make test-unit
+
+  integration:
+    name: Live integration tests (Postgres/SQL Server/Oracle/Kafka)
+    runs-on: ubuntu-latest
+    needs: build-lint-unit
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Run full suite against live backends (-race)
+        run: make test-integration-race
+
+      - name: Tear down backends
+        if: always()
+        run: make test-integration-down
