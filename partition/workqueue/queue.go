@@ -153,19 +153,24 @@ func (q *MemoryQueue) Claim(ctx context.Context, workerID string, lease time.Dur
 		if done {
 			return nil, nil
 		}
-		// Wait for a new item or lease expiry.
+		// Wait for a new item or lease expiry. Use an explicit timer (not
+		// time.After) and Stop it on the common early-wake path (waitDone fires
+		// first), so the runtime timer is released immediately instead of
+		// sitting in the timer heap for up to lease/4 on every wait iteration.
 		waitDone := make(chan struct{})
+		timer := time.NewTimer(lease / 4)
 		go func() {
 			select {
 			case <-ctx.Done():
 				q.cond.Broadcast()
-			case <-time.After(lease / 4):
+			case <-timer.C:
 				q.cond.Broadcast()
 			case <-waitDone:
 			}
 		}()
 		q.cond.Wait()
 		close(waitDone)
+		timer.Stop()
 	}
 }
 

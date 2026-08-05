@@ -6,7 +6,6 @@ import (
 
 	"github.com/mpandav-tibco/flogo-datapipeline/record"
 	"github.com/mpandav-tibco/flogo-datapipeline/sink"
-	"github.com/mpandav-tibco/flogo-datapipeline/transform"
 )
 
 // captureSink records rows written to it so late-routing can be asserted.
@@ -343,8 +342,8 @@ func TestWindowAdvancedConfigOK(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newTransform advanced: %v", err)
 	}
-	if _, ok := tr.(transform.Transform); !ok {
-		t.Fatal("does not implement transform.Transform")
+	if tr == nil {
+		t.Fatal("newTransform returned a nil Transform")
 	}
 	_ = tr.Close()
 }
