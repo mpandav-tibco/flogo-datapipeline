@@ -206,15 +206,15 @@ func (e *emitter) build(ev Event) olEvent {
 		Run:       olRun{RunID: uuidFromString(ev.RunID)},
 		Job:       olJob{Namespace: e.namespace, Name: job},
 		Inputs:    e.datasets(ev.Inputs, false, -1),
-		Outputs:   e.datasets2(ev.Outputs, ev.Type == Complete, ev.RowCount, ev.RowsDeleted),
+		Outputs:   e.datasetsWithCdcStats(ev.Outputs, ev.Type == Complete, ev.RowCount, ev.RowsDeleted),
 	}
 }
 
-// datasets2 wraps datasets to additionally attach the custom CDC-stats facet
-// when rowsDeleted >= 0 — kept as a thin wrapper (rather than adding more
-// parameters to the widely-used datasets helper) so the START event's plain
-// datasets(...) call site above is untouched.
-func (e *emitter) datasets2(ds []Dataset, withStats bool, rowCount, rowsDeleted int64) []olDataset {
+// datasetsWithCdcStats wraps datasets to additionally attach the custom
+// CDC-stats facet when rowsDeleted >= 0 — kept as a thin wrapper (rather than
+// adding more parameters to the widely-used datasets helper) so the START
+// event's plain datasets(...) call site above is untouched.
+func (e *emitter) datasetsWithCdcStats(ds []Dataset, withStats bool, rowCount, rowsDeleted int64) []olDataset {
 	out := e.datasets(ds, withStats, rowCount)
 	if !withStats || rowsDeleted < 0 {
 		return out
