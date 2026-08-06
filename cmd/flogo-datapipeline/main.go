@@ -37,6 +37,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -48,6 +49,9 @@ import (
 	"github.com/mpandav-tibco/flogo-datapipeline/action/pipeline"
 	"github.com/mpandav-tibco/flogo-datapipeline/api"
 	"github.com/mpandav-tibco/flogo-datapipeline/internal/appprops"
+	"github.com/mpandav-tibco/flogo-datapipeline/sink"
+	"github.com/mpandav-tibco/flogo-datapipeline/source"
+	"github.com/mpandav-tibco/flogo-datapipeline/transform"
 
 	// --- ObjStore provider backends ---
 	// These three packages register the concrete S3, GCS, and ADLS Gen2 clients
@@ -121,7 +125,7 @@ import (
 	// Additional transforms (gap-08)
 	_ "github.com/mpandav-tibco/flogo-datapipeline/transform/broadcast"   // Fan-out ("tee") — write every row to N additional sinks unconditionally
 	_ "github.com/mpandav-tibco/flogo-datapipeline/transform/cast"        // Column type casting
-	_ "github.com/mpandav-tibco/flogo-datapipeline/transform/dq"          // Data-quality expectations with pass-rate thresholds
+	"github.com/mpandav-tibco/flogo-datapipeline/transform/dq"            // Data-quality expectations with pass-rate thresholds
 	_ "github.com/mpandav-tibco/flogo-datapipeline/transform/explode"     // Expand an array column into one row per element
 	_ "github.com/mpandav-tibco/flogo-datapipeline/transform/flatten"     // Flatten nested-object columns into dotted columns
 	_ "github.com/mpandav-tibco/flogo-datapipeline/transform/hwm"         // High-water-mark observer (pure passthrough)
@@ -177,11 +181,22 @@ func main() {
 	// -api-addr    full TCP addr override (e.g. :8888); -port takes precedence if both set
 	// -validate    check the pipeline definition(s) and exit — no engine boot, no triggers,
 	//              no source/sink/DB/Kafka connections. Safe to run in CI.
+	// -describe    print the registered source/sink/transform/dq-expectation type names as
+	//              JSON and exit — no pipeline file needed. This is the Studio parity check's
+	//              ground truth (see studio/vscode/scripts/check-stage-parity.mjs): it fails
+	//              the moment a backend PR registers a type the Studio's STAGE_CATALOG/
+	//              DQ_EXPECTATIONS don't know about yet.
 	appFile := flag.String("f", "", "Path to the .datapipeline app file (required)")
 	apiPort := flag.Int("port", 0, "API server port (e.g. 9080)")
 	apiAddr := flag.String("api-addr", "", "API server TCP address (e.g. :8888); overridden by -port")
 	validateOnly := flag.Bool("validate", false, "Validate the pipeline definition(s) and exit (no engine boot, no I/O)")
+	describe := flag.Bool("describe", false, "Print registered source/sink/transform/dq-expectation types as JSON and exit")
 	flag.Parse()
+
+	if *describe {
+		printDescribe()
+		os.Exit(0)
+	}
 
 	if *appFile == "" {
 		*appFile = os.Getenv("PIPELINE_FILE")
@@ -301,6 +316,56 @@ type appResource struct {
 
 type appDoc struct {
 	Resources []appResource `json:"resources"`
+}
+
+// describeManifest is the -describe output shape: every registered source/
+// sink/transform/dq-expectation type name, sorted for stable diffing. This is
+// the engine's own ground truth for what the Studio's STAGE_CATALOG (and
+// DQ_EXPECTATIONS) ought to contain — see check-stage-parity.mjs.
+type describeManifest struct {
+	Sources        []string      `json:"sources"`
+	Sinks          []string      `json:"sinks"`
+	Transforms     []string      `json:"transforms"`
+	DQExpectations []string      `json:"dqExpectations"`
+	Ports          describePorts `json:"ports"`
+}
+
+// describePorts is the graph-authoring port schema for each kind, and per-type
+// for transforms (the only kind whose port shape varies by type) — see
+// pipeline.PortsFor / pipeline.PortSchema for the source of truth.
+type describePorts struct {
+	Source     pipeline.PortSchema            `json:"source"`
+	Sink       pipeline.PortSchema            `json:"sink"`
+	Transforms map[string]pipeline.PortSchema `json:"transforms"`
+}
+
+func printDescribe() {
+	transforms := transform.Types()
+	sort.Strings(transforms)
+	transformPorts := make(map[string]pipeline.PortSchema, len(transforms))
+	for _, t := range transforms {
+		transformPorts[t] = pipeline.PortsFor("transform", t)
+	}
+	m := describeManifest{
+		Sources:        source.Formats(),
+		Sinks:          sink.Types(),
+		Transforms:     transforms,
+		DQExpectations: dq.ExpectationTypes(),
+		Ports: describePorts{
+			Source:     pipeline.PortsFor("source", ""),
+			Sink:       pipeline.PortsFor("sink", ""),
+			Transforms: transformPorts,
+		},
+	}
+	sort.Strings(m.Sources)
+	sort.Strings(m.Sinks)
+	sort.Strings(m.DQExpectations)
+	out, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "flogo-datapipeline: describe: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println(string(out))
 }
 
 // runValidate parses appJSON and validates every "pipeline:" resource's

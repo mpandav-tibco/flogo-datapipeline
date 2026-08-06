@@ -38,6 +38,14 @@
 // Like router, broadcast owns external sinks, so it always runs
 // single-threaded (transform.SinkOwner) — the parallel path would otherwise
 // open duplicate writers per worker to the same destination.
+//
+// For a DAG-authored (graph.nodes/edges) pipeline, PREFER plain unconditional
+// (default/success) edges wired directly to sink nodes over this transform:
+// each broadcast sink becomes its own edge from the source node with no
+// condition at all (every EdgeSuccess edge already tees every row — no
+// mutually-exclusive predicate juggling needed, unlike router's case), giving
+// the same visible-in-graphStats benefit. Not deprecated — remains the only
+// option for the LINEAR (non-graph) model.
 package broadcast
 
 import (

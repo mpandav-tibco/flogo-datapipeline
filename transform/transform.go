@@ -166,6 +166,17 @@ func New(typ string, cfg map[string]interface{}) (Transform, error) {
 	return f(cfg)
 }
 
+// Types returns the names of all registered transform types.
+func Types() []string {
+	mu.RLock()
+	defer mu.RUnlock()
+	out := make([]string, 0, len(registry))
+	for k := range registry {
+		out = append(out, k)
+	}
+	return out
+}
+
 // Build constructs a Pipeline from a slice of transform configs.
 // Each config map must have a "type" key identifying the transform.
 func Build(configs []map[string]interface{}) (*Pipeline, error) {

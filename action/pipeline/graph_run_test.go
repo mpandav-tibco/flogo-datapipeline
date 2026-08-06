@@ -6,9 +6,94 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/mpandav-tibco/flogo-datapipeline/action/pipeline/graphexec"
+
 	_ "github.com/mpandav-tibco/flogo-datapipeline/transform/validate"
 	_ "github.com/mpandav-tibco/flogo-datapipeline/transform/window"
 )
+
+// TestGraphRun_NativeEdgeRouting proves the "router"/"split" transform's
+// routing semantics (named routes, checked in priority order, a default
+// fallback) are FULLY replicable with native conditional/otherwise graph
+// edges wired straight to sink nodes — the pattern DAG-authored pipelines
+// should prefer (see the recommendation in transform/router's package doc and
+// Phase E notes): no node owns an external sink directly, so every route's
+// row count is visible in graphStats/the canvas, and the node is no longer
+// forced single-threaded by SinkOwner (moot for the graph runner today, since
+// it never parallelizes within one node anyway — but relevant if that changes).
+//
+// Route priority (mirrors router's own doc example, "high" listed before
+// "eu"): a row matching BOTH conditions must land ONLY in "high" — the "eu"
+// edge's condition is written to explicitly EXCLUDE what "high" already
+// claims (amount<=1000), which is the pattern authors must follow to replicate
+// exclusive first-match routing with the graph's inherently TEE-style
+// conditional edges (a row can match multiple conditions and gets a copy on
+// each — only correct as "exclusive routing" when predicates are mutually
+// exclusive, as here).
+func TestGraphRun_NativeEdgeRouting(t *testing.T) {
+	src := writeTemp(t, "in.csv", `id,amount,region
+1,2000,US
+2,500,EU
+3,300,US
+4,1500,EU
+`)
+	highPath := filepath.Join(t.TempDir(), "high.jsonl")
+	euPath := filepath.Join(t.TempDir(), "eu.jsonl")
+	defaultPath := filepath.Join(t.TempDir(), "default.jsonl")
+
+	def := &Definition{
+		Source: csvSource(src),
+		Sink:   SinkDef{Type: "null"}, // required by the schema; unused by the graph
+		Graph: &GraphDef{
+			Nodes: []GraphNodeDef{
+				{ID: "source", Kind: "source", Type: "csv"},
+				{ID: "high", Kind: "sink", Type: "jsonlines", Extra: map[string]interface{}{"config": map[string]interface{}{"path": highPath}}},
+				{ID: "eu", Kind: "sink", Type: "jsonlines", Extra: map[string]interface{}{"config": map[string]interface{}{"path": euPath}}},
+				{ID: "def", Kind: "sink", Type: "jsonlines", Extra: map[string]interface{}{"config": map[string]interface{}{"path": defaultPath}}},
+			},
+			Edges: []GraphEdge{
+				{From: "source:rows", To: "high:in", Type: "expression", Value: "amount > 1000"},
+				{From: "source:rows", To: "eu:in", Type: "expression", Value: "region = 'EU' AND amount <= 1000"},
+				{From: "source:rows", To: "def:in", Type: "otherwise"},
+			},
+		},
+	}
+
+	out, err := runInline(t, def)
+	if err != nil {
+		t.Fatalf("RunDirect: %v", err)
+	}
+	if out.Status != "completed" {
+		t.Fatalf("status = %q, want completed (err=%s)", out.Status, out.Error)
+	}
+	if out.RowsProcessed != 4 {
+		t.Fatalf("RowsProcessed = %d, want 4", out.RowsProcessed)
+	}
+	// id=1 (amount>1000) and id=4 (amount>1000 AND region=EU) both go to "high"
+	// ONLY — id=4 must NOT also leak into "eu" despite matching region='EU'.
+	if rows := readJSONL(t, highPath); len(rows) != 2 {
+		t.Fatalf("high sink = %d rows, want 2 (id 1 and 4): %v", len(rows), rows)
+	}
+	if rows := readJSONL(t, euPath); len(rows) != 1 || fmt.Sprint(rows[0]["id"]) != "2" {
+		t.Fatalf("eu sink = %v, want exactly id=2", rows)
+	}
+	if rows := readJSONL(t, defaultPath); len(rows) != 1 || fmt.Sprint(rows[0]["id"]) != "3" {
+		t.Fatalf("default sink = %v, want exactly id=3", rows)
+	}
+	// graphStats must show the source's RowsOut split across all 3 sinks — the
+	// concrete observability win over router's owned (graph-invisible) sinks.
+	gs, ok := out.Metadata["graphStats"].([]graphexec.NodeStat)
+	if !ok {
+		t.Fatalf("Metadata[\"graphStats\"] missing or wrong type: %T", out.Metadata["graphStats"])
+	}
+	written := map[string]int64{}
+	for _, ns := range gs {
+		written[ns.ID] = ns.RowsWritten
+	}
+	if written["high"] != 2 || written["eu"] != 1 || written["def"] != 1 {
+		t.Fatalf("graphStats written counts = %v, want high=2 eu=1 def=1", written)
+	}
+}
 
 func mkGraphDef(nTransforms int, txType string, g *GraphDef) *Definition {
 	tr := make([]TransformDef, nTransforms)
@@ -208,6 +293,75 @@ func TestGraphRun_ExtraSinkJSON(t *testing.T) {
 	}
 }
 
+// TestGraphRun_TwoPortJoin proves a join transform can be wired from TWO
+// distinct source nodes via graph edges targeting its named "left"/"right"
+// ports, end-to-end through the real orchestration path — the join's "right"
+// side is no longer embedded inline config but a separate graph node/subgraph.
+func TestGraphRun_TwoPortJoin(t *testing.T) {
+	leftCSV := writeTemp(t, "orders.csv", `customerId,orderRef
+1,order-1
+2,order-2
+3,order-3
+`)
+	rightCSV := writeTemp(t, "customers.csv", `id,name,tier
+1,Alice,gold
+2,Bob,silver
+`)
+	outPath := filepath.Join(t.TempDir(), "joined.jsonl")
+
+	def := &Definition{
+		Source: SourceDef{Type: "csv"}, // required by the schema; unused by the graph
+		Sink:   SinkDef{Type: "null"},  // required by the schema; unused by the graph
+		Graph: &GraphDef{
+			Nodes: []GraphNodeDef{
+				{ID: "leftSrc", Kind: "source", Type: "csv", Extra: map[string]interface{}{
+					"config": map[string]interface{}{"path": leftCSV, "hasHeader": true},
+				}},
+				{ID: "rightSrc", Kind: "source", Type: "csv", Extra: map[string]interface{}{
+					"config": map[string]interface{}{"path": rightCSV, "hasHeader": true},
+				}},
+				{ID: "j", Kind: "transform", Type: "join", Extra: map[string]interface{}{
+					"config": map[string]interface{}{"leftKey": "customerId", "rightKey": "id", "right": "graph"},
+				}},
+				{ID: "out", Kind: "sink", Type: "jsonlines", Extra: map[string]interface{}{
+					"config": map[string]interface{}{"path": outPath},
+				}},
+			},
+			Edges: []GraphEdge{
+				{From: "leftSrc:rows", To: "j:left"},
+				{From: "rightSrc:rows", To: "j:right"},
+				{From: "j:out", To: "out:in"},
+			},
+		},
+	}
+
+	out, err := runInline(t, def)
+	if err != nil {
+		t.Fatalf("RunDirect: %v", err)
+	}
+	if out.Status != "completed" {
+		t.Fatalf("status = %q, want completed (err=%s)", out.Status, out.Error)
+	}
+	if out.RowsProcessed != 5 { // 3 left + 2 right
+		t.Fatalf("RowsProcessed = %d, want 5", out.RowsProcessed)
+	}
+	rows := readJSONL(t, outPath)
+	// customerId=3 has no match on the right → dropped (inner join default).
+	if len(rows) != 2 {
+		t.Fatalf("joined rows = %d, want 2 (customerId 1 and 2): %v", len(rows), rows)
+	}
+	byRef := map[string]map[string]interface{}{}
+	for _, r := range rows {
+		byRef[fmt.Sprint(r["orderRef"])] = r
+	}
+	if byRef["order-1"]["name"] != "Alice" || byRef["order-1"]["tier"] != "gold" {
+		t.Fatalf("order-1 row = %v, want Alice/gold", byRef["order-1"])
+	}
+	if byRef["order-2"]["name"] != "Bob" || byRef["order-2"]["tier"] != "silver" {
+		t.Fatalf("order-2 row = %v, want Bob/silver", byRef["order-2"])
+	}
+}
+
 // Per-row error routing: a validate node with an error edge sends its violating
 // rows down the edge to an error sink row-by-row (not its internal sink).
 func TestGraphRun_ValidateReject(t *testing.T) {
@@ -368,10 +522,10 @@ func TestGraphRun_CheckpointSaveAndResume(t *testing.T) {
 	}
 }
 
-// A windowed (stateful) graph with checkpoint configured must still run
-// correctly: the runner detects the Flusher node and SKIPS barrier checkpointing
-// (with a warning) rather than persisting a source position without the matching
-// window-state snapshot. The window aggregate stays correct.
+// A windowed (stateful) graph with checkpoint configured now checkpoints
+// correctly (see TestGraphRun_StatefulCheckpoint_ResumesWindowState for the
+// resume proof) — this test just guards that a normal, uninterrupted run still
+// completes with the right aggregate when checkpointing is configured.
 func TestGraphRun_CheckpointStatefulGuard(t *testing.T) {
 	src := writeTemp(t, "win.csv", windowCSV)
 	outp := filepath.Join(t.TempDir(), "agg.jsonl")
@@ -411,6 +565,6 @@ func TestGraphRun_CheckpointStatefulGuard(t *testing.T) {
 		t.Fatalf("status=%q, want completed (err=%s)", out.Status, out.Error)
 	}
 	if r := readJSONL(t, outp); len(r) != 1 {
-		t.Fatalf("sink = %d rows, want 1 aggregate (window stays correct without checkpoint)", len(r))
+		t.Fatalf("sink = %d rows, want 1 aggregate (window stays correct with checkpointing enabled)", len(r))
 	}
 }

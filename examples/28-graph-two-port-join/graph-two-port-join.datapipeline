@@ -1,0 +1,62 @@
+{
+  "name": "graph-two-port-join",
+  "type": "flogo:app",
+  "version": "1.0.0",
+  "description": "Phase B demo: a join transform wired from TWO separate graph source nodes via named 'left'/'right' ports (graph.nodes/edges), instead of the join's older inline 'right' config. Proves the engine's port-aware multi-input join end to end with the real binary.",
+  "appModel": "1.1.1",
+  "imports": [
+    "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+    "github.com/project-flogo/contrib/trigger/timer"
+  ],
+  "triggers": [
+    {
+      "id": "run-once",
+      "ref": "github.com/project-flogo/contrib/trigger/timer",
+      "settings": {
+        "repeating": true,
+        "startDelay": 0,
+        "interval": 86400000
+      },
+      "handlers": [
+        {
+          "settings": {},
+          "action": {
+            "ref": "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+            "settings": {
+              "pipelineRef": "res://pipeline:graph-two-port-join"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "resources": [
+    {
+      "id": "pipeline:graph-two-port-join",
+      "data": {
+        "name": "graph-two-port-join",
+        "description": "orders.csv (left) + customers.csv (right) -> join(leftKey=customerId, rightKey=id, right='graph') -> joined.jsonl. customerId=3 has no customer match and is dropped (inner join).",
+        "version": "1.0.0",
+        "source": { "type": "csv", "path": "./data/orders.csv" },
+        "sink": { "type": "null" },
+        "graph": {
+          "nodes": [
+            { "id": "leftSrc", "kind": "source", "type": "csv",
+              "config": { "path": "./data/orders.csv", "hasHeader": true } },
+            { "id": "rightSrc", "kind": "source", "type": "csv",
+              "config": { "path": "./data/customers.csv", "hasHeader": true } },
+            { "id": "j", "kind": "transform", "type": "join",
+              "config": { "leftKey": "customerId", "rightKey": "id", "right": "graph", "prefix": "cust_" } },
+            { "id": "out", "kind": "sink", "type": "jsonlines",
+              "config": { "path": "./out/joined.jsonl" } }
+          ],
+          "edges": [
+            ["leftSrc:rows", "j:left"],
+            ["rightSrc:rows", "j:right"],
+            ["j:out", "out:in"]
+          ]
+        }
+      }
+    }
+  ]
+}

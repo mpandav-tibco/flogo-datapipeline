@@ -6,25 +6,34 @@ import (
 )
 
 // pedge is a compiled outbound edge: the target node, the edge's routing role,
-// and (for EdgeCondition only) its compiled row predicate.
+// (for EdgeCondition only) its compiled row predicate, and (for an edge into a
+// multi-input-active node) which named port it targets ("left" | "right").
 type pedge struct {
-	to    *pnode
-	etype EdgeType
-	pred  Pred
+	to     *pnode
+	etype  EdgeType
+	pred   Pred
+	toPort string
 }
 
 // pnode is a compiled node: its operator (exactly one of src/tx/snk is set by
-// kind) plus its outbound edges and inbound-edge count.
+// kind) plus its outbound edges and inbound-edge count. multiIn is non-nil
+// ONLY when tx implements MultiInputOp AND the node has ≥ 1 "right"-port
+// inbound edge (see Compile's post-wiring pass) — that combination is what
+// activates the dedicated left/right scheduling in runMultiInputTransform;
+// otherwise the node runs through the ordinary single-input path unaffected.
 type pnode struct {
-	id     string
-	kind   NodeKind
-	src    SourceOp
-	tx     TransformOp
-	snk    SinkOp
-	out    []*pedge
-	inDeg  int
-	hasErr bool
-	closer interface{ Close() error }
+	id         string
+	kind       NodeKind
+	src        SourceOp
+	tx         TransformOp
+	snk        SinkOp
+	out        []*pedge
+	inDeg      int // ALL inbound edges, for cycle detection only
+	leftInDeg  int // multi-input nodes: "left"-port (or unlabeled) inbound edges
+	rightInDeg int // multi-input nodes: "right"-port inbound edges
+	hasErr     bool
+	multiIn    MultiInputOp
+	closer     interface{ Close() error }
 }
 
 // Plan is a validated, ready-to-run graph: operators constructed, edges wired,
@@ -40,6 +49,14 @@ func nodeOf(endpoint string) string {
 		return endpoint[:i]
 	}
 	return endpoint
+}
+
+// portOf returns the ":port" suffix of an endpoint ("" if none).
+func portOf(endpoint string) string {
+	if i := strings.IndexByte(endpoint, ':'); i >= 0 {
+		return endpoint[i+1:]
+	}
+	return ""
 }
 
 // normEdgeType maps the neutral edge type onto a canonical routing role; an
@@ -86,11 +103,16 @@ func Compile(g *Graph, b Builders) (*Plan, error) {
 		pn := &pnode{id: n.ID, kind: n.Kind}
 		switch n.Kind {
 		case KindSource:
-			op, err := b.Source(n.Type, n.Cfg)
-			if err != nil {
-				return fail("graphexec: build source %q (%s): %w", n.ID, n.Type, err)
+			if n.PreBuilt != nil {
+				// Caller-owned lifecycle — do not register a closer.
+				pn.src = n.PreBuilt
+			} else {
+				op, err := b.Source(n.Type, n.Cfg)
+				if err != nil {
+					return fail("graphexec: build source %q (%s): %w", n.ID, n.Type, err)
+				}
+				pn.src, pn.closer = op, op
 			}
-			pn.src, pn.closer = op, op
 		case KindTransform:
 			op, err := b.Transform(n.Type, n.Cfg)
 			if err != nil {
@@ -152,8 +174,28 @@ func Compile(g *Graph, b Builders) (*Plan, error) {
 		default:
 			return fail("graphexec: edge %s→%s has unknown type %q", e.From, e.To, e.Type)
 		}
+		pe.toPort = portOf(e.To)
 		from.out = append(from.out, pe)
-		to.inDeg++
+		to.inDeg++ // ALL inbound edges count here, regardless of port — cycle detection only.
+		if pe.toPort == "right" {
+			to.rightInDeg++
+		} else {
+			to.leftInDeg++
+		}
+	}
+
+	// 2b) Activate the multi-input schedule ONLY for a node whose operator
+	// implements MultiInputOp AND has \u2265 1 real "right"-port edge \u2014 e.g. an
+	// existing join promoted into a graph with no right-port edges (still
+	// configured with an inline "right" dataset) is left on the ordinary
+	// single-input path, unaffected.
+	for _, n := range p.nodes {
+		if n.tx == nil || n.rightInDeg == 0 {
+			continue
+		}
+		if mi, ok := n.tx.(MultiInputOp); ok {
+			n.multiIn = mi
+		}
 	}
 
 	// 3) Prove the graph is acyclic (Kahn) — a cycle would deadlock the runner.
@@ -197,8 +239,9 @@ func (p *Plan) checkAcyclic() error {
 
 // HasStateful reports whether any transform node buffers state across batches
 // (implements Flusher) — e.g. a window operator. Such a node needs a state
-// snapshot to resume correctly, which the barrier checkpoint does not yet
-// provide, so callers must not enable checkpointing for a plan with one.
+// snapshot to resume correctly; see Snapshotters for the nodes that actually
+// provide one (a Flusher without Snapshotter still runs, just without
+// checkpoint/resume support for its buffered state).
 func (p *Plan) HasStateful() bool {
 	for _, n := range p.nodes {
 		if n.tx == nil {
@@ -209,6 +252,44 @@ func (p *Plan) HasStateful() bool {
 		}
 	}
 	return false
+}
+
+// Snapshotters returns every transform node whose operator implements
+// Snapshotter, keyed by node id — used by the caller to restore state before a
+// resumed Run (once, from a persisted checkpoint) and to capture state at
+// each checkpoint barrier (see graph_run.go's runGraph/runGraphScaled).
+func (p *Plan) Snapshotters() map[string]Snapshotter {
+	out := make(map[string]Snapshotter)
+	for _, n := range p.nodes {
+		if n.tx == nil {
+			continue
+		}
+		if s, ok := n.tx.(Snapshotter); ok {
+			out[n.id] = s
+		}
+	}
+	return out
+}
+
+// RewireSource replaces the operator on an already-compiled KindSource node
+// WITHOUT rebuilding the rest of the plan — used by callers that run the SAME
+// compiled transform/sink chain across multiple partitions of a horizontally-
+// scaled source (a fresh partition-scoped SourceOp per call, matching the
+// linear engine's one-sink-per-shard reuse). The caller owns both the OLD and
+// NEW source's lifecycle exactly like Node.PreBuilt: RewireSource neither
+// closes the previous operator nor registers the new one as a plan-owned
+// closer. Pair with Options.KeepOpen so intervening Run calls don't tear down
+// the transform/sink chain this is meant to reuse.
+func (p *Plan) RewireSource(nodeID string, src SourceOp) error {
+	n, ok := p.byID[nodeID]
+	if !ok {
+		return fmt.Errorf("graphexec: RewireSource: no node %q", nodeID)
+	}
+	if n.kind != KindSource {
+		return fmt.Errorf("graphexec: RewireSource: node %q is not a source", nodeID)
+	}
+	n.src = src
+	return nil
 }
 
 // Transforms returns every transform operator in the plan, in node order. The

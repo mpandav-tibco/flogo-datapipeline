@@ -42,11 +42,31 @@ func (p *Plan) Run(ctx context.Context, opts Options) (*Result, error) {
 	}
 
 	// One input channel per non-source node; a WaitGroup counting its inbound
-	// producers so the channel is closed exactly once they have all finished.
+	// producers so the channel is closed exactly once they have all finished. A
+	// multi-input-active node (see pnode.multiIn) gets TWO dedicated channels
+	// instead — rightCh/leftCh — each with its own producer WaitGroup, so its
+	// right-side producers can be drained to completion before any left batch
+	// is delivered.
 	inCh := make(map[string]chan pmsg, len(p.nodes))
 	inWG := make(map[string]*sync.WaitGroup, len(p.nodes))
+	rightCh := make(map[string]chan pmsg, len(p.nodes))
+	rightWG := make(map[string]*sync.WaitGroup, len(p.nodes))
+	leftCh := make(map[string]chan pmsg, len(p.nodes))
+	leftWG := make(map[string]*sync.WaitGroup, len(p.nodes))
 	for _, n := range p.nodes {
 		if n.kind == KindSource {
+			continue
+		}
+		if n.multiIn != nil {
+			rightCh[n.id] = make(chan pmsg, opts.bufferDepth())
+			rwg := &sync.WaitGroup{}
+			rwg.Add(n.rightInDeg)
+			rightWG[n.id] = rwg
+
+			leftCh[n.id] = make(chan pmsg, opts.bufferDepth())
+			lwg := &sync.WaitGroup{}
+			lwg.Add(n.leftInDeg)
+			leftWG[n.id] = lwg
 			continue
 		}
 		inCh[n.id] = make(chan pmsg, opts.bufferDepth())
@@ -60,8 +80,26 @@ func (p *Plan) Run(ctx context.Context, opts Options) (*Result, error) {
 			close(ch)
 		}(ch, inWG[id])
 	}
+	for id, ch := range rightCh {
+		go func(ch chan pmsg, wg *sync.WaitGroup) {
+			wg.Wait()
+			close(ch)
+		}(ch, rightWG[id])
+	}
+	for id, ch := range leftCh {
+		go func(ch chan pmsg, wg *sync.WaitGroup) {
+			wg.Wait()
+			close(ch)
+		}(ch, leftWG[id])
+	}
 
-	rt := &runtime{res: res, opts: opts, inCh: inCh, inWG: inWG, fail: fail}
+	rt := &runtime{
+		res: res, opts: opts,
+		inCh: inCh, inWG: inWG,
+		rightCh: rightCh, rightWG: rightWG,
+		leftCh: leftCh, leftWG: leftWG,
+		fail: fail,
+	}
 
 	// Checkpoint coordinator: active only when an interval + callback are set.
 	// The source emits a drain barrier every CheckpointRows rows; the coordinator
@@ -85,14 +123,20 @@ func (p *Plan) Run(ctx context.Context, opts Options) (*Result, error) {
 			case KindSource:
 				rt.runSource(rctx, n)
 			case KindTransform:
-				rt.runTransform(rctx, n)
+				if n.multiIn != nil {
+					rt.runMultiInputTransform(rctx, n)
+				} else {
+					rt.runTransform(rctx, n)
+				}
 			case KindSink:
 				rt.runSink(rctx, n)
 			}
 		}(n)
 	}
 	nodes.Wait()
-	_ = p.Close()
+	if !opts.KeepOpen {
+		_ = p.Close()
+	}
 	return res, runErr
 }
 
@@ -103,6 +147,13 @@ type runtime struct {
 	inCh map[string]chan pmsg
 	inWG map[string]*sync.WaitGroup
 	fail func(error)
+
+	// Dedicated channels for a multi-input-active node's two named ports (see
+	// pnode.multiIn) — populated only for such nodes; absent for every other node.
+	rightCh map[string]chan pmsg
+	rightWG map[string]*sync.WaitGroup
+	leftCh  map[string]chan pmsg
+	leftWG  map[string]*sync.WaitGroup
 
 	// Checkpoint coordination (active only when opts.CheckpointRows > 0).
 	cpOn        bool
@@ -156,10 +207,21 @@ func (rt *runtime) runCheckpointCoord(ctx context.Context) {
 
 // emitBarrier forwards a checkpoint barrier to EVERY outbound edge. Barriers are
 // control signals — they ignore edge conditions so every downstream path drains.
+// A multi-input-active target receives it on whichever dedicated channel the
+// edge targets (see runMultiInputTransform — a right-channel barrier is simply
+// ignored there; the bounded right side is not part of the checkpoint story).
 func (rt *runtime) emitBarrier(ctx context.Context, n *pnode, epoch int64) bool {
 	for _, e := range n.out {
+		ch := rt.inCh[e.to.id]
+		if e.to.multiIn != nil {
+			if e.toPort == "right" {
+				ch = rt.rightCh[e.to.id]
+			} else {
+				ch = rt.leftCh[e.to.id]
+			}
+		}
 		select {
-		case rt.inCh[e.to.id] <- pmsg{barrier: epoch}:
+		case ch <- pmsg{barrier: epoch}:
 		case <-ctx.Done():
 			return false
 		}
@@ -168,10 +230,21 @@ func (rt *runtime) emitBarrier(ctx context.Context, n *pnode, epoch int64) bool 
 }
 
 // finishProducers signals, for every outbound edge of n, that this producer has
-// finished — decrementing each consumer's inbound WaitGroup so its channel is
+// finished — decrementing the consumer's inbound WaitGroup (the ordinary merged
+// one, or the right/left one for a multi-input-active target) so its channel is
 // eventually closed. Deferred by producers so it runs even on early return.
 func (rt *runtime) finishProducers(n *pnode) {
 	for _, e := range n.out {
+		if e.to.multiIn != nil {
+			if e.toPort == "right" {
+				if wg := rt.rightWG[e.to.id]; wg != nil {
+					wg.Done()
+				}
+			} else if wg := rt.leftWG[e.to.id]; wg != nil {
+				wg.Done()
+			}
+			continue
+		}
 		if wg := rt.inWG[e.to.id]; wg != nil {
 			wg.Done()
 		}
@@ -363,6 +436,113 @@ func (rt *runtime) runTransform(ctx context.Context, n *pnode) {
 	}
 }
 
+// runMultiInputTransform drives a multi-input-active node (see pnode.multiIn):
+// it fully drains the right channel to LoadRight, calls CloseRight exactly
+// once, THEN streams the left channel through ApplyLeft — mirroring
+// runTransform's main loop (barrier handling, Flusher end-of-input) but
+// against leftCh instead of the merged inCh, and counting barriers against
+// leftInDeg instead of inDeg. A barrier arriving on the right channel is
+// ignored (the bounded right side is not part of the checkpoint story); a
+// multi-input node has no error-edge/Splitter path since none of today's
+// MultiInputOp implementers (just join) need one.
+func (rt *runtime) runMultiInputTransform(ctx context.Context, n *pnode) {
+	defer rt.finishProducers(n)
+	stat := rt.res.Nodes[n.id]
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case m, ok := <-rt.rightCh[n.id]:
+			if !ok {
+				goto rightDone
+			}
+			if m.batch == nil {
+				continue // barrier on the right side — not part of the checkpoint story.
+			}
+			atomic.AddInt64(&stat.RowsIn, int64(m.batch.Len()))
+			if err := n.multiIn.LoadRight(m.batch); err != nil {
+				record.Put(m.batch)
+				rt.fail(fmt.Errorf("transform %q: load right: %w", n.id, err))
+				return
+			}
+			record.Put(m.batch)
+		}
+	}
+rightDone:
+	if err := n.multiIn.CloseRight(); err != nil {
+		rt.fail(fmt.Errorf("transform %q: close right: %w", n.id, err))
+		return
+	}
+
+	ch := rt.leftCh[n.id]
+	var barrierSeen int64
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case m, ok := <-ch:
+			if !ok {
+				if f, hasFlush := n.tx.(Flusher); hasFlush {
+					fb, ferr := f.Flush()
+					if ferr != nil {
+						rt.fail(fmt.Errorf("transform %q flush: %w", n.id, ferr))
+						return
+					}
+					if fb != nil {
+						if fb.Len() > 0 {
+							atomic.AddInt64(&stat.RowsOut, int64(fb.Len()))
+							rt.emit(ctx, n, fb)
+						} else {
+							record.Put(fb)
+						}
+					}
+				}
+				return
+			}
+			if m.barrier > 0 {
+				barrierSeen++
+				if barrierSeen >= int64(n.leftInDeg) {
+					barrierSeen = 0
+					if !rt.emitBarrier(ctx, n, m.barrier) {
+						return
+					}
+				}
+				continue
+			}
+			b := m.batch
+			atomic.AddInt64(&stat.RowsIn, int64(b.Len()))
+			out, err := n.multiIn.ApplyLeft(b)
+			if err != nil {
+				handled := rt.emitError(ctx, n, b)
+				if out != nil && out != b {
+					record.Put(out)
+				}
+				record.Put(b)
+				if !handled {
+					rt.fail(fmt.Errorf("transform %q: %w", n.id, err))
+					return
+				}
+				continue
+			}
+			if out != b {
+				record.Put(b)
+			}
+			if out == nil {
+				continue
+			}
+			if out.Len() == 0 {
+				record.Put(out)
+				continue
+			}
+			atomic.AddInt64(&stat.RowsOut, int64(out.Len()))
+			if !rt.emit(ctx, n, out) {
+				return
+			}
+		}
+	}
+}
+
 func (rt *runtime) runSink(ctx context.Context, n *pnode) {
 	stat := rt.res.Nodes[n.id]
 	ch := rt.inCh[n.id]
@@ -488,10 +668,20 @@ func (rt *runtime) emitError(ctx context.Context, n *pnode, b *record.RecordBatc
 }
 
 // send delivers a batch to an edge's consumer, honouring cancellation. On
-// cancellation it recycles the batch it was handed.
+// cancellation it recycles the batch it was handed. A multi-input-active
+// target routes to its dedicated right/left channel instead of the ordinary
+// merged one.
 func (rt *runtime) send(ctx context.Context, e *pedge, b *record.RecordBatch) bool {
+	ch := rt.inCh[e.to.id]
+	if e.to.multiIn != nil {
+		if e.toPort == "right" {
+			ch = rt.rightCh[e.to.id]
+		} else {
+			ch = rt.leftCh[e.to.id]
+		}
+	}
 	select {
-	case rt.inCh[e.to.id] <- pmsg{batch: b}:
+	case ch <- pmsg{batch: b}:
 		return true
 	case <-ctx.Done():
 		record.Put(b)

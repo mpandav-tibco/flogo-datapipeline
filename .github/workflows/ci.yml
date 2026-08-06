@@ -1,6 +1,7 @@
 name: CI
 
-# Two jobs, matching the Makefile's own targets exactly (no CI-only logic):
+# Three jobs, matching the Makefile's own targets exactly (no CI-only logic)
+# for the two Go jobs, plus a lightweight Studio guardrail:
 #   1. build-lint-unit: build + vet + golangci-lint + unit tests. Fast, runs on
 #      every push/PR — live-gated tests skip cleanly since no DP_TEST_*/
 #      KAFKA_TEST_* backends are configured here.
@@ -11,6 +12,14 @@ name: CI
 #      for the live-infra adversarial test suite built up over this
 #      project's history — without it, those tests only ever run when a
 #      human remembers to invoke `make test-integration` locally.
+#   3. studio-stage-parity: builds the engine binary and runs `flogo-
+#      datapipeline -describe` against studio/vscode/scripts/check-stage-
+#      parity.mjs, failing the build the moment a source/sink/transform/dq-
+#      expectation type is registered in Go without a matching entry in the
+#      Studio's STAGE_CATALOG/DQ_EXPECTATIONS (webview/main.ts) — the exact
+#      class of drift a 2026-08-06 architecture review found six live
+#      instances of (avro/rest source+sink, broadcast, referential-integrity
+#      dq expectation, the whole `contract` feature).
 #
 # The broker-restart resilience test (source/kafka/broker_restart_test.go)
 # stays skipped here by design: it requires KAFKA_TEST_BROKER_CONTAINER,
@@ -73,3 +82,23 @@ jobs:
       - name: Tear down backends
         if: always()
         run: make test-integration-down
+
+  studio-stage-parity:
+    name: Studio STAGE_CATALOG parity check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build engine binary (CGO required — links mattn/go-sqlite3)
+        run: CGO_ENABLED=1 go build -o flogo-datapipeline ./cmd/flogo-datapipeline
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Check every engine-registered type has a matching Studio entry
+        run: node studio/vscode/scripts/check-stage-parity.mjs

@@ -32,6 +32,18 @@
 // loading more than maxRows rows is a hard error. Keys are matched by string
 // form, so align key column types across the two sides (e.g. both int or both
 // string) to avoid surprises.
+//
+// Graph-wired right side: set "right" to the string "graph" instead of an
+// inline source config to wire the right side from a graph edge (a node's
+// "right"-port input) rather than an embedded config — e.g. authored in
+// Studio as two source nodes feeding a join's "left"/"right" ports. In this
+// mode the transform is constructed empty and expects its caller (the graph
+// runner) to call LoadRight for every right-side batch, then CloseRight
+// exactly once before the first ApplyLeft call — see LoadRight/CloseRight/
+// ApplyLeft below, which together satisfy graphexec.MultiInputOp (structural
+// typing; this package does not import graphexec). Omitting "right" entirely
+// (neither an inline config nor the "graph" sentinel) is still a hard
+// construction error, so a genuinely missing config keeps failing loudly.
 package join
 
 import (
@@ -49,21 +61,20 @@ func init() {
 
 type joinTransform struct {
 	leftKey       string
-	joinType      string   // "inner" | "left"
-	rightColNames []string // output names for the added right columns (prefixed)
+	rightKey      string
+	joinType      string // "inner" | "left"
+	prefix        string
+	wantCols      []string // configured rightColumns, if any
+	maxRows       int64
+	rightCols     []string // resolved once the first right batch/row is seen
+	rightColNames []string // output names for the added right columns (prefixed) — set by CloseRight (graph-wired) or the constructor (inline)
 	table         map[string][][]interface{}
+	loaded        int64
+	graphWired    bool // true when constructed via the "right":"graph" sentinel
+	rightClosed   bool // true once CloseRight has run (graph-wired mode only)
 }
 
 func newJoinTransform(cfg map[string]interface{}) (transform.Transform, error) {
-	rmap, ok := cfg["right"].(map[string]interface{})
-	if !ok {
-		return nil, fmt.Errorf("join transform: 'right' source config is required")
-	}
-	rtype, _ := rmap["type"].(string)
-	if rtype == "" {
-		return nil, fmt.Errorf("join transform: right.type is required")
-	}
-
 	leftKey, _ := cfg["leftKey"].(string)
 	if leftKey == "" {
 		leftKey, _ = cfg["key"].(string)
@@ -95,20 +106,6 @@ func newJoinTransform(cfg map[string]interface{}) (transform.Transform, error) {
 		}
 	}
 
-	// The right side is read fully into memory (a broadcast / stream-table join),
-	// so it MUST be bounded. A Kafka right source defaults to a batch drain-to-
-	// current-end so it terminates instead of blocking forever on a live topic.
-	if rtype == "kafka" {
-		if _, ok := rmap["mode"]; !ok {
-			rmap["mode"] = "batch"
-		}
-		_, hasEnd := rmap["stopAtCurrentEnd"]
-		_, hasOff := rmap["stopOffset"]
-		_, hasTS := rmap["stopTimestamp"]
-		if !hasEnd && !hasOff && !hasTS {
-			rmap["stopAtCurrentEnd"] = true
-		}
-	}
 	// maxRows caps the in-memory reference table (guards OOM and catches a source
 	// that never ends). Default 1,000,000; override with 'maxRows'.
 	maxRows := int64(1_000_000)
@@ -127,6 +124,56 @@ func newJoinTransform(cfg map[string]interface{}) (transform.Transform, error) {
 		}
 	}
 
+	j := &joinTransform{
+		leftKey:  leftKey,
+		rightKey: rightKey,
+		joinType: joinType,
+		prefix:   prefix,
+		wantCols: wantCols,
+		maxRows:  maxRows,
+		table:    make(map[string][][]interface{}),
+	}
+	// When rightColumns is configured, the output schema is fixed up front so
+	// it does not depend on whether the reference side ever produces a row —
+	// an empty right side must still add the configured columns (as nulls for
+	// a left join).
+	if len(wantCols) > 0 {
+		j.rightCols = wantCols
+	}
+
+	// Graph-wired mode: "right" is the sentinel string "graph" — the caller
+	// (the graph runner) supplies right-side batches via LoadRight/CloseRight
+	// instead of an inline source config. Leave the table empty; do NOT touch
+	// rightColNames until CloseRight (see the ApplyLeft guard below).
+	if rstr, ok := cfg["right"].(string); ok && rstr == "graph" {
+		j.graphWired = true
+		return j, nil
+	}
+
+	rmap, ok := cfg["right"].(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("join transform: 'right' source config is required")
+	}
+	rtype, _ := rmap["type"].(string)
+	if rtype == "" {
+		return nil, fmt.Errorf("join transform: right.type is required")
+	}
+
+	// The right side is read fully into memory (a broadcast / stream-table join),
+	// so it MUST be bounded. A Kafka right source defaults to a batch drain-to-
+	// current-end so it terminates instead of blocking forever on a live topic.
+	if rtype == "kafka" {
+		if _, ok := rmap["mode"]; !ok {
+			rmap["mode"] = "batch"
+		}
+		_, hasEnd := rmap["stopAtCurrentEnd"]
+		_, hasOff := rmap["stopOffset"]
+		_, hasTS := rmap["stopTimestamp"]
+		if !hasEnd && !hasOff && !hasTS {
+			rmap["stopAtCurrentEnd"] = true
+		}
+	}
+
 	// Load the right side fully into a keyed multimap.
 	rs, err := source.New(rtype, rmap)
 	if err != nil {
@@ -134,36 +181,12 @@ func newJoinTransform(cfg map[string]interface{}) (transform.Transform, error) {
 	}
 	defer rs.Close()
 
-	table := make(map[string][][]interface{})
-	// When rightColumns is configured, the output schema is fixed up front so it
-	// does not depend on whether the reference source has rows (an empty right
-	// table must still add the configured columns — as nulls for a left join).
-	var rightCols []string
-	if len(wantCols) > 0 {
-		rightCols = wantCols
-	}
-	var loaded int64
 	for {
 		b, rErr := rs.ReadBatch(1000)
 		if b != nil && b.Len() > 0 {
-			// Enforce the cap BEFORE growing the table so the in-memory footprint is
-			// bounded at maxRows exactly (never maxRows + one batch).
-			if loaded+int64(b.Len()) > maxRows {
-				return nil, fmt.Errorf("join transform: right source exceeded maxRows=%d — it must be a bounded reference dataset (raise 'maxRows' or use a bounded/batch source)", maxRows)
+			if lerr := j.loadRightBatch(b); lerr != nil {
+				return nil, lerr
 			}
-			if rightCols == nil {
-				rightCols = resolveRightCols(b.Columns, wantCols, rightKey)
-			}
-			for i := 0; i < b.Len(); i++ {
-				m := b.RowMap(i)
-				key := fmt.Sprintf("%v", m[rightKey])
-				vals := make([]interface{}, len(rightCols))
-				for j, c := range rightCols {
-					vals[j] = m[c]
-				}
-				table[key] = append(table[key], vals)
-			}
-			loaded += int64(b.Len())
 		}
 		if rErr == io.EOF {
 			break
@@ -172,18 +195,9 @@ func newJoinTransform(cfg map[string]interface{}) (transform.Transform, error) {
 			return nil, fmt.Errorf("join transform: read right source: %w", rErr)
 		}
 	}
+	j.finalizeRightColumns()
 
-	names := make([]string, len(rightCols))
-	for i, c := range rightCols {
-		names[i] = prefix + c
-	}
-
-	return &joinTransform{
-		leftKey:       leftKey,
-		joinType:      joinType,
-		rightColNames: names,
-		table:         table,
-	}, nil
+	return j, nil
 }
 
 // resolveRightCols picks the right columns to emit: the configured subset, or
@@ -201,9 +215,78 @@ func resolveRightCols(cols []record.Column, want []string, rightKey string) []st
 	return out
 }
 
+// loadRightBatch is the shared core of the constructor's inline load loop and
+// the graph-wired LoadRight: enforce maxRows, resolve rightCols from the FIRST
+// batch seen, then key every row into the table.
+func (j *joinTransform) loadRightBatch(b *record.RecordBatch) error {
+	// Enforce the cap BEFORE growing the table so the in-memory footprint is
+	// bounded at maxRows exactly (never maxRows + one batch).
+	if j.loaded+int64(b.Len()) > j.maxRows {
+		return fmt.Errorf("join transform: right source exceeded maxRows=%d — it must be a bounded reference dataset (raise 'maxRows' or use a bounded/batch source)", j.maxRows)
+	}
+	if j.rightCols == nil {
+		j.rightCols = resolveRightCols(b.Columns, j.wantCols, j.rightKey)
+	}
+	for i := 0; i < b.Len(); i++ {
+		m := b.RowMap(i)
+		key := fmt.Sprintf("%v", m[j.rightKey])
+		vals := make([]interface{}, len(j.rightCols))
+		for k, c := range j.rightCols {
+			vals[k] = m[c]
+		}
+		j.table[key] = append(j.table[key], vals)
+	}
+	j.loaded += int64(b.Len())
+	return nil
+}
+
+// finalizeRightColumns computes the prefixed output column names from
+// whatever rightCols were resolved (possibly still nil if zero right rows were
+// ever loaded — an empty right side is valid for a left join).
+func (j *joinTransform) finalizeRightColumns() {
+	names := make([]string, len(j.rightCols))
+	for i, c := range j.rightCols {
+		names[i] = j.prefix + c
+	}
+	j.rightColNames = names
+}
+
+// LoadRight ingests one batch of the graph-wired right side. Satisfies
+// graphexec.MultiInputOp structurally (this package imports no graphexec type).
+func (j *joinTransform) LoadRight(b *record.RecordBatch) error {
+	if b == nil {
+		return nil
+	}
+	return j.loadRightBatch(b)
+}
+
+// CloseRight finalizes the right-side table once every right-port producer has
+// finished. Must be called before the first ApplyLeft.
+func (j *joinTransform) CloseRight() error {
+	j.finalizeRightColumns()
+	j.rightClosed = true
+	return nil
+}
+
+// ApplyLeft processes one batch of the graph-wired left (primary) side. Errors
+// if called before CloseRight, rather than silently joining against a
+// partially-loaded table.
+func (j *joinTransform) ApplyLeft(in *record.RecordBatch) (*record.RecordBatch, error) {
+	if !j.rightClosed {
+		return nil, fmt.Errorf("join transform: ApplyLeft called before CloseRight — the graph runner must fully drain the right port first")
+	}
+	return j.applyJoin(in)
+}
+
 func (j *joinTransform) Name() string { return "join" }
 
 func (j *joinTransform) Apply(in *record.RecordBatch) (*record.RecordBatch, error) {
+	return j.applyJoin(in)
+}
+
+// applyJoin is the shared join logic used by both the linear-model Apply and
+// the graph-wired ApplyLeft.
+func (j *joinTransform) applyJoin(in *record.RecordBatch) (*record.RecordBatch, error) {
 	if in == nil {
 		return nil, nil
 	}

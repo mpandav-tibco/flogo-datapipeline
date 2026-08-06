@@ -2,7 +2,9 @@ package pipeline
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 	"time"
@@ -11,6 +13,7 @@ import (
 
 	"github.com/mpandav-tibco/flogo-datapipeline/action/pipeline/graphexec"
 	"github.com/mpandav-tibco/flogo-datapipeline/checkpoint"
+	"github.com/mpandav-tibco/flogo-datapipeline/record"
 	"github.com/mpandav-tibco/flogo-datapipeline/sink"
 	"github.com/mpandav-tibco/flogo-datapipeline/source"
 	"github.com/mpandav-tibco/flogo-datapipeline/transform"
@@ -42,6 +45,71 @@ import (
 // The map and the gate check in graphExecutable are kept so a future transform
 // that needs extra wiring can be gated again without reworking the gate.
 var unsupportedGraphTransforms = map[string]bool{}
+
+// snapshotGraphState captures Snapshot() from every stateful node, keyed by
+// node id, and marshals the result into one JSON blob for checkpoint.Token's
+// WindowState field (which holds arbitrary JSON, not just a single window's
+// state — a graph may have more than one stateful node). Returns nil (not an
+// error) when there are no stateful nodes, so a plain graph's checkpoint stays
+// exactly as before. A single node's Snapshot failure is logged by the caller
+// and simply omitted, rather than aborting a healthy checkpoint save.
+func snapshotGraphState(snapshotters map[string]graphexec.Snapshotter) (json.RawMessage, error) {
+	if len(snapshotters) == 0 {
+		return nil, nil
+	}
+	state := make(map[string]json.RawMessage, len(snapshotters))
+	var firstErr error
+	for id, s := range snapshotters {
+		b, err := s.Snapshot()
+		if err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("node %q: %w", id, err)
+			}
+			continue
+		}
+		state[id] = b
+	}
+	if len(state) == 0 {
+		return nil, firstErr
+	}
+	b, err := json.Marshal(state)
+	if err != nil {
+		return nil, fmt.Errorf("marshal graph state: %w", err)
+	}
+	return b, firstErr
+}
+
+// restoreGraphSnapshots unmarshals a checkpoint token's WindowState (as saved
+// by snapshotGraphState) and calls Restore on each matching stateful node. A
+// node id present in the snapshot but absent from the CURRENT plan (the
+// pipeline's graph changed since the checkpoint was taken) is logged and
+// skipped rather than failing the whole resume.
+func restoreGraphSnapshots(runLog corelog.Logger, snapshotters map[string]graphexec.Snapshotter, raw json.RawMessage) error {
+	var state map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &state); err != nil {
+		return fmt.Errorf("unmarshal graph state: %w", err)
+	}
+	for id, b := range state {
+		s, ok := snapshotters[id]
+		if !ok {
+			runLog.Warnf("graph state restore: node %q from the checkpoint no longer exists in this graph — skipping its snapshot", id)
+			continue
+		}
+		if err := s.Restore(b); err != nil {
+			return fmt.Errorf("node %q: %w", id, err)
+		}
+	}
+	return nil
+}
+
+// eofSourceOp is a placeholder graphexec.SourceOp used only to satisfy Compile
+// for the "source" node of a scaled graph plan BEFORE the first partition's
+// real source is wired in via Plan.RewireSource — Compile never reads from it.
+type eofSourceOp struct{}
+
+func (eofSourceOp) ReadBatch(int) (*record.RecordBatch, error) { return nil, io.EOF }
+func (eofSourceOp) Skip(int64) error                           { return nil }
+func (eofSourceOp) Close() error                               { return nil }
 
 // graphExecutable reports whether the pipeline's graph both NEEDS the graph
 // runner (non-reducible) and CAN be run: every node must be resolvable — either
@@ -138,8 +206,11 @@ func transformIndex(id string) (int, bool) {
 // self-contained node (one carrying its own "config" object) is built from that
 // config; otherwise a standard node is resolved from the linear model by id
 // (source → def.Source, t{i} → def.Transforms[i], sink → def.Sink). Each edge's
-// type and condition are carried through.
-func (a *DataPipelineAction) buildExecGraph(in *Input) (*graphexec.Graph, error) {
+// type and condition are carried through. preBuiltSource, when non-nil, is
+// wired directly as the "source" node's operator instead of its config —
+// used for horizontally-scaled runs where the caller already opened a
+// partition-scoped source (see runGraphScaled).
+func (a *DataPipelineAction) buildExecGraph(in *Input, preBuiltSource graphexec.SourceOp) (*graphexec.Graph, error) {
 	def := a.def
 	eg := &graphexec.Graph{}
 	for _, n := range def.Graph.Nodes {
@@ -152,6 +223,9 @@ func (a *DataPipelineAction) buildExecGraph(in *Input) (*graphexec.Graph, error)
 				node.Kind = graphexec.KindSource
 				node.Type = def.Source.Type
 				node.Cfg = a.buildSourceConfig(in)
+				if preBuiltSource != nil {
+					node.PreBuilt = preBuiltSource
+				}
 			case "sink":
 				node.Kind = graphexec.KindSink
 				node.Type = def.Sink.Type
@@ -207,6 +281,18 @@ func (a *DataPipelineAction) runGraph(ctx context.Context, in *Input, runLog cor
 	def := a.def
 	out := &Output{}
 
+	// Horizontally-scaled DAG execution: delegate to runGraphScaled, which
+	// reuses the same scaling.Coordinator / partition-claim machinery as the
+	// linear engine's runScaled. A "single" (default) pipeline stays below,
+	// unchanged.
+	scMode := def.Scaling.Mode
+	if scMode == "" {
+		scMode = "single"
+	}
+	if scMode == "sharded" || scMode == "distributed" {
+		return a.runGraphScaled(ctx, in, runLog, runID, scMode)
+	}
+
 	// --- watermark store + prior mark (incremental HWM) — mirrors the linear path.
 	// The store is a no-op unless incremental.mode == "hwm". A prior mark is
 	// injected into the primary source config so an HWM-aware source (jdbc) can
@@ -239,7 +325,7 @@ func (a *DataPipelineAction) runGraph(ctx context.Context, in *Input, runLog cor
 		}
 	}
 
-	eg, err := a.buildExecGraph(in)
+	eg, err := a.buildExecGraph(in, nil)
 	if err != nil {
 		return out, fmt.Errorf("graph build: %w", err)
 	}
@@ -279,6 +365,9 @@ func (a *DataPipelineAction) runGraph(ctx context.Context, in *Input, runLog cor
 			}
 		}
 	}
+	// snapshotters are the stateful nodes (e.g. window) whose state is captured
+	// at each checkpoint barrier and restored on resume — see below.
+	snapshotters := plan.Snapshotters()
 
 	opts := graphexec.Options{
 		BatchSize:   def.Performance.BatchSize,
@@ -292,51 +381,60 @@ func (a *DataPipelineAction) runGraph(ctx context.Context, in *Input, runLog cor
 		ckptKey = def.Checkpoint.Key
 	}
 
-	// Checkpoint/resume for the streaming DAG. STATELESS graphs get full no-loss
-	// checkpointing via drain barriers: the source pauses at each interval, the
-	// barrier flushes every sink, and the source position is persisted only once
-	// ALL sinks are durable — so a crash resumes from the last saved position with
-	// no committed rows lost (at-least-once for the in-flight tail). A STATEFUL
-	// graph (a window operator) needs a coordinated state snapshot the barrier
-	// does not yet capture, so it keeps running WITHOUT checkpoint (with a warn).
+	// Checkpoint/resume for the streaming DAG, including STATEFUL graphs (a
+	// window node): the barrier fires only once every producer has paused (no
+	// batch in flight anywhere), which is also the safe instant to call
+	// Snapshot() on every stateful node — captured alongside the source
+	// position so a crash resumes with the window aggregates and the source
+	// cursor in sync, exactly mirroring the linear engine's own
+	// winOp.Snapshot()/Restore() contract (see saveCheckpoint in action.go).
 	var ckpt checkpoint.Checkpoint
 	if ct := def.Checkpoint.Type; ct != "" && ct != "none" {
-		if plan.HasStateful() {
-			runLog.Warnf("graph runner: checkpoint/resume not yet supported for a windowed (stateful) graph — running without it (configured checkpoint=%s)", ct)
-		} else {
-			c, cerr := openCheckpoint(def)
-			if cerr != nil {
-				_ = plan.Close()
-				return out, fmt.Errorf("checkpoint open: %w", cerr)
-			}
-			ckpt = c
-			defer ckpt.Close()
+		c, cerr := openCheckpoint(def)
+		if cerr != nil {
+			_ = plan.Close()
+			return out, fmt.Errorf("checkpoint open: %w", cerr)
+		}
+		ckpt = c
+		defer ckpt.Close()
 
-			// Resume: skip rows already durable before the last saved checkpoint.
-			tok, lErr := ckpt.Load(ckptKey)
-			if lErr != nil {
+		// Resume: skip rows already durable before the last saved checkpoint,
+		// and restore any stateful node's snapshot taken at that same position.
+		tok, lErr := ckpt.Load(ckptKey)
+		if lErr != nil {
+			_ = plan.Close()
+			return out, fmt.Errorf("checkpoint load: %w", lErr)
+		}
+		if tok != nil && tok.RowsProcessed > 0 {
+			runLog.Infof("resuming graph %q — skipping %d already-processed rows", ckptKey, tok.RowsProcessed)
+			opts.ResumeFrom = tok.RowsProcessed
+		}
+		if tok != nil && len(tok.WindowState) > 0 {
+			if err := restoreGraphSnapshots(runLog, snapshotters, tok.WindowState); err != nil {
 				_ = plan.Close()
-				return out, fmt.Errorf("checkpoint load: %w", lErr)
+				return out, fmt.Errorf("graph state restore: %w", err)
 			}
-			if tok != nil && tok.RowsProcessed > 0 {
-				runLog.Infof("resuming graph %q — skipping %d already-processed rows", ckptKey, tok.RowsProcessed)
-				opts.ResumeFrom = tok.RowsProcessed
-			}
-			// Enable barriers only when an interval is configured; otherwise the
-			// checkpoint is written just once at end-of-run (below).
-			if def.Checkpoint.IntervalRows > 0 {
-				opts.CheckpointRows = def.Checkpoint.IntervalRows
-				opts.OnCheckpoint = func(pos int64) error {
-					if serr := ckpt.Save(ckptKey, checkpoint.NewToken(def.Source.Type, pos, nil)); serr != nil {
-						// Match the linear path: warn and keep running rather than
-						// aborting a healthy load on a checkpoint-backend hiccup.
-						runLog.Warnf("graph checkpoint save failed (continuing): %v", serr)
-						return nil
-					}
-					a.recorder.CheckpointSaved(a.ref)
-					runLog.Infof("graph checkpoint saved — %d rows processed", pos)
+		}
+		// Enable barriers only when an interval is configured; otherwise the
+		// checkpoint is written just once at end-of-run (below).
+		if def.Checkpoint.IntervalRows > 0 {
+			opts.CheckpointRows = def.Checkpoint.IntervalRows
+			opts.OnCheckpoint = func(pos int64) error {
+				state, serr := snapshotGraphState(snapshotters)
+				if serr != nil {
+					runLog.Warnf("graph state snapshot failed (checkpointing source position only): %v", serr)
+				}
+				token := checkpoint.NewToken(def.Source.Type, pos, nil)
+				token.WindowState = state
+				if serr := ckpt.Save(ckptKey, token); serr != nil {
+					// Match the linear path: warn and keep running rather than
+					// aborting a healthy load on a checkpoint-backend hiccup.
+					runLog.Warnf("graph checkpoint save failed (continuing): %v", serr)
 					return nil
 				}
+				a.recorder.CheckpointSaved(a.ref)
+				runLog.Infof("graph checkpoint saved — %d rows processed", pos)
+				return nil
 			}
 		}
 	}
@@ -361,11 +459,19 @@ func (a *DataPipelineAction) runGraph(ctx context.Context, in *Input, runLog cor
 	// was flushed by the sink-close path but not acked, so persist the FINAL
 	// position now — a restart after a clean run then resumes at EOF (a no-op)
 	// instead of reprocessing the tail. DeleteOnSuccess clears it for a fresh run.
+	// (Any stateful node's Flush already ran as part of Run's node-completion, so
+	// its Snapshot here is expected to be empty — nothing left to resume.)
 	if ckpt != nil {
 		if def.Checkpoint.DeleteOnSuccess {
 			_ = ckpt.Delete(ckptKey)
 		} else {
-			if serr := ckpt.Save(ckptKey, checkpoint.NewToken(def.Source.Type, out.RowsProcessed, nil)); serr != nil {
+			state, serr := snapshotGraphState(snapshotters)
+			if serr != nil {
+				runLog.Warnf("graph state snapshot failed (final checkpoint saves source position only): %v", serr)
+			}
+			token := checkpoint.NewToken(def.Source.Type, out.RowsProcessed, nil)
+			token.WindowState = state
+			if serr := ckpt.Save(ckptKey, token); serr != nil {
 				runLog.Warnf("final graph checkpoint save failed: %v", serr)
 			} else {
 				a.recorder.CheckpointSaved(a.ref)
@@ -390,5 +496,163 @@ func (a *DataPipelineAction) runGraph(ctx context.Context, in *Input, runLog cor
 
 	runLog.Infof("graph run complete — nodes=%d edges=%d read=%d written=%d",
 		len(eg.Nodes), len(eg.Edges), res.RowsRead, res.RowsWritten)
+	return out, nil
+}
+
+// runGraphScaled executes a non-reducible graph across horizontal partitions
+// of the PRIMARY source, for scaling.mode "sharded"/"distributed" — the graph
+// counterpart of the linear engine's runScaled, reusing the SAME
+// scaling.Coordinator / partition-claim machinery (a.runScaled) so
+// static-shard assignment and dynamic-claim behavior are identical between
+// the two execution paths.
+//
+// The graph (transform/sink operators) is compiled EXACTLY ONCE and reused
+// across every partition this instance owns — Plan.RewireSource swaps in each
+// partition's source before its Run call, and Options.KeepOpen keeps the
+// compiled sink/transform chain open between calls — mirroring the linear
+// engine's own drain(), which reuses one open sink across every partition on
+// a shard rather than reopening it per partition (reopening a file-based sink
+// per partition would truncate the previous partition's rows on the next
+// open).
+//
+// NOT YET SUPPORTED here (documented, not silently mishandled):
+//   - incremental HWM — each partition would need its own watermark
+//     semantics, which is undefined; a configured hwm mode logs a warning and
+//     is otherwise ignored by this path.
+//   - the post-run DQ gate report / HWM harvest — mirrors the single-instance
+//     graph path's harvest, but is not yet wired here.
+//
+// Per-node graphStats accumulate correctly across every partition this
+// instance processes (see nodeTotals below), so the Studio run overlay still
+// gets a cumulative, meaningful picture.
+func (a *DataPipelineAction) runGraphScaled(ctx context.Context, in *Input, runLog corelog.Logger, runID string, scMode string) (*Output, error) {
+	def := a.def
+	out := &Output{}
+
+	if def.Incremental.Mode == "hwm" {
+		runLog.Warnf("graph runner: incremental.mode=hwm is not yet supported combined with scaling.mode=%s for a graph-executed pipeline — the watermark will NOT be read or advanced by this run", scMode)
+	}
+
+	srcCfg := a.buildSourceConfig(in)
+	primarySrc, err := source.New(def.Source.Type, srcCfg)
+	if err != nil {
+		return out, fmt.Errorf("primary source open: %w", err)
+	}
+	defer primarySrc.Close()
+
+	// Compile the transform/sink chain ONCE, wired to a placeholder source that
+	// is immediately swapped out (via RewireSource) before the first partition
+	// runs — Compile never reads from it, so an EOF stub satisfies it cleanly.
+	eg, err := a.buildExecGraph(in, eofSourceOp{})
+	if err != nil {
+		return out, fmt.Errorf("graph build: %w", err)
+	}
+	plan, err := graphexec.Compile(eg, graphBuilders())
+	if err != nil {
+		return out, fmt.Errorf("graph compile: %w", err)
+	}
+	defer func() { _ = plan.Close() }()
+	statefulGraph := plan.HasStateful()
+
+	var ckpt checkpoint.Checkpoint
+	if ct := def.Checkpoint.Type; ct != "" && ct != "none" {
+		if statefulGraph {
+			runLog.Warnf("graph runner: checkpoint/resume not yet supported for a windowed (stateful) graph — running scaled without it (configured checkpoint=%s)", ct)
+		} else {
+			c, cerr := openCheckpoint(def)
+			if cerr != nil {
+				return out, fmt.Errorf("checkpoint open: %w", cerr)
+			}
+			ckpt = c
+			defer ckpt.Close()
+		}
+	}
+
+	// nodeTotals accumulates per-node counters across every partition this
+	// instance processes, for the final graphStats metadata.
+	nodeTotals := make(map[string]*graphexec.NodeStat)
+	mergeStats := func(res *graphexec.Result) {
+		for id, ns := range res.Nodes {
+			t, ok := nodeTotals[id]
+			if !ok {
+				t = &graphexec.NodeStat{ID: ns.ID, Kind: ns.Kind}
+				nodeTotals[id] = t
+			}
+			t.RowsIn += ns.RowsIn
+			t.RowsOut += ns.RowsOut
+			t.RowsWritten += ns.RowsWritten
+			t.RowsErrored += ns.RowsErrored
+		}
+	}
+	finalize := func() {
+		gs := make([]graphexec.NodeStat, 0, len(nodeTotals))
+		for _, ns := range nodeTotals {
+			gs = append(gs, *ns)
+		}
+		out.Metadata = map[string]interface{}{"graphStats": gs}
+	}
+
+	// drainOnce swaps pSrc into the ALREADY-COMPILED plan and runs it, keeping
+	// the transform/sink chain open for the next partition. Mirrors the linear
+	// engine's drain(pSrc, ckptKey), which reuses the same open sink per shard.
+	drainOnce := func(pSrc source.Source, ckptKey string) error {
+		if rerr := plan.RewireSource("source", pSrc); rerr != nil {
+			return fmt.Errorf("graph rewire source: %w", rerr)
+		}
+
+		opts := graphexec.Options{
+			BatchSize:   def.Performance.BatchSize,
+			BufferDepth: def.Performance.SourceBufferBatches,
+			KeepOpen:    true,
+		}
+		if ckpt != nil {
+			tok, lErr := ckpt.Load(ckptKey)
+			if lErr != nil {
+				return fmt.Errorf("checkpoint load: %w", lErr)
+			}
+			if tok != nil && tok.RowsProcessed > 0 {
+				runLog.Infof("resuming graph partition %q — skipping %d already-processed rows", ckptKey, tok.RowsProcessed)
+				opts.ResumeFrom = tok.RowsProcessed
+			}
+			if def.Checkpoint.IntervalRows > 0 {
+				opts.CheckpointRows = def.Checkpoint.IntervalRows
+				opts.OnCheckpoint = func(pos int64) error {
+					if serr := ckpt.Save(ckptKey, checkpoint.NewToken(def.Source.Type, pos, nil)); serr != nil {
+						runLog.Warnf("graph checkpoint save failed (continuing): %v", serr)
+						return nil
+					}
+					a.recorder.CheckpointSaved(a.ref)
+					return nil
+				}
+			}
+		}
+
+		res, runErr := plan.Run(ctx, opts)
+		mergeStats(res)
+		out.RowsProcessed += res.RowsRead + opts.ResumeFrom
+		out.RowsWritten += res.RowsWritten
+		if runErr != nil {
+			return runErr
+		}
+		if ckpt != nil {
+			partitionRows := opts.ResumeFrom + res.RowsRead
+			if def.Checkpoint.DeleteOnSuccess {
+				_ = ckpt.Delete(ckptKey)
+			} else if serr := ckpt.Save(ckptKey, checkpoint.NewToken(def.Source.Type, partitionRows, nil)); serr != nil {
+				runLog.Warnf("final graph checkpoint save failed for partition %q: %v", ckptKey, serr)
+			} else {
+				a.recorder.CheckpointSaved(a.ref)
+			}
+		}
+		return nil
+	}
+
+	if err := a.runScaled(ctx, runLog, def, scMode, primarySrc, srcCfg, runID, drainOnce); err != nil {
+		finalize()
+		return out, err
+	}
+
+	finalize()
+	runLog.Infof("graph run complete (scaling.mode=%s) — read=%d written=%d", scMode, out.RowsProcessed, out.RowsWritten)
 	return out, nil
 }

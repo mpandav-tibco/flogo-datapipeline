@@ -52,6 +52,13 @@ type Node struct {
 	Kind NodeKind
 	Type string
 	Cfg  map[string]interface{}
+	// PreBuilt, when set on a KindSource node, is used directly as that node's
+	// operator instead of calling Builders.Source(Type, Cfg) — used for
+	// horizontally-scaled runs where the caller has already opened a
+	// partition-scoped source. The CALLER owns PreBuilt's lifecycle: Compile
+	// does not add it to the Plan's close list (mirrors how the linear engine's
+	// scaling path closes a partition source itself — see runScaled).
+	PreBuilt SourceOp
 }
 
 // EdgeType classifies an edge the way Flogo Flow classifies links between
@@ -131,6 +138,60 @@ type Flusher interface {
 	Flush() (*record.RecordBatch, error)
 }
 
+// Snapshotter is an OPTIONAL capability a STATEFUL transform (e.g. window)
+// implements to serialize/restore its keyed state across a checkpoint —
+// mirroring the linear engine's own window Snapshot()/Restore() contract
+// exactly (same method names; transform/window's windowTransform already
+// satisfies this via structural typing, zero changes needed there).
+//
+// Snapshot is called by the checkpoint coordinator at each drain barrier —
+// the instant every producer in the graph has paused and no batch is in
+// flight anywhere (the same guarantee that lets every sink flush durably), so
+// it's safe to call directly without additional synchronization. Restore is
+// called once by the CALLER (graph_run.go) before the first Run, to prime a
+// resumed node's state from a previously persisted snapshot — graphexec
+// itself never calls Restore; see Plan.Snapshotters.
+type Snapshotter interface {
+	Snapshot() ([]byte, error)
+	Restore(data []byte) error
+}
+
+// MultiInputOp is an OPTIONAL capability for a transform with two DISTINCT
+// named input ports rather than one homogeneous stream — e.g. a keyed join's
+// "left" (the streaming primary continuation) and "right" (a bounded
+// reference dataset that must be FULLY LOADED before any left row can be
+// matched against it, exactly like the existing config-driven join transform's
+// own in-memory table — this just lets the "right" side be wired from an
+// arbitrary upstream node/subgraph via a real graph edge instead of embedded
+// config).
+//
+// A node is scheduled via this capability ONLY when its operator implements
+// MultiInputOp AND it has at least one inbound edge targeting the "right"
+// port by name (an edge whose To is "nodeID:right"). A MultiInputOp-capable
+// operator used with NO "right"-port edges (e.g. an existing join promoted
+// into a graph for unrelated reasons, still configured with an inline "right"
+// dataset) runs through the ordinary TransformOp.Apply path, completely
+// unaffected — see graphExecutable's reducible-graph fallback for the same
+// "don't disturb pipelines that don't need this" principle.
+//
+// Execution order (see runtime.runMultiInputTransform): every right-port
+// producer's batches are drained to LoadRight and CloseRight is called ONCE
+// they've all finished — BEFORE any left-port batch reaches ApplyLeft. A
+// checkpoint barrier arriving on the right channel is ignored (the bounded
+// right side is not part of the primary checkpoint story); barriers are
+// tracked against the LEFT port's producer count only.
+type MultiInputOp interface {
+	// LoadRight ingests one batch of the bounded reference side. Called
+	// repeatedly until every right-port producer has finished.
+	LoadRight(in *record.RecordBatch) error
+	// CloseRight signals every right-port producer has finished — the
+	// operator should finalize its in-memory index here.
+	CloseRight() error
+	// ApplyLeft processes one batch of the streaming primary side, exactly
+	// like TransformOp.Apply, but is only called AFTER CloseRight.
+	ApplyLeft(in *record.RecordBatch) (*record.RecordBatch, error)
+}
+
 // SinkOp writes batches to a destination. Satisfied structurally by sink.Sink.
 type SinkOp interface {
 	WriteBatch(b *record.RecordBatch) error
@@ -168,6 +229,14 @@ type Options struct {
 	// ResumeFrom, when > 0, skips the source that many rows before the first read
 	// (resuming from a saved checkpoint).
 	ResumeFrom int64
+	// KeepOpen, when true, skips Run's internal Plan.Close() so the SAME compiled
+	// transform/sink operators can be reused across multiple Run calls — used by
+	// horizontally-scaled runs that swap the source (via Plan.RewireSource)
+	// between partitions while keeping one open sink per shard, exactly like the
+	// linear engine's runScaled/drain reuse one sink across every partition an
+	// instance owns. The caller must call Plan.Close() itself once, after the
+	// LAST Run call.
+	KeepOpen bool
 }
 
 func (o Options) batchSize() int {

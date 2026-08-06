@@ -137,9 +137,7 @@ services:
       #   --entity-name testuser256
       KAFKA_SASL_ENABLED_MECHANISMS: "PLAIN,SCRAM-SHA-256,SCRAM-SHA-512"
       KAFKA_LISTENER_NAME_CLIENTSASL_PLAIN_SASL_JAAS_CONFIG: >-
-        org.apache.kafka.common.security.plain.PlainLoginModule required
-        username="admin" password="admin-secret"
-        user_admin="admin-secret" user_testuser="testpass123";
+        org.apache.kafka.common.security.plain.PlainLoginModule required username="admin" password="admin-secret" user_admin="admin-secret" user_testuser="testpass123";
       KAFKA_LISTENER_NAME_CLIENTSASL_SCRAM-SHA-256_SASL_JAAS_CONFIG: >-
         org.apache.kafka.common.security.scram.ScramLoginModule required;
       KAFKA_LISTENER_NAME_CLIENTSASL_SCRAM-SHA-512_SASL_JAAS_CONFIG: >-
@@ -163,9 +161,7 @@ services:
       # configuration" (verified 2026-08-05).
       KAFKA_LISTENER_NAME_CLIENTSASLTLS_SASL_ENABLED_MECHANISMS: "PLAIN"
       KAFKA_LISTENER_NAME_CLIENTSASLTLS_PLAIN_SASL_JAAS_CONFIG: >-
-        org.apache.kafka.common.security.plain.PlainLoginModule required
-        username="admin" password="admin-secret"
-        user_admin="admin-secret" user_testuser="testpass123";
+        org.apache.kafka.common.security.plain.PlainLoginModule required username="admin" password="admin-secret" user_admin="admin-secret" user_testuser="testpass123";
 
   gcs:
     image: fsouza/fake-gcs-server:latest

@@ -780,6 +780,15 @@ func buildExpectation(cfg map[string]interface{}) (Expectation, error) {
 	return factory(cfg)
 }
 
+// ExpectationTypes returns the names of all built-in expectation types.
+func ExpectationTypes() []string {
+	out := make([]string, 0, len(expectationFactories))
+	for k := range expectationFactories {
+		out = append(out, k)
+	}
+	return out
+}
+
 // ----------------------------------------------------------------------------
 // Helpers
 // ----------------------------------------------------------------------------

@@ -1,0 +1,5 @@
+customerId,orderRef,amount
+1,order-1,120.50
+2,order-2,45.00
+3,order-3,300.00
+1,order-4,15.75

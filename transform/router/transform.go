@@ -28,6 +28,24 @@
 // The router owns external sinks, so it always runs single-threaded (it
 // implements transform.SinkOwner): the engine never parallelizes a pipeline
 // containing it, which would otherwise open duplicate writers per worker.
+//
+// For a DAG-authored (graph.nodes/edges) pipeline, PREFER native conditional/
+// otherwise graph edges wired directly to sink nodes over this transform:
+// route "high" becomes an edge {"type":"expression","value":"amount > 1000"}
+// to a "high" sink node, and the default becomes an "otherwise" edge (omit it
+// entirely for onUnmatched:"drop"). Two real benefits over this transform's
+// owned sinks: every route's row count is visible in graphStats / the Studio
+// canvas (an owned sink is invisible to the graph's node/edge model), and the
+// node is no longer forced single-threaded (moot in the graph runner today,
+// which never parallelizes within one node anyway — but a real win if that
+// changes). The one thing to get right by hand: the graph's conditional edges
+// are TEE-style (a row matching multiple conditions gets copied to each),
+// unlike this transform's exclusive first-match-wins ordering — write
+// mutually-exclusive predicates (e.g. a later route explicitly excludes an
+// earlier one's range) to replicate exclusive routing; see
+// TestGraphRun_NativeEdgeRouting in action/pipeline/graph_run_test.go for a
+// worked example mirroring this exact config. This transform is NOT
+// deprecated — it remains the only option for the LINEAR (non-graph) model.
 package router
 
 import (

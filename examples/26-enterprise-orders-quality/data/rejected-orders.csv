@@ -1,0 +1,7 @@
+order_id,customer_id,amount,quantity,status,email
+ORD-000003,CUST-103,-25.00,1,SHIPPED,carol@example.com
+ORD-000004,CUST-104,200.00,3,UNKNOWN,dave@example.com
+ORD-000005,CUST-105,49.99,1,DELIVERED,not-an-email
+BADID,CUST-107,10.00,1,PENDING,frank@example.com
+ORD-000008,,75.00,2,SHIPPED,grace@example.com
+ORD-000010,CUST-110,99999999.00,1,SHIPPED,ivan@example.com

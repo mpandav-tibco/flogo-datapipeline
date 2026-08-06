@@ -1,0 +1,175 @@
+{
+  "name": "enterprise-orders-quality",
+  "type": "flogo:app",
+  "version": "1.0.0",
+  "description": "Cast → validate (DQ gate + dead-letter routing) → high-value filter → project → JSONL.",
+  "appModel": "1.1.1",
+  "imports": [
+    "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+    "github.com/project-flogo/contrib/trigger/timer"
+  ],
+  "triggers": [
+    {
+      "id": "pipeline-timer",
+      "ref": "github.com/project-flogo/contrib/trigger/timer",
+      "settings": {
+        "repeating": true,
+        "startDelay": 0,
+        "interval": 86400000
+      },
+      "handlers": [
+        {
+          "settings": {},
+          "action": {
+            "ref": "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+            "settings": {
+              "pipelineRef": "res://pipeline:enterprise-orders-quality"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "resources": [
+    {
+      "id": "pipeline:enterprise-orders-quality",
+      "data": {
+        "name": "enterprise-orders-quality",
+        "description": "Cast → validate (DQ gate + dead-letter routing) → high-value filter → project → JSONL.",
+        "version": "1.0.0",
+        "mode": "etl",
+        "source": {
+          "type": "csv",
+          "path": "./data/orders.csv",
+          "delimiter": ",",
+          "hasHeader": true,
+          "columns": [
+            {
+              "name": "order_id",
+              "type": "string"
+            },
+            {
+              "name": "customer_id",
+              "type": "string"
+            },
+            {
+              "name": "amount",
+              "type": "string"
+            },
+            {
+              "name": "quantity",
+              "type": "string"
+            },
+            {
+              "name": "status",
+              "type": "string"
+            },
+            {
+              "name": "email",
+              "type": "string"
+            }
+          ]
+        },
+        "transforms": [
+          {
+            "type": "cast",
+            "columns": [
+              {
+                "name": "amount",
+                "type": "decimal",
+                "scale": 2
+              },
+              {
+                "name": "quantity",
+                "type": "int"
+              }
+            ],
+            "onError": "null"
+          },
+          {
+            "type": "validate",
+            "rules": [
+              {
+                "field": "order_id",
+                "notNull": true,
+                "pattern": "^ORD-[0-9]{6}$"
+              },
+              {
+                "field": "customer_id",
+                "notNull": true
+              },
+              {
+                "field": "amount",
+                "notNull": true,
+                "min": 0.01,
+                "max": 99999.99
+              },
+              {
+                "field": "status",
+                "in": [
+                  "PENDING",
+                  "SHIPPED",
+                  "DELIVERED",
+                  "CANCELLED"
+                ]
+              },
+              {
+                "field": "email",
+                "pattern": "^[^@]+@[^@]+\\.[^@]+$"
+              }
+            ],
+            "onViolation": "route",
+            "errorSinkType": "csv",
+            "errorSinkConfig": {
+              "path": "./data/rejected-orders.csv"
+            }
+          },
+          {
+            "type": "filter",
+            "expr": "amount >= 100"
+          },
+          {
+            "type": "mapper",
+            "fields": {
+              "order_id": "=$order_id",
+              "customer_id": "=$customer_id",
+              "amount": "=$amount",
+              "status": "=$status"
+            },
+            "fieldOrder": [
+              "order_id",
+              "customer_id",
+              "amount",
+              "status"
+            ]
+          },
+          {
+            "type": "schemadrift",
+            "policy": "additive",
+            "onDrift": "log"
+          }
+        ],
+        "sink": {
+          "type": "jsonlines",
+          "path": "./out/curated-orders.jsonl"
+        },
+        "performance": {
+          "batchSize": 5000,
+          "maxMemoryMB": 512
+        },
+        "scaling": {
+          "mode": "single"
+        },
+        "checkpoint": {
+          "type": "none"
+        },
+        "observability": {
+          "audit": {
+            "enabled": true,
+            "file": "./out/audit.jsonl"
+          }
+        }
+      }
+    }
+  ]
+}
