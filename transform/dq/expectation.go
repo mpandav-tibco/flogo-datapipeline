@@ -19,13 +19,17 @@ package dq
 //   expectTableRowCountBetween  — row count within [lo, hi]
 //   expectColumnMeanBetween     — column mean within [lo, hi]
 //   expectColumnStddevBelow     — column stddev < threshold
+//   expectColumnValuesInReferenceDataset — referential-integrity / foreign-key check: fraction of
+//                                 non-null values found in a bounded reference dataset's column
 
 import (
 	"fmt"
+	"io"
 	"math"
 	"strings"
 
 	"github.com/mpandav-tibco/flogo-datapipeline/record"
+	"github.com/mpandav-tibco/flogo-datapipeline/source"
 )
 
 // Expectation is the interface every built-in and user-defined expectation must
@@ -573,18 +577,193 @@ func (e *expectColumnStddevBelow) Evaluate(_ *record.RecordBatch, profile *Batch
 }
 
 // ----------------------------------------------------------------------------
+// expectColumnValuesInReferenceDataset
+// ----------------------------------------------------------------------------
+
+// expectColumnValuesInReferenceDataset asserts that at least `threshold`
+// fraction of non-null values in `column` exist in a reference dataset's
+// `referenceColumn` — a classic referential-integrity / foreign-key check
+// (e.g. every order's customer_id exists in the customers table). Reuses the
+// same bounded-reference-load pattern as the `join` transform's "right" side:
+// the reference dataset is read fully into an in-memory set ONCE, at pipeline
+// setup (not per batch) — so it MUST be bounded, guarded by the same maxRows
+// cap join uses (default 1,000,000; a Kafka reference source defaults to a
+// batch drain-to-current-end for the same reason).
+//
+// Config keys:
+//
+//	column           string  Column to check in the batch (required)
+//	referenceDataset object  A source config ({"type": ..., ...}) for the bounded reference dataset (required)
+//	referenceColumn  string  Column in the reference dataset to match against (default: column)
+//	threshold        float64 Minimum fraction of non-null values that must match (default 1.0)
+//	maxRows          int     Cap on reference rows loaded into memory (default 1,000,000)
+type expectColumnValuesInReferenceDataset struct {
+	column    string
+	threshold float64
+	refValues map[string]struct{}
+	refDesc   string // human-readable description of the reference dataset, for messages
+}
+
+func newExpectColumnValuesInReferenceDataset(cfg map[string]interface{}) (Expectation, error) {
+	col, err := requireString(cfg, "column", "expectColumnValuesInReferenceDataset")
+	if err != nil {
+		return nil, err
+	}
+	rmap, ok := cfg["referenceDataset"].(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("expectColumnValuesInReferenceDataset[%s]: 'referenceDataset' source config is required", col)
+	}
+	rtype, _ := rmap["type"].(string)
+	if rtype == "" {
+		return nil, fmt.Errorf("expectColumnValuesInReferenceDataset[%s]: referenceDataset.type is required", col)
+	}
+	refColumn, _ := cfg["referenceColumn"].(string)
+	if refColumn == "" {
+		refColumn = col
+	}
+	threshold := 1.0
+	if t, ok := cfg["threshold"]; ok {
+		if f, ok2 := toFloat64(t); ok2 {
+			threshold = f
+		}
+	}
+	maxRows := int64(1_000_000)
+	switch v := cfg["maxRows"].(type) {
+	case float64:
+		if v > 0 {
+			maxRows = int64(v)
+		}
+	case int:
+		if v > 0 {
+			maxRows = int64(v)
+		}
+	case int64:
+		if v > 0 {
+			maxRows = v
+		}
+	}
+
+	// Kafka reference sources must be bounded, same rationale as the join
+	// transform's "right" side — default to a batch drain-to-current-end.
+	if rtype == "kafka" {
+		if _, ok := rmap["mode"]; !ok {
+			rmap["mode"] = "batch"
+		}
+		_, hasEnd := rmap["stopAtCurrentEnd"]
+		_, hasOff := rmap["stopOffset"]
+		_, hasTS := rmap["stopTimestamp"]
+		if !hasEnd && !hasOff && !hasTS {
+			rmap["stopAtCurrentEnd"] = true
+		}
+	}
+
+	rs, err := source.New(rtype, rmap)
+	if err != nil {
+		return nil, fmt.Errorf("expectColumnValuesInReferenceDataset[%s]: open referenceDataset: %w", col, err)
+	}
+	defer rs.Close()
+
+	refValues := make(map[string]struct{})
+	var loaded int64
+	for {
+		b, rErr := rs.ReadBatch(1000)
+		if b != nil && b.Len() > 0 {
+			// Enforce the cap BEFORE growing the set so the in-memory footprint is
+			// bounded at maxRows exactly (never maxRows + one batch) — same discipline
+			// as the join transform's right-side load.
+			if loaded+int64(b.Len()) > maxRows {
+				return nil, fmt.Errorf("expectColumnValuesInReferenceDataset[%s]: referenceDataset exceeded maxRows=%d — it must be a bounded reference dataset (raise 'maxRows' or use a bounded/batch source)", col, maxRows)
+			}
+			colIdx := b.ColIndex(refColumn)
+			if colIdx < 0 {
+				return nil, fmt.Errorf("expectColumnValuesInReferenceDataset[%s]: referenceColumn %q not found in referenceDataset schema", col, refColumn)
+			}
+			for _, row := range b.Rows {
+				if colIdx >= len(row) || row[colIdx] == nil {
+					continue
+				}
+				refValues[fmt.Sprintf("%v", row[colIdx])] = struct{}{}
+			}
+			loaded += int64(b.Len())
+		}
+		if rErr == io.EOF {
+			break
+		}
+		if rErr != nil {
+			return nil, fmt.Errorf("expectColumnValuesInReferenceDataset[%s]: read referenceDataset: %w", col, rErr)
+		}
+	}
+
+	return &expectColumnValuesInReferenceDataset{
+		column:    col,
+		threshold: threshold,
+		refValues: refValues,
+		refDesc:   fmt.Sprintf("%s.%s (%d distinct values loaded)", rtype, refColumn, len(refValues)),
+	}, nil
+}
+
+func (e *expectColumnValuesInReferenceDataset) Name() string {
+	return "expectColumnValuesInReferenceDataset"
+}
+
+func (e *expectColumnValuesInReferenceDataset) Evaluate(batch *record.RecordBatch, _ *BatchProfile) ExpectationResult {
+	colIdx := batch.ColIndex(e.column)
+	if colIdx < 0 {
+		return columnNotFoundResult(e.Name(), e.column)
+	}
+
+	var matched, unmatched int
+	for _, row := range batch.Rows {
+		if colIdx >= len(row) || row[colIdx] == nil {
+			continue
+		}
+		key := fmt.Sprintf("%v", row[colIdx])
+		if _, ok := e.refValues[key]; ok {
+			matched++
+		} else {
+			unmatched++
+		}
+	}
+
+	total := matched + unmatched
+	if total == 0 {
+		return ExpectationResult{
+			Name:     e.Name(),
+			Passed:   true,
+			Score:    1.0,
+			Observed: "no non-null values",
+			Expected: fmt.Sprintf("values found in reference dataset %s", e.refDesc),
+			Message:  fmt.Sprintf("expectColumnValuesInReferenceDataset[%s]: no non-null values to check", e.column),
+		}
+	}
+
+	score := float64(matched) / float64(total)
+	passed := score >= e.threshold
+	return ExpectationResult{
+		Name:     e.Name(),
+		Passed:   passed,
+		Score:    score,
+		Observed: fmt.Sprintf("%d/%d values found in reference dataset (%d orphaned)", matched, total, unmatched),
+		Expected: fmt.Sprintf("referential integrity >= %.4f against %s", e.threshold, e.refDesc),
+		Message: fmt.Sprintf("expectColumnValuesInReferenceDataset[%s]: %d orphaned values (score=%.4f), passed=%v",
+			e.column, unmatched, score, passed),
+	}
+}
+
+// ----------------------------------------------------------------------------
 // Registry and factory
 // ----------------------------------------------------------------------------
 
 // expectationFactories maps expectation type names to their constructor functions.
 var expectationFactories = map[string]func(cfg map[string]interface{}) (Expectation, error){
-	"expectColumnNotNull":        newExpectColumnNotNull,
-	"expectColumnUnique":         newExpectColumnUnique,
-	"expectColumnValuesBetween":  newExpectColumnValuesBetween,
-	"expectColumnValuesInSet":    newExpectColumnValuesInSet,
-	"expectTableRowCountBetween": newExpectTableRowCountBetween,
-	"expectColumnMeanBetween":    newExpectColumnMeanBetween,
-	"expectColumnStddevBelow":    newExpectColumnStddevBelow,
+	"expectColumnNotNull":                  newExpectColumnNotNull,
+	"expectColumnUnique":                   newExpectColumnUnique,
+	"expectColumnValuesBetween":            newExpectColumnValuesBetween,
+	"expectColumnValuesInSet":              newExpectColumnValuesInSet,
+	"expectTableRowCountBetween":           newExpectTableRowCountBetween,
+	"expectColumnMeanBetween":              newExpectColumnMeanBetween,
+	"expectColumnStddevBelow":              newExpectColumnStddevBelow,
+	"expectColumnValuesInReferenceDataset": newExpectColumnValuesInReferenceDataset,
 }
 
 // buildExpectation constructs an Expectation from a raw config map.

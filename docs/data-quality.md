@@ -63,6 +63,7 @@ Studio Run Report.
 | `expectColumnMeanBetween` | column mean within a band |
 | `expectColumnStddevBelow` | column standard deviation under a threshold |
 | `expectTableRowCountBetween` | row-count band |
+| `expectColumnValuesInReferenceDataset` | referential integrity / foreign-key check against a bounded reference dataset |
 
 ```json
 { "type": "dq", "options": {

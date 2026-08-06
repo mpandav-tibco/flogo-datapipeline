@@ -511,6 +511,15 @@ func rowSatisfiesExpectation(batch *record.RecordBatch, rowIdx int, exp Expectat
 		// For row-level scoring, treat uniqueness expectations as always passing.
 		return true
 
+	case *expectColumnValuesInReferenceDataset:
+		val := batch.Value(rowIdx, e.column)
+		if val == nil {
+			return true // null excluded from the referential check, same as the other row-level expectations
+		}
+		key := fmt.Sprintf("%v", val)
+		_, ok := e.refValues[key]
+		return ok
+
 	case *expectColumnMeanBetween, *expectColumnStddevBelow, *expectTableRowCountBetween:
 		// These are purely dataset-level; they do not affect per-row scores.
 		return true
