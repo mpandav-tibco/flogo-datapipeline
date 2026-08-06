@@ -230,7 +230,7 @@ lease / heartbeat / retry, and a transaction-level advisory lock on enqueue).
 | `performance` | `batchSize` (`5000`), `transformWorkers` (`1`), `sourceBufferBatches` (`4`), `sinkBufferBatches` (`4`), `maxMemoryMB` (`512`), `rowGroupParallelism` (`4`) |
 | `scaling` | see [Scaling](#scaling--coordination) |
 | `observability` | `metrics` (`prometheus`/`otel`), `options`, `stallSeconds`, `audit` (governance log), `lineage` (OpenLineage) |
-| `contract` (optional) | portable schema + data-quality + SLA artifact, checked at design time and run time — see [Data contracts](data-contracts.md) |
+| `contract` (optional) | portable schema + data-quality + SLA + independent source/sink reconciliation artifact, checked at design time and run time — see [Data contracts](data-contracts.md) |
 
 **Run output** (`action/pipeline/action.go`): `status` (`completed` | `partial` |
 `failed`), `rowsProcessed`, `rowsWritten`, `rowsFailed`, `rowsDropped`,

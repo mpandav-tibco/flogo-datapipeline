@@ -139,6 +139,81 @@ func (a *DataPipelineAction) finalizeStatus(runLog corelog.Logger, out *Output, 
 		runLog.Warnf("contract SLA violation: run took %dms, exceeding maxDurationMs=%d — the run's data is otherwise complete and correct, only marked \"partial\" to surface the SLA breach",
 			out.DurationMs, a.def.Contract.MaxDurationMs)
 	}
+	if out.Status == "completed" && out.Metadata != nil {
+		if rec, ok := out.Metadata["reconciliation"].(map[string]interface{}); ok {
+			if mismatched, _ := rec["mismatched"].(bool); mismatched {
+				if onMismatch, _ := rec["onMismatch"].(string); onMismatch == "fail" {
+					out.Status = "partial"
+					runLog.Warnf("contract reconciliation mismatch: sourceCount=%v sinkCount=%v driftPct=%v — the run's data is otherwise complete and correct, only marked \"partial\" to surface the mismatch",
+						rec["sourceCount"], rec["sinkCount"], rec["driftPct"])
+				}
+			}
+		}
+	}
+}
+
+// runReconciliation runs a data contract's optional post-run reconciliation
+// check (see ContractDef.Reconciliation): independently querying the source's
+// and sink's own row counts (via the optional source.Reconciler /
+// sink.Reconciler interfaces, reusing their still-open connections) and
+// comparing them against each other — entirely independent of the pipeline's
+// internal RowsProcessed/RowsWritten counters. Must be called BEFORE the sink
+// closes its connection. A source/sink type that doesn't implement the
+// interface is skipped with a warning (documented scope limit — only jdbc
+// implements this today), never failing the run outright.
+func (a *DataPipelineAction) runReconciliation(runLog corelog.Logger, def *Definition, src source.Source, snk sink.Sink, out *Output) {
+	if def.Contract == nil || def.Contract.Reconciliation == nil || !def.Contract.Reconciliation.Enabled {
+		return
+	}
+	rc := def.Contract.Reconciliation
+
+	srcRec, ok := src.(source.Reconciler)
+	if !ok {
+		runLog.Warnf("contract.reconciliation is enabled but source type %q does not support it (only jdbc does today) — skipping", def.Source.Type)
+		return
+	}
+	snkRec, ok := snk.(sink.Reconciler)
+	if !ok {
+		runLog.Warnf("contract.reconciliation is enabled but sink type %q does not support it (only jdbc does today) — skipping", def.Sink.Type)
+		return
+	}
+
+	sourceCount, err := srcRec.ReconciliationCount(rc.SourceCountQuery)
+	if err != nil {
+		runLog.Warnf("contract reconciliation: source count query failed (skipping check): %v", err)
+		return
+	}
+	sinkCount, err := snkRec.ReconciliationCount(rc.SinkCountQuery)
+	if err != nil {
+		runLog.Warnf("contract reconciliation: sink count query failed (skipping check): %v", err)
+		return
+	}
+
+	var driftPct float64
+	if sourceCount > 0 {
+		driftPct = math.Abs(float64(sourceCount-sinkCount)) / float64(sourceCount)
+	} else if sinkCount != 0 {
+		driftPct = 1.0 // source is empty but sink is not — maximal drift
+	}
+	mismatched := driftPct > rc.MaxDriftPct
+
+	if out.Metadata == nil {
+		out.Metadata = make(map[string]interface{})
+	}
+	out.Metadata["reconciliation"] = map[string]interface{}{
+		"sourceCount": sourceCount,
+		"sinkCount":   sinkCount,
+		"driftPct":    driftPct,
+		"mismatched":  mismatched,
+		"onMismatch":  rc.OnMismatch,
+	}
+	if mismatched {
+		runLog.Warnf("contract reconciliation mismatch: sourceCount=%d sinkCount=%d driftPct=%.4f (maxDriftPct=%.4f)",
+			sourceCount, sinkCount, driftPct, rc.MaxDriftPct)
+	} else {
+		runLog.Infof("contract reconciliation OK: sourceCount=%d sinkCount=%d driftPct=%.4f (maxDriftPct=%.4f)",
+			sourceCount, sinkCount, driftPct, rc.MaxDriftPct)
+	}
 }
 
 // RunDirect executes the pipeline synchronously in the calling goroutine and
@@ -1081,6 +1156,13 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 	if err := snk.Flush(); err != nil {
 		return out, fmt.Errorf("sink final flush: %w", err)
 	}
+
+	// Contract reconciliation (optional, before the sink closes — it reuses
+	// the sink's own open connection). See ContractDef.Reconciliation.
+	// Must run AFTER Flush() (buffered writes aren't durable/visible to a
+	// fresh COUNT(*) query until flushed) and BEFORE Close() (which drops the
+	// connection ReconciliationCount needs).
+	a.runReconciliation(runLog, def, src, snk, out)
 
 	// Explicitly close the sink and surface any error. This is critical for sinks
 	// whose durable write happens at Close (e.g. the object-store sink uploads the

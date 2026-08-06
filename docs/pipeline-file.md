@@ -170,8 +170,9 @@ threshold. See [Observability](observability.md).
 ## `contract` (optional)
 
 A portable **data contract** for the pipeline's output — schema + data-quality
-+ SLA bundled as one versioned artifact, checked at both design time
-(`-validate`) and run time. See [Data contracts](data-contracts.md).
++ SLA + independent source/sink reconciliation bundled as one versioned
+artifact, checked at both design time (`-validate`) and run time. See
+[Data contracts](data-contracts.md).
 
 ## Run output
 
@@ -179,7 +180,7 @@ Every run returns a summary ([`action/pipeline/action.go`](../action/pipeline/ac
 
 | Field | Meaning |
 |---|---|
-| `status` | `completed` \| `partial` \| `failed` — `partial` also covers a completed run that breached a [contract](data-contracts.md)'s `maxDurationMs` SLA |
+| `status` | `completed` \| `partial` \| `failed` — `partial` also covers a completed run that breached a [contract](data-contracts.md)'s `maxDurationMs` SLA or `reconciliation` check |
 | `rowsProcessed` | rows read from the source |
 | `rowsWritten` | rows written to the sink |
 | `rowsFailed` | rows routed to the DLQ / errored |

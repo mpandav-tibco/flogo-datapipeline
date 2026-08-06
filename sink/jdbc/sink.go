@@ -100,6 +100,11 @@ type jdbcSink struct {
 	rowsDeleted int64
 }
 
+var (
+	_ sink.StatsReporter = (*jdbcSink)(nil)
+	_ sink.Reconciler    = (*jdbcSink)(nil)
+)
+
 func newJDBCSink(cfg map[string]interface{}) (sink.Sink, error) {
 	driver, _ := cfg["driver"].(string)
 	if driver == "" {
@@ -1237,6 +1242,19 @@ func (s *jdbcSink) SinkStats() sink.Stats {
 		rd = s.rowsDeleted
 	}
 	return sink.Stats{RowsWritten: -1, RowsFailed: -1, RowsDeleted: rd}
+}
+
+// ReconciliationCount implements sink.Reconciler: runs query (typically
+// "SELECT COUNT(*) FROM ...") against this sink's own connection and returns
+// the single integer result. Used by a data contract's optional post-run
+// reconciliation check. Must be called BEFORE Close() — Close() closes the
+// underlying connection this method reuses.
+func (s *jdbcSink) ReconciliationCount(query string) (int64, error) {
+	var n int64
+	if err := s.db.QueryRow(query).Scan(&n); err != nil {
+		return 0, fmt.Errorf("jdbc sink: reconciliation query: %w", err)
+	}
+	return n, nil
 }
 
 func contains(slice []string, s string) bool {

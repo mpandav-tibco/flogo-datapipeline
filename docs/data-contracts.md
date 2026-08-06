@@ -26,10 +26,11 @@ Set the top-level `contract` key on a pipeline definition:
 | `onViolation` | string | `route` | Same vocabulary as `dq`'s `onFail`: `route` \| `fail` \| `warn` \| `drop`. |
 | `errorSinkType` / `errorSinkConfig` | string / object | — | Passed straight through to the auto-appended `dq` stage when `onViolation: "route"`. |
 | `maxDurationMs` | int | `0` (no limit) | SLA ceiling on total run wall-clock time. See [Duration SLA](#duration-sla). |
+| `reconciliation` | object | — | Independent post-run source/sink row-count check. See [Reconciliation](#reconciliation). |
 
-A contract must declare **at least one** of `schema`, `expectations`, or
-`maxDurationMs` — an empty contract (nothing to enforce) is rejected at
-`Validate()`.
+A contract must declare **at least one** of `schema`, `expectations`,
+`maxDurationMs`, or an *enabled* `reconciliation` — an empty contract
+(nothing to enforce) is rejected at `Validate()`.
 
 ## Design-time schema check
 
@@ -82,6 +83,61 @@ visible in the run summary, [audit log](observability.md#audit-log-optional),
 and [lineage](observability.md#lineage-openlineage) rather than silently
 passing as fully successful. The run's data is otherwise complete and correct
 — only the status reflects the SLA breach.
+
+## Reconciliation
+
+Schema checks, the quality gate, and the duration SLA all validate the
+pipeline's own view of what it did (its row counts, its own
+RowsProcessed/RowsWritten). **Reconciliation is different: it is a fully
+independent check**, comparing a fresh `COUNT(*)`-style query against the
+source with a fresh one against the sink — the same trust-but-verify pattern
+a data engineer runs by hand after a load to catch silent data loss (a crashed
+worker, a transform that filtered more than intended, a truncated batch) that
+the pipeline's own counters wouldn't reveal because they'd faithfully report
+whatever *did* happen, correctly, while still not matching what should have
+happened end to end.
+
+Set `contract.reconciliation`:
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | bool | `false` | Turns the check on. |
+| `sourceCountQuery` | string | — | **Required** when enabled. A query the source runs to count its rows (e.g. `SELECT COUNT(*) FROM orders`). |
+| `sinkCountQuery` | string | — | **Required** when enabled. A query the sink runs to count its rows. |
+| `maxDriftPct` | float | `0` (exact match) | Allowed fractional drift between source and sink counts before it's a mismatch. |
+| `onMismatch` | string | `warn` | `warn` — log and record the mismatch in the run's metadata only. `fail` — additionally reclassify an otherwise-`"completed"` run to `"partial"`. |
+
+There is deliberately **no automatic derivation** of the count queries from
+table names — the source and sink table names aren't always known, obvious,
+or even the same shape (e.g. a source that reads a filtered view vs. a sink
+table that holds everything). Requiring both queries explicitly keeps the
+check unambiguous and avoids the engine ever silently comparing counts that
+don't mean what the contract author thinks.
+
+**Scope limit (documented, not silently missing):** reconciliation is only
+performed when **both** the source and sink implement it (a private
+`Reconciler` interface) — today, only `jdbc` does. A source or sink that
+doesn't implement it is skipped with a warning log rather than failing the
+run, since only `jdbc` participating on both ends is a meaningful comparison.
+
+The check runs once, near the end of the run — after the sink's final flush
+(so buffered writes are durable and visible to a fresh count query) but before
+it closes its connection. The result is recorded in `Output.Metadata["reconciliation"]`
+(`sourceCount`, `sinkCount`, `driftPct`, `mismatched`, `onMismatch`), the same
+place e.g. `windowStats` and `cdcStats` are recorded, for lineage/audit/API
+consumers.
+
+```json
+"contract": {
+  "reconciliation": {
+    "enabled": true,
+    "sourceCountQuery": "SELECT COUNT(*) FROM orders",
+    "sinkCountQuery": "SELECT COUNT(*) FROM orders_dw",
+    "maxDriftPct": 0,
+    "onMismatch": "fail"
+  }
+}
+```
 
 ## Example
 

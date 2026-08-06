@@ -51,6 +51,17 @@ type StatsReporter interface {
 	SinkStats() Stats
 }
 
+// Reconciler is an optional Sink interface mirroring source.Reconciler — an
+// independent trust-verification query run against the sink's own
+// already-open connection, used by a data contract's optional post-run
+// reconciliation check (action/pipeline's ContractDef.Reconciliation). Only
+// jdbc implements this today; other sink types simply don't.
+type Reconciler interface {
+	// ReconciliationCount runs query (typically "SELECT COUNT(*) FROM ...")
+	// against the sink's own connection and returns the single integer result.
+	ReconciliationCount(query string) (int64, error)
+}
+
 // Factory constructs a Sink from a generic config map.
 type Factory func(cfg map[string]interface{}) (Sink, error)
 
