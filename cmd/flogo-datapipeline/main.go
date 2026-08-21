@@ -37,6 +37,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sort"
 	"strings"
 	"syscall"
@@ -176,6 +177,8 @@ import (
 var mlog = corelog.ChildLogger(corelog.RootLogger(), "main")
 
 func main() {
+	startedAt := time.Now()
+
 	// -f <path>    path to the .datapipeline file (a flogo:app JSON) — same pattern as flogo-agent
 	// -port <n>    API server port (set by the VSCode extension binary manager)
 	// -api-addr    full TCP addr override (e.g. :8888); -port takes precedence if both set
@@ -221,6 +224,18 @@ func main() {
 	// ConfigMaps, matching the flogo-agents / Flogo app-property model.
 	appJSON = appprops.Resolve(appJSON)
 
+	// Best-effort app/pipeline name for the ready banner; falls back to the
+	// file name when the app JSON has no top-level "name" (shouldn't happen
+	// for a well-formed .datapipeline, but never worth failing startup over).
+	var appMeta struct {
+		Name string `json:"name"`
+	}
+	_ = json.Unmarshal([]byte(appJSON), &appMeta)
+	appName := appMeta.Name
+	if appName == "" {
+		appName = filepath.Base(*appFile)
+	}
+
 	if *validateOnly {
 		os.Exit(runValidate(*appFile, appJSON))
 	}
@@ -257,6 +272,8 @@ func main() {
 		f := pipeline.GlobalFactory()
 		if f == nil {
 			mlog.Warn("pipeline API: factory not available (no pipeline action registered?); API server not started")
+			mlog.Infof("flogo-datapipeline ready — startup took %s (engine boot, no API server)", time.Since(startedAt))
+			printReadyBanner(appName, "", time.Since(startedAt))
 		} else {
 			apiSrv = api.NewServer(f, *apiAddr)
 			go func() {
@@ -265,7 +282,12 @@ func main() {
 				}
 			}()
 			mlog.Infof("pipeline API server started on %s", *apiAddr)
+			mlog.Infof("flogo-datapipeline ready — startup took %s (engine boot + API server)", time.Since(startedAt))
+			printReadyBanner(appName, *apiAddr, time.Since(startedAt))
 		}
+	} else {
+		mlog.Infof("flogo-datapipeline ready — startup took %s (engine boot)", time.Since(startedAt))
+		printReadyBanner(appName, "", time.Since(startedAt))
 	}
 
 	// Wait for a termination signal.
@@ -303,6 +325,38 @@ func main() {
 		os.Exit(1)
 	}
 	os.Exit(0)
+}
+
+// printReadyBanner prints a boxed, human-scannable startup summary straight to
+// stdout (bypassing the structured logger's timestamp/level prefix, which
+// would otherwise break the box alignment) right after the equivalent
+// mlog.Infof "ready" line — that line stays the searchable/structured record,
+// this is purely a visual highlight for a human watching the console/Output
+// channel. apiAddr is omitted from the box when empty (no API server).
+func printReadyBanner(pipelineName, apiAddr string, elapsed time.Duration) {
+	const title = "FLOGO-DATAPIPELINE READY"
+	rows := []string{
+		"pipeline : " + pipelineName,
+		"startup  : " + elapsed.Round(10*time.Microsecond).String(),
+	}
+	if apiAddr != "" {
+		rows = append(rows, "api      : "+apiAddr)
+	}
+	width := len([]rune(title))
+	for _, r := range rows {
+		if n := len([]rune(r)); n > width {
+			width = n
+		}
+	}
+	bar := strings.Repeat("─", width+2)
+	pad := func(s string) string { return s + strings.Repeat(" ", width-len([]rune(s))) }
+	fmt.Println("┌" + bar + "┐")
+	fmt.Println("│ " + pad(title) + " │")
+	fmt.Println("├" + bar + "┤")
+	for _, r := range rows {
+		fmt.Println("│ " + pad(r) + " │")
+	}
+	fmt.Println("└" + bar + "┘")
 }
 
 // appResource is the minimal shape needed to locate "pipeline:" resources in a
