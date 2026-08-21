@@ -224,6 +224,14 @@
           "type": "webview",
           "contextualTitle": "Data Pipeline"
         }
+      ],
+      "flogoDataPipelineDqPanel": [
+        {
+          "id": "flogoDataPipelineStudio.dqReport",
+          "name": "DQ Report",
+          "type": "webview",
+          "contextualTitle": "Data Pipeline"
+        }
       ]
     },
     "viewsContainers": {
@@ -238,6 +246,11 @@
         {
           "id": "flogoDataPipelinePanel",
           "title": "Data Preview",
+          "icon": "resources/icon.svg"
+        },
+        {
+          "id": "flogoDataPipelineDqPanel",
+          "title": "DQ Report",
           "icon": "resources/icon.svg"
         }
       ]
@@ -390,7 +403,8 @@
     "watch": "node --max-old-space-size=4096 ./node_modules/webpack/bin/webpack.js --watch",
     "package": "node --max-old-space-size=4096 ./node_modules/webpack/bin/webpack.js --mode production --devtool hidden-source-map",
     "typecheck": "node --max-old-space-size=4096 ./node_modules/typescript/bin/tsc --noEmit",
-    "lint": "node --max-old-space-size=4096 ./node_modules/eslint/bin/eslint.js src webview --ext ts"
+    "lint": "node --max-old-space-size=4096 ./node_modules/eslint/bin/eslint.js src webview --ext ts",
+    "check:stage-parity": "node scripts/check-stage-parity.mjs"
   },
   "devDependencies": {
     "@types/node": "^18.19.0",

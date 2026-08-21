@@ -216,5 +216,39 @@ export function validate(text: string): ValidationIssue[] {
       anchor: 'checkpoint',
     });
   }
+
+  // Data contract (schema + quality gate + SLA + reconciliation) — mirrors the
+  // engine's own Definition.validate() rules (action/pipeline/definition.go) so
+  // a misconfiguration surfaces here at design time instead of only at run time.
+  const contract: any = doc.contract;
+  if (contract) {
+    const onViolation = String(contract.onViolation || 'route');
+    if (!['route', 'fail', 'warn', 'drop'].includes(onViolation)) {
+      issues.push({ sev: 'error', label: 'contract.onViolation', msg: `contract.onViolation must be 'route', 'fail', 'warn', or 'drop', got '${onViolation}'.`, anchor: 'contract' });
+    }
+    const recon: any = contract.reconciliation;
+    const reconEnabled = !!(recon && recon.enabled);
+    const hasSchema = Array.isArray(contract.schema) && contract.schema.length > 0;
+    const hasExpectations = Array.isArray(contract.expectations) && contract.expectations.length > 0;
+    const hasMaxDuration = !!contract.maxDurationMs;
+    if (!hasSchema && !hasExpectations && !hasMaxDuration && !reconEnabled) {
+      issues.push({ sev: 'warn', label: 'contract', msg: 'A data contract is present but declares nothing to enforce (set schema, expectations, maxDurationMs, and/or reconciliation).', anchor: 'contract' });
+    }
+    if (reconEnabled) {
+      const onMismatch = String(recon.onMismatch || 'warn');
+      if (!['warn', 'fail'].includes(onMismatch)) {
+        issues.push({ sev: 'error', label: 'contract.reconciliation.onMismatch', msg: `contract.reconciliation.onMismatch must be 'warn' or 'fail', got '${onMismatch}'.`, anchor: 'contract' });
+      }
+      if (!recon.sourceCountQuery || !recon.sinkCountQuery) {
+        issues.push({ sev: 'error', label: 'contract.reconciliation', msg: 'Reconciliation is enabled but requires both a source count query and a sink count query.', anchor: 'contract' });
+      }
+      if (recon.maxDriftPct != null && Number(recon.maxDriftPct) < 0) {
+        issues.push({ sev: 'error', label: 'contract.reconciliation.maxDriftPct', msg: 'contract.reconciliation.maxDriftPct must be >= 0.', anchor: 'contract' });
+      }
+      if ((source.type !== 'jdbc') || (sink.type !== 'jdbc')) {
+        issues.push({ sev: 'warn', label: 'contract.reconciliation', msg: 'Reconciliation only runs when both source and sink are jdbc — it will be skipped (with a warning) for this pipeline.', anchor: 'contract' });
+      }
+    }
+  }
   return issues;
 }

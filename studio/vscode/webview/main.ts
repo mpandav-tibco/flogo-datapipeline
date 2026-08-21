@@ -4,736 +4,30 @@
 // a command palette and right-click menus. All persistence + engine actions
 // are delegated to the extension host over postMessage.
 
-import type { PipelineDoc } from '../src/model/pipeline';
-import type { HostToWebview, WebviewToHost } from '../src/protocol';
-import type { RunResponse, PreviewResult, StatusResponse, StageTestResult } from '../src/engine/apiClient';
+import type { HostToWebview } from '../src/protocol';
+import type { StatusResponse, StageTestResult } from '../src/engine/apiClient';
 import { TRIGGER_CATALOG, triggerDef } from '../src/model/triggers';
-import { deriveBranches, branchesByOwner, deriveGraph, type DerivedBranch } from '../src/model/graph';
-interface VsCodeApi {
-  postMessage(msg: WebviewToHost): void;
-  getState(): unknown;
-  setState(s: unknown): void;
-}
-declare function acquireVsCodeApi(): VsCodeApi;
-const vscode = acquireVsCodeApi();
+import {
+  SOURCE_TYPES, SINK_TYPES, TRANSFORMS, typeLabel, transformLabel,
+  nodeIcon, TF_ARITY, familyOfType, familyLabel, defaultConfigFor, DQ_EXPECTATIONS, DQ_NEEDS_COLUMN,
+} from '../src/model/stageCatalog';
+import { branchesByOwner, deriveGraph, type DerivedBranch } from '../src/model/graph';
+import {
+  $, el, fmt, fmtK, post, attachResize, S, dbState, targetOf, metaFor, buildPipe,
+  cfgTarget, graphNodeById, findSelNode, setCfgField, setCfgValue,
+  type Node, type StageTest, type ConnSummary,
+} from '../src/model/webviewState';
+import {
+  FIELD_ENUMS, FIELD_ENUMS_BY_TYPE, FIELD_NAME_KEYS, FIELD_HINTS, SOURCE_FIXED_SCHEMA,
+  parseProducedColumns, humanize, isBoolField, isFileField, isNumField, isJsonField,
+} from '../src/model/fieldMeta';
+import { toast, escapeHtml } from '../src/model/toast';
 
-// ── tiny DOM helpers ──────────────────────────────────────────────────────
-const $ = (s: string, r: ParentNode = document): HTMLElement | null => r.querySelector(s);
-function el(tag: string, cls?: string, html?: string): HTMLElement {
-  const e = document.createElement(tag);
-  if (cls) e.className = cls;
-  if (html != null) e.innerHTML = html;
-  return e;
-}
-const fmt = (n: number) => n.toLocaleString('en-US');
-const fmtK = (n: number) => (n >= 1e6 ? (n / 1e6).toFixed(2) + 'M' : n >= 1e3 ? Math.round(n / 1e3) + 'k' : String(Math.round(n)));
-
-function post(msg: WebviewToHost) {
-  vscode.postMessage(msg);
-}
-
-// Make the config dock resizable: applies the remembered width and adds a
-// left-edge drag grip that updates S.inspWidth live (clamped to a sane range).
-function attachResize(insp: HTMLElement): void {
-  // Mappers need more room than a simple form, so give map/mapper nodes a wider
-  // default dock — until the user drags it to a width of their own.
-  const sn = S.pipe && S.pipe.nodes ? S.pipe.nodes.find((n) => n.id === S.selNode) : null;
-  const tall = !!(sn && (sn.type === 'map' || sn.type === 'mapper'));
-  const def = tall ? Math.min(560, Math.round(window.innerWidth * 0.5)) : 360;
-  insp.style.width = (S.inspWidthSet ? (S.inspWidth || def) : def) + 'px';
-  const grip = el('div', 'inspgrip');
-  grip.title = 'Drag to resize the config panel';
-  grip.onmousedown = (e: MouseEvent) => {
-    e.preventDefault();
-    const startX = e.clientX;
-    const startW = insp.getBoundingClientRect().width;
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
-    const move = (ev: MouseEvent) => {
-      // Grip sits on the LEFT edge of the right-docked panel: dragging left widens.
-      const w = Math.max(300, Math.min(Math.round(window.innerWidth * 0.6), startW + (startX - ev.clientX)));
-      insp.style.width = w + 'px';
-      S.inspWidth = w;
-      S.inspWidthSet = true;
-    };
-    const up = () => {
-      document.removeEventListener('mousemove', move);
-      document.removeEventListener('mouseup', up);
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-    };
-    document.addEventListener('mousemove', move);
-    document.addEventListener('mouseup', up);
-  };
-  insp.appendChild(grip);
-}
-
-// ── node model ────────────────────────────────────────────────────────────
-interface Node {
-  id: string;
-  kind: 'source' | 'transform' | 'sink' | 'dlq';
-  type: string;
-  nm: string;
-  meta: string;
-  cfg: Record<string, string>;
-  ref: 'source' | 'sink' | 'dlq' | number | string; // maps back into the doc; an extra sink uses its graph node id
-}
-
-interface Pipe {
-  name: string;
-  description: string;
-  mode: string;
-  status: string;
-  nodes: Node[];
-  branches: DerivedBranch[];
-  extraNodes: Node[];
-  hasDlq: boolean;
-  dlqNode: Node | null;
-}
-
-// ── state ─────────────────────────────────────────────────────────────────
-const S = {
-  fileName: 'pipeline.datapipeline',
-  ref: '',
-  doc: {} as PipelineDoc,
-  pipe: null as Pipe | null,
-  selNode: null as string | null,
-  inspTab: 'Config',
-  inspClosed: false,
-  inspWidth: 360,
-  inspWidthSet: false,
-  zoom: 1,
-  mapMode: 'visual',
-  showBranches: true,
-  showCounts: true,
-  minimapOpen: false,
-  paletteOpen: true,
-  paletteQ: '',
-  paletteCat: {} as Record<string, boolean>,
-  panelOpen: false,
-  panelTab: 'problems',
-  rateRps: 0,
-  ratePrev: null as { rows: number; at: number } | null,
-  setOpen: null as Record<string, boolean> | null,
-  tabs: [{ id: 'canvas', type: 'canvas' as string }],
-  active: 'canvas',
-  running: false,
-  port: null as number | null,
-  ran: false,
-  lastRun: null as RunResponse | null,
-  preview: null as PreviewResult | null,
-  previewOn: false,
-  issues: [] as { sev: string; label: string; msg: string; anchor: string | null }[],
-  tailTimer: 0 as number | 0,
-  conns: [] as ConnSummary[],
-  stageTest: null as StageTest | null,
-  srcSample: null as SrcSample | null,
-  sinkSample: null as SrcSample | null,
-  db: {} as Record<string, DbIntrospect>,
-  srcSchemaLoading: false,
-  bindPick: null as { nodeId: string; key: string; suggested: string; cur: string } | null,
-};
-
-// Live-DB introspection state, keyed by target ('source' | 'sink' | 'dlq').
-interface DbIntrospect {
-  tables: string[] | null;   // fetched table list (null = not fetched)
-  loadingTables: boolean;
-  loadingCols: boolean;
-  autoSchema: boolean;       // auto-fetch columns from DB on table select
-  error: string | null;
-  objects?: string[] | null; // object-store keys (browse)
-  loadingObjects?: boolean;
-  topics?: string[] | null;  // kafka topic list (browse)
-  loadingTopics?: boolean;
-}
-function dbState(target: string): DbIntrospect {
-  if (!S.db[target]) S.db[target] = { tables: null, loadingTables: false, loadingCols: false, autoSchema: true, error: null, objects: null, loadingObjects: false, topics: null, loadingTopics: false };
-  return S.db[target];
-}
-function targetOf(node: Node): 'source' | 'sink' | 'dlq' | null {
-  if (node.kind === 'source') return 'source';
-  if (node.kind === 'sink') return 'sink';
-  if (node.kind === 'dlq') return 'dlq';
-  return null;
-}
-
-// Read-only source-sample state for the source node's Test tab, so the user can
-// SEE the rows the pipeline reads before running anything.
-interface SrcSample {
-  columns: string[];
-  rows: Array<Record<string, unknown>>;
-  loading: boolean;
-  read: number;      // rowsRead reported by the engine
-}
-
-// Atomic stage-tester working state for the currently selected transform.
-interface StageTest {
-  stage: number;                              // transforms[] index under test
-  columns: string[];                          // input column order
-  rows: Array<Record<string, unknown>>;       // editable input sample
-  result: StageTestResult | null;             // last run outcome
-  view: 'grid' | 'json';                      // input editor surface
-  seeding: boolean;                           // sample fetch in flight
-  running: boolean;                           // test run in flight
-  jsonDraft: string | null;                   // unsaved JSON textarea buffer
-}
-
-// Connection summary sent by the host (never carries secret values).
-interface ConnSummary { id: string; name: string; type: string; family: string; desc: string; }
-
-// Map a source/sink stage type to a connection family so we offer only
-// compatible connections in the inspector.
-function familyOfType(type: string): string | null {
-  if (['jdbc', 'postgres', 'mysql', 'sqlite'].includes(type)) return 'db';
-  if (type === 'kafka') return 'stream';
-  if (['s3', 'gcs', 'adls', 'objstore'].includes(type)) return 'obj';
-  // Note: the `lookup` transform reads a full templated `url`, which a base-URL
-  // connection can't supply, so it is intentionally not connection-bindable.
-  if (type === 'http') return 'http';
-  return null;
-}
-function familyLabel(fam: string): string {
-  return ({ db: 'database', stream: 'Kafka', obj: 'object-store', http: 'HTTP' } as Record<string, string>)[fam] || fam;
-}
-
-const statusColor: Record<string, string> = { running: 'b', completed: 'g', partial: 'y', failed: 'r', idle: 'd' };
-
-// ── build a Pipe from the real doc ────────────────────────────────────────
-function metaFor(kind: string, type: string, cfg: any): string {
-  cfg = cfg || {};
-  // Transform stages show a semantic one-liner (like the wireframe node
-  // subtitles) so the graph documents itself at a glance.
-  if (kind === 'transform') {
-    const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? '' : 's'}`;
-    switch (type) {
-      case 'join':
-        return `${cfg.joinType || 'inner'} · ${cfg.leftKey || 'key'} = ${cfg.rightKey || 'key'}`;
-      case 'validate':
-        return plural(Array.isArray(cfg.rules) ? cfg.rules.length : 0, 'rule') + (cfg.onViolation ? ' · ' + cfg.onViolation : '');
-      case 'router': case 'split':
-        return plural(Array.isArray(cfg.routes) ? cfg.routes.length : 0, 'route') + ' · first-match';
-      case 'dq':
-        return plural(Array.isArray(cfg.expectations) ? cfg.expectations.length : 0, 'expectation') + (cfg.onFail ? ' · ' + cfg.onFail : '');
-      case 'window': {
-        const wk = (cfg.window && cfg.window.kind) || 'tumbling';
-        return `${wk} · ` + plural(Array.isArray(cfg.aggregations) ? cfg.aggregations.length : 0, 'agg');
-      }
-      case 'map': case 'mapper':
-        return plural(cfg.fields && typeof cfg.fields === 'object' ? Object.keys(cfg.fields).length : 0, 'field');
-      case 'cast':
-        return plural(Array.isArray(cfg.columns) ? cfg.columns.length : 0, 'column');
-      case 'lookup': {
-        const host = cfg.url ? String(cfg.url).replace(/^https?:\/\//, '').split('/')[0] : '';
-        return (cfg.keyField || 'key') + (host ? ' → ' + host : '');
-      }
-      case 'filter':
-        return cfg.expr ? String(cfg.expr).slice(0, 30) : 'filter';
-      case 'parse':
-        return `${cfg.mode || 'regex'}` + (cfg.source ? ' · ' + cfg.source : '');
-      case 'union':
-        return 'union +' + (Array.isArray(cfg.with) ? cfg.with.length : 0);
-      case 'schemadrift':
-        return `${cfg.policy || 'additive'}` + (cfg.onDrift ? ' · ' + cfg.onDrift : '');
-      case 'explode':
-        return cfg.column ? 'explode ' + cfg.column : 'explode';
-      case 'flatten':
-        return 'flatten' + (cfg.separator ? ' · "' + cfg.separator + '"' : '');
-      case 'hwm':
-        return cfg.column ? 'hwm ' + cfg.column : 'high-water mark';
-    }
-    return transformLabel(type);
-  }
-  // Source / sink / dlq: friendly label + the salient destination detail.
-  const bits: string[] = [typeLabel(type)];
-  if (cfg.path) bits.push(String(cfg.path).split(/[\\/]/).pop() || '');
-  if (cfg.table) bits.push(cfg.table);
-  if (cfg.topic) bits.push(cfg.topic);
-  if (cfg.bucket) bits.push(cfg.bucket);
-  if (cfg.index) bits.push(cfg.index);
-  if (cfg.dsn) bits.push('dsn');
-  if (cfg.expr) bits.push(String(cfg.expr).slice(0, 24));
-  return bits.filter(Boolean).join(' · ');
-}
-function cfgOf(o: any): Record<string, string> {
-  const out: Record<string, string> = {};
-  if (!o || typeof o !== 'object') return out;
-  for (const [k, v] of Object.entries(o)) {
-    if (k === 'type' || k === 'name') continue; // type is the stage kind; name is the editable stage label
-    if (v == null) continue;
-    if (typeof v === 'object') out[k] = JSON.stringify(v);
-    else out[k] = String(v);
-  }
-  return out;
-}
-function buildPipe(doc: PipelineDoc): Pipe {
-  const src: any = doc.source || {};
-  const sink: any = doc.sink || {};
-  const transforms = Array.isArray(doc.transforms) ? doc.transforms : [];
-  const nodes: Node[] = [];
-  nodes.push({
-    id: 'source',
-    kind: 'source',
-    type: src.type || 'source',
-    nm: (src.path && String(src.path).split(/[\\/]/).pop()) || typeLabel(src.type) || 'source',
-    meta: metaFor('source', src.type || '—', src),
-    cfg: cfgOf(src),
-    ref: 'source',
-  });
-  transforms.forEach((t: any, i: number) => {
-    nodes.push({
-      id: 't' + i,
-      kind: 'transform',
-      type: t.type || 'transform',
-      nm: t.name || transformLabel(t.type) || 'transform',
-      meta: metaFor('transform', t.type || '—', t),
-      cfg: cfgOf(t),
-      ref: i,
-    });
-  });
-  nodes.push({
-    id: 'sink',
-    kind: 'sink',
-    type: sink.type || 'sink',
-    nm: sink.table || typeLabel(sink.type) || 'sink',
-    meta: metaFor('sink', sink.type || '—', sink),
-    cfg: cfgOf(sink),
-    ref: 'sink',
-  });
-
-  // Dead-Letter Queue is a SEPARATE top-level `dlq` block that routes write-time
-  // failures — it sits alongside the main sink, it never replaces it. The DLQ
-  // node is built from doc.dlq (destination type + flattened options), not from
-  // the transform chain.
-  const dlq: any = doc.dlq || {};
-  const hasDlq = !!dlq.type;
-  let dlqNode: Node | null = null;
-  if (hasDlq) {
-    const opts = (dlq.options && typeof dlq.options === 'object') ? dlq.options : {};
-    // Flatten options + the two top-level tunables for display.
-    const cfg = cfgOf({ ...opts, maxRowsPerBatch: dlq.maxRowsPerBatch, onFull: dlq.onFull });
-    dlqNode = {
-      id: 'dlq',
-      kind: 'dlq',
-      type: dlq.type,
-      nm: opts.table || opts.path || dlq.type,
-      meta: metaFor('dlq', dlq.type, opts),
-      cfg,
-      ref: 'dlq',
-    };
-  }
-
-  // Extra sink nodes live ONLY in the graph (self-contained `config`), never in
-  // the linear model. Surface them as first-class nodes for the canvas + inspector
-  // but keep them OUT of `nodes` so they never join the linear main chain.
-  const extraNodes: Node[] = [];
-  const gg: any = (doc as any).graph;
-  if (gg && Array.isArray(gg.nodes)) {
-    for (const gn of gg.nodes) {
-      if (typeof gn.id !== 'string' || !gn.id.startsWith('xsink-')) continue;
-      const c = (gn.config && typeof gn.config === 'object') ? gn.config : {};
-      extraNodes.push({
-        id: gn.id, kind: 'sink', type: gn.type || 'null',
-        nm: (c.path && String(c.path).split(/[\\/]/).pop()) || c.table || typeLabel(gn.type) || 'sink',
-        meta: metaFor('sink', gn.type || '—', c),
-        cfg: cfgOf(c), ref: gn.id,
-      });
-    }
-  }
-
-  const branches = deriveBranches(doc);
-  return {
-    name: doc.name || S.fileName.replace(/\.datapipeline$/, ''),
-    description: doc.description || '',
-    mode: String(doc.mode || 'etl').toUpperCase(),
-    status: S.running ? 'running' : S.ran ? 'partial' : 'idle',
-    nodes,
-    branches,
-    extraNodes,
-    hasDlq,
-    dlqNode,
-  };
-}
-
-// Resolve the doc object a stage's config lives in.
-// For the DLQ node, the two tunables (maxRowsPerBatch / onFull) live on the
-// top-level dlq block; every other field lives in dlq.options (the destination
-// sink config). cfgTarget returns dlq.options; setCfgField/Value special-case
-// the two tunables.
-const DLQ_TOPLEVEL = new Set(['maxRowsPerBatch', 'onFull']);
-function cfgTarget(node: Node): any {
-  const doc: any = S.doc;
-  if (node.ref === 'source') return (doc.source = doc.source || {});
-  if (node.ref === 'sink') return (doc.sink = doc.sink || {});
-  if (node.ref === 'dlq') {
-    doc.dlq = doc.dlq || {};
-    doc.dlq.options = doc.dlq.options || {};
-    return doc.dlq.options;
-  }
-  if (typeof node.ref === 'string' && node.ref.startsWith('xsink-')) {
-    const gn = graphNodeById(doc, node.ref);
-    if (gn) return (gn.config = gn.config || {});
-    return {};
-  }
-  doc.transforms = doc.transforms || [];
-  const ti = node.ref as number;
-  return (doc.transforms[ti] = doc.transforms[ti] || {});
-}
-
-// Find a node in the explicit graph block by id (used for self-contained extra
-// sink nodes whose config lives in doc.graph.nodes[i].config).
-function graphNodeById(doc: any, id: string): any {
-  const g = doc && doc.graph;
-  if (!g || !Array.isArray(g.nodes)) return null;
-  return g.nodes.find((n: any) => n && n.id === id) || null;
-}
-
-// Resolve the currently-selected node across the main chain, the DLQ branch, and
-// any extra sink nodes (which live only in the graph).
-function findSelNode(p: Pipe): Node {
-  if (S.selNode === 'dlq' && p.dlqNode) return p.dlqNode;
-  return p.nodes.find((n) => n.id === S.selNode) || p.extraNodes.find((n) => n.id === S.selNode) || p.nodes[0];
-}
-
-// Write a config field back into the doc and persist (string value, coerced to
-// the prior type where possible).
-function setCfgField(node: Node, key: string, value: string) {
-  const target = node.ref === 'dlq' && DLQ_TOPLEVEL.has(key) ? ((S.doc as any).dlq = (S.doc as any).dlq || {}) : cfgTarget(node);
-  const prev = target[key];
-  if (typeof prev === 'number' && value.trim() !== '' && !isNaN(Number(value))) target[key] = Number(value);
-  else if (typeof prev === 'boolean') target[key] = value === 'true';
-  else target[key] = value;
-  S.pipe = buildPipe(S.doc);
-  post({ type: 'save', doc: S.doc });
-}
-
-// Write a raw (non-string) value — used by toggles, number, and structured editors.
-function setCfgValue(node: Node, key: string, value: unknown) {
-  const target = node.ref === 'dlq' && DLQ_TOPLEVEL.has(key) ? ((S.doc as any).dlq = (S.doc as any).dlq || {}) : cfgTarget(node);
-  target[key] = value;
-  S.pipe = buildPipe(S.doc);
-  post({ type: 'save', doc: S.doc });
-}
-
-// ── config-field metadata (labels, enums, widget selection) ─────────────────
-const FIELD_LABELS: Record<string, string> = {
-  // common
-  path: 'File path', dsn: 'Connection string (DSN)', driver: 'Driver', table: 'Table',
-  batchSize: 'Batch size', columns: 'Columns', encoding: 'Encoding',
-  // csv / tsv
-  hasHeader: 'Has header row', delimiter: 'Delimiter', writeHeader: 'Write header row',
-  // jdbc source
-  query: 'SQL query', orderKey: 'Order-by key', where: 'WHERE clause',
-  // fixedwidth
-  skipLines: 'Skip lines', recordLength: 'Record length',
-  // xml / jsonlines
-  recordElement: 'Record element', fields: 'Fields',
-  // parquet
-  rowGroupParallelism: 'Row-group parallelism', rowGroupSize: 'Row-group size',
-  compression: 'Compression',
-  // kafka source
-  brokers: 'Brokers', topic: 'Topic', groupId: 'Consumer group', startOffset: 'Start offset',
-  pollMs: 'Poll interval (ms)', deserializer: 'Deserializer', mode: 'Read mode',
-  stopOffset: 'Stop offset', stopTimestamp: 'Stop timestamp', schemaRegistryURL: 'Schema registry URL',
-  stopAtCurrentEnd: 'Drain to current end',
-  // kafka sink
-  ackMode: 'Ack mode', compressionCodec: 'Compression codec', maxMessageBytes: 'Max message bytes',
-  partitionKey: 'Partition key', serializer: 'Serializer',
-  // objstore
-  bucket: 'Bucket', prefix: 'Prefix', format: 'Inner format', download: 'Download locally',
-  region: 'Region', key: 'Key template', endpoint: 'Endpoint URL', forcePathStyle: 'Force path-style',
-  rollMaxBytes: 'Roll at size (bytes)', rollMaxSeconds: 'Roll at age (seconds)',
-  accessKeyIdEnv: 'Access-key env var', secretAccessKeyEnv: 'Secret-key env var',
-  // jdbc sink
-  onConflict: 'On conflict', conflictKey: 'Conflict key', autoMigrate: 'Auto-migrate table',
-  // dlq destination (top-level dlq block + options)
-  envelopeColumn: 'Error envelope column', maxRowsPerBatch: 'Max rows per batch', onFull: 'On full',
-  // filter / map
-  expr: 'Filter expression', fieldOrder: 'Field order',
-  // sectioned (Text Document) source
-  headerKVRegex: 'Header key/value pattern', bodyColumnMarker: 'Table header line',
-  bodyDelimiter: 'Column separator', broadcastHeader: 'Attach header fields to every row',
-  formatPreset: 'Format preset',
-  // template (Custom Text) sink
-  template: 'Template', templatePath: 'Template file', templateSource: 'Template from',
-  // validate
-  rules: 'Validation rules', onViolation: 'On violation',
-  errorSinkType: 'Error sink type', errorSinkConfig: 'Error sink config',
-  // hwm
-  column: 'Watermark column', valueType: 'Value type',
-  // schemadrift
-  policy: 'Drift policy', onDrift: 'On drift',
-  // dq
-  expectations: 'Expectations', onFail: 'On fail', qualityThreshold: 'Quality threshold',
-  scoreColumn: 'Score column', reportSinkType: 'Report sink type', reportSinkConfig: 'Report sink config',
-  threshold: 'Threshold',
-  // lookup
-  keyField: 'Key field', url: 'URL', method: 'HTTP method', concurrency: 'Concurrency',
-  cacheSize: 'Cache size', timeoutMs: 'Timeout (ms)', onError: 'On error', outputFields: 'Output fields',
-  // parse (mode/prefix labels are shared with kafka/objstore above)
-  source: 'Source field', pattern: 'Regex pattern', keepSource: 'Keep source field',
-  // checkpoint / watermark shared
-  addr: 'Address', keyPrefix: 'Key prefix', backend: 'Backend', nullable: 'Nullable',
-};
-const FIELD_ENUMS: Record<string, string[]> = {
-  driver: ['postgres', 'mysql', 'sqlite'],
-  encoding: ['utf-8', 'ebcdic-037', 'latin-1'],
-  compression: ['snappy', 'gzip', 'zstd', 'none'],
-  // kafka
-  startOffset: ['earliest', 'latest'],
-  deserializer: ['json', 'avro', 'string'],
-  serializer: ['json', 'avro', 'string'],
-  mode: ['streaming', 'batch'],
-  ackMode: ['none', 'leader', 'all'],
-  compressionCodec: ['none', 'gzip', 'snappy', 'lz4', 'zstd'],
-  // objstore
-  format: ['csv', 'jsonlines', 'parquet'],
-  // jdbc sink
-  onConflict: ['insert', 'upsert', 'ignore'],
-  // validate / dq
-  onViolation: ['route', 'drop', 'fail'],
-  onFail: ['route', 'fail', 'warn', 'drop'],
-  // schemadrift
-  policy: ['project', 'additive', 'strict', 'drop'],
-  onDrift: ['log', 'alert', 'silent'],
-  // hwm
-  valueType: ['datetime', 'int', 'string'],
-  // lookup
-  method: ['GET', 'POST'],
-  onError: ['null', 'skip', 'fail'],
-  // dlq
-  onFull: ['block', 'drop'],
-  // watermark
-  backend: ['file', 'redis', 'postgres'],
-};
-// Per-stage-type enum overrides — used when a field name is shared across stage
-// types with different allowed values (e.g. `mode` is streaming/batch for kafka
-// but regex/json for parse; `onError` is null/skip/fail for lookup but
-// keep/drop/route for parse). Keyed by stage type, then field name.
-const FIELD_ENUMS_BY_TYPE: Record<string, Record<string, string[]>> = {
-  parse: {
-    mode: ['regex', 'json'],
-    onError: ['keep', 'drop', 'route'],
-  },
-};
-
-// Config keys that reference an INPUT field name (not free text). For these we
-// render an autocomplete input backed by the upstream schema — so users pick
-// from the available fields instead of guessing the exact name — while still
-// allowing a custom value (self-describing sources, computed names). Keyed by
-// stage type, then the set of field-name config keys.
-const FIELD_NAME_KEYS: Record<string, Set<string>> = {
-  parse: new Set(['source']),
-  hwm: new Set(['column']),
-  lookup: new Set(['keyField']),
-};
-const FIELD_HINTS: Record<string, string> = {
-  path: 'Local path or glob. Supports ${date}/${year} templating.',
-  dsn: 'e.g. host=localhost port=5432 dbname=app user=… sslmode=disable',
-  expr: "Boolean expression over row fields, e.g. amount > 0 AND status != 'CANCELLED'",
-  conflictKey: 'Comma-separated key columns used for upsert matching.',
-  table: 'Destination table. Created automatically if Auto-migrate is on.',
-  onConflict: 'insert = append rows · upsert = insert or update on the conflict key · ignore = skip duplicates.',
-  autoMigrate: 'Create the table if missing and add new columns as they appear (pairs well with additive schema drift).',
-  batchSize: 'Rows per INSERT batch. Higher = faster, more memory. 1000–5000 is typical.',
-  fields: 'JSON map of output field → expression.',
-  query: 'Full SELECT statement. Overrides table/orderKey when set.',
-  brokers: 'Comma-separated host:port list, e.g. broker-1:9092, broker-2:9092',
-  recordElement: 'XML element that marks one record, e.g. "order".',
-  key: 'Object key template, supports ${date}, ${uuid}, ${runId}.',
-  endpoint: 'Custom S3-compatible endpoint (MinIO/Ceph), e.g. http://minio:9000. Leave empty for real AWS S3.',
-  forcePathStyle: 'Path-style addressing (bucket in the URL path). Required for MinIO and most S3-compatible stores.',
-  rollMaxBytes: 'Close & upload the current object once it reaches this many bytes. 0 = one object per run (no size roll).',
-  rollMaxSeconds: 'Close & upload the current object after it has been open this many seconds. 0 = no time-based roll.',
-  accessKeyIdEnv: 'Name of the env var holding the access key ID (e.g. AWS_ACCESS_KEY_ID). Keeps the secret out of the pipeline file.',
-  secretAccessKeyEnv: 'Name of the env var holding the secret access key. Keeps the secret out of the pipeline file.',
-  rules: 'JSON array of field rules: [{ "field": "amount", "notNull": true }]',
-  expectations: 'JSON array of DQ expectations (expectColumnNotNull, expectValuesInSet, …).',
-  url: 'Enrichment endpoint. Use {keyField} as the placeholder, e.g. https://api/enrich/{id} — substituted per row.',
-  headerKVRegex: 'Regex with two capture groups (key, value) matching each header line. Default handles “Key  <2+ spaces>  Value”.',
-  bodyColumnMarker: 'Regex identifying the line that names the table columns, e.g. ^MEASUREMENT\\s',
-  bodyDelimiter: 'Regex that splits each body row into fields. Default \\s+ handles whitespace-aligned tables.',
-  broadcastHeader: 'Stamp every header attribute onto each body row so downstream transforms and the sink see file-level context.',
-  template: 'Go text/template. Available: .Rows (each row as a map), .Count, .Columns, .Attr (header fields). Helpers: rpad, lpad, padc, sci, upper, lower, trim, add, seq.',
-  templatePath: 'Path to a .tmpl file. Overrides the inline template when set.',
-  source: 'Any text or JSON field to structure into columns — a log line, a delimited blob, an embedded JSON string, a composite key, etc. Not just logs (e.g. message).',
-  pattern: 'Regex with named groups (?P<name>…); each group becomes a column. Add (?s) to let . span multiple lines (e.g. stitched stack traces).',
-  prefix: 'Optional prefix added to each extracted column name (JSON mode), e.g. log_.',
-  keepSource: 'Keep the original source field alongside the extracted columns.',
-  // podlog (K8s pod-log collector)
-  root: 'Directory to tail CRI pod logs from (default /var/log/pods). Point it at a local folder for testing.',
-  node: 'Node name stamped onto every record and metrics labels — usually the K8s node this collector runs on.',
-  positionFile: 'Crash-safe offset registry file — lets the collector resume where it left off after a restart. Recommended in production.',
-  fromBeginning: 'On: read existing log files from the start. Off: tail only new lines (from end of file).',
-  bounded: 'On (test/drain): stop with EOF once all logs are read. Off: run as a continuous live collector.',
-  pollMs: 'How often (ms) to poll idle files for new lines. Default 500.',
-  includeNamespaces: 'JSON array — if non-empty, ONLY these namespaces are tailed, e.g. ["team-a","team-b"]. Empty = all.',
-  excludeNamespaces: 'JSON array of namespaces to skip, e.g. ["kube-system","kube-public"].',
-}; const SOURCE_TYPES = ['csv', 'tsv', 'fixedwidth', 'sectioned', 'parquet', 'xml', 'jsonlines', 'jdbc', 'kafka', 's3', 'gcs', 'adls', 'podlog'];
-const SINK_TYPES = ['jdbc', 'parquet', 'csv', 'jsonlines', 'template', 'kafka', 's3', 'gcs', 'adls', 'null'];
-// Friendly, generic display labels for stage types whose engine id is jargon.
-// The engine id (used in the .datapipeline file) is unchanged; only the picker
-// label differs. Types without an entry fall back to their raw id.
-const TYPE_LABELS: Record<string, string> = {
-  sectioned: 'Text Document',
-  template: 'Custom Text',
-  null: 'Null (discard)',
-  podlog: 'Pod Logs (K8s)',
-};
-function typeLabel(t: string): string {
-  return TYPE_LABELS[t] || t;
-}
-
-// Friendly display names for transform stage types, so a node/breadcrumb shows
-// "Data Quality" instead of the raw config key "dq". Falls back to the raw type
-// for anything not listed.
-const TF_LABELS: Record<string, string> = {
-  filter: 'Filter',
-  map: 'Map',
-  mapper: 'Map',
-  validate: 'Validate',
-  lookup: 'Lookup',
-  hwm: 'High-Water Mark',
-  dq: 'Data Quality',
-  schemadrift: 'Schema Drift',
-  parse: 'Parse',
-  window: 'Window (aggregate)',
-  join: 'Join',
-  cast: 'Cast',
-  explode: 'Explode',
-  flatten: 'Flatten',
-  router: 'Router / Split',
-  split: 'Router / Split',
-};
-function transformLabel(t: string): string {
-  return TF_LABELS[t] || t;
-}
-
-// Per-type glyphs so a join, router, validate and filter are visually distinct
-// on the canvas and in the palette instead of a single generic "ƒ". Single
-// characters only, so they sit cleanly in the fixed-size icon box.
-const TF_ICON: Record<string, string> = {
-  filter: '▽', map: 'ƒ', mapper: 'ƒ', cast: '⇄', parse: '❮',
-  validate: '✓', dq: '◉', lookup: '⌕', hwm: '⇡', schemadrift: '⟳',
-  window: '⧖', join: '⨝', union: '⋃', explode: '✶', flatten: '≡',
-  router: '⋔', split: '⋔',
-};
-const SRC_ICON: Record<string, string> = {
-  csv: 'C', tsv: 'T', fixedwidth: '▦', sectioned: '▦', parquet: '◱',
-  xml: '⟨', jsonlines: '⌗', jdbc: 'J', kafka: 'K', objstore: '◇',
-  s3: '◇', gcs: '◇', adls: '◇', podlog: '☰',
-};
-const SINK_ICON: Record<string, string> = {
-  jdbc: 'J', kafka: 'K', parquet: '◱', objstore: '◇', s3: '◇',
-  gcs: '◇', adls: '◇', jsonlines: '⌗', csv: 'C', null: '∅', template: '❏',
-};
-function nodeIcon(kind: string, type: string): string {
-  if (kind === 'source') return SRC_ICON[type] || '⇥';
-  if (kind === 'sink') return SINK_ICON[type] || '⇤';
-  return TF_ICON[type] || 'ƒ';
-}
-// Fan-in / fan-out hint shown in the palette (blank for the 1→1 majority).
-const TF_ARITY: Record<string, string> = {
-  join: '2→1', union: 'N→1', router: '1→N', split: '1→N',
-  validate: '1→2', dq: '1→2', explode: '1→N',
-};
-
-// Fixed emitted schemas for sources whose columns are NOT declared in the
-// .datapipeline JSON (the engine knows them internally). Surfacing them here
-// means the map editor's "Available data" palette is populated immediately —
-// users see the $fields to map from without first running a preview. Keyed by
-// source type.
-const SOURCE_FIXED_SCHEMA: Record<string, Array<{ name: string; type: string }>> = {
-  podlog: [
-    { name: 'namespace', type: 'string' },
-    { name: 'pod', type: 'string' },
-    { name: 'container', type: 'string' },
-    { name: 'uid', type: 'string' },
-    { name: 'stream', type: 'string' },
-    { name: 'log_time', type: 'string' },
-    { name: 'message', type: 'string' },
-    { name: 'node', type: 'string' },
-    { name: 'idempotency_key', type: 'string' },
-  ],
-};
-
-// Columns a `parse` transform appends: regex named-capture groups, or the JSON
-// field allow-list (with optional prefix). Empty when unknown (json without an
-// explicit fields list), matching the runtime.
-function parseProducedColumns(t: any): string[] {
-  if (!t || t.type !== 'parse') return [];
-  const out: string[] = [];
-  if (String(t.mode || 'regex') === 'json') {
-    const prefix = typeof t.prefix === 'string' ? t.prefix : '';
-    if (Array.isArray(t.fields)) for (const f of t.fields) out.push(prefix + String(f));
-  } else {
-    const pat = String(t.pattern || '');
-    const re = /\(\?P<([A-Za-z_][A-Za-z0-9_]*)>/g;
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(pat)) !== null) out.push(m[1]);
-  }
-  if (String(t.onError) === 'route') out.push('_parse_error');
-  return out;
-}
 // Special selection id for the pipeline-level settings panel (not a real node).
 const SETTINGS_NODE = '__pipeline_settings__';
 // A DLQ destination is any real sink type (never 'dlq' itself — DLQ is a route,
 // not a sink type).
 const DLQ_DEST_TYPES = ['jdbc', 'parquet', 'csv', 'jsonlines', 's3', 'gcs', 'adls', 'null'];
-
-// Starter config for a freshly chosen source/sink type — matches the keys each
-// backend reads, so a newly switched stage is immediately runnable/editable.
-function defaultConfigFor(kind: 'source' | 'sink', type: string): Record<string, unknown> {
-  const src: Record<string, Record<string, unknown>> = {
-    csv: { path: './data/input.csv', hasHeader: true, delimiter: ',', columns: [] },
-    tsv: { path: './data/input.tsv', hasHeader: true, columns: [] },
-    fixedwidth: { path: './data/input.dat', encoding: 'utf-8', recordLength: 0, columns: [] },
-    sectioned: {
-      path: './data/input.txt',
-      headerKVRegex: '^(\\S[\\S ]*?)\\s{2,}(.*?)\\s*$',
-      bodyColumnMarker: '^COLUMNS\\s',
-      bodyDelimiter: '\\s+',
-      broadcastHeader: true,
-      columns: [],
-    },
-    parquet: { path: './data/input.parquet', rowGroupParallelism: 4 },
-    xml: { path: './data/input.xml', recordElement: 'record' },
-    jsonlines: { path: './data/input.jsonl' },
-    jdbc: { driver: 'postgres', dsn: '', table: '', where: '', orderKey: '', batchSize: 5000 },
-    kafka: { brokers: '', topic: '', groupId: 'dp-consumer', startOffset: 'earliest', deserializer: 'json', mode: 'batch', stopAtCurrentEnd: true },
-    s3: { bucket: '', prefix: '', region: 'us-east-1', format: 'csv' },
-    gcs: { bucket: '', prefix: '', format: 'csv' },
-    adls: { bucket: '', prefix: '', format: 'csv' },
-    podlog: {
-      root: '/var/log/pods',
-      node: '',
-      positionFile: './out/positions.json',
-      fromBeginning: false,
-      bounded: false,
-      pollMs: 500,
-      includeNamespaces: [],
-      excludeNamespaces: ['kube-system'],
-      multiline: { startPattern: '', flushIdleMs: 2000, maxLines: 500 },
-    },
-  };
-  const sink: Record<string, Record<string, unknown>> = {
-    jdbc: { driver: 'postgres', dsn: '', table: '', batchSize: 1000, onConflict: 'insert', autoMigrate: true },
-    parquet: { path: './out/output.parquet', compression: 'snappy', rowGroupSize: 100000 },
-    csv: { path: './out/output.csv', delimiter: ',', writeHeader: true },
-    jsonlines: { path: './out/output.jsonl' },
-    template: { path: './out/{{index .Attr "id"}}.txt', template: '{{range .Rows}}{{.}}\n{{end}}' },
-    kafka: { brokers: '', topic: '', ackMode: 'all', serializer: 'json' },
-    s3: {
-      bucket: '', key: '${date}/part-${uuid}.parquet', format: 'parquet',
-      region: 'us-east-1', endpoint: '', forcePathStyle: false,
-      accessKeyIdEnv: '', secretAccessKeyEnv: '',
-      rollMaxBytes: 0, rollMaxSeconds: 0,
-    },
-    gcs: { bucket: '', key: '${date}/part-${uuid}.parquet', format: 'parquet' },
-    adls: { bucket: '', key: '${date}/part-${uuid}.parquet', format: 'parquet' },
-    null: {},
-  };
-  return (kind === 'source' ? src[type] : sink[type]) || {};
-}
 
 // Starter DLQ destination options for a chosen DLQ destination sink type.
 function defaultDlqOptions(type: string): Record<string, unknown> {
@@ -752,25 +46,6 @@ function defaultDlqOptions(type: string): Record<string, unknown> {
     null: {},
   };
   return m[type] || {};
-}
-
-function humanize(k: string): string {
-  return FIELD_LABELS[k] || k.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase());
-}
-function isBoolField(k: string, v: string): boolean {
-  return v === 'true' || v === 'false' ||
-    /^(has|is|enable|delete|trim|nullable|repeating|download|autoMigrate|caseSensitive|deleteOnSuccess|forcePathStyle)/i.test(k);
-}
-function isFileField(k: string): boolean {
-  return /(^path$|^root$|_path$|file$|dir$|directory$)/i.test(k);
-}
-function isNumField(k: string, v: string): boolean {
-  return /(size|port|workers|batches|interval|memory|parallelism|scale|length|start|retries|threshold|rows|seconds|delay|lines|concurrency|ms$|bytes|offset|count|limit|poll)/i.test(k) &&
-    v.trim() !== '' && !isNaN(Number(v));
-}
-function isJsonField(v: string): boolean {
-  const t = v.trim();
-  return t.startsWith('{') || t.startsWith('[');
 }
 
 // browse callbacks keyed by request id (resolved via browseResult host message)
@@ -1008,6 +283,216 @@ function renderUnionSourcesEditor(node: Node): HTMLElement {
   add.onclick = () => { withArr.push({ type: 'csv', path: '' }); setCfgValue(node, 'with', withArr); renderEditor(); };
   box.appendChild(add);
   f.appendChild(box);
+  return f;
+}
+
+// Typed editor for the broadcast transform's `sinks` list (name + type +
+// primary location field, like renderUnionSourcesEditor's "with" list), plus
+// an "Advanced config (JSON)" escape hatch per card so any sink-specific key
+// beyond the primary location field is still reachable — never silently
+// dropped even for a sink type this editor doesn't have a dedicated field for.
+function renderBroadcastSinksEditor(node: Node): HTMLElement {
+  const f = el('div', 'fld');
+  f.appendChild(el('div', 'k', 'Fan-out sinks'));
+  f.appendChild(el('div', 'hint', 'Every row is duplicated to each sink below, then the batch continues downstream (unless Passthrough is off).'));
+  const target = cfgTarget(node) as any;
+  const sinks: any[] = Array.isArray(target.sinks) ? target.sinks : [];
+  const save = () => setCfgValue(node, 'sinks', sinks);
+  const BC_SINK_TYPES = ['jsonlines', 'csv', 'parquet', 'avro', 'kafka', 'jdbc', 's3', 'gcs', 'adls', 'rest', 'template', 'null'];
+  const locKey = (t: string) => (t === 'jdbc' ? 'table' : ['s3', 'gcs', 'adls'].includes(t) ? 'key' : t === 'kafka' ? 'topic' : t === 'rest' ? 'url' : t === 'null' ? '' : 'path');
+
+  const box = el('div', 'rcards');
+  sinks.forEach((s, i) => {
+    if (!s.sinkConfig || typeof s.sinkConfig !== 'object') s.sinkConfig = {};
+    const card = el('div', 'rcard');
+    const head = el('div', 'rhead');
+    const nameInp = document.createElement('input');
+    nameInp.placeholder = 'name (e.g. s3-archive)';
+    nameInp.value = s.name || '';
+    nameInp.onchange = () => { s.name = nameInp.value.trim(); save(); };
+    const sel = document.createElement('select');
+    const cur = s.sinkType || 'jsonlines';
+    (BC_SINK_TYPES.includes(cur) ? BC_SINK_TYPES : [cur, ...BC_SINK_TYPES]).forEach((o) => {
+      const op = document.createElement('option'); op.value = o; op.textContent = typeLabel(o);
+      if (o === cur) op.selected = true; sel.appendChild(op);
+    });
+    sel.onchange = () => {
+      const old = locKey(s.sinkType || 'jsonlines'); const neu = locKey(sel.value);
+      if (old && neu && old !== neu && s.sinkConfig[old] != null) { s.sinkConfig[neu] = s.sinkConfig[old]; delete s.sinkConfig[old]; }
+      s.sinkType = sel.value; save(); renderEditor();
+    };
+    const del = el('span', 'del', '✕'); del.title = 'Remove sink';
+    del.onclick = () => { sinks.splice(i, 1); save(); renderEditor(); };
+    head.appendChild(nameInp);
+    head.appendChild(sel);
+    head.appendChild(del);
+    card.appendChild(head);
+
+    const lk = locKey(s.sinkType || 'jsonlines');
+    if (lk) {
+      const row = el('div', 'rrow');
+      row.appendChild(el('label', undefined, lk === 'table' ? 'Table' : lk === 'key' ? 'Object' : lk === 'topic' ? 'Topic' : lk === 'url' ? 'URL' : 'Path'));
+      const inp = document.createElement('input');
+      inp.placeholder = lk === 'table' ? 'e.g. orders_archive' : lk === 'key' ? 'e.g. archive/${date}.jsonl' : lk === 'topic' ? 'e.g. orders-changed' : lk === 'url' ? 'https://…' : 'e.g. ./out/archive.jsonl';
+      inp.value = s.sinkConfig[lk] != null ? String(s.sinkConfig[lk]) : '';
+      inp.onchange = () => { const v = inp.value.trim(); if (v === '') delete s.sinkConfig[lk]; else s.sinkConfig[lk] = v; save(); };
+      row.appendChild(inp);
+      card.appendChild(row);
+    }
+
+    const advRow = el('div', 'rrow');
+    advRow.appendChild(el('label', undefined, 'Advanced'));
+    const ta = document.createElement('textarea');
+    ta.rows = 2;
+    ta.value = JSON.stringify(s.sinkConfig);
+    ta.onchange = () => {
+      try {
+        s.sinkConfig = JSON.parse(ta.value || '{}');
+        ta.style.borderColor = '';
+        save();
+      } catch {
+        ta.style.borderColor = 'var(--red)';
+        toast('err', 'Advanced config is not valid JSON');
+      }
+    };
+    advRow.appendChild(ta);
+    card.appendChild(advRow);
+    card.appendChild(el('div', 'muted', '<div style="font-size:10.5px;margin-top:2px">Full sinkConfig as JSON — any key this sink type needs beyond the field above.</div>'));
+
+    box.appendChild(card);
+  });
+  const add = el('button', 'addcard', '＋ Add sink');
+  add.onclick = () => {
+    sinks.push({ name: 'sink' + (sinks.length + 1), sinkType: 'jsonlines', sinkConfig: { path: './out/broadcast-' + (sinks.length + 1) + '.jsonl' } });
+    setCfgValue(node, 'sinks', sinks); renderEditor();
+  };
+  box.appendChild(add);
+  f.appendChild(box);
+  return f;
+}
+
+// Key/value map editor — used by the rest source/sink's `headers` and
+// `queryParams` (both a flat object of string→string) instead of a raw JSON
+// textarea. A small first step towards descriptor-driven widgets: the SHAPE
+// (flat string map) picks the widget, same idea as renderField's own
+// isBoolField/isNumField/isJsonField heuristics, just for one more shape.
+function renderKVMapEditor(node: Node, key: string, label: string): HTMLElement {
+  const f = el('div', 'fld');
+  f.appendChild(el('div', 'k', label));
+  const target = cfgTarget(node) as any;
+  const map: Record<string, string> = target[key] && typeof target[key] === 'object' ? target[key] : {};
+  const save = () => setCfgValue(node, key, map);
+  const box = el('div', 'rcards');
+  Object.keys(map).forEach((mapKey) => {
+    const row = el('div', 'rcard');
+    const head = el('div', 'rhead');
+    const kInp = document.createElement('input');
+    kInp.placeholder = 'name'; kInp.value = mapKey;
+    kInp.onchange = () => {
+      const v = kInp.value.trim();
+      if (v && v !== mapKey) { map[v] = map[mapKey]; delete map[mapKey]; save(); renderEditor(); }
+    };
+    const vInp = document.createElement('input');
+    vInp.placeholder = 'value'; vInp.value = map[mapKey];
+    vInp.onchange = () => { map[mapKey] = vInp.value; save(); };
+    const del = el('span', 'del', '✕');
+    del.onclick = () => { delete map[mapKey]; save(); renderEditor(); };
+    head.appendChild(kInp); head.appendChild(vInp); head.appendChild(del);
+    row.appendChild(head);
+    box.appendChild(row);
+  });
+  const add = el('button', 'addcard', '＋ Add ' + label.toLowerCase().replace(/s$/, ''));
+  add.onclick = () => {
+    let n = 1; while (('key' + n) in map) n++;
+    map['key' + n] = ''; save(); renderEditor();
+  };
+  box.appendChild(add);
+  f.appendChild(box);
+  return f;
+}
+
+// Array-of-numbers editor (e.g. rest sink's `successStatusCodes`) — a single
+// comma-separated input instead of a JSON textarea for `[200, 201, 204]`.
+function renderNumberListEditor(node: Node, key: string, label: string, hint?: string): HTMLElement {
+  const f = el('div', 'fld');
+  f.appendChild(el('div', 'k', label));
+  const target = cfgTarget(node) as any;
+  const arr: number[] = Array.isArray(target[key]) ? target[key] : [];
+  const inp = el('input', 'v') as HTMLInputElement;
+  inp.placeholder = 'e.g. 200, 201, 204';
+  inp.value = arr.join(', ');
+  inp.onchange = () => {
+    const nums = inp.value.split(',').map((s) => Number(s.trim())).filter((n) => !isNaN(n));
+    setCfgValue(node, key, nums);
+  };
+  f.appendChild(inp);
+  if (hint) f.appendChild(el('div', 'hint', hint));
+  return f;
+}
+
+// source/rest's `pagination` object — a type-aware form instead of a raw JSON
+// textarea, mirroring the wireframe's "the form is data, not code" widget
+// model on a small scale: the visible sub-fields change with `pagination.type`.
+const REST_PAGINATION_FIELDS: Record<string, Array<{ key: string; label: string; placeholder: string }>> = {
+  none: [],
+  page: [
+    { key: 'pageParam', label: 'Page param', placeholder: 'page' },
+    { key: 'pageSizeParam', label: 'Page-size param', placeholder: 'limit' },
+    { key: 'startPage', label: 'Start page', placeholder: '1' },
+    { key: 'pageSize', label: 'Page size', placeholder: '100' },
+    { key: 'maxPages', label: 'Max pages (0=unlimited)', placeholder: '0' },
+  ],
+  offset: [
+    { key: 'offsetParam', label: 'Offset param', placeholder: 'offset' },
+    { key: 'limitParam', label: 'Limit param', placeholder: 'limit' },
+    { key: 'pageSize', label: 'Page size', placeholder: '100' },
+    { key: 'maxPages', label: 'Max pages (0=unlimited)', placeholder: '0' },
+  ],
+  cursor: [
+    { key: 'nextCursorPath', label: 'Next-cursor JSON path', placeholder: 'data.nextCursor' },
+    { key: 'cursorParam', label: 'Cursor query param', placeholder: 'cursor' },
+    { key: 'nextUrlPath', label: 'Next-URL JSON path (alt.)', placeholder: 'data.nextUrl' },
+  ],
+};
+function renderRestPaginationEditor(node: Node): HTMLElement {
+  const f = el('div', 'fld');
+  f.appendChild(el('div', 'k', 'Pagination'));
+  const target = cfgTarget(node) as any;
+  const pag: Record<string, unknown> = target.pagination && typeof target.pagination === 'object' ? target.pagination : { type: 'none' };
+  const save = () => setCfgValue(node, 'pagination', pag);
+
+  const typeRow = el('div', 'rrow');
+  typeRow.appendChild(el('label', undefined, 'Type'));
+  const sel = document.createElement('select');
+  const cur = String(pag.type || 'none');
+  Object.keys(REST_PAGINATION_FIELDS).forEach((o) => {
+    const op = document.createElement('option'); op.value = o; op.textContent = o;
+    if (o === cur) op.selected = true; sel.appendChild(op);
+  });
+  sel.onchange = () => { pag.type = sel.value; save(); renderEditor(); };
+  typeRow.appendChild(sel);
+  const wrap = el('div', 'rcard');
+  wrap.appendChild(typeRow);
+
+  const NUMERIC_KEYS = new Set(['startPage', 'pageSize', 'maxPages']);
+  (REST_PAGINATION_FIELDS[cur] || []).forEach((spec) => {
+    const row = el('div', 'rrow');
+    row.appendChild(el('label', undefined, spec.label));
+    const inp = document.createElement('input');
+    inp.placeholder = spec.placeholder;
+    inp.value = pag[spec.key] != null ? String(pag[spec.key]) : '';
+    inp.onchange = () => {
+      const v = inp.value.trim();
+      if (v === '') delete pag[spec.key];
+      else if (NUMERIC_KEYS.has(spec.key)) pag[spec.key] = Number(v);
+      else pag[spec.key] = v;
+      save();
+    };
+    row.appendChild(inp);
+    wrap.appendChild(row);
+  });
+  f.appendChild(wrap);
+  f.appendChild(el('div', 'hint', 'How the source pages through the full result set. See docs/sources/rest.md.'));
   return f;
 }
 
@@ -1615,7 +1100,10 @@ function pruneEmptySettings(): void {
   if (doc.observability && isEmpty(doc.observability.audit)) delete doc.observability.audit;
   if (doc.observability && isEmpty(doc.observability.lineage)) delete doc.observability.lineage;
   if (doc.incremental && isEmpty(doc.incremental.storeOptions)) delete doc.incremental.storeOptions;
-  for (const k of ['checkpoint', 'incremental', 'performance', 'scaling', 'observability']) {
+  if (doc.contract && isEmpty(doc.contract.reconciliation)) delete doc.contract.reconciliation;
+  if (doc.contract && Array.isArray(doc.contract.schema) && !doc.contract.schema.length) delete doc.contract.schema;
+  if (doc.contract && Array.isArray(doc.contract.expectations) && !doc.contract.expectations.length) delete doc.contract.expectations;
+  for (const k of ['checkpoint', 'incremental', 'performance', 'scaling', 'observability', 'contract']) {
     if (isEmpty(doc[k])) delete doc[k];
   }
 }
@@ -1700,8 +1188,9 @@ function stGroup(title: string, subtitle: string, ...fields: HTMLElement[]): HTM
       : /reliab|checkpoint|incremental/i.test(title) ? 'rel'
         : /load|performance/i.test(title) ? 'perf'
           : /scal/i.test(title) ? 'scale'
-            : /observ|metric/i.test(title) ? 'obs' : 'exec';
-  const glyph = { exec: '◧', trig: '⇥', rel: '❖', perf: '⚡', scale: '⤢', obs: '📈' }[cat] || '◧';
+            : /observ|metric/i.test(title) ? 'obs'
+              : /contract/i.test(title) ? 'contract' : 'exec';
+  const glyph = { exec: '◧', trig: '⇥', rel: '❖', perf: '⚡', scale: '⤢', obs: '📈', contract: '☑' }[cat] || '◧';
   const g = el('div', 'setgroup sg-' + cat);
   const open = !!(S.setOpen && S.setOpen[title]);
   g.classList.toggle('collapsed', !open);
@@ -1797,6 +1286,8 @@ function renderPipelineSettings(): HTMLElement {
       'Trigger · Invocation': false,
       'Reliability · Checkpoint & resume': false,
       'Reliability · Incremental load': false,
+      'Data Contract': false,
+      'Data Contract · Reconciliation': false,
       'Load strategy · Performance': false,
       'Scaling': false,
       'Observability · Metrics': false,
@@ -1876,6 +1367,64 @@ function renderPipelineSettings(): HTMLElement {
     }
   }
   ib.appendChild(stGroup('Reliability · Incremental load', 'Read only new rows each run', ...incFields));
+
+  // ── Data Contract (schema + quality gate + SLA) ─────────────────────────────
+  // A portable schema + data-quality + SLA + reconciliation artifact, checked
+  // at both design time (-validate) and run time — see docs/data-contracts.md.
+  // Entirely absent from the pipeline until a field here is actually set:
+  // pruneEmptySettings() strips `contract` back out if it ends up empty, so
+  // merely opening this panel never injects an unenforceable contract.
+  const contractObj = settingsSection(doc, 'contract');
+  const contractFields: HTMLElement[] = [
+    stText(contractObj, 'version', 'Version', 'e.g. 1.0.0', 'Informational — not enforced, carried through for audit/documentation.'),
+    stSelect(contractObj, 'onViolation', 'On violation', [
+      ['route', 'Route — quarantine failing rows'],
+      ['fail', 'Fail — abort the run'],
+      ['warn', 'Warn — log only, rows still flow'],
+      ['drop', 'Drop — discard the whole batch'],
+    ], "Same vocabulary as the dq transform's onFail — applies when the quality gate below is violated.", true),
+  ];
+  if (String(contractObj.onViolation || 'route') === 'route') {
+    contractFields.push(stSelect(contractObj, 'errorSinkType', 'Error sink type', SINK_TYPES.map((t) => [t, typeLabel(t)] as [string, string]), 'Where quarantined rows are written.'));
+  }
+  contractFields.push(stNum(contractObj, 'qualityThreshold', 'Quality threshold', '0.95', 'Overall expectations score (0–1) below which On violation fires.'));
+  contractFields.push(stNum(contractObj, 'maxDurationMs', 'Max duration (ms)', '600000', 'SLA ceiling on total run wall-clock time (0 or blank = no limit). Exceeding it marks the run "partial" without touching its data.'));
+
+  const schemaRow = el('div', 'fld');
+  schemaRow.appendChild(el('div', 'k', 'Schema (JSON)'));
+  const schemaTa = document.createElement('textarea');
+  schemaTa.className = 'v';
+  schemaTa.rows = 2;
+  schemaTa.placeholder = '[{"name":"amount","type":"decimal"}]';
+  schemaTa.value = JSON.stringify(contractObj.schema || []);
+  schemaTa.onchange = () => {
+    try { contractObj.schema = JSON.parse(schemaTa.value || '[]'); schemaTa.style.borderColor = ''; saveSettings(); }
+    catch { schemaTa.style.borderColor = 'var(--red)'; toast('err', 'Schema is not valid JSON'); }
+  };
+  schemaRow.appendChild(schemaTa);
+  schemaRow.appendChild(el('div', 'hint', "The contract's expected OUTPUT columns. Cross-checked at design time against Source → Columns when both are declared."));
+  contractFields.push(schemaRow);
+
+  contractFields.push(renderContractExpectationsEditor(contractObj));
+  ib.appendChild(stGroup('Data Contract', 'Schema + quality gate + SLA — checked at design time and run time', ...contractFields));
+
+  // ── Data Contract · Reconciliation ──────────────────────────────────────────
+  // An independent post-run check — entirely separate from schema/expectations
+  // above and from the pipeline's own RowsProcessed/RowsWritten counters.
+  const reconObj = settingsSection(contractObj, 'reconciliation');
+  const reconFields: HTMLElement[] = [
+    stBool(reconObj, 'enabled', 'Enable reconciliation', "Compares a fresh source row count against a fresh sink row count — catches silent data loss the pipeline's own counters would miss.", true),
+  ];
+  if (reconObj.enabled) {
+    reconFields.push(stText(reconObj, 'sourceCountQuery', 'Source count query', 'SELECT COUNT(*) FROM orders', 'Required. Only jdbc source/sink support this today — other types are skipped with a warning at run time.'));
+    reconFields.push(stText(reconObj, 'sinkCountQuery', 'Sink count query', 'SELECT COUNT(*) FROM orders_dw', 'Required. Only jdbc source/sink support this today.'));
+    reconFields.push(stNum(reconObj, 'maxDriftPct', 'Max drift (fraction)', '0', 'Allowed drift between source/sink counts before it is a mismatch (0 = exact match).'));
+    reconFields.push(stSelect(reconObj, 'onMismatch', 'On mismatch', [
+      ['warn', 'Warn — record only'],
+      ['fail', 'Fail — mark the run "partial"'],
+    ], 'What happens when the drift exceeds Max drift.'));
+  }
+  ib.appendChild(stGroup('Data Contract · Reconciliation', 'Independent source/sink row-count check (jdbc only)', ...reconFields));
 
   // ── Performance / load strategy ────────────────────────────────────────────
   const perf = settingsSection(doc, 'performance');
@@ -2686,18 +2235,7 @@ function renderRulesEditor(node: Node): HTMLElement {
   return f;
 }
 
-// Catalogue of DQ expectation types with their parameter shapes, mirroring the
-// engine's expectationFactories. Each entry declares which fields to render.
-const DQ_EXPECTATIONS: Array<{ type: string; label: string; params: Array<{ key: string; label: string; kind: 'number' | 'text' | 'list' | 'bool' }> }> = [
-  { type: 'expectColumnNotNull', label: 'Column not null', params: [{ key: 'threshold', label: 'Threshold', kind: 'number' }] },
-  { type: 'expectColumnUnique', label: 'Column unique', params: [{ key: 'threshold', label: 'Threshold', kind: 'number' }] },
-  { type: 'expectColumnValuesBetween', label: 'Values between', params: [{ key: 'min', label: 'Min', kind: 'number' }, { key: 'max', label: 'Max', kind: 'number' }] },
-  { type: 'expectColumnValuesInSet', label: 'Values in set', params: [{ key: 'values', label: 'Allowed', kind: 'list' }, { key: 'caseSensitive', label: 'Case-sensitive', kind: 'bool' }] },
-  { type: 'expectTableRowCountBetween', label: 'Row count between', params: [{ key: 'min', label: 'Min', kind: 'number' }, { key: 'max', label: 'Max', kind: 'number' }] },
-  { type: 'expectColumnMeanBetween', label: 'Mean between', params: [{ key: 'min', label: 'Min', kind: 'number' }, { key: 'max', label: 'Max', kind: 'number' }] },
-  { type: 'expectColumnStddevBelow', label: 'Std-dev below', params: [{ key: 'threshold', label: 'Threshold', kind: 'number' }] },
-];
-const DQ_NEEDS_COLUMN = new Set(['expectColumnNotNull', 'expectColumnUnique', 'expectColumnValuesBetween', 'expectColumnValuesInSet', 'expectColumnMeanBetween', 'expectColumnStddevBelow']);
+// (DQ_EXPECTATIONS/DQ_NEEDS_COLUMN now live in ../src/model/stageCatalog — see the import.)
 
 // Structured expectation editor for the `dq` transform. Each expectation is a
 // card: a type picker (plain-language label), a column picker, and only the
@@ -2751,6 +2289,32 @@ function renderExpectationsEditor(node: Node): HTMLElement {
       card.appendChild(row);
     }
 
+    // Referential-integrity's reference dataset is a bounded source config
+    // (any registered source type — csv/jdbc/parquet/…), read once at pipeline
+    // setup, mirroring the join transform's "right" side. A raw-JSON editor
+    // keeps this one card from needing a full per-source-type field set.
+    if (ex.type === 'expectColumnValuesInReferenceDataset') {
+      const rdRow = el('div', 'rrow');
+      rdRow.appendChild(el('label', undefined, 'Ref. dataset'));
+      const ta = document.createElement('textarea');
+      ta.rows = 2;
+      ta.placeholder = '{"type":"csv","path":"customers.csv","hasHeader":true}';
+      ta.value = JSON.stringify(ex.referenceDataset || {});
+      ta.onchange = () => {
+        try {
+          ex.referenceDataset = JSON.parse(ta.value || '{}');
+          ta.style.borderColor = '';
+          save();
+        } catch {
+          ta.style.borderColor = 'var(--red)';
+          toast('err', 'Reference dataset is not valid JSON');
+        }
+      };
+      rdRow.appendChild(ta);
+      card.appendChild(rdRow);
+      card.appendChild(el('div', 'muted', '<div style="font-size:10.5px;margin-top:2px">Any registered source type (bounded — read once, e.g. csv/jdbc/parquet). Matched by string form against "Column".</div>'));
+    }
+
     spec.params.forEach((p) => {
       if (p.kind === 'bool') {
         const tg = el('div', 'rtoggle' + (ex[p.key] ? ' on' : ''));
@@ -2782,6 +2346,116 @@ function renderExpectationsEditor(node: Node): HTMLElement {
   add.onclick = () => {
     exps.push({ type: 'expectColumnNotNull', column: cols[0]?.name || '' });
     setCfgValue(node, 'expectations', exps);
+    renderEditor();
+  };
+  box.appendChild(add);
+  f.appendChild(box);
+  return f;
+}
+
+// Same expectation-card UX as renderExpectationsEditor (shares the
+// DQ_EXPECTATIONS/DQ_NEEDS_COLUMN catalog so the two editors can never drift
+// apart), but for the pipeline-root `contract.expectations` block instead of a
+// `dq` transform stage — writes directly into the settings object via
+// saveSettings() rather than through a Node's cfgTarget(). Columns are
+// computed against the FULL transform chain (a fake sink-ref node) since the
+// contract's expectations validate what's about to reach the sink.
+function renderContractExpectationsEditor(contractObj: any): HTMLElement {
+  const f = el('div', 'fld');
+  f.appendChild(el('div', 'k', 'Expectations'));
+  f.appendChild(el('div', 'hint', "Same expectation catalog as the dq transform's own expectations — auto-appended as a quality gate before the sink."));
+  const exps: any[] = Array.isArray(contractObj.expectations) ? contractObj.expectations : [];
+  const cols = upstreamSchema({ id: '__contract__', kind: 'sink', type: '', nm: '', meta: '', cfg: {}, ref: 'sink' });
+  const save = () => { contractObj.expectations = exps; saveSettings(); };
+
+  const box = el('div', 'rcards');
+  exps.forEach((ex, i) => {
+    const spec = DQ_EXPECTATIONS.find((d) => d.type === ex.type) || DQ_EXPECTATIONS[0];
+    const card = el('div', 'rcard');
+    const head = el('div', 'rhead');
+    const typeSel = document.createElement('select');
+    DQ_EXPECTATIONS.forEach((d) => {
+      const op = document.createElement('option');
+      op.value = d.type; op.textContent = d.label;
+      if (d.type === ex.type) op.selected = true;
+      typeSel.appendChild(op);
+    });
+    typeSel.onchange = () => { ex.type = typeSel.value; save(); renderEditor(); };
+    const del = el('span', 'del', '✕');
+    del.onclick = () => { exps.splice(i, 1); save(); renderEditor(); };
+    head.appendChild(typeSel);
+    head.appendChild(del);
+    card.appendChild(head);
+
+    if (DQ_NEEDS_COLUMN.has(ex.type)) {
+      const row = el('div', 'rrow');
+      row.appendChild(el('label', undefined, 'Column'));
+      const colSel = document.createElement(cols.length ? 'select' : 'input') as HTMLSelectElement | HTMLInputElement;
+      if (cols.length) {
+        const opts = cols.map((c) => c.name);
+        if (ex.column && !opts.includes(ex.column)) opts.unshift(ex.column);
+        opts.forEach((o) => {
+          const op = document.createElement('option');
+          op.value = o; op.textContent = o;
+          if (o === ex.column) (op as HTMLOptionElement).selected = true;
+          colSel.appendChild(op);
+        });
+      } else {
+        (colSel as HTMLInputElement).placeholder = 'column name';
+        (colSel as HTMLInputElement).value = ex.column || '';
+      }
+      colSel.onchange = () => { ex.column = (colSel as HTMLInputElement).value; save(); };
+      row.appendChild(colSel);
+      card.appendChild(row);
+    }
+
+    if (ex.type === 'expectColumnValuesInReferenceDataset') {
+      const rdRow = el('div', 'rrow');
+      rdRow.appendChild(el('label', undefined, 'Ref. dataset'));
+      const ta = document.createElement('textarea');
+      ta.rows = 2;
+      ta.placeholder = '{"type":"csv","path":"customers.csv","hasHeader":true}';
+      ta.value = JSON.stringify(ex.referenceDataset || {});
+      ta.onchange = () => {
+        try { ex.referenceDataset = JSON.parse(ta.value || '{}'); ta.style.borderColor = ''; save(); }
+        catch { ta.style.borderColor = 'var(--red)'; toast('err', 'Reference dataset is not valid JSON'); }
+      };
+      rdRow.appendChild(ta);
+      card.appendChild(rdRow);
+    }
+
+    spec.params.forEach((p) => {
+      if (p.kind === 'bool') {
+        const tg = el('div', 'rtoggle' + (ex[p.key] ? ' on' : ''));
+        tg.innerHTML = `<span class="sw"></span><span class="lbl">${p.label}</span>`;
+        tg.onclick = () => { ex[p.key] = !ex[p.key]; if (!ex[p.key]) delete ex[p.key]; save(); renderEditor(); };
+        card.appendChild(tg);
+        return;
+      }
+      const row = el('div', 'rrow');
+      row.appendChild(el('label', undefined, p.label));
+      const inp = document.createElement('input');
+      if (p.kind === 'number') inp.type = 'number';
+      inp.placeholder = p.kind === 'list' ? 'comma-separated' : '';
+      inp.value = ex[p.key] != null ? (Array.isArray(ex[p.key]) ? ex[p.key].join(', ') : String(ex[p.key])) : '';
+      inp.onchange = () => {
+        const v = inp.value.trim();
+        if (v === '') { delete ex[p.key]; }
+        else if (p.kind === 'number') ex[p.key] = Number(v);
+        else if (p.kind === 'list') ex[p.key] = v.split(',').map((s) => s.trim()).filter(Boolean);
+        else ex[p.key] = v;
+        save();
+      };
+      row.appendChild(inp);
+      card.appendChild(row);
+    });
+    box.appendChild(card);
+  });
+  const add = el('button', 'addcard', '＋ Add expectation');
+  add.onclick = () => {
+    exps.push({ type: 'expectColumnNotNull', column: cols[0]?.name || '' });
+    contractObj.expectations = exps;
+    saveSettings();
     renderEditor();
   };
   box.appendChild(add);
@@ -3080,7 +2754,6 @@ function renderAll() {
   renderTabs();
   renderEditor();
   renderStatus();
-  renderPanel();
 }
 
 // ── tabs ──────────────────────────────────────────────────────────────────
@@ -3259,17 +2932,21 @@ function graphWouldCycle(edges: any[], from: string, to: string): boolean {
   }
   return false;
 }
-function addGraphLink(from: string, to: string): void {
+function addGraphLink(from: string, to: string, toPort?: string): void {
   if (from === to) { toast('warn', 'Cannot connect a stage to itself'); return; }
   const doc = S.doc as any;
   if (!doc.graph) doc.graph = deriveGraph(S.doc);
   const edges: any[] = (doc.graph.edges = doc.graph.edges || []);
-  if (edges.some((e) => gEndpointNode(edgeFrom(e)) === from && gEndpointNode(edgeTo(e)) === to)) { toast('warn', 'That link already exists'); return; }
+  const port = toPort || 'in';
+  if (edges.some((e) => gEndpointNode(edgeFrom(e)) === from && gEndpointNode(edgeTo(e)) === to && (edgeTo(e).split(':')[1] || 'in') === port)) { toast('warn', 'That link already exists'); return; }
   if (graphWouldCycle(edges, from, to)) { toast('err', 'That link would create a cycle'); return; }
   // Port-qualified endpoints, matching deriveGraph: source emits "rows", other
-  // stages emit "out"; every stage receives on "in".
-  const fromKind = ((S.pipe && S.pipe.nodes.find((n) => n.id === from)) || ({} as any)).kind;
-  edges.push([from + ':' + (fromKind === 'source' ? 'rows' : 'out'), to + ':in']);
+  // stages emit "out"; a join receives on "left"/"right" (the ":right" suffix
+  // activates the engine's two-port join — see graphexec.MultiInputOp); every
+  // other stage receives on "in".
+  const allSources = ((S.pipe && S.pipe.nodes) || []).concat((S.pipe && S.pipe.extraSources) || []);
+  const fromKind = (allSources.find((n) => n.id === from) || ({} as any)).kind;
+  edges.push([from + ':' + (fromKind === 'source' ? 'rows' : 'out'), to + ':' + port]);
   persistAndRebuild();
   toast('ok', 'Link added — click it to set its type');
 }
@@ -3533,6 +3210,12 @@ function renderGraphCanvas(cv: HTMLElement): void {
   const exBandY = branchTop + maxBrRow * (BH + BGY);
   p.extraNodes.forEach((n, i) => { pos[n.id] = { x: 24 + i * (BW + GX), y: exBandY, w: BW, h: BH }; });
 
+  // Extra source nodes (self-contained graph sources): their own lane below the
+  // extra sinks, so a 2nd source can be dragged in and wired to a join's "right"
+  // port. Same free-floating drag/position-persist mechanics as extra sinks.
+  const exSrcBandY = exBandY + (p.extraNodes.length ? (BH + GX) : 0);
+  p.extraSources.forEach((n, i) => { pos[n.id] = { x: 24 + i * (BW + GX), y: exSrcBandY, w: BW, h: BH }; });
+
   // Apply saved overrides.
   for (const id in saved) if (pos[id]) { pos[id].x = saved[id].x; pos[id].y = saved[id].y; }
 
@@ -3588,15 +3271,29 @@ function renderGraphCanvas(cv: HTMLElement): void {
     svg.appendChild(rub);
     let hov: HTMLElement | null = null;
     const clearHov = () => { if (hov) hov.classList.remove('linktarget'); hov = null; };
-    const targetAt = (cx: number, cy: number): HTMLElement | null => {
+    // A join node has two stacked input ports (left/right — see the wireframe).
+    // Since ports are visual-only dots (the real drop target is the node card),
+    // infer WHICH port from where inside the card's bounding box the cursor is:
+    // top half → left (the main/backbone input), bottom half → right (the
+    // second input that activates the engine's two-port join).
+    const targetAt = (cx: number, cy: number): { node: HTMLElement; port: string } | null => {
       const el0 = document.elementFromPoint(cx, cy) as HTMLElement | null;
       const node = el0 ? (el0.closest('.gnode[data-gid]') as HTMLElement | null) : null;
-      return node && node.dataset.gid !== fromId ? node : null;
+      if (!node || node.dataset.gid === fromId) return null;
+      const gid = node.dataset.gid;
+      const tn = gid ? p.nodes.find((n) => n.id === gid) : undefined;
+      let port = 'in';
+      if (tn && tn.type === 'join') {
+        const r = node.getBoundingClientRect();
+        port = r.height && (cy - r.top) / r.height > 0.5 ? 'right' : 'left';
+      }
+      return { node, port };
     };
     const move = (m: MouseEvent) => {
       const lx = (m.clientX - wrapRect.left) / z, ly = (m.clientY - wrapRect.top) / z;
       rub.setAttribute('d', `M ${a.outX} ${a.outY} C ${(a.outX + lx) / 2} ${a.outY}, ${(a.outX + lx) / 2} ${ly}, ${lx} ${ly}`);
-      const node = targetAt(m.clientX, m.clientY);
+      const t = targetAt(m.clientX, m.clientY);
+      const node = t ? t.node : null;
       if (node !== hov) { clearHov(); if (node) { hov = node; node.classList.add('linktarget'); } }
     };
     const up = (m: MouseEvent) => {
@@ -3604,8 +3301,8 @@ function renderGraphCanvas(cv: HTMLElement): void {
       document.removeEventListener('mouseup', up);
       document.body.style.userSelect = '';
       rub.remove(); clearHov(); _gConnecting = false; _gDragged = true;
-      const node = targetAt(m.clientX, m.clientY);
-      if (node && node.dataset.gid) addGraphLink(fromId, node.dataset.gid);
+      const t = targetAt(m.clientX, m.clientY);
+      if (t && t.node.dataset.gid) addGraphLink(fromId, t.node.dataset.gid, t.port);
     };
     document.addEventListener('mousemove', move);
     document.addEventListener('mouseup', up);
@@ -3622,18 +3319,29 @@ function renderGraphCanvas(cv: HTMLElement): void {
   const redraw = () => {
     svg.querySelectorAll('.gedge, .gedgelabel, .gedgehit').forEach((e) => e.remove());
     wrap.querySelectorAll('.gport, .plabel').forEach((e) => e.remove());
+    // Y offset of a join's left/right input port within its own card (matches
+    // the wireframe's two stacked port dots).
+    const joinPortY = (id: string, port: 'left' | 'right') => {
+      const q = pos[id];
+      return q.y + q.h * (port === 'right' ? 0.68 : 0.32);
+    };
     for (let i = 1; i < p.nodes.length; i++) {
       const pa = p.nodes[i - 1], pb = p.nodes[i];
       const a = cp(pa.id), b = cp(pb.id);
       // The backbone edge is a success link by default, but the user can retype
-      // it (→ no match / condition) — a stored override in doc.graph wins.
+      // it (→ no match / condition) — a stored override in doc.graph wins. A
+      // join owns TWO input ports, so the backbone/main-chain input lands on
+      // its "left" port specifically (the "right" port is reserved for a 2nd
+      // source wired in separately).
       const fromEp = pa.id + ':' + (pa.kind === 'source' ? 'rows' : 'out');
-      const toEp = pb.id + ':in';
+      const toPort = pb.type === 'join' ? 'left' : 'in';
+      const toEp = pb.id + ':' + toPort;
+      const toY = pb.type === 'join' ? joinPortY(pb.id, 'left') : b.inY;
       const ov = graphEdgesOf(S.doc).find((e) => edgeFrom(e) === fromEp && edgeTo(e) === toEp);
       const et = ov ? (edgeType(ov) || 'default') : 'default';
       const etCls = et === 'expression' ? ' cond' : et === 'otherwise' ? ' otherwise' : et === 'error' ? ' error' : '';
       const cls = etCls ? ('manual' + etCls) : ('main' + (S.running ? ' running' : ''));
-      const mp = graphEdge(svg, a.outX, a.outY, b.inX, b.inY, cls);
+      const mp = graphEdge(svg, a.outX, a.outY, b.inX, toY, cls);
       // Fat transparent hit-path so the backbone link is clickable to set its type.
       const mhit = document.createElementNS(GSVG_NS, 'path');
       mhit.setAttribute('d', mp.getAttribute('d') || '');
@@ -3659,10 +3367,18 @@ function renderGraphCanvas(cv: HTMLElement): void {
     }
     p.nodes.forEach((n) => {
       const q = cp(n.id);
-      if (n.kind !== 'source') graphPort(wrap, q.inX, q.inY, gKindCls(n.kind), inPortLabel(n), 'in');
+      if (n.kind !== 'source') {
+        if (n.type === 'join') {
+          graphPort(wrap, q.inX, joinPortY(n.id, 'left'), gKindCls(n.kind), 'left', 'in');
+          graphPort(wrap, q.inX, joinPortY(n.id, 'right'), gKindCls(n.kind), 'right', 'in');
+        } else {
+          graphPort(wrap, q.inX, q.inY, gKindCls(n.kind), inPortLabel(n), 'in');
+        }
+      }
       if (n.kind !== 'sink') connectPort(n.id, q.outX, q.outY, gKindCls(n.kind), outPortLabel(n), 'out');
     });
     p.extraNodes.forEach((n) => { const q = cp(n.id); graphPort(wrap, q.inX, q.inY, gKindCls('sink')); });
+    p.extraSources.forEach((n) => { const q = cp(n.id); connectPort(n.id, q.outX, q.outY, gKindCls('source'), 'rows', 'out'); });
     branchList.forEach((b) => {
       const o = cp(b.owner), nn = cp(b.id);
       const ep = b.flow === 'out'
@@ -3793,6 +3509,12 @@ function renderGraphCanvas(cv: HTMLElement): void {
     wrap.appendChild(b.card);
   });
   p.extraNodes.forEach((n, i) => {
+    const nd = buildGraphNode(n, i, pos[n.id].x, pos[n.id].y, BW);
+    els[n.id] = nd;
+    attachDrag(nd, n.id);
+    wrap.appendChild(nd);
+  });
+  p.extraSources.forEach((n, i) => {
     const nd = buildGraphNode(n, i, pos[n.id].x, pos[n.id].y, BW);
     els[n.id] = nd;
     attachDrag(nd, n.id);
@@ -3963,6 +3685,32 @@ function autoFitCanvas(): void {
 // (reusing the same add logic the toolbar pills use). Collapsible to a strip.
 function addFromPalette(kind: string, type: string, pos?: { x: number; y: number }): void {
   if (kind === 'source') {
+    const existing = (S.doc.source as any);
+    if (existing && existing.type) {
+      // A primary source is already configured — add an EXTRA self-contained
+      // source node instead of silently overwriting it (this used to destroy
+      // the existing source's config with no undo). An extra source is what
+      // lets a join's "right" port be wired to a real second source rather
+      // than the join's own inline `right` config — see the join node's two
+      // ports in renderGraphCanvas.
+      const doc = S.doc as any;
+      if (!doc.graph) doc.graph = deriveGraph(S.doc);
+      doc.graph.nodes = Array.isArray(doc.graph.nodes) ? doc.graph.nodes : [];
+      let n = 1; while (doc.graph.nodes.some((g: any) => g && g.id === 'xsource-' + n)) n++;
+      const id = 'xsource-' + n;
+      doc.graph.nodes.push({ id, kind: 'source', type, ports: { out: ['rows'] }, config: defaultConfigFor('source', type) });
+      if (pos) {
+        doc.ui = doc.ui || {};
+        doc.ui.positions = doc.ui.positions || {};
+        doc.ui.positions[id] = { x: Math.max(0, Math.round(pos.x - 90)), y: Math.max(0, Math.round(pos.y - 36)) };
+      }
+      S.pipe = buildPipe(S.doc);
+      S.selNode = id; S.inspTab = 'Config'; S.inspClosed = false;
+      post({ type: 'save', doc: S.doc });
+      renderEditor();
+      toast('ok', `Added source node → ${typeLabel(type)}. Drag a link from it to wire it in.`);
+      return;
+    }
     (S.doc.source as any) = { type, ...defaultConfigFor('source', type) };
     S.selNode = 'source'; S.inspTab = 'Config'; S.inspClosed = false;
     persistAndRebuild();
@@ -4272,9 +4020,9 @@ function renderCanvas(m: HTMLElement) {
         sel.appendChild(op);
       });
       sel.onchange = () => {
-        if (typeof sn.ref === 'string' && sn.ref.startsWith('xsink-')) {
+        if (typeof sn.ref === 'string' && (sn.ref.startsWith('xsink-') || sn.ref.startsWith('xsource-'))) {
           const gn = graphNodeById(S.doc, sn.ref);
-          if (gn) { gn.type = sel.value; gn.config = defaultConfigFor('sink', sel.value); }
+          if (gn) { gn.type = sel.value; gn.config = defaultConfigFor(sn.kind as 'source' | 'sink', sel.value); }
           persistAndRebuild();
           return;
         }
@@ -4314,6 +4062,13 @@ function renderCanvas(m: HTMLElement) {
       const delRow = el('div', 'insp-type');
       const delBtn = el('button', 'btn sm', '✕ Delete sink node');
       delBtn.onclick = () => removeExtraSink(sn.ref as string);
+      delRow.appendChild(delBtn);
+      ib.appendChild(delRow);
+    }
+    if (typeof sn.ref === 'string' && sn.ref.startsWith('xsource-')) {
+      const delRow = el('div', 'insp-type');
+      const delBtn = el('button', 'btn sm', '✕ Delete source node');
+      delBtn.onclick = () => removeExtraSource(sn.ref as string);
       delRow.appendChild(delBtn);
       ib.appendChild(delRow);
     }
@@ -4414,6 +4169,10 @@ function renderCanvas(m: HTMLElement) {
         else if (k === 'expr' && sn.type === 'filter') ib.appendChild(renderFilterEditor(sn));
         else if (k === 'errorSink' && sn.kind === 'source') ib.appendChild(renderErrorSinkEditor(sn));
         else if (k === 'with' && sn.type === 'union') ib.appendChild(renderUnionSourcesEditor(sn));
+        else if (k === 'sinks' && sn.type === 'broadcast') ib.appendChild(renderBroadcastSinksEditor(sn));
+        else if ((k === 'headers' || k === 'queryParams') && sn.type === 'rest') ib.appendChild(renderKVMapEditor(sn, k, humanize(k)));
+        else if (k === 'pagination' && sn.type === 'rest' && sn.kind === 'source') ib.appendChild(renderRestPaginationEditor(sn));
+        else if (k === 'successStatusCodes' && sn.type === 'rest') ib.appendChild(renderNumberListEditor(sn, k, 'Success status codes', 'HTTP status codes treated as success, e.g. 200, 201, 204.'));
         else ib.appendChild(renderField(sn, k, v));
       });
 
@@ -5105,68 +4864,7 @@ function persistAndRebuild() {
 }
 
 // ── add / remove transforms ─────────────────────────────────────────────────
-const TRANSFORMS: Array<{ type: string; label: string; cfg: Record<string, unknown> }> = [
-  {
-    type: 'filter', label: 'Filter — drop rows by a boolean expression',
-    cfg: { expr: "amount > 0 AND status != 'CANCELLED'" }
-  },
-  {
-    type: 'map', label: 'Map — project, rename, coerce & derive fields',
-    cfg: { fields: { net_amount: '=multiply($amount, 1.1)' } }
-  },
-  {
-    type: 'validate', label: 'Validate — per-field rules, route to DLQ',
-    cfg: { rules: [{ field: 'amount', notNull: true }], onViolation: 'route' }
-  },
-  {
-    type: 'lookup', label: 'Lookup — HTTP enrichment with LRU cache',
-    cfg: { keyField: 'id', url: 'https://api.internal/enrich/{id}', method: 'GET', cacheSize: 10000, onError: 'null' }
-  },
-  {
-    type: 'hwm', label: 'High-water mark — incremental cursor',
-    cfg: { column: 'updated_at', valueType: 'datetime' }
-  },
-  {
-    type: 'dq', label: 'Data quality — expectations + quality score',
-    cfg: { expectations: [{ type: 'expectColumnNotNull', column: 'id' }], onFail: 'warn', qualityThreshold: 0.95 }
-  },
-  {
-    type: 'schemadrift', label: 'Schema drift — detect column add/remove/type',
-    cfg: { policy: 'additive', onDrift: 'log' }
-  },
-  {
-    type: 'parse', label: 'Parse — structure a text field into columns (regex/JSON)',
-    cfg: { source: 'text', mode: 'regex', pattern: '^(?P<key>\\w+)=(?P<value>.*)$', onError: 'keep', keepSource: true }
-  },
-  {
-    type: 'window', label: 'Window — event-time aggregation (tumbling/sliding/session)',
-    cfg: { window: { kind: 'tumbling', sizeMs: 60000 }, eventTime: { column: 'ts', format: 'RFC3339' }, groupBy: [], aggregations: [{ as: 'n', fn: 'count' }], watermark: { strategy: 'boundedOutOfOrderness', maxLatenessMs: 0 } }
-  },
-  {
-    type: 'join', label: 'Join — keyed join against a reference source (stream-table)',
-    cfg: { leftKey: 'id', rightKey: 'id', joinType: 'inner', right: { type: 'csv', path: 'reference.csv', hasHeader: true } }
-  },
-  {
-    type: 'union', label: 'Union — append bounded same-schema sources (UNION ALL)',
-    cfg: { with: [{ type: 'csv', path: 'more-orders.csv', hasHeader: true }] }
-  },
-  {
-    type: 'cast', label: 'Cast — convert column types (int / float / decimal / date / …)',
-    cfg: { columns: [{ name: 'amount', type: 'decimal' }], onError: 'null' }
-  },
-  {
-    type: 'explode', label: 'Explode — expand an array column into one row per element',
-    cfg: { column: 'items' }
-  },
-  {
-    type: 'flatten', label: 'Flatten — nested-object columns into dotted columns',
-    cfg: { separator: '.' }
-  },
-  {
-    type: 'router', label: 'Router / Split — route rows to sinks by predicate',
-    cfg: { routes: [{ name: 'high', when: 'amount > 1000', sinkType: 'jsonlines', sinkConfig: { path: './out/high.jsonl' } }], onUnmatched: 'pass' }
-  },
-];
+// (TRANSFORMS is derived from STAGE_CATALOG — see near SOURCE_TYPES/SINK_TYPES.)
 
 // Compute the column names visible at a given transforms[] insert position,
 // walking the source columns through any map/lookup stages before it. Used to
@@ -5290,6 +4988,15 @@ function removeExtraSink(id: string) {
   S.selNode = 'sink';
   persistAndRebuild();
   toast('warn', 'Sink node removed');
+}
+function removeExtraSource(id: string) {
+  const doc = S.doc as any;
+  if (doc.graph && Array.isArray(doc.graph.nodes)) doc.graph.nodes = doc.graph.nodes.filter((n: any) => n && n.id !== id);
+  if (doc.graph && Array.isArray(doc.graph.edges)) doc.graph.edges = doc.graph.edges.filter((e: any) => gEndpointNode(edgeFrom(e)) !== id && gEndpointNode(edgeTo(e)) !== id);
+  if (doc.ui && doc.ui.positions) delete doc.ui.positions[id];
+  S.selNode = 'source';
+  persistAndRebuild();
+  toast('warn', 'Source node removed');
 }
 function dlqMenu(e: MouseEvent) {
   e.preventDefault();
@@ -5484,143 +5191,31 @@ function renderFleet(wv: HTMLElement) {
 }
 
 // ── status bar ───────────────────────────────────────────────────────────────
-// Bottom Problems panel — an inline, collapsible list of validation issues
-// (matching the wireframe's bottom panel). Clicking an issue jumps to the
-// offending stage on the canvas. The #panel host is created lazily so it works
-// in both the packaged editor HTML and the standalone test harness.
-function renderPanel() {
-  const win = $('.win');
-  if (!win) return;
-  let host = $('#panel');
-  if (!host) {
-    host = el('div', 'panel');
-    host.id = 'panel';
-    const sb = $('#statusbar');
-    if (sb) win.insertBefore(host, sb); else win.appendChild(host);
-  }
-  host.className = 'panel' + (S.panelOpen ? '' : ' collapsed');
-  host.innerHTML = '';
-  const errs = S.issues.filter((i) => i.sev === 'error').length;
-
-  // The bottom strip is a launcher for VS Code's NATIVE panels: Problems, Data
-  // Preview, Output and Terminal all live in real VS Code surfaces (Problems is
-  // populated via diagnostics), so the webview reveals them rather than
-  // re-implementing them. DQ Report is the one view with no native home.
-  const PANELS: Array<{ id: string; label: string; native?: 'problems' | 'preview' | 'output' | 'terminal' }> = [
-    { id: 'problems', label: 'Problems', native: 'problems' },
-    { id: 'preview', label: 'Data Preview', native: 'preview' },
-    { id: 'dq', label: 'DQ Report' },
-    { id: 'output', label: 'Output', native: 'output' },
-    { id: 'terminal', label: 'Terminal', native: 'terminal' },
-  ];
-  const tabs = el('div', 'paneltabs');
-  PANELS.forEach((tb) => {
-    const active = S.panelOpen && S.panelTab === tb.id;
-    const pt = el('div', 'pt' + (active ? ' on' : '') + (tb.id === 'problems' && errs ? ' err' : ''));
-    if (tb.id === 'problems') {
-      pt.innerHTML = 'Problems <span class="cnt"></span>';
-      (pt.querySelector('.cnt') as HTMLElement).textContent = String(S.issues.length);
-    } else {
-      pt.textContent = tb.label;
-    }
-    pt.onclick = () => {
-      // Clicking the already-active tab collapses the panel (old feel).
-      if (tb.id === S.panelTab && S.panelOpen) { S.panelOpen = false; renderPanel(); return; }
-      S.panelTab = tb.id;
-      S.panelOpen = true;
-      // Native-backed tabs reveal the matching VS Code surface.
-      if (tb.native === 'problems') post({ type: 'showProblems' });
-      else if (tb.native === 'preview') post({ type: 'showDataPreview' });
-      else if (tb.native === 'output') post({ type: 'showOutput' });
-      else if (tb.native === 'terminal') post({ type: 'showTerminal' });
-      renderPanel();
-    };
-    tabs.appendChild(pt);
-  });
-  const acts = el('div', 'pacts');
-  const toggle = el('span', '', S.panelOpen ? '⌄' : '⌃');
-  toggle.title = S.panelOpen ? 'Collapse panel' : 'Expand panel';
-  toggle.onclick = () => { S.panelOpen = !S.panelOpen; renderPanel(); };
-  acts.appendChild(toggle);
-  tabs.appendChild(acts);
-  host.appendChild(tabs);
-
-  if (!S.panelOpen) return;
-  const body = el('div', 'panelbody');
-  if (S.panelTab === 'dq') renderDqBody(body);
-  else if (S.panelTab === 'preview') renderNativeLaunchBody(body, 'the Data Preview panel', 'Sampled rows from a dry-run open in the native Data Preview panel beside the editor.', () => post({ type: 'showDataPreview' }));
-  else if (S.panelTab === 'output') renderNativeLaunchBody(body, 'the engine Output', 'The engine boot / run log streams to the “Flogo Data Pipeline” output channel.', () => post({ type: 'showOutput' }));
-  else if (S.panelTab === 'terminal') renderNativeLaunchBody(body, 'the Terminal', 'Run the built pipeline binary or CLI commands in the integrated terminal.', () => post({ type: 'showTerminal' }));
-  else {
-    // Problems live in VS Code's native Problems panel (populated via diagnostics);
-    // the webview summarises the count and re-opens it. Errored stages are also
-    // ringed on the canvas, so you rarely need to leave the graph.
-    const warns = S.issues.length - errs;
-    const desc = S.issues.length
-      ? `${errs} error${errs === 1 ? '' : 's'} and ${warns} warning${warns === 1 ? '' : 's'} — listed in VS Code's Problems panel, with the errored stages ringed on the canvas.`
-      : 'No problems — the pipeline validates cleanly.';
-    renderNativeLaunchBody(body, 'the Problems panel', desc, () => post({ type: 'showProblems' }));
-  }
-  host.appendChild(body);
-}
-
-// DQ Report: a data-quality summary of the last run — rows read/written/rejected
-// overall, plus per-stage reject counts from the graph run's per-node stats.
-function renderDqBody(body: HTMLElement): void {
-  const r = S.lastRun;
-  if (!r) {
-    body.appendChild(el('div', 'muted', '<div style="padding:6px 4px;font-size:12px">Run the pipeline to see a data-quality report — rows read, written and rejected, per stage.</div>'));
-    return;
-  }
-  const read = r.rowsProcessed || 0, wrote = r.rowsWritten || 0, failed = r.rowsFailed || 0;
-  const passRate = read ? Math.round((wrote / read) * 1000) / 10 : 0;
-  const sum = el('div', 'dqsum');
-  sum.innerHTML =
-    `<span class="dqm"><b>${fmtK(read)}</b> read</span>`
-    + `<span class="dqm ok"><b>${fmtK(wrote)}</b> written</span>`
-    + `<span class="dqm err"><b>${fmtK(failed)}</b> rejected</span>`
-    + `<span class="dqm"><b>${passRate}%</b> pass rate</span>`;
-  body.appendChild(sum);
-  const gs = r.graphStats;
-  const rejects = gs ? gs.filter((s) => s.rowsErrored > 0) : [];
-  if (rejects.length && S.pipe) {
-    const tbl = el('div', 'dqtbl');
-    rejects.forEach((s) => {
-      const n = S.pipe!.nodes.find((x) => x.id === s.id);
-      const nm = n ? (n.nm && n.nm !== n.type ? n.nm : transformLabel(n.type)) : s.id;
-      const row = el('div', 'dqrow');
-      row.innerHTML = '<span class="dqn"></span><span class="dqv"></span>';
-      (row.querySelector('.dqn') as HTMLElement).textContent = nm;
-      (row.querySelector('.dqv') as HTMLElement).innerHTML = `${fmtK(s.rowsOut)} passed · <span class="err">${fmtK(s.rowsErrored)} rejected</span>`;
-      row.onclick = () => { S.selNode = s.id; S.inspTab = 'Config'; S.inspClosed = false; S.active = 'canvas'; renderAll(); };
-      tbl.appendChild(row);
-    });
-    body.appendChild(tbl);
-  } else if (!failed) {
-    body.appendChild(el('div', 'muted', '<div style="padding:6px 4px;font-size:12px">No rows were rejected in the last run — clean data.</div>'));
-  }
-}
-
-// A body for the native-backed tabs (Data Preview / Output / Terminal): the
-// webview can't embed these, so it explains where they live and re-opens them.
-function renderNativeLaunchBody(body: HTMLElement, where: string, desc: string, open: () => void): void {
-  const wrap = el('div', 'nativelaunch');
-  wrap.appendChild(el('div', 'nldesc', escapeHtml(desc)));
-  const btn = el('button', 'btn', 'Open ' + where + ' ↗');
-  btn.onclick = open;
-  wrap.appendChild(btn);
-  body.appendChild(wrap);
-}
-
+// Problems, Data Preview, DQ Report, Output and Terminal all live in real VS
+// Code surfaces (docked in the Panel alongside each other) rather than a
+// second copy of that chrome inside the webview — Problems is populated via
+// diagnostics, Data Preview/DQ Report are contributed panel views, Output is
+// the "Flogo Data Pipeline" channel, Terminal is the integrated terminal. The
+// status bar below is just a set of compact launchers, like VS Code's own.
 function renderStatus() {
   const sb = $('#statusbar')!;
   sb.innerHTML = '';
   const errs = S.issues.filter((i) => i.sev === 'error').length;
   const warns = S.issues.filter((i) => i.sev === 'warn').length;
   const problems = el('div', 'sbi', `<span style="color:var(--red)">⊗ ${errs}</span> <span style="color:var(--yellow)">⚠ ${warns}</span>`);
+  problems.title = 'Open the Problems panel';
   problems.onclick = () => post({ type: 'showProblems' });
   sb.appendChild(problems);
+  if (S.lastRun) {
+    const r = S.lastRun;
+    const failed = r.rowsFailed || 0;
+    const dq = el('div', 'sbi', failed ? `<span style="color:var(--red)">◉ ${fmtK(failed)} rejected</span>` : '<span style="color:var(--green)">◉ DQ clean</span>');
+    dq.title = 'Open the DQ Report panel';
+    dq.onclick = () => post({ type: 'showDqReport' });
+    sb.appendChild(dq);
+  }
   const eng = el('div', 'sbi', S.port ? `◈ engine :${S.port}` : '◈ engine: stopped');
+  eng.title = 'Open the Output channel';
   eng.onclick = () => post({ type: 'showOutput' });
   sb.appendChild(eng);
   sb.appendChild(el('div', 'grow'));
@@ -5895,20 +5490,6 @@ function nodeMenu(n: Node, i: number, e: MouseEvent) {
 }
 
 // ── toasts ────────────────────────────────────────────────────────────────────
-function toast(kind: 'ok' | 'err' | 'warn' | 'info', msg: string, sticky = false) {
-  const box = $('#toasts')!;
-  const t = el('div', 'toast');
-  const icon = { ok: '<span style="color:var(--green)">✓</span>', err: '<span style="color:var(--red)">✕</span>', warn: '<span style="color:var(--yellow)">⚠</span>', info: '<span style="color:var(--blueHi)">ℹ</span>' }[kind];
-  t.innerHTML = `<div class="tt"><span class="i">${icon}</span><div>${msg}</div><span class="close">✕</span></div>`;
-  (t.querySelector('.close') as HTMLElement).onclick = () => t.remove();
-  box.appendChild(t);
-  if (!sticky) setTimeout(() => { t.style.opacity = '0'; t.style.transition = 'opacity .3s'; setTimeout(() => t.remove(), 300); }, 3600);
-}
-
-function escapeHtml(s: string) {
-  return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
 // ── host message handling ─────────────────────────────────────────────────────
 // Flatten a podlog source's nested `options` block onto the source object so the
 // first-class labeled form renders. The engine reads flat or nested identically
@@ -6005,9 +5586,16 @@ window.addEventListener('message', (ev: MessageEvent<HostToWebview>) => {
     case 'validationResult':
       S.issues = msg.issues || [];
       renderStatus();
-      renderPanel();
       // Re-render the canvas so error rings on the affected nodes update.
       if (cur()?.type === 'canvas') renderEditor();
+      break;
+    case 'selectNode':
+      // A DQ Report stage click (native panel view) selects that node here.
+      S.selNode = msg.id;
+      S.inspTab = 'Config';
+      S.inspClosed = false;
+      S.active = 'canvas';
+      renderAll();
       break;
     case 'previewResult':
       S.preview = msg.result;

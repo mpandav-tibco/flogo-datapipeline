@@ -13,7 +13,9 @@ import {
 } from '../model/pipeline';
 import { applyTriggerToApp } from '../model/triggers';
 import { ApiClient } from '../engine/apiClient';
+import type { RunResponse } from '../engine/apiClient';
 import { DataPreviewView } from '../panel/dataPreviewView';
+import { DqReportView } from '../panel/dqReportView';
 import { ConnectionStore } from '../connections/store';
 import { RunHistoryStore } from '../runHistory';
 import type { WebviewToHost } from '../protocol';
@@ -52,6 +54,7 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
     private readonly manager: BinaryManager,
     private readonly hooks: EngineHooks = {},
     private readonly dataPreview?: DataPreviewView,
+    private readonly dqReport?: DqReportView,
     private readonly connections?: ConnectionStore,
     private readonly runHistory?: RunHistoryStore,
   ) {
@@ -69,10 +72,11 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
     manager: BinaryManager,
     hooks: EngineHooks,
     dataPreview?: DataPreviewView,
+    dqReport?: DqReportView,
     connections?: ConnectionStore,
     runHistory?: RunHistoryStore,
   ): { provider: PipelineEditorProvider; disposable: vscode.Disposable } {
-    const provider = new PipelineEditorProvider(context, manager, hooks, dataPreview, connections, runHistory);
+    const provider = new PipelineEditorProvider(context, manager, hooks, dataPreview, dqReport, connections, runHistory);
     const disposable = vscode.window.registerCustomEditorProvider(
       PipelineEditorProvider.viewType,
       provider,
@@ -86,6 +90,13 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
 
   get activePipelineUri(): vscode.Uri | null {
     return this.activeUri;
+  }
+
+  // Routes a DQ Report stage click (from the separate native panel view) back
+  // to whichever pipeline editor is currently active, selecting that node.
+  selectNodeInActiveEditor(id: string): void {
+    const panel = this.activeUri && this.panelByUri.get(this.activeUri.toString());
+    if (panel) this.post(panel, { type: 'selectNode', id });
   }
 
   broadcastStopped(): void {
@@ -258,6 +269,10 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
 
       case 'showDataPreview':
         this.dataPreview?.reveal();
+        break;
+
+      case 'showDqReport':
+        this.dqReport?.reveal();
         break;
 
       case 'showTerminal': {
@@ -780,6 +795,27 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
     this.resolvedPath = null;
   }
 
+  // Labels each rejecting graph node (transform index -> its declared name/type)
+  // and pushes the summary to the native DQ Report panel view.
+  private pushDqReport(document: vscode.TextDocument, run: RunResponse): void {
+    if (!this.dqReport) return;
+    let transforms: any[] = [];
+    try {
+      const pd = extractPipelineData(JSON.parse(document.getText()));
+      transforms = Array.isArray(pd.transforms) ? pd.transforms : [];
+    } catch {
+      /* best-effort label lookup; rejects still show by raw node id */
+    }
+    const rejects = (run.graphStats || [])
+      .filter((s) => s.rowsErrored > 0)
+      .map((s) => {
+        const m = /^t(\d+)$/.exec(s.id);
+        const t = m ? transforms[Number(m[1])] : null;
+        return { id: s.id, name: (t && (t.name || t.type)) || s.id, rowsOut: s.rowsOut, rowsErrored: s.rowsErrored };
+      });
+    this.dqReport.showResult(run, rejects);
+  }
+
   private async runPipeline(document: vscode.TextDocument, panel: vscode.WebviewPanel, fresh = false): Promise<void> {
     if (this.runInFlight) {
       this.post(panel, { type: 'runError', message: 'Another pipeline run is already in progress.' });
@@ -813,6 +849,7 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
         runId = ack.runId;
         this.logRun(`[run] accepted runId=${runId}`);
         this.post(panel, { type: 'runResult', result: ack, final: false });
+        this.pushDqReport(document, ack);
       } catch (err) {
         this.post(panel, { type: 'runError', message: 'Run request failed: ' + errText(err) });
         this.logRun(`[run] request failed: ${errText(err)}`);
@@ -844,6 +881,7 @@ export class PipelineEditorProvider implements vscode.CustomTextEditorProvider {
         if (!run) continue;
         const terminal = ['completed', 'partial', 'failed', 'cancelled'].includes(run.status);
         this.post(panel, { type: 'runResult', result: run, final: terminal });
+        this.pushDqReport(document, run);
         if (terminal) {
           this.logRun(
             `[run] ${run.status} — processed=${run.rowsProcessed} written=${run.rowsWritten} failed=${run.rowsFailed} dropped=${run.rowsDropped ?? 0} (${run.durationMs}ms)`,

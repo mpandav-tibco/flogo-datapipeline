@@ -40,7 +40,8 @@ export type HostToWebview =
   | { type: 'schemaRegistry'; columns: Array<{ name: string; type: string; nullable?: boolean }>; subject: string }
   | { type: 'schemaRegistryError'; message: string }
   | { type: 'xmlSchema'; recordElement: string; fields: Array<{ name: string; xpath: string; type: string }>; columns: Array<{ name: string; type: string }> }
-  | { type: 'xmlSchemaError'; message: string };
+  | { type: 'xmlSchemaError'; message: string }
+  | { type: 'selectNode'; id: string };
 
 // Webview -> Host
 export type WebviewToHost =
@@ -57,6 +58,7 @@ export type WebviewToHost =
   | { type: 'showOutput' }
   | { type: 'showProblems' }
   | { type: 'showDataPreview' }
+  | { type: 'showDqReport' }
   | { type: 'showTerminal' }
   | { type: 'browse'; id: string; mode?: 'file' | 'folder' }
   | { type: 'newFromTemplate' }

@@ -4,6 +4,7 @@ import * as path from 'path';
 import { BinaryManager } from './binaryManager';
 import { PipelineEditorProvider, EngineHooks } from './editor/pipelineEditorProvider';
 import { DataPreviewView } from './panel/dataPreviewView';
+import { DqReportView } from './panel/dqReportView';
 import { SidebarProvider } from './sidebar';
 import { RunHistoryStore } from './runHistory';
 import { TEMPLATES } from './templates';
@@ -65,8 +66,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.window.registerWebviewViewProvider(DataPreviewView.viewType, dataPreview),
   );
 
-  editor = PipelineEditorProvider.register(context, manager, hooks, dataPreview, connectionStore, runHistory);
+  // Native panel view for the data-quality report (same dock, no OOTB VS Code
+  // equivalent — Problems/Output/Terminal all reuse the real ones).
+  const dqReport = new DqReportView(context.extensionUri);
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider(DqReportView.viewType, dqReport),
+  );
+
+  editor = PipelineEditorProvider.register(context, manager, hooks, dataPreview, dqReport, connectionStore, runHistory);
   context.subscriptions.push(editor.disposable);
+  dqReport.onSelectNode = (id) => editor.provider.selectNodeInActiveEditor(id);
 
   manager.onCrash(() => {
     hooks.onStopped?.();
