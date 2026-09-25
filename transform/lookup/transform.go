@@ -35,6 +35,7 @@ import (
 
 	"github.com/mpandav-tibco/flogo-datapipeline/record"
 	"github.com/mpandav-tibco/flogo-datapipeline/transform"
+	lru "github.com/hashicorp/golang-lru/v2"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -51,7 +52,7 @@ type lookupTransform struct {
 	concurrency  int
 	onError      string
 	client       *http.Client
-	cache        *lruCache
+	cache        *lru.Cache[string, map[string]interface{}]
 	sfGroup      singleflight.Group // zero value is ready; no init needed
 }
 
@@ -102,7 +103,7 @@ func newLookupTransform(cfg map[string]interface{}) (transform.Transform, error)
 		concurrency:  concurrency,
 		onError:      onError,
 		client:       &http.Client{Timeout: time.Duration(timeoutMs) * time.Millisecond},
-		cache:        newLRUCache(cacheSize),
+			cache:        newCache(cacheSize),
 	}, nil
 }
 
@@ -192,7 +193,7 @@ func (l *lookupTransform) fetchWithCache(key string) (map[string]interface{}, er
 	v, err, _ := l.sfGroup.Do(key, func() (interface{}, error) {
 		data, err := l.fetch(key)
 		if err == nil && data != nil {
-			l.cache.Put(key, data)
+				l.cache.Add(key, data)
 		}
 		return data, err
 	})
@@ -250,94 +251,13 @@ func (l *lookupTransform) fetch(key string) (map[string]interface{}, error) {
 }
 
 func (l *lookupTransform) Close() error {
-	l.cache.Clear()
+	l.cache.Purge()
 	return nil
 }
 
-// lruCache is a simple bounded LRU cache using a doubly-linked list + map.
-// Get and Put are concurrent-safe (each acquires c.mu). fetchWithCache uses
-// a singleflight.Group to avoid duplicate in-flight fetches for the same key.
-type lruCache struct {
-	mu    sync.Mutex
-	cap   int
-	items map[string]*lruNode
-	head  *lruNode // most-recently used sentinel
-	tail  *lruNode // least-recently used sentinel
-}
-
-type lruNode struct {
-	key   string
-	value map[string]interface{}
-	prev  *lruNode
-	next  *lruNode
-}
-
-func newLRUCache(cap int) *lruCache {
-	head := &lruNode{}
-	tail := &lruNode{}
-	head.next = tail
-	tail.prev = head
-	return &lruCache{
-		cap:   cap,
-		items: make(map[string]*lruNode, cap),
-		head:  head,
-		tail:  tail,
-	}
-}
-
-func (c *lruCache) Get(key string) (map[string]interface{}, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if n, ok := c.items[key]; ok {
-		c.moveToFront(n)
-		return n.value, true
-	}
-	return nil, false
-}
-
-func (c *lruCache) Put(key string, value map[string]interface{}) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if n, ok := c.items[key]; ok {
-		n.value = value
-		c.moveToFront(n)
-		return
-	}
-	n := &lruNode{key: key, value: value}
-	c.items[key] = n
-	c.addToFront(n)
-	if len(c.items) > c.cap {
-		c.evict()
-	}
-}
-
-func (c *lruCache) Clear() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.items = make(map[string]*lruNode, c.cap)
-	c.head.next = c.tail
-	c.tail.prev = c.head
-}
-
-func (c *lruCache) moveToFront(n *lruNode) {
-	n.prev.next = n.next
-	n.next.prev = n.prev
-	c.addToFront(n)
-}
-
-func (c *lruCache) addToFront(n *lruNode) {
-	n.prev = c.head
-	n.next = c.head.next
-	c.head.next.prev = n
-	c.head.next = n
-}
-
-func (c *lruCache) evict() {
-	lru := c.tail.prev
-	if lru == c.head {
-		return
-	}
-	lru.prev.next = c.tail
-	c.tail.prev = lru.prev
-	delete(c.items, lru.key)
+// newCache builds a bounded LRU cache; cacheSize is always > 0 (validated at
+// construction), so the only possible New error can't occur here.
+func newCache(cap int) *lru.Cache[string, map[string]interface{}] {
+	c, _ := lru.New[string, map[string]interface{}](cap)
+	return c
 }

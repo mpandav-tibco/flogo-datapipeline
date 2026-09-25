@@ -22,7 +22,6 @@ package lineage
 
 import (
 	"bytes"
-	"crypto/sha1"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -32,6 +31,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	corelog "github.com/project-flogo/core/support/log"
 )
 
@@ -257,16 +257,11 @@ func (e *emitter) datasets(ds []Dataset, withStats bool, rowCount int64) []olDat
 	return out
 }
 
-// uuidFromString derives a stable RFC-4122 (v5-style) UUID from an arbitrary
-// string, so the START and COMPLETE events of one run share the same runId as
+// uuidFromString derives a stable RFC-4122 v5 UUID from an arbitrary string,
+// so the START and COMPLETE events of one run share the same runId as
 // OpenLineage requires, even though the engine's run id is not itself a UUID.
 func uuidFromString(s string) string {
-	h := sha1.Sum([]byte("flogo-datapipeline:" + s))
-	var b [16]byte
-	copy(b[:], h[:16])
-	b[6] = (b[6] & 0x0f) | 0x50 // version 5
-	b[8] = (b[8] & 0x3f) | 0x80 // RFC-4122 variant
-	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+	return uuid.NewSHA1(uuid.NameSpaceOID, []byte("flogo-datapipeline:"+s)).String()
 }
 
 // --- OpenLineage JSON model ---

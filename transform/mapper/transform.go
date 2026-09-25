@@ -23,7 +23,6 @@ package mapper
 
 import (
 	"crypto/md5"
-	"crypto/rand"
 	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/base64"
@@ -42,6 +41,7 @@ import (
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
 
+	"github.com/google/uuid"
 	"github.com/mpandav-tibco/flogo-datapipeline/record"
 	"github.com/mpandav-tibco/flogo-datapipeline/transform"
 )
@@ -1411,13 +1411,7 @@ func concatArgs(args []interface{}) string {
 	return sb.String()
 }
 
-// newUUIDv4 returns a random RFC-4122 v4 UUID without pulling in a dependency.
+// newUUIDv4 returns a random RFC-4122 v4 UUID.
 func newUUIDv4() string {
-	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return ""
-	}
-	b[6] = (b[6] & 0x0f) | 0x40
-	b[8] = (b[8] & 0x3f) | 0x80
-	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+	return uuid.NewString()
 }

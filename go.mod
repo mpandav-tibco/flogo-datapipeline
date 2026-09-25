@@ -41,6 +41,8 @@ require (
 
 require (
 	github.com/hamba/avro/v2 v2.31.0
+	github.com/hashicorp/golang-lru/v2 v2.0.7
+	github.com/google/uuid v1.6.0
 	github.com/microsoft/go-mssqldb v1.10.0
 	github.com/project-flogo/contrib/trigger/rest v0.10.0
 	github.com/project-flogo/messaging-contrib/kafka v0.0.0-20250805082303-583e5ea77fdf
@@ -100,7 +102,6 @@ require (
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/golang/snappy v1.0.0 // indirect
 	github.com/google/s2a-go v0.1.7 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.2 // indirect
 	github.com/googleapis/gax-go/v2 v2.12.4 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.20.0 // indirect

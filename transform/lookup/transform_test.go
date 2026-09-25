@@ -148,11 +148,11 @@ func TestLookup_Caches(t *testing.T) {
 }
 
 func TestLRUCache_Eviction(t *testing.T) {
-	c := newLRUCache(2)
-	c.Put("a", map[string]interface{}{"v": 1})
-	c.Put("b", map[string]interface{}{"v": 2})
+	c := newCache(2)
+	c.Add("a", map[string]interface{}{"v": 1})
+	c.Add("b", map[string]interface{}{"v": 2})
 	_, _ = c.Get("a")                          // a becomes MRU
-	c.Put("c", map[string]interface{}{"v": 3}) // evicts b (LRU)
+	c.Add("c", map[string]interface{}{"v": 3}) // evicts b (LRU)
 	if _, ok := c.Get("b"); ok {
 		t.Error("b should have been evicted")
 	}
@@ -162,8 +162,8 @@ func TestLRUCache_Eviction(t *testing.T) {
 	if _, ok := c.Get("c"); !ok {
 		t.Error("c should be present")
 	}
-	c.Clear()
+	c.Purge()
 	if _, ok := c.Get("a"); ok {
-		t.Error("Clear should empty the cache")
+		t.Error("Purge should empty the cache")
 	}
 }

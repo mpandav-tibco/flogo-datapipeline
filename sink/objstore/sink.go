@@ -36,7 +36,6 @@ package objstore
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -45,6 +44,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/mpandav-tibco/flogo-datapipeline/objstore"
 	"github.com/mpandav-tibco/flogo-datapipeline/record"
 	"github.com/mpandav-tibco/flogo-datapipeline/sink"
@@ -614,15 +614,7 @@ var _ sink.Sink = (*rollingObjstoreSink)(nil)
 // unique per run (e.g. "orders-{uuid}.parquet") so concurrent writers and
 // re-runs never collide.
 func newUUID() string {
-	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		// Fall back to a timestamp-based value; collisions are still astronomically
-		// unlikely given the surrounding date macros.
-		return fmt.Sprintf("%d", time.Now().UnixNano())
-	}
-	b[6] = (b[6] & 0x0f) | 0x40 // version 4
-	b[8] = (b[8] & 0x3f) | 0x80 // variant 10
-	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+	return uuid.NewString()
 }
 
 // buildInnerCfg copies config keys that are relevant to the inner sink,
