@@ -725,6 +725,11 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 	if bufDepth < 1 {
 		bufDepth = 1
 	}
+	// Transformed batches that may queue for the sink writer (see writeStage).
+	sinkDepth := def.Performance.SinkBufferBatches
+	if sinkDepth < 1 {
+		sinkDepth = 1
+	}
 
 	// transformWorkers > 1 requests multi-core transform parallelism. It is only
 	// safe when transforms are STATELESS and there is no ordered-cursor state to
@@ -811,6 +816,34 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 		readCtx, cancelRead := context.WithCancel(ctx)
 		defer cancelRead()
 
+		// Write stage: a single writer goroutine overlaps sink I/O with the next
+		// batch's transform. Order is preserved, and syncWrites is a barrier
+		// taken before every sink Flush/checkpoint and before returning, so
+		// checkpoint semantics are unchanged (see writeStage).
+		ws := newWriteStage(sinkDepth, func(b *record.RecordBatch, o *Output) (int, error) {
+			t2 := time.Now()
+			n, err := a.rowLevelWrite(runLog, snk, dlq, b, runID, o)
+			if err != nil {
+				return 0, err
+			}
+			d := time.Since(t2)
+			a.recorder.BatchWritten(a.ref, def.Sink.Type, n, d)
+			a.checkStall(runLog, "write", d)
+			return n, nil
+		})
+		wsClosed := false
+		defer func() {
+			if !wsClosed {
+				ws.close(true) // aborting: recycle queued batches unwritten
+			}
+		}()
+		syncWrites := func() error {
+			w, f, err := ws.sync()
+			out.RowsWritten += w
+			out.RowsFailed += f
+			return err
+		}
+
 		go func() {
 			defer close(readCh)
 			for {
@@ -877,17 +910,13 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 					a.recorder.BatchTransformed(a.ref, int(batchLen), txOut, txDur)
 					a.checkStall(runLog, "transform", txDur)
 
-					// --- write (with per-row DLQ fallback) ---
-					t2 := time.Now()
-					written, writeErr := a.rowLevelWrite(runLog, snk, dlq, transformed, runID, out)
-					writeDur := time.Since(t2)
-					record.Put(transformed)
-					if writeErr != nil {
-						return writeErr
+					// --- write (async, with per-row DLQ fallback) ---
+					if !ws.submit(transformed) {
+						// An earlier write failed; surface it now.
+						if err := syncWrites(); err != nil {
+							return err
+						}
 					}
-					out.RowsWritten += int64(written)
-					a.recorder.BatchWritten(a.ref, def.Sink.Type, written, writeDur)
-					a.checkStall(runLog, "write", writeDur)
 				} else {
 					a.recorder.BatchTransformed(a.ref, int(batchLen), 0, txDur)
 					a.checkStall(runLog, "transform", txDur)
@@ -898,6 +927,9 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 				rowTrigger := ckptIntervalRows > 0 && rowsSinceCkpt >= ckptIntervalRows
 				timeTrigger := ckptIntervalSecs > 0 && time.Since(lastCkpt) >= time.Duration(ckptIntervalSecs)*time.Second
 				if rowTrigger || timeTrigger {
+					if err := syncWrites(); err != nil {
+						return err
+					}
 					if err := snk.Flush(); err != nil {
 						return fmt.Errorf("sink flush (checkpoint): %w", err)
 					}
@@ -917,6 +949,11 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 				}
 			}
 		}
+		if err := syncWrites(); err != nil {
+			return err
+		}
+		wsClosed = true
+		ws.close(false)
 		return nil
 	}
 
