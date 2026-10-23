@@ -1,6 +1,7 @@
 # Design: one execution engine
 
-Status: implemented on `perf/core-hot-path-review`.
+Status: implemented on `perf/core-hot-path-review`. Benchmark (53M rows, same-day
+A/B vs `master`): [examples/23-enterprise-benchmark/reports/engine-unification.md](../../examples/23-enterprise-benchmark/reports/engine-unification.md).
 
 ## Problem
 
