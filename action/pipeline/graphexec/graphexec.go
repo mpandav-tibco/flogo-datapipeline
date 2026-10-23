@@ -199,7 +199,8 @@ type SinkOp interface {
 	Close() error
 }
 
-// Pred is a compiled boolean row predicate used for conditional edges.
+// Pred is a compiled boolean row predicate used for conditional edges. The row
+// map is reused across rows, so a Pred must not retain it after returning.
 type Pred func(row map[string]interface{}) bool
 
 // Builders supplies the concrete constructors the compiler needs. Injecting

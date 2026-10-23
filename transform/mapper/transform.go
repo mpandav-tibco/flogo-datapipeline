@@ -144,8 +144,9 @@ func (m *mapperTransform) Apply(in *record.RecordBatch) (*record.RecordBatch, er
 	// code changes later (an append past cap always reallocates).
 	width := len(m.fieldExprs)
 	buf := make([]interface{}, in.Len()*width)
+	var row map[string]interface{}
 	for i := range in.Rows {
-		row := in.RowMap(i)
+		row = in.RowMapInto(i, row)
 		outRow := buf[i*width : (i+1)*width : (i+1)*width]
 		for j, fe := range m.fieldExprs {
 			outRow[j] = fe.eval(row)

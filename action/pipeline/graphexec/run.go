@@ -608,8 +608,18 @@ func (rt *runtime) emit(ctx context.Context, n *pnode, b *record.RecordBatch) bo
 		return rt.send(ctx, n.out[0], b)
 	}
 	buckets := make([]*record.RecordBatch, len(n.out))
+	hasCond := false
+	for _, e := range n.out {
+		if e.etype == EdgeCondition {
+			hasCond = true
+			break
+		}
+	}
+	var row map[string]interface{}
 	for ri := range b.Rows {
-		row := b.RowMap(ri)
+		if hasCond {
+			row = b.RowMapInto(ri, row)
+		}
 		matched := false
 		for i, e := range n.out {
 			switch e.etype {

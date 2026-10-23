@@ -124,8 +124,9 @@ func (v *validateTransform) Apply(in *record.RecordBatch) (*record.RecordBatch, 
 	good.Columns = in.Columns
 	var badRows [][]interface{}
 
+	var row map[string]interface{}
 	for i := range in.Rows {
-		row := in.RowMap(i)
+		row = in.RowMapInto(i, row)
 		if violations := v.check(row); len(violations) == 0 {
 			good.Rows = append(good.Rows, in.Rows[i])
 		} else {
@@ -169,8 +170,10 @@ func (v *validateTransform) ApplySplit(in *record.RecordBatch) (*record.RecordBa
 	pass.Columns = in.Columns
 	reject := in.Clone(in.Len())
 	reject.Columns = in.Columns
+	var row map[string]interface{}
 	for i := range in.Rows {
-		if len(v.check(in.RowMap(i))) == 0 {
+		row = in.RowMapInto(i, row)
+		if len(v.check(row)) == 0 {
 			pass.Rows = append(pass.Rows, in.Rows[i])
 		} else {
 			reject.Rows = append(reject.Rows, in.Rows[i])

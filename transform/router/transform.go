@@ -177,8 +177,9 @@ func (r *routerTransform) Apply(in *record.RecordBatch) (*record.RecordBatch, er
 	routeRows := make([][][]interface{}, len(r.routes))
 	var defRows, passRows [][]interface{}
 
+	var row map[string]interface{}
 	for i := range in.Rows {
-		row := in.RowMap(i)
+		row = in.RowMapInto(i, row)
 		matched := -1
 		for j, rt := range r.routes {
 			if rt.when.Eval(row) {

@@ -40,8 +40,9 @@ func (f *filterTransform) Name() string { return "filter" }
 func (f *filterTransform) Apply(in *record.RecordBatch) (*record.RecordBatch, error) {
 	out := in.Clone(in.Len())
 	out.Columns = in.Columns
+	var row map[string]interface{}
 	for i := range in.Rows {
-		row := in.RowMap(i)
+		row = in.RowMapInto(i, row)
 		if f.cond.eval(row) {
 			out.Rows = append(out.Rows, in.Rows[i])
 		}

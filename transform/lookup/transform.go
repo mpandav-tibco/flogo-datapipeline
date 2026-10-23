@@ -33,9 +33,9 @@ import (
 	"sync"
 	"time"
 
+	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/mpandav-tibco/flogo-datapipeline/record"
 	"github.com/mpandav-tibco/flogo-datapipeline/transform"
-	lru "github.com/hashicorp/golang-lru/v2"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -103,7 +103,7 @@ func newLookupTransform(cfg map[string]interface{}) (transform.Transform, error)
 		concurrency:  concurrency,
 		onError:      onError,
 		client:       &http.Client{Timeout: time.Duration(timeoutMs) * time.Millisecond},
-			cache:        newCache(cacheSize),
+		cache:        newCache(cacheSize),
 	}, nil
 }
 
@@ -129,6 +129,15 @@ func (l *lookupTransform) Apply(in *record.RecordBatch) (*record.RecordBatch, er
 	}
 	results := make([]result, len(in.Rows))
 
+	keyIdx := in.ColIndex(l.keyField)
+	keyOf := func(i int) string {
+		var v interface{}
+		if keyIdx >= 0 && keyIdx < len(in.Rows[i]) {
+			v = in.Rows[i][keyIdx]
+		}
+		return fmt.Sprintf("%v", v)
+	}
+
 	sem := make(chan struct{}, l.concurrency)
 	var wg sync.WaitGroup
 
@@ -138,7 +147,7 @@ func (l *lookupTransform) Apply(in *record.RecordBatch) (*record.RecordBatch, er
 		go func(idx int) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			key := fmt.Sprintf("%v", in.RowMap(idx)[l.keyField])
+			key := keyOf(idx)
 			data, err := l.fetchWithCache(key)
 			results[idx] = result{idx: idx, data: data, err: err}
 		}(i)
@@ -152,7 +161,7 @@ func (l *lookupTransform) Apply(in *record.RecordBatch) (*record.RecordBatch, er
 			case "fail":
 				record.Put(out)
 				return nil, fmt.Errorf("lookup: key %v: %w",
-					fmt.Sprintf("%v", in.RowMap(r.idx)[l.keyField]), r.err)
+					keyOf(r.idx), r.err)
 			case "skip":
 				skipIndices[r.idx] = true
 				continue
@@ -193,7 +202,7 @@ func (l *lookupTransform) fetchWithCache(key string) (map[string]interface{}, er
 	v, err, _ := l.sfGroup.Do(key, func() (interface{}, error) {
 		data, err := l.fetch(key)
 		if err == nil && data != nil {
-				l.cache.Add(key, data)
+			l.cache.Add(key, data)
 		}
 		return data, err
 	})

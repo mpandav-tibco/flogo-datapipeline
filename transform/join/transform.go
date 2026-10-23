@@ -227,8 +227,9 @@ func (j *joinTransform) loadRightBatch(b *record.RecordBatch) error {
 	if j.rightCols == nil {
 		j.rightCols = resolveRightCols(b.Columns, j.wantCols, j.rightKey)
 	}
+	var m map[string]interface{}
 	for i := 0; i < b.Len(); i++ {
-		m := b.RowMap(i)
+		m = b.RowMapInto(i, m)
 		key := fmt.Sprintf("%v", m[j.rightKey])
 		vals := make([]interface{}, len(j.rightCols))
 		for k, c := range j.rightCols {
@@ -302,11 +303,10 @@ func (j *joinTransform) applyJoin(in *record.RecordBatch) (*record.RecordBatch, 
 
 	leftIdx := in.ColIndex(j.leftKey)
 	for i := range in.Rows {
+		// A missing column or short row is nil — exactly what RowMap would yield.
 		var keyVal interface{}
 		if leftIdx >= 0 && leftIdx < len(in.Rows[i]) {
 			keyVal = in.Rows[i][leftIdx]
-		} else {
-			keyVal = in.RowMap(i)[j.leftKey]
 		}
 		matches := j.table[fmt.Sprintf("%v", keyVal)]
 		if len(matches) == 0 {
