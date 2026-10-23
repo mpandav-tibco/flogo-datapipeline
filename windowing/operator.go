@@ -5,6 +5,8 @@ import (
 	"math"
 	"sort"
 	"strings"
+
+	"github.com/mpandav-tibco/flogo-datapipeline/record"
 )
 
 // Result is one emitted window aggregation for one key.
@@ -50,6 +52,10 @@ type Operator struct {
 	// firing (discarding — accumulators are reset after each early fire).
 	earlyEveryMs int64
 	accumulating bool
+
+	// due indexes open windows by End so Emit visits only windows that are
+	// actually due instead of scanning every key (see deadline.go).
+	due deadlineHeap
 }
 
 type keyState struct {
@@ -167,6 +173,7 @@ func (o *Operator) Add(keyVals []interface{}, ts int64, row map[string]interface
 			}
 			ks.windows[w] = accs
 			o.openWindowCount++
+			o.schedule(key, w)
 		}
 		for i, ag := range o.aggs {
 			if ag.Fn == "count" {
@@ -236,9 +243,21 @@ func (o *Operator) addSession(keyVals []interface{}, ts int64, row map[string]in
 		}
 		accs[i].Add(row[ag.Column])
 	}
-	ks.windows[Window{Start: mergedStart, End: mergedEnd}] = accs
+	merged := Window{Start: mergedStart, End: mergedEnd}
+	ks.windows[merged] = accs
 	o.openWindowCount += 1 - len(overlap)
 	o.store.put(key, ks)
+	// A merge that kept the bounds of an existing window is already scheduled.
+	scheduled := false
+	for _, w := range overlap {
+		if w == merged {
+			scheduled = true
+			break
+		}
+	}
+	if !scheduled {
+		o.schedule(key, merged)
+	}
 	return false
 }
 
@@ -257,60 +276,66 @@ func (o *Operator) Watermark() int64 {
 // when early triggers are enabled and the watermark has advanced earlyEveryMs past
 // its last firing; in discarding mode its accumulators are then reset. Results are
 // returned in deterministic order (window start, then key).
+//
+// Final firing and TTL eviction are driven by the End-ordered deadline index, so
+// cost is proportional to the windows that close, not to total retained state.
+// Only early triggers (which must inspect every open window) still scan.
 func (o *Operator) Emit(watermark int64) []Result {
 	if watermark > o.currentWatermark {
 		o.currentWatermark = watermark
 	}
 	var out []Result
+	var sortKeys []string
+	o.popDue(watermark, func(key string, st *keyState, w Window, accs []Accumulator) {
+		out = append(out, o.buildResult(st.keyVals, w, accs))
+		sortKeys = append(sortKeys, key)
+	})
+	if o.earlyEveryMs > 0 {
+		out, sortKeys = o.fireEarly(watermark, out, sortKeys)
+	}
+	o.sweepTTL()
+	sortResultsKeyed(out, sortKeys)
+	return out
+}
+
+// fireEarly emits partial results for still-open windows whose trigger cadence
+// has elapsed.
+func (o *Operator) fireEarly(watermark int64, out []Result, sortKeys []string) ([]Result, []string) {
 	for _, key := range o.store.keys() {
 		st, ok := o.store.get(key)
 		if !ok {
 			continue
 		}
+		changed := false
 		for w, accs := range st.windows {
-			if w.End <= watermark {
-				// final firing
-				out = append(out, o.buildResult(st.keyVals, w, accs))
-				delete(st.windows, w)
-				o.openWindowCount--
-				if st.earlyFired != nil {
-					delete(st.earlyFired, w)
-				}
-				continue
-			}
-			if o.earlyEveryMs <= 0 {
-				continue
-			}
-			// early firing on trigger cadence
 			last, ok := st.earlyFired[w]
 			if !ok {
 				last = w.Start
 			}
-			if watermark >= last+o.earlyEveryMs {
-				out = append(out, o.buildResult(st.keyVals, w, accs))
-				if st.earlyFired == nil {
-					st.earlyFired = make(map[Window]int64)
+			if watermark < last+o.earlyEveryMs {
+				continue
+			}
+			out = append(out, o.buildResult(st.keyVals, w, accs))
+			sortKeys = append(sortKeys, key)
+			if st.earlyFired == nil {
+				st.earlyFired = make(map[Window]int64)
+			}
+			st.earlyFired[w] = watermark
+			changed = true
+			if !o.accumulating {
+				// discarding: reset so the next pane is a delta
+				fresh := make([]Accumulator, len(o.aggs))
+				for i, ag := range o.aggs {
+					fresh[i], _ = newAccumulator(ag.Fn)
 				}
-				st.earlyFired[w] = watermark
-				if !o.accumulating {
-					// discarding: reset so the next pane is a delta
-					fresh := make([]Accumulator, len(o.aggs))
-					for i, ag := range o.aggs {
-						fresh[i], _ = newAccumulator(ag.Fn)
-					}
-					st.windows[w] = fresh
-				}
+				st.windows[w] = fresh
 			}
 		}
-		if len(st.windows) == 0 {
-			o.store.remove(key)
-		} else {
+		if changed {
 			o.store.put(key, st)
 		}
 	}
-	o.sweepTTL()
-	sortResults(out)
-	return out
+	return out, sortKeys
 }
 
 // sweepTTL drops windows abandoned far behind the max event time, bounding memory
@@ -320,36 +345,16 @@ func (o *Operator) sweepTTL() {
 	if o.stateTtlMs <= 0 || !o.hasEvent {
 		return
 	}
-	cutoff := o.maxEventTime - o.stateTtlMs
-	for _, key := range o.store.keys() {
-		st, ok := o.store.get(key)
-		if !ok {
-			continue
-		}
-		changed := false
-		for w := range st.windows {
-			if w.End <= cutoff {
-				delete(st.windows, w)
-				if st.earlyFired != nil {
-					delete(st.earlyFired, w)
-				}
-				o.ttlEvicted++
-				o.openWindowCount--
-				changed = true
-			}
-		}
-		if len(st.windows) == 0 {
-			o.store.remove(key)
-		} else if changed {
-			o.store.put(key, st)
-		}
-	}
+	o.popDue(o.maxEventTime-o.stateTtlMs, func(string, *keyState, Window, []Accumulator) {
+		o.ttlEvicted++
+	})
 }
 
 // Flush closes and returns ALL remaining windows regardless of watermark (the
 // end-of-input path for bounded sources), clearing state.
 func (o *Operator) Flush() []Result {
 	var out []Result
+	var sortKeys []string
 	for _, key := range o.store.keys() {
 		st, ok := o.store.get(key)
 		if !ok {
@@ -357,11 +362,13 @@ func (o *Operator) Flush() []Result {
 		}
 		for w, accs := range st.windows {
 			out = append(out, o.buildResult(st.keyVals, w, accs))
+			sortKeys = append(sortKeys, key)
 		}
 	}
 	o.store.clear()
 	o.openWindowCount = 0
-	sortResults(out)
+	o.due = o.due[:0]
+	sortResultsKeyed(out, sortKeys)
 	return out
 }
 
@@ -373,18 +380,32 @@ func (o *Operator) buildResult(keyVals []interface{}, w Window, accs []Accumulat
 	return Result{Key: cloneVals(keyVals), Window: w, Aggs: aggs}
 }
 
-// sortResults orders by window start, then window end, then key string — stable,
-// deterministic output for reproducible sinks and tests.
-func sortResults(rs []Result) {
-	sort.Slice(rs, func(i, j int) bool {
-		if rs[i].Window.Start != rs[j].Window.Start {
-			return rs[i].Window.Start < rs[j].Window.Start
-		}
-		if rs[i].Window.End != rs[j].Window.End {
-			return rs[i].Window.End < rs[j].Window.End
-		}
-		return keyString(rs[i].Key) < keyString(rs[j].Key)
-	})
+// sortResultsKeyed orders by window start, then window end, then key string —
+// stable, deterministic output for reproducible sinks and tests. keys[i] is
+// the precomputed keyString of rs[i], so comparisons never rebuild it.
+func sortResultsKeyed(rs []Result, keys []string) {
+	sort.Sort(keyedResults{rs, keys})
+}
+
+type keyedResults struct {
+	rs   []Result
+	keys []string
+}
+
+func (k keyedResults) Len() int { return len(k.rs) }
+func (k keyedResults) Swap(i, j int) {
+	k.rs[i], k.rs[j] = k.rs[j], k.rs[i]
+	k.keys[i], k.keys[j] = k.keys[j], k.keys[i]
+}
+func (k keyedResults) Less(i, j int) bool {
+	a, b := k.rs[i].Window, k.rs[j].Window
+	if a.Start != b.Start {
+		return a.Start < b.Start
+	}
+	if a.End != b.End {
+		return a.End < b.End
+	}
+	return k.keys[i] < k.keys[j]
 }
 
 // keyString builds a stable map key from grouping values. 0x1f (unit separator)
@@ -405,12 +426,7 @@ func valString(v interface{}) string {
 	if v == nil {
 		return "\x00nil"
 	}
-	switch s := v.(type) {
-	case string:
-		return s
-	default:
-		return fmt.Sprintf("%v", s)
-	}
+	return record.FormatValue(v) // identical to %v, without fmt for common types
 }
 
 func cloneVals(vals []interface{}) []interface{} {

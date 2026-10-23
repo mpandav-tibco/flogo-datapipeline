@@ -18,7 +18,7 @@ type accState struct {
 	Max  float64     `json:"mx,omitempty"`
 	Seen bool        `json:"e,omitempty"`
 	Set  bool        `json:"t,omitempty"`
-	Val  interface{} `json:"v,omitempty"`
+	Val  *typedValue `json:"v,omitempty"`
 	// Decimal-mode fields hold the exact value as a string so precision survives
 	// the JSON round-trip (a JSON number would re-round through float64).
 	IsDec bool   `json:"d,omitempty"`
@@ -89,10 +89,10 @@ func (a *maxAcc) load(s accState) {
 }
 func (a *countAcc) snap() accState  { return accState{N: a.n} }
 func (a *countAcc) load(s accState) { a.n = s.N }
-func (a *firstAcc) snap() accState  { return accState{Val: a.val, Set: a.set} }
-func (a *firstAcc) load(s accState) { a.val, a.set = s.Val, s.Set }
-func (a *lastAcc) snap() accState   { return accState{Val: a.val, Set: a.set} }
-func (a *lastAcc) load(s accState)  { a.val, a.set = s.Val, s.Set }
+func (a *firstAcc) snap() accState  { return accState{Val: wrapVal(a.val), Set: a.set} }
+func (a *firstAcc) load(s accState) { a.val, a.set = unwrapVal(s.Val), s.Set }
+func (a *lastAcc) snap() accState   { return accState{Val: wrapVal(a.val), Set: a.set} }
+func (a *lastAcc) load(s accState)  { a.val, a.set = unwrapVal(s.Val), s.Set }
 
 // --- operator snapshot ---
 
@@ -102,7 +102,7 @@ func (a *lastAcc) load(s accState)  { a.val, a.set = s.Val, s.Set }
 // operator is snapshotted/restored without materialising its entire state at once.
 
 type keySnapshot struct {
-	KeyVals []interface{}    `json:"key"`
+	KeyVals []typedValue     `json:"key"`
 	Windows []windowSnapshot `json:"windows"`
 }
 
@@ -151,7 +151,7 @@ func (o *Operator) Snapshot() ([]byte, error) {
 // keyStateToSnapshot converts one live keyState into its serialisable form.
 // Shared by Snapshot and the spillable state store.
 func keyStateToSnapshot(st *keyState) keySnapshot {
-	ks := keySnapshot{KeyVals: st.keyVals}
+	ks := keySnapshot{KeyVals: wrapVals(st.keyVals)}
 	for w, accs := range st.windows {
 		ws := windowSnapshot{Start: w.Start, End: w.End, Accs: make([]accState, len(accs))}
 		for i, a := range accs {
@@ -169,7 +169,7 @@ func keyStateToSnapshot(st *keyState) keySnapshot {
 // fresh accumulators of the operator's aggregate types. Shared by Restore and
 // the spillable state store.
 func keySnapshotToState(ks keySnapshot, aggs []AggSpec) *keyState {
-	st := &keyState{keyVals: ks.KeyVals, windows: make(map[Window][]Accumulator, len(ks.Windows))}
+	st := &keyState{keyVals: unwrapVals(ks.KeyVals), windows: make(map[Window][]Accumulator, len(ks.Windows))}
 	for _, ws := range ks.Windows {
 		accs := make([]Accumulator, len(aggs))
 		for i, ag := range aggs {
@@ -248,7 +248,8 @@ func (o *Operator) Restore(data []byte) error {
 				if err := dec.Decode(&ks); err != nil {
 					return err
 				}
-				o.store.put(keyString(ks.KeyVals), keySnapshotToState(ks, o.aggs))
+				st := keySnapshotToState(ks, o.aggs)
+				o.store.put(keyString(st.keyVals), st)
 				o.openWindowCount += len(ks.Windows)
 			}
 			if _, err := dec.Token(); err != nil { // consume ']'
@@ -261,5 +262,6 @@ func (o *Operator) Restore(data []byte) error {
 			}
 		}
 	}
+	o.rebuildDeadlines()
 	return nil
 }
