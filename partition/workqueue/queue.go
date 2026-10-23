@@ -12,6 +12,7 @@
 package workqueue
 
 import (
+	"container/heap"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -99,15 +100,63 @@ type MemoryQueue struct {
 	items map[string]*WorkItem
 	order []string // insertion order for FIFO claim
 	cond  *sync.Cond
+
+	// Indexes that keep Claim, AllComplete and Stats independent of the total
+	// partition count (an object-store prefix can yield one partition per
+	// object — tens of thousands). Claim semantics are unchanged: the PENDING
+	// item earliest in insertion order wins.
+	pos        map[string]int       // item ID -> index in order
+	next       int                  // order[:next] has been claimed at least once
+	requeued   posHeap              // positions of items returned to PENDING (lazy: re-checked on pop)
+	inProgress map[string]*WorkItem // leased items, scanned for lease expiry
+	counts     map[string]int       // items per status
+}
+
+// posHeap is a min-heap of insertion positions.
+type posHeap []int
+
+func (h posHeap) Len() int            { return len(h) }
+func (h posHeap) Less(i, j int) bool  { return h[i] < h[j] }
+func (h posHeap) Swap(i, j int)       { h[i], h[j] = h[j], h[i] }
+func (h *posHeap) Push(x interface{}) { *h = append(*h, x.(int)) }
+func (h *posHeap) Pop() interface{} {
+	old := *h
+	v := old[len(old)-1]
+	*h = old[:len(old)-1]
+	return v
 }
 
 // NewMemoryQueue creates a new in-process work queue.
 func NewMemoryQueue() *MemoryQueue {
 	q := &MemoryQueue{
-		items: make(map[string]*WorkItem),
+		items:      make(map[string]*WorkItem),
+		pos:        make(map[string]int),
+		inProgress: make(map[string]*WorkItem),
+		counts:     map[string]int{StatusPending: 0, StatusInProgress: 0, StatusDone: 0, StatusFailed: 0},
 	}
 	q.cond = sync.NewCond(&q.mu)
 	return q
+}
+
+// setStatus moves item to status, maintaining the counters and indexes. Must
+// be called with q.mu held.
+func (q *MemoryQueue) setStatus(item *WorkItem, status string) {
+	old := item.Status
+	if old == status {
+		return
+	}
+	q.counts[old]--
+	q.counts[status]++
+	item.Status = status
+	if old == StatusInProgress {
+		delete(q.inProgress, item.ID)
+	}
+	switch status {
+	case StatusInProgress:
+		q.inProgress[item.ID] = item
+	case StatusPending:
+		heap.Push(&q.requeued, q.pos[item.ID])
+	}
 }
 
 func (q *MemoryQueue) Enqueue(_ context.Context, partitions []source.Partition, maxRetries int) error {
@@ -124,9 +173,33 @@ func (q *MemoryQueue) Enqueue(_ context.Context, partitions []source.Partition, 
 			MaxRetries: maxRetries,
 		}
 		q.items[p.ID] = item
+		q.pos[p.ID] = len(q.order)
 		q.order = append(q.order, p.ID)
+		q.counts[StatusPending]++
 	}
 	q.cond.Broadcast()
+	return nil
+}
+
+// nextPending returns the PENDING item earliest in insertion order, or nil.
+// Must be called with q.mu held.
+func (q *MemoryQueue) nextPending() *WorkItem {
+	// Drop stale requeue entries (items claimed or finished since requeue).
+	for len(q.requeued) > 0 && q.items[q.order[q.requeued[0]]].Status != StatusPending {
+		heap.Pop(&q.requeued)
+	}
+	// Advance the cursor past items that are no longer pending.
+	for q.next < len(q.order) && q.items[q.order[q.next]].Status != StatusPending {
+		q.next++
+	}
+	switch {
+	case len(q.requeued) > 0 && (q.next >= len(q.order) || q.requeued[0] < q.next):
+		return q.items[q.order[heap.Pop(&q.requeued).(int)]]
+	case q.next < len(q.order):
+		item := q.items[q.order[q.next]]
+		q.next++
+		return item
+	}
 	return nil
 }
 
@@ -138,25 +211,20 @@ func (q *MemoryQueue) Claim(ctx context.Context, workerID string, lease time.Dur
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		// Expire stale leases.
+		// Expire stale leases (only leased items are inspected).
 		now := time.Now()
-		for _, id := range q.order {
-			item := q.items[id]
-			if item.Status == StatusInProgress && !item.ClaimedAt.IsZero() &&
-				now.Sub(item.ClaimedAt) > lease {
-				item.Status = StatusPending
+		for _, item := range q.inProgress {
+			if !item.ClaimedAt.IsZero() && now.Sub(item.ClaimedAt) > lease {
 				item.WorkerID = ""
+				q.setStatus(item, StatusPending)
 			}
 		}
-		// Claim first PENDING item.
-		for _, id := range q.order {
-			item := q.items[id]
-			if item.Status == StatusPending {
-				item.Status = StatusInProgress
-				item.WorkerID = workerID
-				item.ClaimedAt = now
-				return item, nil
-			}
+		// Claim the first PENDING item in insertion order.
+		if item := q.nextPending(); item != nil {
+			q.setStatus(item, StatusInProgress)
+			item.WorkerID = workerID
+			item.ClaimedAt = now
+			return item, nil
 		}
 		// Check if all done.
 		done, _ := q.allComplete()
@@ -197,7 +265,7 @@ func (q *MemoryQueue) Complete(_ context.Context, item *WorkItem) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if stored, ok := q.items[item.ID]; ok {
-		stored.Status = StatusDone
+		q.setStatus(stored, StatusDone)
 		stored.CompletedAt = time.Now()
 	}
 	q.cond.Broadcast()
@@ -211,10 +279,10 @@ func (q *MemoryQueue) Fail(_ context.Context, item *WorkItem, reason string) err
 		stored.RetryCount++
 		stored.Error = reason
 		if stored.RetryCount >= stored.MaxRetries {
-			stored.Status = StatusFailed
+			q.setStatus(stored, StatusFailed)
 		} else {
-			stored.Status = StatusPending
 			stored.WorkerID = ""
+			q.setStatus(stored, StatusPending)
 		}
 	}
 	q.cond.Broadcast()
@@ -229,20 +297,15 @@ func (q *MemoryQueue) AllComplete(_ context.Context) (bool, error) {
 }
 
 func (q *MemoryQueue) allComplete() (bool, error) {
-	for _, item := range q.items {
-		if item.Status == StatusPending || item.Status == StatusInProgress {
-			return false, nil
-		}
-	}
-	return true, nil
+	return q.counts[StatusPending] == 0 && q.counts[StatusInProgress] == 0, nil
 }
 
 func (q *MemoryQueue) Stats(_ context.Context) (map[string]int, error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	counts := map[string]int{StatusPending: 0, StatusInProgress: 0, StatusDone: 0, StatusFailed: 0}
-	for _, item := range q.items {
-		counts[item.Status]++
+	counts := make(map[string]int, len(q.counts))
+	for k, v := range q.counts {
+		counts[k] = v
 	}
 	return counts, nil
 }
