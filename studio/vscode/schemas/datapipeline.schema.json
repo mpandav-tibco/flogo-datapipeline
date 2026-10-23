@@ -681,6 +681,12 @@
               "description": "Remove the checkpoint file/key when the pipeline exits cleanly.",
               "default": false
             },
+            "onSaveError": {
+              "type": "string",
+              "enum": ["continue", "fail"],
+              "description": "What a failed checkpoint save does: 'continue' logs and keeps processing (previous checkpoint retained); 'fail' stops the run.",
+              "default": "continue"
+            },
             "key": {
               "type": "string",
               "description": "Stable checkpoint key for single-instance streaming resume. Defaults to the per-run id; set a fixed value so a long-lived streaming job finds its state across restarts."

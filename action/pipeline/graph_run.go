@@ -433,16 +433,13 @@ func (a *DataPipelineAction) runGraph(ctx context.Context, in *Input, runLog cor
 				if serr != nil {
 					// Advancing the position without operator state would lose the
 					// buffered input on resume; keep the previous checkpoint instead.
-					runLog.Warnf("graph state snapshot failed (checkpoint skipped, previous checkpoint retained): %v", serr)
-					return nil
+					return checkpointFailed(runLog, def, "graph state snapshot", serr)
 				}
 				token := checkpoint.NewToken(def.Source.Type, pos, nil)
 				token.WindowState = state
 				if serr := ckpt.Save(ckptKey, token); serr != nil {
-					// Match the linear path: warn and keep running rather than
-					// aborting a healthy load on a checkpoint-backend hiccup.
-					runLog.Warnf("graph checkpoint save failed (continuing): %v", serr)
-					return nil
+					// Same policy as the linear path (checkpoint.onSaveError).
+					return checkpointFailed(runLog, def, "graph checkpoint save", serr)
 				}
 				a.recorder.CheckpointSaved(a.ref)
 				runLog.Infof("graph checkpoint saved — %d rows processed", pos)
@@ -491,12 +488,16 @@ func (a *DataPipelineAction) runGraph(ctx context.Context, in *Input, runLog cor
 		} else {
 			state, serr := snapshotGraphState(snapshotters)
 			if serr != nil {
-				runLog.Warnf("graph state snapshot failed (final checkpoint skipped, previous checkpoint retained): %v", serr)
+				if ferr := checkpointFailed(runLog, def, "final graph state snapshot", serr); ferr != nil {
+					return out, ferr
+				}
 			} else {
 				token := checkpoint.NewToken(def.Source.Type, out.RowsProcessed, nil)
 				token.WindowState = state
 				if serr := ckpt.Save(ckptKey, token); serr != nil {
-					runLog.Warnf("final graph checkpoint save failed: %v", serr)
+					if ferr := checkpointFailed(runLog, def, "final graph checkpoint save", serr); ferr != nil {
+						return out, ferr
+					}
 				} else {
 					a.recorder.CheckpointSaved(a.ref)
 				}
@@ -643,8 +644,7 @@ func (a *DataPipelineAction) runGraphScaled(ctx context.Context, in *Input, runL
 				opts.CheckpointRows = def.Checkpoint.IntervalRows
 				opts.OnCheckpoint = func(pos int64) error {
 					if serr := ckpt.Save(ckptKey, checkpoint.NewToken(def.Source.Type, pos, nil)); serr != nil {
-						runLog.Warnf("graph checkpoint save failed (continuing): %v", serr)
-						return nil
+						return checkpointFailed(runLog, def, "graph checkpoint save", serr)
 					}
 					a.recorder.CheckpointSaved(a.ref)
 					return nil
@@ -664,7 +664,9 @@ func (a *DataPipelineAction) runGraphScaled(ctx context.Context, in *Input, runL
 			if def.Checkpoint.DeleteOnSuccess {
 				_ = ckpt.Delete(ckptKey)
 			} else if serr := ckpt.Save(ckptKey, checkpoint.NewToken(def.Source.Type, partitionRows, nil)); serr != nil {
-				runLog.Warnf("final graph checkpoint save failed for partition %q: %v", ckptKey, serr)
+				if ferr := checkpointFailed(runLog, def, fmt.Sprintf("final graph checkpoint save for partition %q", ckptKey), serr); ferr != nil {
+					return ferr
+				}
 			} else {
 				a.recorder.CheckpointSaved(a.ref)
 			}

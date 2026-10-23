@@ -933,17 +933,22 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 					if err := snk.Flush(); err != nil {
 						return fmt.Errorf("sink flush (checkpoint): %w", err)
 					}
-					saveCheckpoint(runLog, ckpt, ckptKey, def.Source.Type, out.RowsProcessed, pSrc, winOp, out.RowsProcessed-resumeBaseline)
-					a.recorder.CheckpointSaved(a.ref)
-					saveWatermark(runLog, wmStore, hwmProvider, def, a.ref)
-					a.emitWindowMetrics(winOp)
 					// Surface the checkpoint so operators can see progress being
 					// persisted and which trigger fired (row count vs. time).
 					reason := "rows"
 					if timeTrigger && !rowTrigger {
 						reason = "time"
 					}
-					runLog.Infof("checkpoint saved — %d rows processed (trigger=%s)", out.RowsProcessed, reason)
+					if cerr := saveCheckpoint(runLog, ckpt, ckptKey, def.Source.Type, out.RowsProcessed, pSrc, winOp, out.RowsProcessed-resumeBaseline); cerr != nil {
+						if ferr := checkpointFailed(runLog, def, "checkpoint", cerr); ferr != nil {
+							return ferr
+						}
+					} else {
+						a.recorder.CheckpointSaved(a.ref)
+						runLog.Infof("checkpoint saved — %d rows processed (trigger=%s)", out.RowsProcessed, reason)
+					}
+					saveWatermark(runLog, wmStore, hwmProvider, def, a.ref)
+					a.emitWindowMetrics(winOp)
 					rowsSinceCkpt = 0
 					lastCkpt = time.Now()
 				}
@@ -1236,8 +1241,13 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 			runLog.Warnf("checkpoint delete failed (continuing; a stale checkpoint may remain): %v", err)
 		}
 	} else {
-		saveCheckpoint(runLog, ckpt, resumeKey, def.Source.Type, out.RowsProcessed, src, winOp, math.MaxInt64)
-		a.recorder.CheckpointSaved(a.ref)
+		if cerr := saveCheckpoint(runLog, ckpt, resumeKey, def.Source.Type, out.RowsProcessed, src, winOp, math.MaxInt64); cerr != nil {
+			if ferr := checkpointFailed(runLog, def, "final checkpoint", cerr); ferr != nil {
+				return out, ferr
+			}
+		} else {
+			a.recorder.CheckpointSaved(a.ref)
+		}
 	}
 
 	// Always persist the final high-water mark on successful completion,
@@ -1362,7 +1372,11 @@ func (a *DataPipelineAction) emitWindowMetrics(winOp wintransform.WindowedOperat
 	a.recorder.Gauge("flogo_pipeline_window_spill_failures_total", "Cumulative keys dropped because spill-to-disk failed (should stay 0).", labels, float64(st.SpillFailures))
 }
 
-func saveCheckpoint(runLog corelog.Logger, ckpt checkpoint.Checkpoint, runID, format string, rowsProcessed int64, src source.Source, winOp wintransform.WindowedOperator, committerRows int64) {
+// saveCheckpoint persists a checkpoint token (cursor + window state) and, only
+// once it is durable, acknowledges the source. It returns a non-nil error when
+// nothing was persisted (snapshot or backend failure); the previous checkpoint
+// and uncommitted source offsets then remain in force.
+func saveCheckpoint(runLog corelog.Logger, ckpt checkpoint.Checkpoint, runID, format string, rowsProcessed int64, src source.Source, winOp wintransform.WindowedOperator, committerRows int64) error {
 	var cp checkpoint.CursorProvider
 	if p, ok := src.(checkpoint.CursorProvider); ok {
 		cp = p
@@ -1377,14 +1391,12 @@ func saveCheckpoint(runLog corelog.Logger, ckpt checkpoint.Checkpoint, runID, fo
 			// their already-consumed input — silent data loss. Keep the previous
 			// durable checkpoint (and uncommitted source offsets) instead; the next
 			// interval retries.
-			runLog.Warnf("window snapshot failed (checkpoint skipped, previous checkpoint retained): %v", err)
-			return
+			return fmt.Errorf("window snapshot: %w", err)
 		}
 		t.WindowState = snap
 	}
 	if err := ckpt.Save(runID, t); err != nil {
-		runLog.Warnf("checkpoint save failed (continuing): %v", err)
-		return
+		return fmt.Errorf("save: %w", err)
 	}
 	// Advance the source's external acknowledgement (e.g. Kafka offsets) only
 	// after the token is durable, so a crash re-delivers everything after this
@@ -1395,6 +1407,17 @@ func saveCheckpoint(runLog corelog.Logger, ckpt checkpoint.Checkpoint, runID, fo
 			runLog.Warnf("source commit failed (continuing): %v", err)
 		}
 	}
+	return nil
+}
+
+// checkpointFailed applies checkpoint.onSaveError to a failed checkpoint: it
+// returns the error to abort the run under "fail", otherwise logs it.
+func checkpointFailed(runLog corelog.Logger, def *Definition, what string, err error) error {
+	if def.Checkpoint.failOnCheckpointError() {
+		return fmt.Errorf("%s failed (checkpoint.onSaveError=fail): %w", what, err)
+	}
+	runLog.Warnf("%s failed (continuing; previous checkpoint retained): %v", what, err)
+	return nil
 }
 
 func newRunID() string {

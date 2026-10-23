@@ -121,6 +121,7 @@ Resume an interrupted run from the last saved source position.
 | `intervalRows` | `10000` | checkpoint every N rows |
 | `intervalSeconds` | `30` | …or every N seconds |
 | `deleteOnSuccess` | — | remove the checkpoint after a clean finish |
+| `onSaveError` | `continue` | `continue` logs a failed checkpoint save and keeps going (the previous checkpoint and uncommitted source offsets stay in force); `fail` stops the run |
 | `key` | per-run id | stable key for single-instance streaming resume |
 | `path` | temp dir | **file** backend: directory for checkpoint files |
 | `addr` | `localhost:6379` | **redis** backend: host:port |
