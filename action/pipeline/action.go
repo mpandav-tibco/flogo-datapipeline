@@ -10,7 +10,6 @@ import (
 	"runtime/debug"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/project-flogo/core/action"
@@ -803,35 +802,32 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 		// main goroutine transforms+writes. A byte semaphore enforces maxMemoryMB.
 		type readItem struct {
 			batch   *record.RecordBatch
+			bytes   int64 // budget charged at read time; released verbatim
 			readDur time.Duration
 			err     error
 		}
 		readCh := make(chan readItem, bufDepth)
-		var inFlight int64 // bytes currently buffered (atomic)
+		budget := newMemBudget(maxInFlightBytes)
 		readCtx, cancelRead := context.WithCancel(ctx)
 		defer cancelRead()
 
 		go func() {
 			defer close(readCh)
 			for {
-				if readCtx.Err() != nil {
-					return
-				}
 				// Backpressure: block while the buffer already holds ~maxMemoryMB.
-				for maxInFlightBytes > 0 && atomic.LoadInt64(&inFlight) >= maxInFlightBytes {
-					if readCtx.Err() != nil {
-						return
-					}
-					time.Sleep(2 * time.Millisecond)
+				if !budget.waitForRoom(readCtx) {
+					return
 				}
 				t0 := time.Now()
 				b, rErr := pSrc.ReadBatch(batchSize)
 				rd := time.Since(t0)
-				if b != nil && b.Len() > 0 {
-					atomic.AddInt64(&inFlight, batchBytes(b))
+				var nb int64
+				if maxInFlightBytes > 0 && b != nil && b.Len() > 0 {
+					nb = batchBytes(b)
+					budget.acquire(nb)
 				}
 				select {
-				case readCh <- readItem{batch: b, readDur: rd, err: rErr}:
+				case readCh <- readItem{batch: b, bytes: nb, readDur: rd, err: rErr}:
 				case <-readCtx.Done():
 					return
 				}
@@ -851,7 +847,6 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 			}
 
 			if batch != nil && batch.Len() > 0 {
-				bBytes := batchBytes(batch)
 				batchLen := int64(batch.Len())
 				out.RowsProcessed += batchLen
 				rowsSinceCkpt += batchLen
@@ -867,7 +862,7 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 					record.Put(batch)
 				}
 				// Batch fully consumed from the buffer — release its bytes.
-				atomic.AddInt64(&inFlight, -bBytes)
+				budget.release(item.bytes)
 
 				if txErr != nil {
 					runLog.Warnf("transform error on batch of %d rows (routing to failed): %v", batchLen, txErr)
@@ -944,11 +939,13 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 			txErr       error
 			txDur       time.Duration
 			readDur     time.Duration
+			bytes       int64
 		}
 		type job struct {
 			seq     int64
 			batch   *record.RecordBatch
 			readDur time.Duration
+			bytes   int64 // budget charged at read time; released verbatim
 		}
 
 		// One private transform pipeline per worker so concurrent Apply calls
@@ -976,27 +973,25 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 		wctx, cancel := context.WithCancel(ctx)
 		defer cancel()
 
-		var inFlight int64
+		budget := newMemBudget(maxInFlightBytes)
 		go func() {
 			defer close(jobCh)
 			var seq int64
 			for {
-				if wctx.Err() != nil {
+				if !budget.waitForRoom(wctx) {
 					return
-				}
-				for maxInFlightBytes > 0 && atomic.LoadInt64(&inFlight) >= maxInFlightBytes {
-					if wctx.Err() != nil {
-						return
-					}
-					time.Sleep(2 * time.Millisecond)
 				}
 				t0 := time.Now()
 				b, rErr := pSrc.ReadBatch(batchSize)
 				rd := time.Since(t0)
 				if b != nil && b.Len() > 0 {
-					atomic.AddInt64(&inFlight, batchBytes(b))
+					var nb int64
+					if maxInFlightBytes > 0 {
+						nb = batchBytes(b)
+						budget.acquire(nb)
+					}
 					select {
-					case jobCh <- job{seq: seq, batch: b, readDur: rd}:
+					case jobCh <- job{seq: seq, batch: b, readDur: rd, bytes: nb}:
 						seq++
 					case <-wctx.Done():
 						return
@@ -1014,12 +1009,13 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 			go func(p *transform.Pipeline) {
 				defer wg.Done()
 				for j := range jobCh {
+					batchLen := int64(j.batch.Len())
 					t1 := time.Now()
 					tOut, err := p.Apply(j.batch)
 					resCh <- result{
 						seq: j.seq, src: j.batch, transformed: tOut,
-						batchLen: int64(j.batch.Len()), txErr: err,
-						txDur: time.Since(t1), readDur: j.readDur,
+						batchLen: batchLen, txErr: err,
+						txDur: time.Since(t1), readDur: j.readDur, bytes: j.bytes,
 					}
 				}
 			}(pipes[i])
@@ -1030,14 +1026,13 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 		var next int64
 		var writeErr error
 		process := func(r result) {
-			bBytes := batchBytes(r.src)
 			out.RowsProcessed += r.batchLen
 			a.recorder.BatchRead(a.ref, def.Source.Type, int(r.batchLen), r.readDur)
 			a.checkStall(runLog, "read", r.readDur)
 			if r.transformed != r.src {
 				record.Put(r.src)
 			}
-			atomic.AddInt64(&inFlight, -bBytes)
+			budget.release(r.bytes)
 			switch {
 			case r.txErr != nil:
 				runLog.Warnf("transform error on batch of %d rows (routing to failed): %v", r.batchLen, r.txErr)
@@ -1388,22 +1383,6 @@ func orDefaultInt(v, def int) int {
 		return def
 	}
 	return v
-}
-
-// batchBytes estimates the in-memory size of a batch for the maxMemoryMB
-// backpressure budget. It is a cheap heuristic — a fixed per-cell estimate — not
-// an exact sizeof; the goal is proportional accounting to bound the read-ahead
-// buffer, not precise memory measurement.
-func batchBytes(b *record.RecordBatch) int64 {
-	if b == nil || len(b.Rows) == 0 {
-		return 0
-	}
-	const bytesPerCell = 32 // rough average across numeric/string cells
-	cols := int64(len(b.Columns))
-	if cols == 0 && len(b.Rows) > 0 {
-		cols = int64(len(b.Rows[0]))
-	}
-	return int64(len(b.Rows)) * cols * bytesPerCell
 }
 
 // openWatermarkStore creates the watermark.Store configured in def.Incremental.
