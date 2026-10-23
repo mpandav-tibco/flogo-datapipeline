@@ -29,8 +29,16 @@
 //	  "columns": [{"name": "id", "type": "int"}, {"name": "total", "type": "decimal"}],
 //	  "timeoutMs": 30000,
 //	  "maxRetries": 3,
-//	  "retryBackoffMs": 500
+//	  "retryBackoffMs": 500,
+//	  "maxBackoffMs": 30000,
+//	  "maxResponseBytes": 67108864
 //	}
+//
+// Retries (429/5xx and transport errors) wait for the server's Retry-After
+// when given, otherwise an exponential backoff from retryBackoffMs with
+// jitter, capped at maxBackoffMs; Close interrupts the wait. Each page body is
+// capped at maxResponseBytes (default 64 MiB) — a larger page is an error, so
+// one oversized response cannot exhaust memory.
 //
 // # Authentication (authType)
 //
@@ -83,13 +91,17 @@
 package rest
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
+	"sync/atomic"
 	"time"
+
+	"github.com/mpandav-tibco/flogo-datapipeline/internal/httpretry"
 
 	"github.com/mpandav-tibco/flogo-datapipeline/record"
 	"github.com/mpandav-tibco/flogo-datapipeline/source"
@@ -112,8 +124,14 @@ type restSource struct {
 	fields []string // ordered field names; nil = infer from first record
 	schema []record.Column
 
-	maxRetries     int
-	retryBackoffMs int
+	maxRetries       int
+	retryBackoffMs   int
+	maxBackoff       time.Duration
+	maxResponseBytes int64
+
+	// ctx is cancelled by Close so retry waits and in-flight requests stop.
+	ctx    context.Context
+	cancel context.CancelFunc
 
 	// Pagination cursor state, advanced as pages are fetched.
 	state paginationState
@@ -124,7 +142,7 @@ type restSource struct {
 	// caller's requested batch size).
 	pending []map[string]interface{}
 
-	closed bool
+	closed atomic.Bool // set by Close, which may run concurrently with ReadBatch
 }
 
 func newRestSource(cfg map[string]interface{}) (source.Source, error) {
@@ -177,7 +195,10 @@ func newRestSource(cfg map[string]interface{}) (source.Source, error) {
 	timeoutMs := intFromCfg(cfg, "timeoutMs", 30000)
 	maxRetries := intFromCfg(cfg, "maxRetries", 3)
 	retryBackoffMs := intFromCfg(cfg, "retryBackoffMs", 500)
+	maxBackoffMs := intFromCfg(cfg, "maxBackoffMs", 30000)
+	maxResponseBytes := intFromCfg(cfg, "maxResponseBytes", 64<<20)
 
+	ctx, cancel := context.WithCancel(context.Background())
 	return &restSource{
 		client:         &http.Client{Timeout: time.Duration(timeoutMs) * time.Millisecond},
 		baseURL:        rawURL,
@@ -191,6 +212,11 @@ func newRestSource(cfg map[string]interface{}) (source.Source, error) {
 		maxRetries:     maxRetries,
 		retryBackoffMs: retryBackoffMs,
 		state:          pag.initialState(),
+
+		maxBackoff:       time.Duration(maxBackoffMs) * time.Millisecond,
+		maxResponseBytes: int64(maxResponseBytes),
+		ctx:              ctx,
+		cancel:           cancel,
 	}, nil
 }
 
@@ -201,7 +227,7 @@ func (s *restSource) Schema() []record.Column { return s.schema }
 // the field list — and therefore the schema — from the first record read, if
 // "columns" was not declared).
 func (s *restSource) ReadBatch(size int) (*record.RecordBatch, error) {
-	if s.closed {
+	if s.closed.Load() {
 		return nil, io.EOF
 	}
 
@@ -275,7 +301,10 @@ func (s *restSource) Skip(n int64) error {
 }
 
 func (s *restSource) Close() error {
-	s.closed = true
+	s.closed.Store(true)
+	if s.cancel != nil {
+		s.cancel()
+	}
 	s.client.CloseIdleConnections()
 	return nil
 }
@@ -344,17 +373,29 @@ func (s *restSource) fetchNextPage() ([]map[string]interface{}, error) {
 }
 
 // doWithRetry issues the HTTP request, retrying on 429/5xx and transport
-// errors with a linear backoff (attempt * retryBackoffMs), up to maxRetries
-// additional attempts. Any other non-2xx status fails immediately with the
-// response body included for debuggability.
+// errors up to maxRetries additional attempts, waiting per Retry-After or
+// jittered exponential backoff (see the package doc). Any other non-2xx status
+// fails immediately with the response body prefix included for debuggability.
 func (s *restSource) doWithRetry(reqURL string) ([]byte, error) {
+	ctx := s.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	limit := s.maxResponseBytes
+	if limit <= 0 {
+		limit = 64 << 20
+	}
 	var lastErr error
+	var lastResp *http.Response // headers only (for Retry-After); body already closed
 	for attempt := 0; attempt <= s.maxRetries; attempt++ {
 		if attempt > 0 {
-			time.Sleep(time.Duration(attempt*s.retryBackoffMs) * time.Millisecond)
+			wait := httpretry.Delay(attempt, lastResp, time.Duration(s.retryBackoffMs)*time.Millisecond, s.maxBackoff)
+			if !httpretry.Sleep(ctx, wait) {
+				return nil, fmt.Errorf("rest source: closed while retrying: %w", lastErr)
+			}
 		}
 
-		req, err := http.NewRequest(s.method, reqURL, nil)
+		req, err := http.NewRequestWithContext(ctx, s.method, reqURL, nil)
 		if err != nil {
 			return nil, fmt.Errorf("rest source: build request: %w", err)
 		}
@@ -363,15 +404,20 @@ func (s *restSource) doWithRetry(reqURL string) ([]byte, error) {
 		}
 
 		resp, err := s.client.Do(req)
+		lastResp = nil
 		if err != nil {
 			lastErr = fmt.Errorf("rest source: request %s: %w", reqURL, err)
 			continue
 		}
-		respBody, readErr := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		lastResp = resp
+		respBody, truncated, readErr := httpretry.ReadLimited(resp.Body, limit)
+		httpretry.Drain(resp)
 		if readErr != nil {
 			lastErr = fmt.Errorf("rest source: read response body: %w", readErr)
 			continue
+		}
+		if truncated && resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			return nil, fmt.Errorf("rest source: %s response exceeds maxResponseBytes=%d (raise it or reduce the page size)", reqURL, limit)
 		}
 
 		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {

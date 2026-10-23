@@ -27,7 +27,9 @@ Census/Hightouch call reverse ETL. Implemented in
 | `mode` | string | `perRow` | — | `perRow` \| `batch` (see below). |
 | `timeoutMs` | int | `30000` | — | Per-request HTTP client timeout. |
 | `maxRetries` | int | `3` | — | Additional attempts on 429/5xx or a transport error. |
-| `retryBackoffMs` | int | `500` | — | Linear backoff: `attempt * retryBackoffMs`. |
+| `retryBackoffMs` | int | `500` | — | Base retry delay: retry *n* waits ~`retryBackoffMs × 2^(n-1)` with jitter (between half and the full value), unless the server sends `Retry-After`. |
+| `maxBackoffMs` | int | `30000` | — | Cap on any single retry wait, including a server's `Retry-After`. |
+| `concurrency` | int | `1` | — | `perRow` only: row requests sent in parallel. Rows of a batch may then reach the API out of order; keep `1` if the API needs ordered writes. |
 | `successStatusCodes` | `[]int` | any 2xx | — | Explicit success set, e.g. `[201]` to reject 200. |
 
 Credentials are **always** read from an environment variable named in the
@@ -48,7 +50,9 @@ config (`bearerTokenEnv`, etc.) — never written inline in the pipeline file.
 ## Behavior
 
 - **Retries:** HTTP 429 and 5xx responses, and transport errors, are retried
-  with a linear backoff up to `maxRetries` additional attempts; any other
+  up to `maxRetries` additional attempts, waiting for the server's `Retry-After`
+  when present, otherwise a jittered exponential backoff capped at `maxBackoffMs`.
+  Closing the pipeline interrupts a pending wait. Any other
   non-success status fails immediately with the response body (truncated) in
   the error for debuggability.
 - **Failure handling:** on the first row/request that fails (after retries),
