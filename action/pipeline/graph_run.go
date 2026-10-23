@@ -446,6 +446,18 @@ func (a *DataPipelineAction) runGraph(ctx context.Context, in *Input, runLog cor
 				}
 				a.recorder.CheckpointSaved(a.ref)
 				runLog.Infof("graph checkpoint saved — %d rows processed", pos)
+				// The source is paused at the barrier, so every row up to pos is
+				// flushed and the token is durable: acknowledge the source (e.g.
+				// Kafka commitMode "checkpoint" offsets), exactly as the linear
+				// path does. Commit takes the run-local row count. Only a single
+				// source has an unambiguous position.
+				if srcs := plan.Sources(); len(srcs) == 1 {
+					if c, ok := srcs[0].(source.Committer); ok {
+						if cerr := c.Commit(pos - opts.ResumeFrom); cerr != nil {
+							runLog.Warnf("source commit failed (continuing): %v", cerr)
+						}
+					}
+				}
 				return nil
 			}
 		}

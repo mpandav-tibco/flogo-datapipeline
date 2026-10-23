@@ -29,6 +29,9 @@
 //	tlsCertFile       string    Path to TLS client certificate file
 //	tlsKeyFile        string    Path to TLS client key file
 //	tlsCACertFile     string    Path to TLS CA certificate file
+//	onDeserializeError string   "skip" (default) logs, counts and skips a message
+//	                            that cannot be decoded; "fail" stops the pipeline
+//	                            with an error instead of dropping it
 package kafka
 
 import (
@@ -95,6 +98,11 @@ type kafkaSource struct {
 	// commitMode: "auto" (sarama auto-commit, default) or "checkpoint" (offsets
 	// committed only when the pipeline checkpoints, via Commit()).
 	commitMode string
+	// failOnDeserialize stops ReadBatch with an error on an undecodable message
+	// (onDeserializeError "fail") instead of skipping it.
+	failOnDeserialize bool
+	// deserializeErrors counts messages skipped because they could not be decoded.
+	deserializeErrors atomic.Int64
 	// Offset-commit bookkeeping (guarded by pendingMu). The consumer runs on a
 	// read-ahead goroutine, so the offset a batch reaches at ReadBatch time is
 	// AHEAD of what the pipeline has processed. To avoid committing (and thus
@@ -246,6 +254,12 @@ func newKafkaSource(cfg map[string]interface{}) (source.Source, error) {
 	if commitMode == "" {
 		commitMode = "auto"
 	}
+	onDeserErr, _ := cfg["onDeserializeError"].(string)
+	switch onDeserErr {
+	case "", "skip", "fail":
+	default:
+		return nil, fmt.Errorf("kafka source: 'onDeserializeError' must be \"skip\" or \"fail\", got %q", onDeserErr)
+	}
 	sc.Consumer.Offsets.Initial = kc.startOffset
 	sc.Consumer.Offsets.AutoCommit.Enable = commitMode != "checkpoint"
 	sc.Consumer.Offsets.AutoCommit.Interval = 1 * time.Second
@@ -344,6 +358,8 @@ func newKafkaSource(cfg map[string]interface{}) (source.Source, error) {
 		cgDone:     cgDone,
 		commitMode: commitMode,
 		pending:    make(map[int32]int64),
+
+		failOnDeserialize: onDeserErr == "fail",
 	}
 
 	ks.hwmColumn, _ = cfg["hwmColumn"].(string)
@@ -488,18 +504,16 @@ func (ks *kafkaSource) ReadBatch(size int) (*record.RecordBatch, error) {
 		batch.Rows = make([][]interface{}, 0, size)
 	}
 
-	for len(batch.Rows) < size {
-		remaining := time.Until(deadline)
-		if remaining <= 0 {
-			break
-		}
+	// One timer for the whole poll window (the deadline is fixed), instead of
+	// allocating a new one per message.
+	timer := time.NewTimer(time.Until(deadline))
+	defer timer.Stop()
 
-		timer := time.NewTimer(remaining)
+	for len(batch.Rows) < size {
 		var env msgEnvelope
 		var ok bool
 		select {
 		case env, ok = <-ks.handler.msgCh:
-			timer.Stop()
 			if !ok {
 				goto done
 			}
@@ -510,8 +524,15 @@ func (ks *kafkaSource) ReadBatch(size int) (*record.RecordBatch, error) {
 		{
 			obj, err := deser(env.msg.Key, env.msg.Value)
 			if err != nil {
-				klog.Warnf("kafka source: deserialize partition=%d offset=%d: %v",
-					env.msg.Partition, env.msg.Offset, err)
+				if ks.failOnDeserialize {
+					record.Put(batch)
+					return nil, fmt.Errorf("kafka source: deserialize partition=%d offset=%d: %w",
+						env.msg.Partition, env.msg.Offset, err)
+				}
+				n := ks.deserializeErrors.Add(1)
+				klog.Warnf("kafka source: skipping undecodable message partition=%d offset=%d (%d skipped so far): %v",
+					env.msg.Partition, env.msg.Offset, n, err)
+				ks.advancePast(env)
 				continue
 			}
 
@@ -523,6 +544,7 @@ func (ks *kafkaSource) ReadBatch(size int) (*record.RecordBatch, error) {
 			}
 
 			if ks.hwmColumn != "" && !ks.passesHWMFilter(obj) {
+				ks.advancePast(env)
 				continue
 			}
 
@@ -568,6 +590,22 @@ done:
 	}
 	return batch, nil
 }
+
+// advancePast moves the partition's pending commit offset past a message that
+// was consumed but not emitted (skipped as undecodable or filtered by the HWM),
+// so a later checkpoint commit covers it instead of redelivering it after every
+// restart when it is the last message on its partition.
+func (ks *kafkaSource) advancePast(env msgEnvelope) {
+	ks.pendingMu.Lock()
+	if off := env.msg.Offset + 1; off > ks.pending[env.msg.Partition] {
+		ks.pending[env.msg.Partition] = off
+	}
+	ks.lastSession = env.session
+	ks.pendingMu.Unlock()
+}
+
+// DeserializeErrors reports how many messages were skipped as undecodable.
+func (ks *kafkaSource) DeserializeErrors() int64 { return ks.deserializeErrors.Load() }
 
 // Flush ensures committed offsets are persisted to Kafka.
 // sarama auto-commit runs every second; sleeping slightly longer guarantees

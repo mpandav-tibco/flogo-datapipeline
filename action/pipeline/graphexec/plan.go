@@ -314,6 +314,18 @@ func (p *Plan) Transforms() []TransformOp {
 	return ops
 }
 
+// Sources returns every source operator in the plan, in node order, for
+// capability type-assertions (e.g. offset committers) by the caller.
+func (p *Plan) Sources() []SourceOp {
+	var ops []SourceOp
+	for _, n := range p.nodes {
+		if n.kind == KindSource && n.src != nil {
+			ops = append(ops, n.src)
+		}
+	}
+	return ops
+}
+
 // sinkCount returns the number of sink nodes (barriers the coordinator awaits).
 func (p *Plan) sinkCount() int {
 	c := 0
