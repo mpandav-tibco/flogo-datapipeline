@@ -126,6 +126,11 @@ func newRunLog(pipelineRef, runID string) corelog.Logger {
 // implementation instead of being duplicated and drifting.
 func (a *DataPipelineAction) finalizeStatus(runLog corelog.Logger, out *Output, runErr error) {
 	switch {
+	case runErr != nil && errors.Is(runErr, context.Canceled):
+		// Stopped on request (shutdown / API cancel): not a failure. No
+		// checkpoint was taken, so a restart resumes from the last durable one.
+		out.Status = "cancelled"
+		out.Error = runErr.Error()
 	case runErr != nil:
 		out.Status = "failed"
 		out.Error = runErr.Error()
@@ -226,6 +231,9 @@ func (a *DataPipelineAction) RunDirect(ctx context.Context, in *Input) (*Output,
 		runID = newRunID()
 	}
 
+	ctx, runDone := activeRuns.start(ctx)
+	defer runDone()
+
 	runLog := newRunLog(a.ref, runID)
 	runLog.Infof("pipeline run started — source=%s sink=%s", a.def.Source.Type, a.def.Sink.Type)
 	a.auditRunStart(runID)
@@ -236,7 +244,7 @@ func (a *DataPipelineAction) RunDirect(ctx context.Context, in *Input) (*Output,
 	out.DurationMs = time.Since(start).Milliseconds()
 
 	a.finalizeStatus(runLog, out, runErr)
-	if runErr != nil {
+	if runErr != nil && out.Status != "cancelled" {
 		runLog.Errorf("pipeline run failed after %dms: %v", out.DurationMs, runErr)
 	}
 	runLog.Infof("pipeline run %s — processed=%d written=%d failed=%d dropped=%d deleted=%d duration=%dms",
@@ -266,7 +274,9 @@ func (a *DataPipelineAction) Run(
 		runID = newRunID()
 	}
 
+	ctx, runDone := activeRuns.start(ctx)
 	go func() {
+		defer runDone()
 		runLog := newRunLog(a.ref, runID)
 		runLog.Infof("pipeline run started — source=%s sink=%s", a.def.Source.Type, a.def.Sink.Type)
 		a.auditRunStart(runID)
@@ -278,7 +288,7 @@ func (a *DataPipelineAction) Run(
 		out.DurationMs = totalDur.Milliseconds()
 
 		a.finalizeStatus(runLog, out, runErr)
-		if runErr != nil {
+		if runErr != nil && out.Status != "cancelled" {
 			runLog.Errorf("pipeline run failed after %dms: %v", out.DurationMs, runErr)
 		}
 		runLog.Infof("pipeline run %s — processed=%d written=%d failed=%d dropped=%d deleted=%d duration=%dms",
@@ -430,8 +440,11 @@ func (a *DataPipelineAction) lineageStart(runID string) {
 // lineageFinish emits a COMPLETE (or FAIL) event with the output row count.
 func (a *DataPipelineAction) lineageFinish(runID string, out *Output) {
 	evType := lineage.Complete
-	if out.Status == "failed" {
+	switch out.Status {
+	case "failed":
 		evType = lineage.Fail
+	case "cancelled":
+		evType = lineage.Abort
 	}
 	// -1 tells the emitter to omit the CDC-stats facet entirely: only a
 	// delete-capable sink (signalled by out.Metadata["cdcStats"], set in
@@ -1013,6 +1026,13 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 				}
 			}
 		}
+		// readCh also closes when the reader stops because the run was
+		// cancelled. That is not end-of-input: returning nil here would report
+		// success and let the end-of-run checkpoint commit offsets of batches
+		// the reader dropped on the way out.
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if err := syncWrites(); err != nil {
 			return err
 		}
@@ -1179,6 +1199,11 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 				process(nr)
 				next++
 			}
+		}
+		if writeErr == nil {
+			// Cancellation closes jobCh/resCh just like end-of-input; never
+			// report it as a completed run.
+			writeErr = ctx.Err()
 		}
 		return writeErr
 	}

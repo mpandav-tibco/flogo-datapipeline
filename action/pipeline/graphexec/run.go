@@ -144,6 +144,12 @@ func (p *Plan) Run(ctx context.Context, opts Options) (*Result, error) {
 	if !opts.KeepOpen {
 		_ = p.Close()
 	}
+	if runErr == nil && ctx.Err() != nil {
+		// Nodes return quietly on cancellation; report it rather than a
+		// completed run, so no end-of-run checkpoint records rows that were
+		// still in flight.
+		runErr = ctx.Err()
+	}
 	return res, runErr
 }
 

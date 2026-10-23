@@ -233,7 +233,7 @@ lease / heartbeat / retry, and a transaction-level advisory lock on enqueue).
 | `contract` (optional) | portable schema + data-quality + SLA + independent source/sink reconciliation artifact, checked at design time and run time — see [Data contracts](data-contracts.md) |
 
 **Run output** (`action/pipeline/action.go`): `status` (`completed` | `partial` |
-`failed`), `rowsProcessed`, `rowsWritten`, `rowsFailed`, `rowsDropped`,
+`failed` | `cancelled`), `rowsProcessed`, `rowsWritten`, `rowsFailed`, `rowsDropped`,
 `rowsDeleted` (delete-capable sinks, e.g. jdbc `opColumn`), `durationMs`, `error`,
 `metadata` (includes `dqReport`). `RunDirect` provides synchronous execution for
 the REST API and SDK.

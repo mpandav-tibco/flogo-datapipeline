@@ -312,8 +312,8 @@ func TestRunDirect_ContextCancelled(t *testing.T) {
 	if runErr == nil {
 		t.Fatalf("expected a cancellation error, got nil (status=%s)", out.Status)
 	}
-	if out.Status != "failed" {
-		t.Fatalf("status=%q, want failed on cancellation", out.Status)
+	if out.Status != "cancelled" {
+		t.Fatalf("status=%q, want cancelled on cancellation", out.Status)
 	}
 }
 

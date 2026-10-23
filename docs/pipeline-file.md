@@ -181,7 +181,7 @@ Every run returns a summary ([`action/pipeline/action.go`](../action/pipeline/ac
 
 | Field | Meaning |
 |---|---|
-| `status` | `completed` \| `partial` \| `failed` — `partial` also covers a completed run that breached a [contract](data-contracts.md)'s `maxDurationMs` SLA or `reconciliation` check |
+| `status` | `completed` \| `partial` \| `failed` \| `cancelled` (stopped by shutdown or the API; no checkpoint is taken, so a restart resumes from the last durable one) — `partial` also covers a completed run that breached a [contract](data-contracts.md)'s `maxDurationMs` SLA or `reconciliation` check |
 | `rowsProcessed` | rows read from the source |
 | `rowsWritten` | rows written to the sink |
 | `rowsFailed` | rows routed to the DLQ / errored |

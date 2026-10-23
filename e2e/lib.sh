@@ -65,7 +65,7 @@ start_app() {
 wait_run() {
 	local logf=$1 timeout=$2 i=0
 	while [ $i -lt $((timeout * 5)) ]; do
-		if grep -q "pipeline run completed\|pipeline run failed\|pipeline run partial" "$logf" 2>/dev/null; then
+		if grep -q "pipeline run completed\|pipeline run failed\|pipeline run partial\|pipeline run cancelled" "$logf" 2>/dev/null; then
 			grep -o "pipeline run [a-z]*.*duration=[0-9a-zµ.]*" "$logf" | tail -1
 			return 0
 		fi
