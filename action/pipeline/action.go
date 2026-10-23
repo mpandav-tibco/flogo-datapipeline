@@ -815,6 +815,30 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 		budget := newMemBudget(maxInFlightBytes)
 		readCtx, cancelRead := context.WithCancel(ctx)
 		defer cancelRead()
+		// On any return, stop the reader and wait for it to leave ReadBatch
+		// before the source can be closed — sources are not safe for a Close
+		// concurrent with ReadBatch. Batches it still delivers are recycled.
+		// The wait is bounded so a source stuck in ReadBatch cannot hang
+		// shutdown (its own poll/request timeout normally ends the call).
+		defer func() {
+			cancelRead()
+			timeout := time.NewTimer(30 * time.Second)
+			defer timeout.Stop()
+			for {
+				select {
+				case it, ok := <-readCh:
+					if !ok {
+						return
+					}
+					if it.batch != nil {
+						record.Put(it.batch)
+					}
+				case <-timeout.C:
+					runLog.Warnf("source reader did not stop within 30s of shutdown; closing the source anyway")
+					return
+				}
+			}
+		}()
 
 		// Write stage: a single writer goroutine overlaps sink I/O with the next
 		// batch's transform. Order is preserved, and syncWrites is a barrier
