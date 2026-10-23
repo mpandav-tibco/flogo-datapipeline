@@ -6,6 +6,7 @@
 package transform
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -45,6 +46,15 @@ type SinkOwner interface {
 	OwnsExternalSink() bool
 }
 
+// ContextBinder is implemented by transforms that perform blocking I/O (e.g.
+// HTTP enrichment). The engine calls BindContext with the run's context before
+// the first Apply, so in-flight I/O is aborted promptly when the run is
+// cancelled instead of waiting out its own timeout. Apply itself stays
+// context-free to keep the Transform interface stable for all implementations.
+type ContextBinder interface {
+	BindContext(ctx context.Context)
+}
+
 // Pipeline chains multiple transforms in sequence.
 // The output of transform N is the input of transform N+1.
 type Pipeline struct {
@@ -66,6 +76,15 @@ func NewPipeline(stages []Transform) *Pipeline {
 // Used by the engine to locate specific transform implementations via type
 // assertions (e.g. to find the hwm transform's HWMProvider interface).
 func (p *Pipeline) Stages() []Transform { return p.stages }
+
+// BindContext hands ctx to every stage implementing ContextBinder.
+func (p *Pipeline) BindContext(ctx context.Context) {
+	for _, t := range p.stages {
+		if cb, ok := t.(ContextBinder); ok {
+			cb.BindContext(ctx)
+		}
+	}
+}
 
 // Apply runs the batch through all stages in order.
 // Returns nil if any stage reduces the batch to zero rows.

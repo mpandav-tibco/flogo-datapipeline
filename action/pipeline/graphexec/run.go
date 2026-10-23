@@ -28,6 +28,13 @@ func (p *Plan) Run(ctx context.Context, opts Options) (*Result, error) {
 
 	rctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	// Hand the run context to I/O-performing transforms (see
+	// transform.ContextBinder) so cancellation aborts their in-flight calls.
+	for _, n := range p.nodes {
+		if cb, ok := n.tx.(interface{ BindContext(context.Context) }); ok {
+			cb.BindContext(rctx)
+		}
+	}
 
 	var runErr error
 	var errOnce sync.Once

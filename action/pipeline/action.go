@@ -670,6 +670,7 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 		return out, fmt.Errorf("transforms build: %w", err)
 	}
 	defer txPipeline.Close()
+	txPipeline.BindContext(ctx)
 
 	// Locate the hwm transform (if present) so the engine can read MaxSeen()
 	// after each checkpoint interval. A nil hwmProvider means no hwm transform
@@ -961,6 +962,7 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 				}
 				return fmt.Errorf("transforms build (worker %d): %w", i, bErr)
 			}
+			p.BindContext(ctx)
 			pipes[i] = p
 		}
 		defer func() {

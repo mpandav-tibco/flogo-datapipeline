@@ -1,7 +1,11 @@
 package lookup
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
+	"strings"
+	"time"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -165,5 +169,85 @@ func TestLRUCache_Eviction(t *testing.T) {
 	c.Purge()
 	if _, ok := c.Get("a"); ok {
 		t.Error("Purge should empty the cache")
+	}
+}
+
+func TestLookup_CachesNotFoundByDefault(t *testing.T) {
+	var hits int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt64(&hits, 1)
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+	for _, tc := range []struct {
+		cfg  map[string]interface{}
+		want int64
+	}{
+		{map[string]interface{}{}, 1},
+		{map[string]interface{}{"cacheNotFound": false}, 3},
+	} {
+		atomic.StoreInt64(&hits, 0)
+		cfg := map[string]interface{}{"keyField": "id", "url": srv.URL + "/{id}", "outputFields": []interface{}{"name"}, "concurrency": 1}
+		for k, v := range tc.cfg {
+			cfg[k] = v
+		}
+		tr := newLookup(t, cfg)
+		_, _ = tr.Apply(mkBatch("id", "gone", "gone"))
+		_, _ = tr.Apply(mkBatch("id", "gone"))
+		if got := atomic.LoadInt64(&hits); got != tc.want {
+			t.Errorf("cfg %v: server hits = %d, want %d", tc.cfg, got, tc.want)
+		}
+	}
+}
+
+func TestLookup_JSONConfigNumbersApply(t *testing.T) {
+	var cfg map[string]interface{}
+	if err := json.Unmarshal([]byte(`{"keyField":"id","url":"http://x/{id}","concurrency":3,"cacheSize":7,"timeoutMs":1234}`), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	l := newLookup(t, cfg).(*lookupTransform)
+	if l.concurrency != 3 || l.client.Timeout != 1234*time.Millisecond {
+		t.Fatalf("JSON numbers ignored: concurrency=%d timeout=%v", l.concurrency, l.client.Timeout)
+	}
+}
+
+func TestLookup_MaxResponseBytes(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, `{"name":"%s"}`, strings.Repeat("x", 100))
+	}))
+	defer srv.Close()
+	tr := newLookup(t, map[string]interface{}{
+		"keyField": "id", "url": srv.URL + "/{id}", "outputFields": []interface{}{"name"},
+		"maxResponseBytes": 50, "onError": "fail",
+	})
+	if _, err := tr.Apply(mkBatch("id", "k")); err == nil || !strings.Contains(err.Error(), "maxResponseBytes") {
+		t.Fatalf("want maxResponseBytes error, got %v", err)
+	}
+}
+
+func TestLookup_BoundContextCancelsInFlight(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}))
+	defer srv.Close()
+	defer close(release)
+	tr := newLookup(t, map[string]interface{}{
+		"keyField": "id", "url": srv.URL + "/{id}", "outputFields": []interface{}{"name"},
+		"timeoutMs": 30000, "onError": "fail",
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	tr.(transform.ContextBinder).BindContext(ctx)
+	time.AfterFunc(100*time.Millisecond, cancel)
+	start := time.Now()
+	_, err := tr.Apply(mkBatch("id", "k"))
+	if err == nil {
+		t.Fatal("want error after cancellation")
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Fatalf("cancellation took %v; request was not bound to the run context", d)
 	}
 }

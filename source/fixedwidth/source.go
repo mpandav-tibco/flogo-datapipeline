@@ -30,6 +30,7 @@ import (
 
 	"golang.org/x/text/encoding/charmap"
 
+	"github.com/mpandav-tibco/flogo-datapipeline/internal/cfgutil"
 	"github.com/mpandav-tibco/flogo-datapipeline/record"
 	"github.com/mpandav-tibco/flogo-datapipeline/source"
 )
@@ -108,15 +109,9 @@ func newFixedWidthSource(cfg map[string]interface{}) (source.Source, error) {
 		return nil, err
 	}
 
-	skipLines := 0
-	if sl, ok := cfg["skipLines"].(int); ok {
-		skipLines = sl
-	}
-
-	recordLength := 0
-	if rl, ok := cfg["recordLength"].(int); ok {
-		recordLength = rl
-	}
+	// JSON-decoded definitions deliver numbers as float64; cfgutil accepts both.
+	skipLines, _ := cfgutil.Int(cfg, "skipLines")
+	recordLength, _ := cfgutil.Int(cfg, "recordLength")
 
 	cols, err := parseFixedWidthColumns(cfg)
 	if err != nil {
