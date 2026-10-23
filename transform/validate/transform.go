@@ -277,7 +277,6 @@ func (v *validateTransform) checkRow(row []interface{}, wantMsgs bool) []string 
 	return violations
 }
 
-
 func parseRules(raw []interface{}) ([]validationRule, error) {
 	rules := make([]validationRule, 0, len(raw))
 	for i, item := range raw {

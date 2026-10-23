@@ -309,7 +309,6 @@ func compareFloat(lf float64, op string, rf float64) bool {
 	return false
 }
 
-
 func toFloat(v interface{}) (float64, bool) {
 	switch n := v.(type) {
 	case int:
