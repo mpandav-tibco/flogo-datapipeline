@@ -135,7 +135,7 @@ func (l *lookupTransform) Apply(in *record.RecordBatch) (*record.RecordBatch, er
 		if keyIdx >= 0 && keyIdx < len(in.Rows[i]) {
 			v = in.Rows[i][keyIdx]
 		}
-		return fmt.Sprintf("%v", v)
+		return record.FormatValue(v)
 	}
 
 	sem := make(chan struct{}, l.concurrency)

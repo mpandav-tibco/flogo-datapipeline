@@ -203,6 +203,10 @@ type SinkOp interface {
 // map is reused across rows, so a Pred must not retain it after returning.
 type Pred func(row map[string]interface{}) bool
 
+// PredBinder resolves a condition against one column layout, returning a
+// predicate over positional rows in that layout.
+type PredBinder func(cols []record.Column) func(row []interface{}) bool
+
 // Builders supplies the concrete constructors the compiler needs. Injecting
 // them keeps this package free of the source/sink/transform/filter imports and
 // lets tests substitute fakes.
@@ -212,6 +216,10 @@ type Builders struct {
 	Sink      func(typ string, cfg map[string]interface{}) (SinkOp, error)
 	// Predicate compiles an edge condition into a reusable row predicate.
 	Predicate func(expr string) (Pred, error)
+	// BindPredicate optionally compiles an edge condition into a schema-bindable
+	// form. When supplied it is used instead of Predicate on the hot path, so
+	// condition routing evaluates positional rows without building row maps.
+	BindPredicate func(expr string) (PredBinder, error)
 }
 
 // Options tunes the run. Zero values fall back to sensible defaults.

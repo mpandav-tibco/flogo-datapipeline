@@ -60,6 +60,10 @@ type validateTransform struct {
 	// execution for a routing validate but leaves drop/fail and default-discard
 	// validates eligible for the parallel transform path.
 	routesToRealSink bool
+
+	// Rule field positions for the most recent column layout.
+	boundCols []record.Column
+	fieldIdx  []int
 }
 
 func newValidateTransform(cfg map[string]interface{}) (transform.Transform, error) {
@@ -124,10 +128,11 @@ func (v *validateTransform) Apply(in *record.RecordBatch) (*record.RecordBatch, 
 	good.Columns = in.Columns
 	var badRows [][]interface{}
 
-	var row map[string]interface{}
-	for i := range in.Rows {
-		row = in.RowMapInto(i, row)
-		if violations := v.check(row); len(violations) == 0 {
+	v.bind(in.Columns)
+	// Only "fail" reports the violation text; the other modes just need a verdict.
+	wantMsgs := v.onViolation == "fail"
+	for i, row := range in.Rows {
+		if violations := v.checkRow(row, wantMsgs); len(violations) == 0 {
 			good.Rows = append(good.Rows, in.Rows[i])
 		} else {
 			switch v.onViolation {
@@ -170,10 +175,9 @@ func (v *validateTransform) ApplySplit(in *record.RecordBatch) (*record.RecordBa
 	pass.Columns = in.Columns
 	reject := in.Clone(in.Len())
 	reject.Columns = in.Columns
-	var row map[string]interface{}
-	for i := range in.Rows {
-		row = in.RowMapInto(i, row)
-		if len(v.check(row)) == 0 {
+	v.bind(in.Columns)
+	for i, row := range in.Rows {
+		if len(v.checkRow(row, false)) == 0 {
 			pass.Rows = append(pass.Rows, in.Rows[i])
 		} else {
 			reject.Rows = append(reject.Rows, in.Rows[i])
@@ -190,44 +194,89 @@ func (v *validateTransform) Close() error {
 	return nil
 }
 
-// check returns a list of violation strings for the given row. Empty = valid.
-func (v *validateTransform) check(row map[string]interface{}) []string {
+func (v *validateTransform) bind(cols []record.Column) {
+	if v.fieldIdx != nil && record.SameColumnNames(v.boundCols, cols) {
+		return
+	}
+	names := make([]string, len(v.rules))
+	for i, r := range v.rules {
+		names[i] = r.field
+	}
+	v.fieldIdx, v.boundCols = record.IndexOf(cols, names...), cols
+}
+
+// errViolation is the placeholder returned by checkRow when messages were not
+// requested: callers only test len(violations) == 0.
+var errViolation = []string{"violation"}
+
+// checkRow returns the violations for a positional row laid out per the columns
+// last passed to bind. Empty = valid. With wantMsgs=false it stops at the first
+// violation and returns a shared placeholder instead of formatting messages.
+func (v *validateTransform) checkRow(row []interface{}, wantMsgs bool) []string {
 	var violations []string
-	for _, r := range v.rules {
-		val := row[r.field]
+	fail := func(msg func() string) bool {
+		if !wantMsgs {
+			violations = errViolation
+			return true
+		}
+		violations = append(violations, msg())
+		return false
+	}
+	for ri := range v.rules {
+		r := &v.rules[ri]
+		var val interface{}
+		if idx := v.fieldIdx[ri]; idx >= 0 && idx < len(row) {
+			val = row[idx]
+		}
 		if r.notNull && val == nil {
-			violations = append(violations, r.field+": required (null)")
+			if fail(func() string { return r.field + ": required (null)" }) {
+				return violations
+			}
 			continue
 		}
 		if val == nil {
 			continue // null is allowed for remaining checks
 		}
-		str := fmt.Sprintf("%v", val)
-		f, isNum := toFloat64(val)
-
-		if r.min != nil && isNum && f < *r.min {
-			violations = append(violations, fmt.Sprintf("%s: %v < min(%v)", r.field, f, *r.min))
+		if r.min != nil || r.max != nil {
+			if f, isNum := toFloat64(val); isNum {
+				if r.min != nil && f < *r.min && fail(func() string { return fmt.Sprintf("%s: %v < min(%v)", r.field, f, *r.min) }) {
+					return violations
+				}
+				if r.max != nil && f > *r.max && fail(func() string { return fmt.Sprintf("%s: %v > max(%v)", r.field, f, *r.max) }) {
+					return violations
+				}
+			}
 		}
-		if r.max != nil && isNum && f > *r.max {
-			violations = append(violations, fmt.Sprintf("%s: %v > max(%v)", r.field, f, *r.max))
+		if r.minLen == nil && r.maxLen == nil && r.pattern == nil && len(r.inSet) == 0 {
+			continue
 		}
-		if r.minLen != nil && len(str) < *r.minLen {
-			violations = append(violations, fmt.Sprintf("%s: length %d < minLen(%d)", r.field, len(str), *r.minLen))
+		str := record.FormatValue(val)
+		if r.minLen != nil && len(str) < *r.minLen && fail(func() string {
+			return fmt.Sprintf("%s: length %d < minLen(%d)", r.field, len(str), *r.minLen)
+		}) {
+			return violations
 		}
-		if r.maxLen != nil && len(str) > *r.maxLen {
-			violations = append(violations, fmt.Sprintf("%s: length %d > maxLen(%d)", r.field, len(str), *r.maxLen))
+		if r.maxLen != nil && len(str) > *r.maxLen && fail(func() string {
+			return fmt.Sprintf("%s: length %d > maxLen(%d)", r.field, len(str), *r.maxLen)
+		}) {
+			return violations
 		}
-		if r.pattern != nil && !r.pattern.MatchString(str) {
-			violations = append(violations, fmt.Sprintf("%s: %q does not match pattern", r.field, str))
+		if r.pattern != nil && !r.pattern.MatchString(str) && fail(func() string {
+			return fmt.Sprintf("%s: %q does not match pattern", r.field, str)
+		}) {
+			return violations
 		}
 		if len(r.inSet) > 0 {
-			if _, ok := r.inSet[strings.ToUpper(str)]; !ok {
-				violations = append(violations, fmt.Sprintf("%s: %q not in allowed set", r.field, str))
+			if _, ok := r.inSet[strings.ToUpper(str)]; !ok && fail(func() string {
+				return fmt.Sprintf("%s: %q not in allowed set", r.field, str)
+			}) {
+				return violations
 			}
 		}
 	}
 	return violations
 }
+
 
 func parseRules(raw []interface{}) ([]validationRule, error) {
 	rules := make([]validationRule, 0, len(raw))

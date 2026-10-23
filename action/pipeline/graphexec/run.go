@@ -608,16 +608,24 @@ func (rt *runtime) emit(ctx context.Context, n *pnode, b *record.RecordBatch) bo
 		return rt.send(ctx, n.out[0], b)
 	}
 	buckets := make([]*record.RecordBatch, len(n.out))
-	hasCond := false
-	for _, e := range n.out {
-		if e.etype == EdgeCondition {
-			hasCond = true
-			break
+	// Condition edges are bound to this batch's column layout once, then
+	// evaluated on positional rows; a map is built only for edges whose
+	// predicate has no positional form.
+	bound := make([]func([]interface{}) bool, len(n.out))
+	needMap := false
+	for i, e := range n.out {
+		if e.etype != EdgeCondition {
+			continue
+		}
+		if e.binder != nil {
+			bound[i] = e.binder(b.Columns)
+		} else {
+			needMap = true
 		}
 	}
 	var row map[string]interface{}
 	for ri := range b.Rows {
-		if hasCond {
+		if needMap {
 			row = b.RowMapInto(ri, row)
 		}
 		matched := false
@@ -626,7 +634,13 @@ func (rt *runtime) emit(ctx context.Context, n *pnode, b *record.RecordBatch) bo
 			case EdgeSuccess:
 				appendRow(&buckets[i], b, ri)
 			case EdgeCondition:
-				if e.pred(row) {
+				var ok bool
+				if bound[i] != nil {
+					ok = bound[i](b.Rows[ri])
+				} else {
+					ok = e.pred(row)
+				}
+				if ok {
 					appendRow(&buckets[i], b, ri)
 					matched = true
 				}

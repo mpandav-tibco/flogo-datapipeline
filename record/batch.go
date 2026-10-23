@@ -101,6 +101,40 @@ func (b *RecordBatch) RowMapInto(i int, m map[string]interface{}) map[string]int
 	return m
 }
 
+// SameColumnNames reports whether a and b name the same columns in the same
+// order. It is the cache key check for compiled, position-bound evaluators: the
+// common case (batches from one source sharing a Columns slice) is O(1).
+func SameColumnNames(a, b []Column) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	if len(a) == 0 || &a[0] == &b[0] {
+		return true
+	}
+	for i := range a {
+		if a[i].Name != b[i].Name {
+			return false
+		}
+	}
+	return true
+}
+
+// IndexOf returns the position of each requested name in cols (-1 if absent).
+// With duplicate column names the LAST one wins, matching RowMap, so
+// position-bound evaluators see exactly the value a map-based one would.
+func IndexOf(cols []Column, names ...string) []int {
+	idx := make([]int, len(names))
+	for i, n := range names {
+		idx[i] = -1
+		for j, c := range cols {
+			if c.Name == n {
+				idx[i] = j
+			}
+		}
+	}
+	return idx
+}
+
 // Clone returns a shallow copy with an independent Rows slice but shared column
 // definitions. Used by transforms that need to produce a filtered subset.
 func (b *RecordBatch) Clone(capacity int) *RecordBatch {

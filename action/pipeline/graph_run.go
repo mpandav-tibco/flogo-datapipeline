@@ -271,6 +271,15 @@ func graphBuilders() graphexec.Builders {
 			}
 			return p.Eval, nil
 		},
+		BindPredicate: func(expr string) (graphexec.PredBinder, error) {
+			p, err := filter.Compile(expr)
+			if err != nil {
+				return nil, err
+			}
+			return func(cols []record.Column) func([]interface{}) bool {
+				return p.Bind(cols).EvalRow
+			}, nil
+		},
 	}
 }
 

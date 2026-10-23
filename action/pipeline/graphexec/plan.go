@@ -12,6 +12,7 @@ type pedge struct {
 	to     *pnode
 	etype  EdgeType
 	pred   Pred
+	binder PredBinder // optional positional form of pred
 	toPort string
 }
 
@@ -166,6 +167,13 @@ func Compile(g *Graph, b Builders) (*Plan, error) {
 				return fail("graphexec: compile condition %q on edge %s→%s: %w", e.Cond, e.From, e.To, err)
 			}
 			pe.pred = pred
+			if b.BindPredicate != nil {
+				binder, err := b.BindPredicate(e.Cond)
+				if err != nil {
+					return fail("graphexec: compile condition %q on edge %s→%s: %w", e.Cond, e.From, e.To, err)
+				}
+				pe.binder = binder
+			}
 		case EdgeSuccess, EdgeOtherwise, EdgeError:
 			// no predicate
 			if pe.etype == EdgeError {

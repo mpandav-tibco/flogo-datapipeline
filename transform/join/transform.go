@@ -227,13 +227,19 @@ func (j *joinTransform) loadRightBatch(b *record.RecordBatch) error {
 	if j.rightCols == nil {
 		j.rightCols = resolveRightCols(b.Columns, j.wantCols, j.rightKey)
 	}
-	var m map[string]interface{}
-	for i := 0; i < b.Len(); i++ {
-		m = b.RowMapInto(i, m)
-		key := fmt.Sprintf("%v", m[j.rightKey])
+	// pos[0] is the key column, pos[1:] the carried columns (-1 = absent → nil).
+	pos := record.IndexOf(b.Columns, append([]string{j.rightKey}, j.rightCols...)...)
+	cellAt := func(row []interface{}, p int) interface{} {
+		if p >= 0 && p < len(row) {
+			return row[p]
+		}
+		return nil
+	}
+	for _, row := range b.Rows {
+		key := record.FormatValue(cellAt(row, pos[0]))
 		vals := make([]interface{}, len(j.rightCols))
-		for k, c := range j.rightCols {
-			vals[k] = m[c]
+		for k := range j.rightCols {
+			vals[k] = cellAt(row, pos[k+1])
 		}
 		j.table[key] = append(j.table[key], vals)
 	}
@@ -308,7 +314,7 @@ func (j *joinTransform) applyJoin(in *record.RecordBatch) (*record.RecordBatch, 
 		if leftIdx >= 0 && leftIdx < len(in.Rows[i]) {
 			keyVal = in.Rows[i][leftIdx]
 		}
-		matches := j.table[fmt.Sprintf("%v", keyVal)]
+		matches := j.table[record.FormatValue(keyVal)]
 		if len(matches) == 0 {
 			if j.joinType == "left" {
 				row := make([]interface{}, len(outCols))

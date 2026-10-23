@@ -33,17 +33,22 @@ func init() {
 type filterTransform struct {
 	expr string
 	cond condition
+	// Position-bound form of cond for the most recent schema; rebuilt only when
+	// the column layout changes (see record.SameColumnNames).
+	boundCols []record.Column
+	bound     boundCond
 }
 
 func (f *filterTransform) Name() string { return "filter" }
 
 func (f *filterTransform) Apply(in *record.RecordBatch) (*record.RecordBatch, error) {
+	if f.bound == nil || !record.SameColumnNames(f.boundCols, in.Columns) {
+		f.bound, f.boundCols = f.cond.bind(in.Columns), in.Columns
+	}
 	out := in.Clone(in.Len())
 	out.Columns = in.Columns
-	var row map[string]interface{}
-	for i := range in.Rows {
-		row = in.RowMapInto(i, row)
-		if f.cond.eval(row) {
+	for i, row := range in.Rows {
+		if f.bound.evalRow(row) {
 			out.Rows = append(out.Rows, in.Rows[i])
 		}
 	}
@@ -78,6 +83,24 @@ func (p Predicate) Eval(row map[string]interface{}) bool {
 	return p.cond != nil && p.cond.eval(row)
 }
 
+// BoundPredicate is a Predicate resolved against one column layout, so rows are
+// evaluated straight from their []interface{} slice without building a map.
+type BoundPredicate struct{ cond boundCond }
+
+// Bind resolves the predicate's field references to positions in cols.
+func (p Predicate) Bind(cols []record.Column) BoundPredicate {
+	if p.cond == nil {
+		return BoundPredicate{}
+	}
+	return BoundPredicate{cond: p.cond.bind(cols)}
+}
+
+// EvalRow reports whether row (laid out per the bound columns) satisfies the
+// predicate; it agrees with Eval on the equivalent row map.
+func (b BoundPredicate) EvalRow(row []interface{}) bool {
+	return b.cond != nil && b.cond.evalRow(row)
+}
+
 // --- expression parser ---
 // Supports: field op literal [AND|OR field op literal ...]
 // op: > >= < <= = != IS NULL IS NOT NULL
@@ -85,17 +108,54 @@ func (p Predicate) Eval(row map[string]interface{}) bool {
 
 type condition interface {
 	eval(row map[string]interface{}) bool
+	bind(cols []record.Column) boundCond
+}
+
+// boundCond evaluates a condition against a positional row.
+type boundCond interface {
+	evalRow(row []interface{}) bool
 }
 
 type andCond struct{ parts []condition }
 type orCond struct{ parts []condition }
 type simpleCond struct {
-	field   string
-	op      string
-	literal interface{} // nil means NULL
+	field string
+	op    string
+	lit   literal
 }
 type notNullCond struct{ field string }
 type isNullCond struct{ field string }
+
+// literal is a right-hand operand with its numeric and string forms computed
+// once at parse time instead of on every row.
+type literal struct {
+	val   interface{} // nil means NULL
+	num   float64
+	isNum bool
+	str   string
+}
+
+func newLiteral(v interface{}) literal {
+	l := literal{val: v}
+	if v != nil {
+		l.num, l.isNum = toFloat(v)
+		l.str = fmt.Sprintf("%v", v)
+	}
+	return l
+}
+
+// cell returns row[idx] and whether the column exists in the row — the
+// positional equivalent of a map lookup's (value, ok).
+func cell(row []interface{}, idx int) (interface{}, bool) {
+	if idx < 0 || idx >= len(row) {
+		return nil, false
+	}
+	return row[idx], true
+}
+
+func fieldIndex(cols []record.Column, field string) int {
+	return record.IndexOf(cols, field)[0]
+}
 
 func (c andCond) eval(row map[string]interface{}) bool {
 	for _, p := range c.parts {
@@ -126,12 +186,74 @@ func (c isNullCond) eval(row map[string]interface{}) bool {
 }
 
 func (c simpleCond) eval(row map[string]interface{}) bool {
-	val := row[c.field]
-	return compare(val, c.op, c.literal)
+	return compareLit(row[c.field], c.op, &c.lit)
 }
 
-func compare(left interface{}, op string, right interface{}) bool {
-	if right == nil {
+type boundAnd []boundCond
+type boundOr []boundCond
+type boundNotNull int
+type boundIsNull int
+type boundSimple struct {
+	idx int
+	op  string
+	lit literal
+}
+
+func bindAll(parts []condition, cols []record.Column) []boundCond {
+	out := make([]boundCond, len(parts))
+	for i, p := range parts {
+		out[i] = p.bind(cols)
+	}
+	return out
+}
+
+func (c andCond) bind(cols []record.Column) boundCond { return boundAnd(bindAll(c.parts, cols)) }
+func (c orCond) bind(cols []record.Column) boundCond  { return boundOr(bindAll(c.parts, cols)) }
+func (c notNullCond) bind(cols []record.Column) boundCond {
+	return boundNotNull(fieldIndex(cols, c.field))
+}
+func (c isNullCond) bind(cols []record.Column) boundCond {
+	return boundIsNull(fieldIndex(cols, c.field))
+}
+func (c simpleCond) bind(cols []record.Column) boundCond {
+	return &boundSimple{idx: fieldIndex(cols, c.field), op: c.op, lit: c.lit}
+}
+
+func (c boundAnd) evalRow(row []interface{}) bool {
+	for _, p := range c {
+		if !p.evalRow(row) {
+			return false
+		}
+	}
+	return true
+}
+
+func (c boundOr) evalRow(row []interface{}) bool {
+	for _, p := range c {
+		if p.evalRow(row) {
+			return true
+		}
+	}
+	return false
+}
+
+func (c boundNotNull) evalRow(row []interface{}) bool {
+	v, ok := cell(row, int(c))
+	return ok && v != nil
+}
+
+func (c boundIsNull) evalRow(row []interface{}) bool {
+	v, ok := cell(row, int(c))
+	return !ok || v == nil
+}
+
+func (c *boundSimple) evalRow(row []interface{}) bool {
+	v, _ := cell(row, c.idx)
+	return compareLit(v, c.op, &c.lit)
+}
+
+func compareLit(left interface{}, op string, right *literal) bool {
+	if right.val == nil {
 		switch op {
 		case "=", "IS":
 			return left == nil
@@ -146,27 +268,12 @@ func compare(left interface{}, op string, right interface{}) bool {
 		return false
 	}
 	// Numeric comparison.
-	lf, lOk := toFloat(left)
-	rf, rOk := toFloat(right)
-	if lOk && rOk {
-		switch op {
-		case "=":
-			return lf == rf
-		case "!=":
-			return lf != rf
-		case ">":
-			return lf > rf
-		case ">=":
-			return lf >= rf
-		case "<":
-			return lf < rf
-		case "<=":
-			return lf <= rf
+	if right.isNum {
+		if lf, ok := toFloat(left); ok {
+			return compareFloat(lf, op, right.num)
 		}
 	}
-	// String comparison.
-	ls := fmt.Sprintf("%v", left)
-	rs := fmt.Sprintf("%v", right)
+	ls, rs := record.FormatValue(left), right.str
 	switch op {
 	case "=":
 		return ls == rs
@@ -183,6 +290,25 @@ func compare(left interface{}, op string, right interface{}) bool {
 	}
 	return false
 }
+
+func compareFloat(lf float64, op string, rf float64) bool {
+	switch op {
+	case "=":
+		return lf == rf
+	case "!=":
+		return lf != rf
+	case ">":
+		return lf > rf
+	case ">=":
+		return lf >= rf
+	case "<":
+		return lf < rf
+	case "<=":
+		return lf <= rf
+	}
+	return false
+}
+
 
 func toFloat(v interface{}) (float64, bool) {
 	switch n := v.(type) {
@@ -304,7 +430,7 @@ func parseTerm(tokens []string) (condition, error) {
 	if err != nil {
 		return nil, fmt.Errorf("bad literal %q: %w", litStr, err)
 	}
-	return simpleCond{field: field, op: op, literal: lit}, nil
+	return simpleCond{field: field, op: op, lit: newLiteral(lit)}, nil
 }
 
 func parseLiteral(s string) (interface{}, error) {

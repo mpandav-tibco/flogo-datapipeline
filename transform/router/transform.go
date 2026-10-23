@@ -82,6 +82,10 @@ type routerTransform struct {
 	passCount   int64
 	dropCount   int64
 	defCount    int64
+
+	// Route predicates bound to the most recent column layout.
+	boundCols []record.Column
+	bound     []filter.BoundPredicate
 }
 
 func newRouter(cfg map[string]interface{}) (transform.Transform, error) {
@@ -177,12 +181,17 @@ func (r *routerTransform) Apply(in *record.RecordBatch) (*record.RecordBatch, er
 	routeRows := make([][][]interface{}, len(r.routes))
 	var defRows, passRows [][]interface{}
 
-	var row map[string]interface{}
-	for i := range in.Rows {
-		row = in.RowMapInto(i, row)
-		matched := -1
+	if r.bound == nil || !record.SameColumnNames(r.boundCols, in.Columns) {
+		r.bound = make([]filter.BoundPredicate, len(r.routes))
 		for j, rt := range r.routes {
-			if rt.when.Eval(row) {
+			r.bound[j] = rt.when.Bind(in.Columns)
+		}
+		r.boundCols = in.Columns
+	}
+	for i, row := range in.Rows {
+		matched := -1
+		for j, pred := range r.bound {
+			if pred.EvalRow(row) {
 				matched = j
 				break
 			}
