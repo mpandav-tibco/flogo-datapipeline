@@ -251,3 +251,22 @@ func TestLookup_BoundContextCancelsInFlight(t *testing.T) {
 		t.Fatalf("cancellation took %v; request was not bound to the run context", d)
 	}
 }
+
+// With the default onError "null", a cancelled run must fail the batch rather
+// than emit rows whose enrichment was aborted (null fields).
+func TestLookup_CancelledRunFailsBatchEvenWithOnErrorNull(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+	tr := newLookup(t, map[string]interface{}{
+		"keyField": "id", "url": srv.URL + "/{id}", "outputFields": []interface{}{"name"},
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	tr.(transform.ContextBinder).BindContext(ctx)
+	time.AfterFunc(50*time.Millisecond, cancel)
+	out, err := tr.Apply(mkBatch("id", "a", "b"))
+	if err == nil || out != nil {
+		t.Fatalf("want batch failure on cancellation, got out=%v err=%v", out, err)
+	}
+}

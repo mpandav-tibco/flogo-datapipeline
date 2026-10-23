@@ -1,6 +1,8 @@
 package pipeline
 
 import (
+	"fmt"
+	"runtime/debug"
 	"sync/atomic"
 
 	"github.com/mpandav-tibco/flogo-datapipeline/record"
@@ -57,7 +59,7 @@ func (s *writeStage) run() {
 			continue
 		}
 		var o Output
-		n, err := s.write(req.batch, &o)
+		n, err := s.safeWrite(req.batch, &o)
 		record.Put(req.batch)
 		s.written += int64(n)
 		s.failed += o.RowsFailed
@@ -66,6 +68,19 @@ func (s *writeStage) run() {
 			s.failedFlag.Store(true)
 		}
 	}
+}
+
+// safeWrite runs one write, converting a panic in the sink/DLQ into an error.
+// The engine's own recover only covers the run goroutine, so without this a
+// sink panic on the writer goroutine would crash the whole process instead of
+// failing the run.
+func (s *writeStage) safeWrite(b *record.RecordBatch, o *Output) (n int, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			n, err = 0, fmt.Errorf("sink panicked: %v\n%s", r, debug.Stack())
+		}
+	}()
+	return s.write(b, o)
 }
 
 // submit queues b for writing; the stage takes ownership of b. It returns
@@ -91,12 +106,14 @@ func (s *writeStage) sync() (written, failed int64, err error) {
 	return written, failed, s.err
 }
 
-// close stops the writer. With discard=true queued batches are recycled
-// without being written (used when the run is aborting).
-func (s *writeStage) close(discard bool) {
+// close stops the writer and returns the rows written / failed since the last
+// sync, so an aborting run still reports what was actually delivered. With
+// discard=true queued batches are recycled without being written.
+func (s *writeStage) close(discard bool) (written, failed int64) {
 	if discard {
 		s.discard.Store(true)
 	}
 	close(s.ch)
 	<-s.done
+	return s.written, s.failed
 }

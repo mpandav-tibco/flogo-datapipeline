@@ -858,7 +858,11 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 		wsClosed := false
 		defer func() {
 			if !wsClosed {
-				ws.close(true) // aborting: recycle queued batches unwritten
+				// Aborting: recycle queued batches unwritten, but still count
+				// what the writer already delivered.
+				w, f := ws.close(true)
+				out.RowsWritten += w
+				out.RowsFailed += f
 			}
 		}()
 		syncWrites := func() error {
@@ -935,6 +939,13 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 					a.checkStall(runLog, "transform", txDur)
 
 					// --- write (async, with per-row DLQ fallback) ---
+					// A batch transformed while the run was being cancelled may
+					// be degraded (e.g. lookups aborted mid-flight); it is
+					// replayed from the last checkpoint, so never write it.
+					if ctx.Err() != nil {
+						record.Put(transformed)
+						return ctx.Err()
+					}
 					if !ws.submit(transformed) {
 						// An earlier write failed; surface it now.
 						if err := syncWrites(); err != nil {

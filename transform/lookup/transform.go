@@ -182,6 +182,13 @@ func (l *lookupTransform) Apply(in *record.RecordBatch) (*record.RecordBatch, er
 		}(i, key)
 	}
 	wg.Wait()
+	// Cancellation is not a lookup failure: onError ("null"/"skip") must not
+	// turn aborted requests into null-enriched or dropped rows. Fail the batch
+	// so nothing degraded is written; it is replayed on restart.
+	if err := l.ctx.Err(); err != nil {
+		record.Put(out)
+		return nil, fmt.Errorf("lookup: run cancelled: %w", err)
+	}
 
 	skipIndices := make(map[int]bool)
 	for _, r := range results {

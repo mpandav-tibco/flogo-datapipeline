@@ -156,3 +156,71 @@ func TestRunDirect_CheckpointFlushSeesAllPriorWrites(t *testing.T) {
 		}
 	}
 }
+
+func TestWriteStage_PanicBecomesError(t *testing.T) {
+	ws := newWriteStage(1, func(b *record.RecordBatch, o *Output) (int, error) {
+		var m map[string]int
+		m["boom"]++ // nil map write panics
+		return 1, nil
+	})
+	ws.submit(oneRowBatch(1))
+	_, _, err := ws.sync()
+	if err == nil || !strings.Contains(err.Error(), "sink panicked") {
+		t.Fatalf("want recovered panic error, got %v", err)
+	}
+	ws.close(false)
+}
+
+func TestWriteStage_CloseReportsUnsyncedCounts(t *testing.T) {
+	ws := newWriteStage(4, func(b *record.RecordBatch, o *Output) (int, error) {
+		o.RowsFailed = 1
+		return 2, nil
+	})
+	for i := 0; i < 3; i++ {
+		ws.submit(oneRowBatch(i))
+	}
+	if w, f := ws.close(false); w != 6 || f != 3 {
+		t.Fatalf("close counts written=%d failed=%d; want 6/3", w, f)
+	}
+}
+
+// panicSink panics on the 3rd write; the run must fail cleanly (recovered),
+// not crash the process, and report the rows delivered before the panic.
+type panicSink struct{ n int }
+
+func init() {
+	sink.Register("panictest", func(map[string]interface{}) (sink.Sink, error) { return &panicSink{}, nil })
+}
+func (s *panicSink) WriteBatch(b *record.RecordBatch) error {
+	s.n++
+	if s.n == 3 {
+		panic("sink exploded")
+	}
+	return nil
+}
+func (s *panicSink) Flush() error { return nil }
+func (s *panicSink) Close() error { return nil }
+
+func TestRunDirect_SinkPanicFailsRunAndCountsDelivered(t *testing.T) {
+	var sb strings.Builder
+	sb.WriteString("id,name,amount\n")
+	for i := 0; i < 100; i++ {
+		fmt.Fprintf(&sb, "%d,n%d,%d\n", i, i, i)
+	}
+	def := &Definition{
+		Source:      csvSource(writeTemp(t, "in.csv", sb.String())),
+		Sink:        SinkDef{Type: "panictest", Options: map[string]interface{}{}},
+		Performance: PerformanceDef{BatchSize: 10},
+	}
+	out, err := runInline(t, def)
+	msg := out.Error
+	if err != nil {
+		msg = err.Error()
+	}
+	if !strings.Contains(msg, "sink exploded") {
+		t.Fatalf("want run failure mentioning the panic, got err=%v out.Error=%q status=%q", err, out.Error, out.Status)
+	}
+	if out.RowsWritten != 20 {
+		t.Fatalf("written=%d; want 20 (two batches delivered before the panic)", out.RowsWritten)
+	}
+}
