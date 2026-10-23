@@ -73,8 +73,8 @@ func gen(args []string) {
 		note := fmt.Sprintf("order %d for customer %d", i, cust)
 		if *format == "jsonl" {
 			b, _ := json.Marshal(map[string]interface{}{"id": i, "customer_id": cust, "amount": amt, "status": st, "region": rg, "note": note})
-			w.Write(b)
-			w.WriteByte('\n')
+			_, _ = w.Write(b)
+			_ = w.WriteByte('\n')
 			continue
 		}
 		fmt.Fprintf(w, "%d%s%d%s%d%s%s%s%s%s%s\n", i, sep, cust, sep, amt, sep, st, sep, rg, sep, note)
@@ -178,7 +178,7 @@ func mock(args []string) {
 			return
 		}
 		tier := []string{"gold", "silver", "bronze"}[n%3]
-		json.NewEncoder(w).Encode(map[string]interface{}{"name": fmt.Sprintf("Customer %d", n), "tier": tier})
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"name": fmt.Sprintf("Customer %d", n), "tier": tier})
 	})
 	http.HandleFunc("/ingest", func(w http.ResponseWriter, r *http.Request) {
 		c := atomic.AddInt64(&ingests, 1)
@@ -224,7 +224,7 @@ func mock(args []string) {
 				dupIngest++
 			}
 		}
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"lookups": atomic.LoadInt64(&lookups), "lookups404": atomic.LoadInt64(&lookups404),
 			"distinctKeys": len(perKey), "maxCallsPerKey": maxPerKey,
 			"ingestCalls": atomic.LoadInt64(&ingests), "ingest429": atomic.LoadInt64(&ingest429),

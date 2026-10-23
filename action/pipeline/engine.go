@@ -233,12 +233,12 @@ func (a *DataPipelineAction) execute(ctx context.Context, in *Input, runLog core
 				runLog.Infof("resuming %q — skipping %d already-processed rows", ckptKey, tok.RowsProcessed)
 				opts.ResumeFrom = tok.RowsProcessed
 			}
-			if tok != nil && len(tok.WindowState) > 0 && !(scaled && stateful) {
+			if tok != nil && len(tok.WindowState) > 0 && (!scaled || !stateful) {
 				if rerr := restoreState(runLog, snapshotters, tok.WindowState, dag); rerr != nil {
 					return rerr
 				}
 			}
-			if !(scaled && stateful) && singleSource {
+			if (!scaled || !stateful) && singleSource {
 				opts.CheckpointRows = def.Checkpoint.IntervalRows
 				opts.CheckpointInterval = time.Duration(def.Checkpoint.IntervalSeconds) * time.Second
 				opts.HasUncommitted = func() bool { return hasUncommitted(pSrc) }

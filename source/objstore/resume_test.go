@@ -20,10 +20,9 @@ type flakyRange struct {
 }
 
 type cutReader struct {
-	r         io.Reader
-	left      int
-	cleanEOF  bool
-	delivered bool
+	r        io.Reader
+	left     int
+	cleanEOF bool
 }
 
 func (c *cutReader) Read(p []byte) (int, error) {

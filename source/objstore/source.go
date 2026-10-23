@@ -219,7 +219,7 @@ func (s *objstoreSource) ReadBatch(size int) (*record.RecordBatch, error) {
 			// Successful read (possibly a partial EOF batch).
 			if err == io.EOF {
 				// The inner source is done; advance to the next object.
-				s.closeInner()
+				_ = s.closeInner() // read-only stream: a close error cannot lose data
 				s.objIdx++
 				if err2 := s.openNextObject(); err2 != nil && err2 != io.EOF {
 					return batch, err2
@@ -231,7 +231,7 @@ func (s *objstoreSource) ReadBatch(size int) (*record.RecordBatch, error) {
 		}
 		if err == io.EOF {
 			// Inner source exhausted with no rows; advance to next object.
-			s.closeInner()
+			_ = s.closeInner()
 			s.objIdx++
 			if err2 := s.openNextObject(); err2 != nil {
 				if err2 == io.EOF {

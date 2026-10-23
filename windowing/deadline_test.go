@@ -136,7 +136,12 @@ func TestEmitIndexMatchesFullScan(t *testing.T) {
 					if step%7 == 0 {
 						got, want := idx.Emit(idx.Watermark()), emitScanReference(ref, ref.Watermark())
 						if !reflect.DeepEqual(got, want) {
-							for i := range got { if i < len(want) && !reflect.DeepEqual(got[i], want[i]) { t.Fatalf("step %d first diff at %d:\n idx=%#v\n ref=%#v", step, i, got[i], want[i]) } }; t.Fatalf("len %d vs %d", len(got), len(want))
+							for i := range got {
+								if i < len(want) && !reflect.DeepEqual(got[i], want[i]) {
+									t.Fatalf("step %d first diff at %d:\n idx=%#v\n ref=%#v", step, i, got[i], want[i])
+								}
+							}
+							t.Fatalf("len %d vs %d", len(got), len(want))
 						}
 						if idx.OpenWindows() != ref.OpenWindows() || idx.EvictedCount() != ref.EvictedCount() {
 							t.Fatalf("step %d: open %d/%d evicted %d/%d", step, idx.OpenWindows(), ref.OpenWindows(), idx.EvictedCount(), ref.EvictedCount())
