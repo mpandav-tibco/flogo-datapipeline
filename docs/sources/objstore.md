@@ -17,7 +17,7 @@ matched object becomes one partition. Implemented in
 |---|---|---|:--:|---|
 | `prefix` | string | — | ✅ | Object glob, e.g. `data/2024/*.parquet`. |
 | `format` | string | — | ✅ | Inner source type: `csv`, `parquet`, `jsonlines`, … Format-specific keys (e.g. `hasHeader`, `delimiter`) are passed through to it. |
-| `download` | bool | format-dependent | — | Spool each object to a temp file before parsing. Implied for `parquet`; but when the store supports ranged reads (S3/GCS/ADLS) and the object size is known, `parquet` instead uses range GETs — fetching only the footer and the selected column chunks, with no whole-object download or temp file. |
+| `download` | bool | format-dependent | — | Spool each object to a temp file before parsing. Implied for `parquet`; but when the store supports ranged reads (S3/GCS/ADLS) and the object size is known, `parquet` instead uses range GETs — fetching only the footer and the selected column chunks, with no whole-object download or temp file. Without `download`, `csv` and `jsonlines` objects are streamed straight into the parser (no temp file); set `download: true` to spool them instead (e.g. when parsing is much slower than the network and long-lived object streams would time out). Other formats spool each object, and its temp file is deleted as soon as that object has been read. |
 
 ### S3 keys
 

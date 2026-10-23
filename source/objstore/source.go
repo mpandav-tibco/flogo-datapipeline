@@ -22,6 +22,12 @@
 // whole-object download). Otherwise, or for other download:true formats, the
 // object is spooled to a temporary file before the inner source is opened.
 //
+// Streaming: csv and jsonlines objects (without download:true) are streamed
+// straight from the store into the inner parser — no temp file, no
+// whole-object download before the first row. Other formats spool each
+// object to a temp file that is deleted as soon as that object is consumed.
+// Every store call carries a context cancelled by Close.
+//
 // Import with a blank import to activate all three provider registrations:
 //
 //	import _ "github.com/mpandav-tibco/flogo-datapipeline/source/objstore"
@@ -57,6 +63,14 @@ var readerAtCapable = map[string]bool{
 	"parquet": true,
 }
 
+// readerCapable is the set of inner formats whose source accepts an injected
+// sequential io.Reader ("reader"), so an object can be streamed without a temp
+// file (see fileutil.OpenInput).
+var readerCapable = map[string]bool{
+	"csv":       true,
+	"jsonlines": true,
+}
+
 func init() {
 	for _, provider := range []string{"s3", "gcs", "adls"} {
 		p := provider // capture for closure
@@ -86,9 +100,14 @@ type objstoreSource struct {
 	// state for sequential (non-partitioned) reading
 	objIdx   int // index of the currently-open object
 	inner    source.Source
-	tmpFiles []string // temp files to delete on Close
+	innerTmp string // temp file backing inner ("" when streamed); removed when inner closes
 	schema   []record.Column
 	closed   bool
+
+	// ctx scopes every store call; Close cancels it so listing, range reads
+	// and object streams stop promptly on shutdown.
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 func newObjstoreSource(provider string, cfg map[string]interface{}) (source.Source, error) {
@@ -118,8 +137,10 @@ func newObjstoreSource(provider string, cfg map[string]interface{}) (source.Sour
 		return nil, fmt.Errorf("%s source: open store: %w", provider, err)
 	}
 
-	objects, err := store.List(context.Background(), prefix)
+	ctx, cancel := context.WithCancel(context.Background())
+	objects, err := store.List(ctx, prefix)
 	if err != nil {
+		cancel()
 		_ = store.Close()
 		return nil, fmt.Errorf("%s source: list %q: %w", provider, prefix, err)
 	}
@@ -131,23 +152,24 @@ func newObjstoreSource(provider string, cfg map[string]interface{}) (source.Sour
 		innerFormat: innerFormat,
 		innerCfg:    innerCfg,
 		download:    download,
+		ctx:         ctx,
+		cancel:      cancel,
 	}
 
 	// Pre-compute schema from the first object so Schema() returns immediately.
 	// If there are no matching objects, schema stays nil; the pipeline engine
 	// must handle this case (empty source).
 	if len(objects) > 0 {
-		innerSrc, tmpPath, err := src.openObject(context.Background(), objects[0])
+		innerSrc, tmpPath, err := src.openObject(ctx, objects[0])
 		if err != nil {
+			cancel()
 			_ = store.Close()
 			return nil, fmt.Errorf("%s source: open first object %q: %w", provider, objects[0].Key, err)
 		}
 		src.schema = innerSrc.Schema()
 		src.inner = innerSrc
+		src.innerTmp = tmpPath
 		src.objIdx = 0
-		if tmpPath != "" {
-			src.tmpFiles = append(src.tmpFiles, tmpPath)
-		}
 	}
 
 	return src, nil
@@ -195,8 +217,7 @@ func (s *objstoreSource) ReadBatch(size int) (*record.RecordBatch, error) {
 			// Successful read (possibly a partial EOF batch).
 			if err == io.EOF {
 				// The inner source is done; advance to the next object.
-				_ = s.inner.Close()
-				s.inner = nil
+				s.closeInner()
 				s.objIdx++
 				if err2 := s.openNextObject(); err2 != nil && err2 != io.EOF {
 					return batch, err2
@@ -208,8 +229,7 @@ func (s *objstoreSource) ReadBatch(size int) (*record.RecordBatch, error) {
 		}
 		if err == io.EOF {
 			// Inner source exhausted with no rows; advance to next object.
-			_ = s.inner.Close()
-			s.inner = nil
+			s.closeInner()
 			s.objIdx++
 			if err2 := s.openNextObject(); err2 != nil {
 				if err2 == io.EOF {
@@ -230,20 +250,34 @@ func (s *objstoreSource) openNextObject() error {
 	if s.objIdx >= len(s.objects) {
 		return io.EOF
 	}
-	innerSrc, tmpPath, err := s.openObject(context.Background(), s.objects[s.objIdx])
+	innerSrc, tmpPath, err := s.openObject(s.ctx, s.objects[s.objIdx])
 	if err != nil {
 		return fmt.Errorf("open object %q: %w", s.objects[s.objIdx].Key, err)
 	}
 	s.inner = innerSrc
-	if tmpPath != "" {
-		s.tmpFiles = append(s.tmpFiles, tmpPath)
-	}
+	s.innerTmp = tmpPath
 	return nil
+}
+
+// closeInner closes the current object's inner source and deletes its temp
+// file right away, so a multi-object read holds at most one spooled object
+// on disk instead of all of them until Close.
+func (s *objstoreSource) closeInner() error {
+	var err error
+	if s.inner != nil {
+		err = s.inner.Close()
+		s.inner = nil
+	}
+	if s.innerTmp != "" {
+		_ = os.Remove(s.innerTmp)
+		s.innerTmp = ""
+	}
+	return err
 }
 
 // openObject downloads or streams a single object and returns an inner source
 // reading from it.  tmpPath is non-empty only when a temp file was created;
-// the caller is responsible for appending it to s.tmpFiles.
+// the caller owns it and must delete it once the inner source is closed.
 func (s *objstoreSource) openObject(ctx context.Context, obj objstore.Object) (source.Source, string, error) {
 	innerCfg := cloneCfg(s.innerCfg)
 
@@ -278,28 +312,26 @@ func (s *objstoreSource) openObject(ctx context.Context, obj objstore.Object) (s
 		return innerSrc, tmpPath, nil
 	}
 
-	// Streaming path: open a pipe and feed the object stream into it.
-	// The inner source reads from the pipe; downloads happen concurrently.
-	pr, pw := io.Pipe()
-	go func() {
+	// Streaming path: formats that parse a sequential stream read the object
+	// directly; the inner source closes the stream when it is closed.
+	if readerCapable[s.innerFormat] {
 		rc, err := s.store.GetReader(ctx, obj.Key)
 		if err != nil {
-			pw.CloseWithError(fmt.Errorf("get reader for %q: %w", obj.Key, err))
-			return
+			return nil, "", fmt.Errorf("get reader for %q: %w", obj.Key, err)
 		}
-		defer rc.Close()
-		_, err = io.Copy(pw, rc)
-		pw.CloseWithError(err)
-	}()
+		innerCfg["reader"] = rc
+		innerSrc, err := source.New(s.innerFormat, innerCfg)
+		if err != nil {
+			_ = rc.Close()
+			return nil, "", fmt.Errorf("open inner source %q (stream) on %q: %w", s.innerFormat, obj.Key, err)
+		}
+		return innerSrc, "", nil
+	}
 
-	// Write the pipe reader to a temp file because most inner sources require
-	// an os.File path rather than an io.Reader.  For streaming sources that
-	// accept an io.Reader directly this could be optimised; keeping temp-file
-	// semantics here keeps the inner source interface unchanged.
-	tmpPath, err := spoolReaderToTempFile(pr)
+	// Other formats need a file path: spool the object to a temp file.
+	tmpPath, err := spoolToTempFile(ctx, s.store, obj.Key)
 	if err != nil {
-		_ = pw.Close()
-		return nil, "", fmt.Errorf("stream spool %q: %w", obj.Key, err)
+		return nil, "", fmt.Errorf("spool %q: %w", obj.Key, err)
 	}
 	innerCfg["path"] = tmpPath
 	innerSrc, err := source.New(s.innerFormat, innerCfg)
@@ -318,17 +350,14 @@ func (s *objstoreSource) Close() error {
 	s.closed = true
 
 	var errs []error
-	if s.inner != nil {
-		if err := s.inner.Close(); err != nil {
-			errs = append(errs, err)
-		}
-		s.inner = nil
+	if s.cancel != nil {
+		s.cancel()
+	}
+	if err := s.closeInner(); err != nil {
+		errs = append(errs, err)
 	}
 	if err := s.store.Close(); err != nil {
 		errs = append(errs, err)
-	}
-	for _, tmp := range s.tmpFiles {
-		_ = os.Remove(tmp) // best-effort cleanup
 	}
 	if len(errs) > 0 {
 		return errs[0]
@@ -374,7 +403,7 @@ func (s *objstoreSource) OpenPartition(p source.Partition) (source.Source, error
 		obj = objstore.Object{Key: key}
 	}
 
-	innerSrc, tmpPath, err := s.openObject(context.Background(), obj)
+	innerSrc, tmpPath, err := s.openObject(s.ctx, obj)
 	if err != nil {
 		return nil, fmt.Errorf("objstore source: open partition %q: %w", key, err)
 	}

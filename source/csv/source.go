@@ -9,11 +9,11 @@ import (
 	"encoding/csv"
 	"fmt"
 	"io"
-	"os"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/mpandav-tibco/flogo-datapipeline/internal/fileutil"
 	"github.com/mpandav-tibco/flogo-datapipeline/record"
 	"github.com/mpandav-tibco/flogo-datapipeline/source"
 )
@@ -32,7 +32,7 @@ func init() {
 // csvSource reads CSV files in batches using encoding/csv.
 // It streams line-by-line so memory usage is O(batchSize), not O(file size).
 type csvSource struct {
-	file      *os.File
+	file      io.Closer
 	reader    *csv.Reader
 	schema    []record.Column
 	hasHeader bool
@@ -41,11 +41,6 @@ type csvSource struct {
 }
 
 func newCSVSource(cfg map[string]interface{}) (source.Source, error) {
-	path, _ := cfg["path"].(string)
-	if path == "" {
-		return nil, fmt.Errorf("csv source: 'path' is required")
-	}
-
 	delimiter := ","
 	if d, ok := cfg["delimiter"].(string); ok && d != "" {
 		delimiter = d
@@ -56,9 +51,9 @@ func newCSVSource(cfg map[string]interface{}) (source.Source, error) {
 		hasHeader = h
 	}
 
-	f, err := os.Open(path)
+	f, err := fileutil.OpenInput(cfg, "csv source")
 	if err != nil {
-		return nil, fmt.Errorf("csv source: open %q: %w", path, err)
+		return nil, err
 	}
 
 	r := csv.NewReader(bufio.NewReaderSize(f, 1<<20)) // 1MB buffer
@@ -92,6 +87,7 @@ func newCSVSource(cfg map[string]interface{}) (source.Source, error) {
 		}
 	}
 	if len(cols) == 0 {
+		f.Close()
 		return nil, fmt.Errorf("csv source: no column definitions and no header row — provide 'columns' in config")
 	}
 	src.schema = cols

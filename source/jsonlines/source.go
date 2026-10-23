@@ -19,10 +19,9 @@ package jsonlines
 import (
 	"bufio"
 	"encoding/json"
-	"fmt"
 	"io"
-	"os"
 
+	"github.com/mpandav-tibco/flogo-datapipeline/internal/fileutil"
 	"github.com/mpandav-tibco/flogo-datapipeline/record"
 	"github.com/mpandav-tibco/flogo-datapipeline/source"
 )
@@ -33,7 +32,7 @@ func init() {
 }
 
 type jsonLinesSource struct {
-	file     *os.File
+	file     io.Closer
 	scanner  *bufio.Scanner
 	schema   []record.Column
 	fields   []string // ordered field names; nil = infer from first record
@@ -42,11 +41,6 @@ type jsonLinesSource struct {
 }
 
 func newJSONLinesSource(cfg map[string]interface{}) (source.Source, error) {
-	path, _ := cfg["path"].(string)
-	if path == "" {
-		return nil, fmt.Errorf("jsonlines source: 'path' is required")
-	}
-
 	var fields []string
 	if f, ok := cfg["fields"].([]interface{}); ok {
 		for _, v := range f {
@@ -56,9 +50,9 @@ func newJSONLinesSource(cfg map[string]interface{}) (source.Source, error) {
 		}
 	}
 
-	f, err := os.Open(path)
+	f, err := fileutil.OpenInput(cfg, "jsonlines source")
 	if err != nil {
-		return nil, fmt.Errorf("jsonlines source: open %q: %w", path, err)
+		return nil, err
 	}
 
 	scanner := bufio.NewScanner(f)
