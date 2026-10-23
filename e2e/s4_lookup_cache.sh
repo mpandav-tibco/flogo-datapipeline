@@ -24,6 +24,7 @@ for v in $VARIANTS; do
 		\"performance\": { \"batchSize\": 5000 }, \"checkpoint\": { \"type\": \"none\" } }")
 	start_app "$f" "$WORK/logs/s4a-$label.log"; st=$(wait_run "$WORK/logs/s4a-$label.log" 900); stop_app
 	nulls=$(psql_q "SELECT count(*) FROM $table WHERE tier IS NULL")
+	sleep 0.5 # let the mock settle before reading counters
 	result "S4A [$label] $st | HTTP $(mock_stats) | null-tier rows=$nulls (want 20000)"
 
 	log "S4B streaming lookup staleness [$label]"
@@ -38,10 +39,10 @@ for v in $VARIANTS; do
 	start_app "$f" "$WORK/logs/s4b-$label.log"
 	"$H" produce -broker "$KAFKA_BROKER" -topic "$topic" -n 50000 >/dev/null
 	until [ "$(tcount $table)" -ge 50000 ]; do sleep 0.5; done
-	curl -s -X POST "http://$MOCK_ADDR/heal" >/dev/null; sleep ${HEAL_WAIT:-3}
+	curl -s -X POST "http://$MOCK_ADDR/heal" >/dev/null; sleep ${HEAL_WAIT:-65} # > default notFoundTtlMs (60s)
 	"$H" produce -broker "$KAFKA_BROKER" -topic "$topic" -n 50000 -start 50000 >/dev/null
 	until [ "$(tcount $table)" -ge 100000 ]; do sleep 0.5; done
 	stop_app
 	stale=$(psql_q "SELECT count(*) FROM $table WHERE id::numeric >= 50000 AND customer_id::numeric % 10 = 0 AND tier IS NULL")
-	result "S4B [$label] customers appeared upstream mid-stream: phase-2 rows still null-enriched (stale)=$stale of 5000 (want 0) | HTTP $(mock_stats)"
+	result "S4B [$label] customers appeared upstream mid-stream: phase-2 rows still null-enriched (stale)=$stale of 5000 (want 0: phase 2 starts ${HEAL_WAIT:-65}s after the heal, past the 60s default notFoundTtlMs) | HTTP $(mock_stats)"
 done
