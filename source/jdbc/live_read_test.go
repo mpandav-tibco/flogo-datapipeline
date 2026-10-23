@@ -164,3 +164,30 @@ func TestNewJDBCSource_Errors(t *testing.T) {
 		t.Error("oracle without orderKey expected an error")
 	}
 }
+
+// TestJDBCSource_LiveMidStreamErrorReleasesCursor: a query that fails partway
+// through (rows.Err) must close the cursor instead of holding it until Close.
+func TestJDBCSource_LiveMidStreamErrorReleasesCursor(t *testing.T) {
+	dsn := os.Getenv("DP_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("set DP_TEST_PG_DSN to run the live JDBC source test")
+	}
+	src, err := newJDBCSource(map[string]interface{}{
+		"driver": "postgres", "dsn": dsn,
+		"query": "SELECT x, 10/(x-50000) AS y FROM generate_series(1,100000) AS x",
+	})
+	if err != nil {
+		t.Fatalf("newJDBCSource: %v", err)
+	}
+	defer src.Close()
+	var readErr error
+	for i := 0; i < 1000 && readErr == nil; i++ {
+		_, readErr = src.ReadBatch(1000)
+	}
+	if readErr == nil || readErr == io.EOF {
+		t.Fatalf("want division-by-zero error, got %v", readErr)
+	}
+	if js := src.(*jdbcSource); js.rows != nil {
+		t.Fatal("cursor still open after a mid-stream error")
+	}
+}

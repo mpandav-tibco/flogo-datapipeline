@@ -18,7 +18,7 @@ func TestInsertSQLCacheMatchesBuilder(t *testing.T) {
 		for _, oc := range []conflictStrategy{conflictInsert, conflictUpsert, conflictIgnore} {
 			s := &jdbcSink{driver: drv, table: "t", columns: []string{"id", "v"}, onConflict: oc, conflictKey: []string{"id"}}
 			rows := [][]interface{}{{int64(1), "a"}, {int64(2)}} // second row short → nil-padded
-			for round := 0; round < 2; round++ {                  // round 1 hits the cache
+			for round := 0; round < 2; round++ {                 // round 1 hits the cache
 				gotQ, gotA := s.insertSQL(rows)
 				wantQ, wantA := s.buildInsert(rows)
 				if gotQ != wantQ || !reflect.DeepEqual(gotA, wantA) {
