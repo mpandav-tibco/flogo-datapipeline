@@ -1,273 +1,305 @@
 {
- "name": "graph04_route_region_s3_v",
- "type": "flogo:app",
- "version": "1.0.0",
- "appModel": "1.1.1",
- "imports": [
-  "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
-  "github.com/mpandav-tibco/flogo-datapipeline/source/csv",
-  "github.com/mpandav-tibco/flogo-datapipeline/transform/filter",
-  "github.com/project-flogo/contrib/trigger/timer",
-  "github.com/mpandav-tibco/flogo-datapipeline/objstore/s3",
-  "github.com/mpandav-tibco/flogo-datapipeline/sink/objstore",
-  "github.com/mpandav-tibco/flogo-datapipeline/sink/parquet"
- ],
- "triggers": [
-  {
-   "id": "bench-timer",
-   "ref": "github.com/project-flogo/contrib/trigger/timer",
-   "settings": {
-    "repeating": true,
-    "startDelay": 0,
-    "interval": 86400000
-   },
-   "handlers": [
+  "name": "graph04_route_region_s3_v",
+  "type": "flogo:app",
+  "version": "1.0.0",
+  "appModel": "1.1.1",
+  "imports": [
+    "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+    "github.com/mpandav-tibco/flogo-datapipeline/source/csv",
+    "github.com/mpandav-tibco/flogo-datapipeline/transform/filter",
+    "github.com/project-flogo/contrib/trigger/timer",
+    "github.com/mpandav-tibco/flogo-datapipeline/objstore/s3",
+    "github.com/mpandav-tibco/flogo-datapipeline/sink/objstore",
+    "github.com/mpandav-tibco/flogo-datapipeline/sink/parquet"
+  ],
+  "triggers": [
     {
-     "settings": {},
-     "action": {
-      "ref": "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+      "id": "bench-timer",
+      "ref": "github.com/project-flogo/contrib/trigger/timer",
       "settings": {
-       "pipelineRef": "res://pipeline:graph04_route_region_s3_v"
-      }
-     }
+        "repeating": true,
+        "startDelay": 0,
+        "interval": 86400000
+      },
+      "handlers": [
+        {
+          "settings": {},
+          "action": {
+            "ref": "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+            "settings": {
+              "pipelineRef": "res://pipeline:graph04routeregions3v"
+            }
+          }
+        }
+      ]
     }
-   ]
-  }
- ],
- "resources": [
-  {
-   "id": "pipeline:graph04_route_region_s3_v",
-   "data": {
-    "mode": "etl",
-    "performance": {
-     "batchSize": 5000,
-     "maxMemoryMB": 1024
-    },
-    "scaling": {
-     "mode": "single"
-    },
-    "checkpoint": {
-     "type": "none"
-    },
-    "source": {
-     "type": "csv",
-     "path": "./data/orders_2m.csv",
-     "delimiter": ",",
-     "hasHeader": true,
-     "columns": [
-      {
-       "name": "order_id",
-       "type": "string"
-      },
-      {
-       "name": "customer_id",
-       "type": "string"
-      },
-      {
-       "name": "region",
-       "type": "string"
-      },
-      {
-       "name": "product",
-       "type": "string"
-      },
-      {
-       "name": "category",
-       "type": "string"
-      },
-      {
-       "name": "quantity",
-       "type": "int"
-      },
-      {
-       "name": "unit_price",
-       "type": "float"
-      },
-      {
-       "name": "status",
-       "type": "string"
-      },
-      {
-       "name": "order_date",
-       "type": "string"
-      },
-      {
-       "name": "email",
-       "type": "string"
-      }
-     ]
-    },
-    "transforms": [
-     {
-      "type": "filter",
-      "expr": "status != 'CANCELLED'"
-     }
-    ],
-    "sink": {
-     "type": "s3-sink",
-     "bucket": "datalake",
-     "region": "us-east-1",
-     "endpoint": "http://localhost:9000",
-     "forcePathStyle": true,
-     "accessKeyIdEnv": "MINIO_AK",
-     "secretAccessKeyEnv": "MINIO_SK",
-     "key": "graph/graph04_route_region_s3_v/west.parquet",
-     "format": "parquet"
-    },
-    "graph": {
-     "nodes": [
-      {
-       "id": "source",
-       "kind": "source",
-       "type": "csv",
-       "ports": {
-        "out": [
-         "rows"
-        ]
-       }
-      },
-      {
-       "id": "t0",
-       "kind": "transform",
-       "type": "filter",
-       "ports": {
-        "in": [
-         "in"
+  ],
+  "resources": [
+    {
+      "id": "pipeline:graph04routeregions3v",
+      "data": {
+        "mode": "etl",
+        "performance": {
+          "batchSize": 5000,
+          "maxMemoryMB": 1024
+        },
+        "scaling": {
+          "mode": "single"
+        },
+        "checkpoint": {
+          "type": "none"
+        },
+        "source": {
+          "type": "csv",
+          "path": "./data/orders_2m.csv",
+          "delimiter": ",",
+          "hasHeader": true,
+          "columns": [
+            {
+              "name": "order_id",
+              "type": "string"
+            },
+            {
+              "name": "customer_id",
+              "type": "string"
+            },
+            {
+              "name": "region",
+              "type": "string"
+            },
+            {
+              "name": "product",
+              "type": "string"
+            },
+            {
+              "name": "category",
+              "type": "string"
+            },
+            {
+              "name": "quantity",
+              "type": "int"
+            },
+            {
+              "name": "unit_price",
+              "type": "float"
+            },
+            {
+              "name": "status",
+              "type": "string"
+            },
+            {
+              "name": "order_date",
+              "type": "string"
+            },
+            {
+              "name": "email",
+              "type": "string"
+            }
+          ]
+        },
+        "transforms": [
+          {
+            "type": "filter",
+            "expr": "status != 'CANCELLED'"
+          }
         ],
-        "out": [
-         "out"
-        ]
-       }
-      },
-      {
-       "id": "sink",
-       "kind": "sink",
-       "type": "s3-sink",
-       "ports": {
-        "in": [
-         "in"
-        ]
-       }
-      },
-      {
-       "id": "xsink-north",
-       "kind": "sink",
-       "type": "s3-sink",
-       "ports": {
-        "in": [
-         "in"
-        ]
-       },
-       "config": {
-        "bucket": "datalake",
-        "region": "us-east-1",
-        "endpoint": "http://localhost:9000",
-        "forcePathStyle": true,
-        "accessKeyIdEnv": "MINIO_AK",
-        "secretAccessKeyEnv": "MINIO_SK",
-        "key": "graph/graph04_route_region_s3_v/north.parquet",
-        "format": "parquet"
-       }
-      },
-      {
-       "id": "xsink-central",
-       "kind": "sink",
-       "type": "s3-sink",
-       "ports": {
-        "in": [
-         "in"
-        ]
-       },
-       "config": {
-        "bucket": "datalake",
-        "region": "us-east-1",
-        "endpoint": "http://localhost:9000",
-        "forcePathStyle": true,
-        "accessKeyIdEnv": "MINIO_AK",
-        "secretAccessKeyEnv": "MINIO_SK",
-        "key": "graph/graph04_route_region_s3_v/central.parquet",
-        "format": "parquet"
-       }
-      },
-      {
-       "id": "xsink-east",
-       "kind": "sink",
-       "type": "s3-sink",
-       "ports": {
-        "in": [
-         "in"
-        ]
-       },
-       "config": {
-        "bucket": "datalake",
-        "region": "us-east-1",
-        "endpoint": "http://localhost:9000",
-        "forcePathStyle": true,
-        "accessKeyIdEnv": "MINIO_AK",
-        "secretAccessKeyEnv": "MINIO_SK",
-        "key": "graph/graph04_route_region_s3_v/east.parquet",
-        "format": "parquet"
-       }
-      },
-      {
-       "id": "xsink-south",
-       "kind": "sink",
-       "type": "s3-sink",
-       "ports": {
-        "in": [
-         "in"
-        ]
-       },
-       "config": {
-        "bucket": "datalake",
-        "region": "us-east-1",
-        "endpoint": "http://localhost:9000",
-        "forcePathStyle": true,
-        "accessKeyIdEnv": "MINIO_AK",
-        "secretAccessKeyEnv": "MINIO_SK",
-        "key": "graph/graph04_route_region_s3_v/south.parquet",
-        "format": "parquet"
-       }
+        "sink": {
+          "type": "s3-sink",
+          "bucket": "datalake",
+          "region": "us-east-1",
+          "endpoint": "http://localhost:9000",
+          "forcePathStyle": true,
+          "accessKeyIdEnv": "MINIO_AK",
+          "secretAccessKeyEnv": "MINIO_SK",
+          "key": "graph/graph04_route_region_s3_v/west.parquet",
+          "format": "parquet"
+        },
+        "graph": {
+          "nodes": [
+            {
+              "id": "source",
+              "kind": "source",
+              "type": "csv",
+              "ports": {
+                "out": [
+                  "rows"
+                ]
+              }
+            },
+            {
+              "id": "t0",
+              "kind": "transform",
+              "type": "filter",
+              "ports": {
+                "in": [
+                  "in"
+                ],
+                "out": [
+                  "out"
+                ]
+              }
+            },
+            {
+              "id": "sink",
+              "kind": "sink",
+              "type": "s3-sink",
+              "ports": {
+                "in": [
+                  "in"
+                ]
+              }
+            },
+            {
+              "id": "xsink-north",
+              "kind": "sink",
+              "type": "s3-sink",
+              "ports": {
+                "in": [
+                  "in"
+                ]
+              },
+              "config": {
+                "bucket": "datalake",
+                "region": "us-east-1",
+                "endpoint": "http://localhost:9000",
+                "forcePathStyle": true,
+                "accessKeyIdEnv": "MINIO_AK",
+                "secretAccessKeyEnv": "MINIO_SK",
+                "key": "graph/graph04_route_region_s3_v/north.parquet",
+                "format": "parquet"
+              }
+            },
+            {
+              "id": "xsink-central",
+              "kind": "sink",
+              "type": "s3-sink",
+              "ports": {
+                "in": [
+                  "in"
+                ]
+              },
+              "config": {
+                "bucket": "datalake",
+                "region": "us-east-1",
+                "endpoint": "http://localhost:9000",
+                "forcePathStyle": true,
+                "accessKeyIdEnv": "MINIO_AK",
+                "secretAccessKeyEnv": "MINIO_SK",
+                "key": "graph/graph04_route_region_s3_v/central.parquet",
+                "format": "parquet"
+              }
+            },
+            {
+              "id": "xsink-east",
+              "kind": "sink",
+              "type": "s3-sink",
+              "ports": {
+                "in": [
+                  "in"
+                ]
+              },
+              "config": {
+                "bucket": "datalake",
+                "region": "us-east-1",
+                "endpoint": "http://localhost:9000",
+                "forcePathStyle": true,
+                "accessKeyIdEnv": "MINIO_AK",
+                "secretAccessKeyEnv": "MINIO_SK",
+                "key": "graph/graph04_route_region_s3_v/east.parquet",
+                "format": "parquet"
+              }
+            },
+            {
+              "id": "xsink-south",
+              "kind": "sink",
+              "type": "s3-sink",
+              "ports": {
+                "in": [
+                  "in"
+                ]
+              },
+              "config": {
+                "bucket": "datalake",
+                "region": "us-east-1",
+                "endpoint": "http://localhost:9000",
+                "forcePathStyle": true,
+                "accessKeyIdEnv": "MINIO_AK",
+                "secretAccessKeyEnv": "MINIO_SK",
+                "key": "graph/graph04_route_region_s3_v/south.parquet",
+                "format": "parquet"
+              }
+            }
+          ],
+          "edges": [
+            [
+              "source:rows",
+              "t0:in"
+            ],
+            {
+              "from": "t0:out",
+              "to": "xsink-north:in",
+              "type": "expression",
+              "value": "region = 'NORTH'"
+            },
+            {
+              "from": "t0:out",
+              "to": "xsink-central:in",
+              "type": "expression",
+              "value": "region = 'CENTRAL'"
+            },
+            {
+              "from": "t0:out",
+              "to": "xsink-east:in",
+              "type": "expression",
+              "value": "region = 'EAST'"
+            },
+            {
+              "from": "t0:out",
+              "to": "xsink-south:in",
+              "type": "expression",
+              "value": "region = 'SOUTH'"
+            },
+            {
+              "from": "t0:out",
+              "to": "sink:in",
+              "type": "otherwise"
+            }
+          ]
+        },
+        "name": "graph04_route_region_s3_v",
+        "ui": {
+          "positions": {
+            "sink": {
+              "x": 867,
+              "y": 20
+            },
+            "t0": {
+              "x": 292,
+              "y": 233
+            },
+            "xsink-north": {
+              "x": 892,
+              "y": 470
+            },
+            "xsink-central": {
+              "x": 869,
+              "y": 326
+            },
+            "xsink-east": {
+              "x": 892,
+              "y": 629
+            },
+            "source": {
+              "x": 2,
+              "y": 232
+            },
+            "xsink-south": {
+              "x": 872,
+              "y": 168
+            }
+          }
+        }
       }
-     ],
-     "edges": [
-      [
-       "source:rows",
-       "t0:in"
-      ],
-      {
-       "from": "t0:out",
-       "to": "xsink-north:in",
-       "type": "expression",
-       "value": "region = 'NORTH'"
-      },
-      {
-       "from": "t0:out",
-       "to": "xsink-central:in",
-       "type": "expression",
-       "value": "region = 'CENTRAL'"
-      },
-      {
-       "from": "t0:out",
-       "to": "xsink-east:in",
-       "type": "expression",
-       "value": "region = 'EAST'"
-      },
-      {
-       "from": "t0:out",
-       "to": "xsink-south:in",
-       "type": "expression",
-       "value": "region = 'SOUTH'"
-      },
-      {
-       "from": "t0:out",
-       "to": "sink:in",
-       "type": "otherwise"
-      }
-     ]
-    },
-    "name": "graph04_route_region_s3_v"
-   }
-  }
- ]
+    }
+  ]
 }

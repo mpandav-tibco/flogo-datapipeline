@@ -168,6 +168,14 @@
             "enabled": true,
             "file": "./out/audit.jsonl"
           }
+        },
+        "ui": {
+          "positions": {
+            "t1.reject": {
+              "x": 623,
+              "y": 277
+            }
+          }
         }
       }
     }

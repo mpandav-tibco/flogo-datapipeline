@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>adidas — Container Log Collection with Flogo Data Pipeline</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="./vendor/reveal/reveal.css">
+<link rel="stylesheet" href="./vendor/reveal/plugin/highlight/monokai.css">
+<style>
+  :root{
+    --bg:#eceef0; --frame:#ffffff; --chrome:#fafbfc;
+    --ink:#1b1e22; --body:#525862; --mute:#9aa0a6;
+    --accent:#2f6db3; --accent-soft:#e7f0fe;
+    --tibco:#106cc8; --tibco2:#0081cb; --flogo-orange:#fc7e1b;
+    --src:#2e7d46; --src-bg:#e6f4ea; --tf:#2f6db3; --tf-bg:#e7f0fe;
+    --snk:#7a4fb0; --snk-bg:#f0e9fa; --dlq:#c1362f; --dlq-bg:#fbe9e7;
+    --ctrl:#b06f00; --ctrl-bg:#fbf1dd;
+    --line:#dde1e5;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  html,body{background:#14181d}
+  .reveal{font-family:var(--sans);color:var(--ink)}
+  .reveal .slides{text-align:left}
+  .reveal .slides section{
+    background:var(--bg);
+    border-radius:18px;
+    padding:64px 76px 56px;
+    box-shadow:0 30px 70px rgba(0,0,0,.35);
+  }
+  .reveal .slides section.hero{
+    background:linear-gradient(135deg,#0b3a66 0%,var(--tibco) 46%,#0aa0c9 100%);
+    color:#fff; display:flex; flex-direction:column; justify-content:center;
+  }
+  .reveal .slides section.hero::after{
+    content:""; position:absolute; right:-120px; bottom:-160px; width:520px; height:520px;
+    border-radius:50%; background:radial-gradient(circle at 30% 30%,rgba(255,255,255,.16),transparent 70%);
+    pointer-events:none;
+  }
+  .reveal .slides section.dark{
+    background:linear-gradient(160deg,#161b22 0%,#1f2733 100%); color:#eef2f6;
+  }
+  .reveal h1,.reveal h2,.reveal h3{font-family:var(--sans);letter-spacing:0;margin:0 0 .3em}
+  .reveal h1{font-size:2.3em;color:var(--tibco);font-weight:800;line-height:1.08}
+  .hero h1{color:#fff;font-size:2.6em}
+  .reveal h2{font-size:1.5em;font-weight:800;color:var(--ink)}
+  .dark h2{color:#fff}
+  .reveal h3{font-size:1em;color:var(--body);font-weight:700;margin-bottom:8px}
+  .dark h3{color:#c9d4e0}
+  .reveal p,.reveal li{font-size:.66em;color:var(--body);line-height:1.55}
+  .dark p,.dark li{color:#c3ccd6}
+  .hero p{color:rgba(255,255,255,.92);font-size:.75em}
+  .reveal code{font-family:var(--mono);background:var(--accent-soft);color:var(--accent);border-radius:5px;padding:2px 7px;font-size:.95em}
+  .reveal pre{box-shadow:0 14px 34px rgba(0,0,0,.28);border:1px solid #2a3038;border-radius:10px}
+  .reveal pre code{font-size:.56em;max-height:560px;border-radius:10px}
+
+  .eyebrow{display:flex;align-items:center;gap:12px;margin-bottom:18px}
+  .eyebrow .kicker{font:800 .34em var(--mono);letter-spacing:.16em;text-transform:uppercase;color:var(--mute)}
+  .hero .eyebrow .kicker{color:rgba(255,255,255,.75)}
+  .step-no{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:10px;
+    background:linear-gradient(135deg,var(--tibco),var(--tibco2));color:#fff;font:800 .8em var(--mono);flex:none;
+    box-shadow:0 6px 14px rgba(16,108,200,.35)}
+
+  .accent-bar{position:absolute;left:0;top:64px;bottom:56px;width:6px;border-radius:6px;background:linear-gradient(180deg,var(--tibco),var(--flogo-orange))}
+
+  .badge{display:inline-block;font:800 .42em var(--mono);letter-spacing:.05em;border-radius:20px;padding:5px 14px;margin:3px 6px 3px 0}
+  .badge.old{background:var(--dlq-bg);color:var(--dlq)}
+  .badge.new{background:var(--src-bg);color:var(--src)}
+
+  .frame{background:#fff;border:1px solid var(--line);border-radius:14px;padding:22px 26px;box-shadow:0 10px 26px rgba(20,25,30,.07)}
+  .dark .frame{background:#242c38;border-color:#323c4a}
+
+  .flowrow{display:flex;align-items:center;justify-content:center;gap:14px;margin:18px 0;flex-wrap:wrap}
+  .fbox{border:1.5px solid var(--line);border-radius:12px;padding:14px 18px;font:700 .46em var(--sans);background:#fff;text-align:center;min-width:120px;box-shadow:0 4px 10px rgba(20,25,30,.05)}
+  .fbox.src{border-color:var(--src);background:var(--src-bg);color:var(--src)}
+  .fbox.tf{border-color:var(--tf);background:var(--tf-bg);color:var(--tf)}
+  .fbox.snk{border-color:var(--snk);background:var(--snk-bg);color:var(--snk)}
+  .fbox.dlq{border-color:var(--dlq);background:var(--dlq-bg);color:var(--dlq)}
+  .fbox.ctrl{border-color:var(--ctrl);background:var(--ctrl-bg);color:var(--ctrl)}
+  .farrow{color:var(--mute);font-size:1.3em;font-weight:300}
+
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:24px;align-items:start}
+  .cols3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:20px;align-items:start}
+
+  .stat{text-align:center;padding:22px 10px;background:#fff;border:1px solid var(--line);border-radius:14px;box-shadow:0 10px 26px rgba(20,25,30,.06)}
+  .stat .n{font:800 1.7em var(--mono);color:var(--tibco);letter-spacing:-.02em}
+  .stat .l{font-size:.46em;color:var(--mute);text-transform:uppercase;letter-spacing:.06em;margin-top:6px}
+
+  table.demo{width:100%;border-collapse:collapse;font-size:.58em;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 10px 26px rgba(20,25,30,.06)}
+  table.demo th{text-align:left;color:#fff;background:var(--tibco);text-transform:uppercase;letter-spacing:.05em;font-size:.8em;padding:10px 14px}
+  table.demo td{padding:11px 14px;border-bottom:1px solid var(--line)}
+  table.demo tr:last-child td{border-bottom:none}
+  table.demo tr:nth-child(even) td{background:#f6f8fa}
+
+  .foot-logo{position:absolute;bottom:20px;right:30px;font:800 .3em var(--mono);color:var(--mute);letter-spacing:.12em}
+  .hero .foot-logo{color:rgba(255,255,255,.6)}
+  .pill-row{margin-top:8px}
+</style>
+</head>
+<body>
+<div class="reveal">
+<div class="slides">
+
+<!-- 0. TITLE -->
+<section class="hero">
+  <div class="eyebrow"><span class="kicker">Flogo Data Pipeline · Customer Demo</span></div>
+  <h1>Container Log Collection,<br>Reimagined</h1>
+  <p style="font-size:.85em;font-weight:600;margin-top:6px">Replacing Fluentd + a custom S3-pusher with a single Flogo Data Pipeline DaemonSet</p>
+  <p style="margin-top:36px;max-width:640px">BW6 / BWCE console logs → enriched, partitioned NDJSON in S3 — no intermediate service, no OpenSearch index-corruption blind spot.</p>
+  <p style="margin-top:56px;font-size:.42em;letter-spacing:.04em;opacity:.85">LOCAL MINIKUBE DEMO · 2 NODES · 6 NAMESPACES · ~25M RECORDS/DAY TARGET</p>
+  <aside class="notes">
+    Open with the customer's own pain, not our product. One sentence: "You're running Fluentd today, plus a
+    custom service that converts and pushes to S3, and OpenSearch corrupts its indices often enough that you
+    lose visibility into your BW app logs." Today I'll show that collapsed into one component, running live
+    on a local cluster that mirrors your topology.
+  </aside>
+</section>
+
+<!-- 1. THE PROBLEM -->
+<section>
+  <div class="accent-bar" style="background:linear-gradient(180deg,var(--dlq),var(--ctrl))"></div>
+  <div class="eyebrow"><span class="kicker">01 · The problem today</span></div>
+  <h2>Two extra moving parts between your app and S3</h2>
+  <div class="frame" style="margin-top:22px">
+    <div class="flowrow">
+      <div class="fbox src">BW app<br>stdout/stderr</div>
+      <span class="farrow">→</span>
+      <div class="fbox ctrl">Fluentd<br>DaemonSet</div>
+      <span class="farrow">→</span>
+      <div class="fbox ctrl">Custom converter<br>service</div>
+      <span class="farrow">→</span>
+      <div class="fbox snk">S3</div>
+      <span class="farrow">→</span>
+      <div class="fbox dlq">OpenSearch<br><span style="font-weight:400">(corrupts)</span></div>
+    </div>
+  </div>
+  <ul style="margin-top:26px">
+    <li>Format conversion + S3 push logic is bespoke and hard to reason about at scale
+      (3 nodes · ~20 namespaces/node · 5–200 apps/namespace · ~25M records/day)</li>
+    <li>OpenSearch indices <strong>occasionally corrupt</strong> — logs silently stop being searchable</li>
+    <li>Two services to patch, scale, and debug independently, for one job: move a log line to S3</li>
+  </ul>
+  <aside class="notes">
+    Pause here. Ask: "Does this match what you're dealing with?" Get a nod before moving on — the rest
+    of the demo lands much better if they've just agreed the pain is real.
+  </aside>
+</section>
+
+<!-- 2. THE SOLUTION -->
+<section>
+  <div class="accent-bar"></div>
+  <div class="eyebrow"><span class="kicker">02 · The solution</span></div>
+  <h2>One DaemonSet, node-local, straight to S3</h2>
+  <div class="frame" style="margin-top:20px">
+    <div class="flowrow">
+      <div class="fbox src">BW app<br>stdout/stderr</div>
+      <span class="farrow">→</span>
+      <div class="fbox src">/var/log/pods<br><span style="font-weight:400">(CRI, per node)</span></div>
+      <span class="farrow">→</span>
+      <div class="fbox tf">Flogo Data Pipeline<br>podlog → map → parse → validate</div>
+      <span class="farrow">→</span>
+      <div class="fbox snk">S3 / MinIO</div>
+    </div>
+    <div class="flowrow" style="margin-top:0">
+      <div style="width:100%;text-align:center">
+        <span class="farrow">⇢</span>
+        <div class="fbox dlq" style="display:inline-block">DLQ <span style="font-weight:400">(node-local, reconcilable)</span></div>
+      </div>
+    </div>
+  </div>
+  <table class="demo" style="margin-top:20px">
+    <tr><th>Old component</th><th>Replaced by</th></tr>
+    <tr><td>Fluentd DaemonSet (per node)</td><td><code>podlog</code> source tailing <code>/var/log/pods</code></td></tr>
+    <tr><td>Multiline concat plugin</td><td><code>podlog</code> multiline stitching (stack traces → one record)</td></tr>
+    <tr><td>Background format-conversion service</td><td>in-pipeline <code>map</code> + <code>parse</code> transforms</td></tr>
+    <tr><td>Custom S3 pusher</td><td><code>s3-sink</code> — partitioned, rolling objects</td></tr>
+    <tr><td>Dropped/oversized logs → lost</td><td><code>validate</code> → DLQ (node-local, reconcilable)</td></tr>
+  </table>
+  <aside class="notes">
+    S3 is the durable source of truth now — any downstream index can be rebuilt from it, so an OpenSearch
+    corruption is an inconvenience, not a data-loss event. That's the headline reframe for this slide.
+  </aside>
+</section>
+
+<!-- 3. LIVE: pods -->
+<section>
+  <div class="accent-bar"></div>
+  <div class="eyebrow"><span class="step-no">1</span><span class="kicker">Live — same ops model as Fluentd</span></div>
+  <h2>One collector pod per node</h2>
+  <pre><code class="language-bash" data-trim>kubectl -n logging get pods -o wide</code></pre>
+  <p style="margin-top:20px;max-width:820px">Exactly the DaemonSet model your ops team already runs for Fluentd — nothing new
+  to learn operationally. 3 nodes in production = 3 collector pods, automatically, with no coordinator.</p>
+  <aside class="notes">
+    Run it live. Point at NODE column — one pod per node, Running 1/1. Say explicitly: "if this were your
+    3-node cluster, you'd see 3 pods here, not 1 per namespace or per app — it scales with nodes, not load."
+  </aside>
+</section>
+
+<!-- 4. LIVE: raw log -->
+<section>
+  <div class="accent-bar"></div>
+  <div class="eyebrow"><span class="step-no">2</span><span class="kicker">Live — the real input, unmodified</span></div>
+  <h2>Raw BW console output, including a stack trace</h2>
+  <pre><code class="language-bash" data-trim>kubectl -n team-alpha logs -l app.kubernetes.io/name=order-service --tail=12</code></pre>
+  <p style="margin-top:20px;max-width:820px">This is the exact console text the BW engine already writes today —
+  no agent, no sidecar, no code change to the app.</p>
+  <aside class="notes">
+    If you have the real BWCE app deployed (license available), run this against team-bwce instead of
+    team-alpha for maximum impact — "this is your actual app, not a simulator."
+  </aside>
+</section>
+
+<!-- 5. LIVE: enriched record -->
+<section>
+  <div class="accent-bar" style="background:linear-gradient(180deg,var(--snk),var(--tf))"></div>
+  <div class="eyebrow"><span class="step-no">3</span><span class="kicker">Live — MinIO console, browse the bucket</span></div>
+  <h2>What lands in S3: OpenSearch-ready, no downstream parsing</h2>
+  <pre><code class="language-json" data-trim>{
+  "@timestamp": "2026-07-17T11:09:20.035793012Z",
+  "log_level": "ERROR",
+  "severity": 4,
+  "is_error": true,
+  "service_name": "order-service",
+  "namespace": "team-alpha",
+  "node": "adidas-logs",
+  "index_hint": "bwce-logs-2026-07-17",
+  "idempotency_key": "545956ba842ba9e8...",
+  "message": "Unhandled fault ...\njava.lang.NullPointerException: ..."
+}</code></pre>
+  <p style="margin-top:16px;max-width:860px">Canonical <code>@timestamp</code>, numeric <code>severity</code>, an
+  <code>is_error</code> flag, pod-hash-stripped <code>service_name</code>, and a daily
+  <code>index_hint</code> — drop straight into OpenSearch, Athena, or Snowflake.</p>
+  <aside class="notes">
+    Open http://localhost:9001 live, browse to team-alpha/order-service-.../date, download an object,
+    cat it, point at each field as you narrate. This is the single most important slide — slow down here.
+  </aside>
+</section>
+
+<!-- 6. LIVE: stitched exception -->
+<section>
+  <div class="accent-bar" style="background:linear-gradient(180deg,var(--dlq),var(--snk))"></div>
+  <div class="eyebrow"><span class="step-no">4</span><span class="kicker">Live — the stack-trace problem, solved</span></div>
+  <h2>One exception, one record — never split</h2>
+  <pre><code class="language-json" data-trim>"log_level": "ERROR",
+"message": "Unhandled fault in process instance 9916\njava.lang.NullPointerException: Cannot read field \"total\" ...\n\tat com.tibco.bw.Rest_Sample.OrderProcess.computeTotal(OrderProcess.java:77)\n\tat com.tibco.bw.core.runtime.ActivityFacade.execute(ActivityFacade.java:212)"</code></pre>
+  <p style="margin-top:22px;max-width:860px">The <code>podlog</code> source stitches multiline Java stack traces into a
+  <strong>single</strong> record before they ever reach S3 — the embedded newlines are just part of one
+  field. Nothing downstream ever sees a split exception again.</p>
+  <aside class="notes">
+    This directly answers a pain point they likely have today with Fluentd's concat plugin — call that out
+    by name if they've mentioned it.
+  </aside>
+</section>
+
+<!-- 7. LIVE: reconfigure -->
+<section>
+  <div class="accent-bar" style="background:linear-gradient(180deg,var(--ctrl),var(--flogo-orange))"></div>
+  <div class="eyebrow"><span class="step-no">5</span><span class="kicker">Live — repoint at a real environment</span></div>
+  <h2>Change environment, zero pipeline edits</h2>
+  <pre><code class="language-bash" data-trim>kubectl -n logging patch configmap adidas-log-collector-config --type merge -p '{"data":{
+  "S3_BUCKET":"acme-prod-bw-logs","S3_REGION":"eu-west-1",
+  "S3_ENDPOINT":"https://s3.eu-west-1.amazonaws.com","S3_FORCE_PATH_STYLE":"false",
+  "CLUSTER_NAME":"acme-prod-eks","ENVIRONMENT":"production"}}'
+kubectl -n logging rollout restart daemonset/adidas-log-collector</code></pre>
+  <p style="margin-top:18px;max-width:860px">Every environment-specific value is a Flogo <strong>app property</strong>
+  resolved from this ConfigMap — the <code>.datapipeline</code> definition itself never changes between
+  dev, staging, and your production AWS account.</p>
+  <aside class="notes">
+    Run it, then re-open the latest S3 object and show cluster/environment changed on the new record.
+    This is the "you don't need a new build to promote this to prod" moment — sells itself to platform teams.
+  </aside>
+</section>
+
+<!-- 8. RELIABILITY (talk track, no live action) -->
+<section class="dark">
+  <div class="eyebrow"><span class="step-no">6</span><span class="kicker">Reliability — no silent data loss</span></div>
+  <h2>At-least-once, with a dedupe key</h2>
+  <div class="cols3" style="margin-top:26px">
+    <div class="frame">
+      <h3>Position registry + checkpoint</h3>
+      <p>Crash-safe file, advanced every 5s. A pod restart resumes exactly where it left off —
+      never re-reads the whole log, never silently skips ahead.</p>
+    </div>
+    <div class="frame">
+      <h3>idempotency_key</h3>
+      <p>Deterministic per-record key. Downstream consumers dedupe on it, so at-least-once delivery
+      never becomes duplicate-counted metrics.</p>
+    </div>
+    <div class="frame">
+      <h3>validate → DLQ</h3>
+      <p>Malformed/null lines are routed to a node-local DLQ instead of dropped — reconcilable,
+      never silently lost.</p>
+    </div>
+  </div>
+  <aside class="notes">
+    No live action needed — this is a talk-track slide. If asked "what happens if a pod dies mid-file?"
+    this is your answer: checkpoint resumes, idempotency_key protects downstream counts.
+  </aside>
+</section>
+
+<!-- 9. SCALE -->
+<section>
+  <div class="accent-bar"></div>
+  <div class="eyebrow"><span class="step-no">7</span><span class="kicker">Scale — proven on a laptop</span></div>
+  <h2>Already in the ballpark of 25M records/day</h2>
+  <div class="cols3" style="margin-top:30px">
+    <div class="stat"><div class="n">98,778</div><div class="l">records in ~8 min · 2-node laptop cluster</div></div>
+    <div class="stat"><div class="n">~200/s</div><div class="l">per node, while CPU-throttled</div></div>
+    <div class="stat"><div class="n">1:1</div><div class="l">collector pods to cluster nodes — no coordinator</div></div>
+  </div>
+  <p style="margin-top:36px;max-width:820px">Each collector reads only its own node's logs, so throughput scales
+  <strong>linearly</strong> with nodes. Your 3 production nodes are far larger than this 2-CPU laptop
+  profile — the 25M/day target is comfortably in reach.</p>
+  <aside class="notes">
+    Numbers are from REPORT.md, the tested run on this exact setup. If pressed on real hardware sizing,
+    offer a follow-up load test on their actual node spec.
+  </aside>
+</section>
+
+<!-- 10. CLOSING -->
+<section class="hero">
+  <div class="eyebrow"><span class="kicker">Summary</span></div>
+  <h1>Fewer moving parts.<br>Same ops model.</h1>
+  <div class="cols" style="margin-top:32px;max-width:920px">
+    <div class="frame">
+      <h3 style="color:var(--body)">What goes away</h3>
+      <p class="pill-row"><span class="badge old">Fluentd DaemonSet</span><span class="badge old">Custom converter service</span></p>
+      <p>Two components, two failure modes, two things to patch and scale — retired.</p>
+    </div>
+    <div class="frame">
+      <h3 style="color:var(--body)">What you get</h3>
+      <p class="pill-row"><span class="badge new">1 binary</span><span class="badge new">1 DaemonSet</span><span class="badge new">S3 = source of truth</span></p>
+      <p>Same DaemonSet mental model your team already operates for Fluentd — just fewer parts.</p>
+    </div>
+  </div>
+  <p style="margin-top:40px;font-size:.5em;font-weight:600">Questions? Let's talk about a pilot on one of your real nodes.</p>
+  <div class="foot-logo">FLOGO-DATAPIPELINE · ADIDAS-LOG-COLLECTION-USECASE</div>
+  <aside class="notes">
+    Close by proposing the concrete next step: a pilot DaemonSet on one real production node, side-by-side
+    with the existing Fluentd pipeline, comparing S3 object counts for a day. Low-risk, high-signal.
+  </aside>
+</section>
+
+</div>
+</div>
+
+<script src="./vendor/reveal/reveal.js"></script>
+<script src="./vendor/reveal/plugin/highlight/highlight.js"></script>
+<script src="./vendor/reveal/plugin/notes/notes.js"></script>
+<script>
+  Reveal.initialize({
+    hash: true,
+    controls: true,
+    controlsTutorial: true,
+    progress: true,
+    slideNumber: 'c/t',
+    center: true,
+    transition: 'slide',
+    width: 1280,
+    height: 720,
+    margin: 0.06,
+    plugins: [ RevealHighlight, RevealNotes ]
+  });
+</script>
+</body>
+</html>
