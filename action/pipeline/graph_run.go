@@ -422,7 +422,10 @@ func (a *DataPipelineAction) runGraph(ctx context.Context, in *Input, runLog cor
 			opts.OnCheckpoint = func(pos int64) error {
 				state, serr := snapshotGraphState(snapshotters)
 				if serr != nil {
-					runLog.Warnf("graph state snapshot failed (checkpointing source position only): %v", serr)
+					// Advancing the position without operator state would lose the
+					// buffered input on resume; keep the previous checkpoint instead.
+					runLog.Warnf("graph state snapshot failed (checkpoint skipped, previous checkpoint retained): %v", serr)
+					return nil
 				}
 				token := checkpoint.NewToken(def.Source.Type, pos, nil)
 				token.WindowState = state
@@ -467,14 +470,15 @@ func (a *DataPipelineAction) runGraph(ctx context.Context, in *Input, runLog cor
 		} else {
 			state, serr := snapshotGraphState(snapshotters)
 			if serr != nil {
-				runLog.Warnf("graph state snapshot failed (final checkpoint saves source position only): %v", serr)
-			}
-			token := checkpoint.NewToken(def.Source.Type, out.RowsProcessed, nil)
-			token.WindowState = state
-			if serr := ckpt.Save(ckptKey, token); serr != nil {
-				runLog.Warnf("final graph checkpoint save failed: %v", serr)
+				runLog.Warnf("graph state snapshot failed (final checkpoint skipped, previous checkpoint retained): %v", serr)
 			} else {
-				a.recorder.CheckpointSaved(a.ref)
+				token := checkpoint.NewToken(def.Source.Type, out.RowsProcessed, nil)
+				token.WindowState = state
+				if serr := ckpt.Save(ckptKey, token); serr != nil {
+					runLog.Warnf("final graph checkpoint save failed: %v", serr)
+				} else {
+					a.recorder.CheckpointSaved(a.ref)
+				}
 			}
 		}
 	}

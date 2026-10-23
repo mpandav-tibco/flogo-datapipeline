@@ -1337,11 +1337,16 @@ func saveCheckpoint(runLog corelog.Logger, ckpt checkpoint.Checkpoint, runID, fo
 	// Attach a window-state snapshot (if this pipeline has a window transform) so
 	// it is persisted atomically with the source cursor and replayed on resume.
 	if winOp != nil {
-		if snap, err := winOp.Snapshot(); err != nil {
-			runLog.Warnf("window snapshot failed (checkpoint without window state): %v", err)
-		} else {
-			t.WindowState = snap
+		snap, err := winOp.Snapshot()
+		if err != nil {
+			// Saving the cursor without the open windows would make a resume skip
+			// their already-consumed input — silent data loss. Keep the previous
+			// durable checkpoint (and uncommitted source offsets) instead; the next
+			// interval retries.
+			runLog.Warnf("window snapshot failed (checkpoint skipped, previous checkpoint retained): %v", err)
+			return
 		}
+		t.WindowState = snap
 	}
 	if err := ckpt.Save(runID, t); err != nil {
 		runLog.Warnf("checkpoint save failed (continuing): %v", err)
@@ -1572,10 +1577,12 @@ func (p *plainDLQAdapter) InjectContext(_, _ string) {}
 // allocations, identical behaviour to the old single WriteBatch call.
 //
 // On batch-level error: falls back to writing each row individually in its own
-// single-row batch.  Rows that succeed are accumulated into a "good" batch and
-// written to snk at the end.  Rows that fail individually are accumulated into
-// a "bad" batch and — when a DLQ sink is configured — forwarded to dlq via
-// WriteBatchErrors so the error envelope carries the per-row message.
+// single-row batch.  A row whose single-row write succeeds is already
+// delivered to snk and is counted as written — it is NOT written again, which
+// would duplicate it in non-idempotent sinks.  Rows that fail individually are
+// accumulated into a "bad" batch and — when a DLQ sink is configured —
+// forwarded to dlq via WriteBatchErrors so the error envelope carries the
+// per-row message.
 //
 // rowLevelWrite always returns nil from the error position unless an
 // unrecoverable infrastructure failure occurs (e.g. the DLQ sink itself
@@ -1607,9 +1614,6 @@ func (a *DataPipelineAction) rowLevelWrite(
 	rowBatch.Columns = batch.Columns
 	rowBatch.Rows = make([][]interface{}, 1)
 
-	goodBatch := record.Get()
-	goodBatch.Columns = batch.Columns
-
 	var badRows [][]interface{}
 	var badErrs []string
 
@@ -1617,7 +1621,7 @@ func (a *DataPipelineAction) rowLevelWrite(
 		rowBatch.Rows[0] = row
 
 		if rowErr := snk.WriteBatch(rowBatch); rowErr == nil {
-			goodBatch.Rows = append(goodBatch.Rows, row)
+			written++
 		} else {
 			runLog.Debugf("row %d failed write (routing to DLQ): %v", i, rowErr)
 			badRows = append(badRows, row)
@@ -1631,25 +1635,6 @@ func (a *DataPipelineAction) rowLevelWrite(
 	rowBatch.Columns = nil
 	rowBatch.Rows = nil
 	record.Put(rowBatch)
-
-	// Write the accumulated good rows to the primary sink.
-	if len(goodBatch.Rows) > 0 {
-		if flushErr := snk.WriteBatch(goodBatch); flushErr != nil {
-			// Even the good-rows consolidated write failed; treat them all as failed
-			// rather than masking the error, and route to DLQ with the consolidated msg.
-			runLog.Warnf("consolidated good-rows write failed (%d rows): %v",
-				len(goodBatch.Rows), flushErr)
-			for _, r := range goodBatch.Rows {
-				badRows = append(badRows, r)
-				badErrs = append(badErrs, flushErr.Error())
-				out.RowsFailed++
-			}
-			written = 0
-		} else {
-			written = len(goodBatch.Rows)
-		}
-	}
-	record.Put(goodBatch)
 
 	// Route bad rows to DLQ.
 	if len(badRows) > 0 && dlq != nil {
