@@ -26,6 +26,6 @@ for mode in auto insert; do
 	psql_q "DROP VIEW IF EXISTS s1b_view_$mode; DROP TABLE IF EXISTS s1b_base_$mode; CREATE TABLE s1b_base_$mode (id int, amount int); CREATE VIEW s1b_view_$mode AS SELECT id, amount FROM s1b_base_$mode" >/dev/null
 	f=$(app "s1b-view-$mode" "$(pipeline s1b-view-$mode s1b_view_$mode $mode)")
 	start_app "$f" "$WORK/logs/s1b-view-$mode.log"; st=$(wait_run "$WORK/logs/s1b-view-$mode.log" 900); stop_app
-	err=$(grep -o 'cannot copy[^"]*\|COPY[^"]\{0,80\}' "$WORK/logs/s1b-view-$mode.log" | head -1)
+	err=$(grep -o 'cannot copy[^"]*\|COPY[^"]\{0,80\}' "$WORK/logs/s1b-view-$mode.log" | head -1 || true)
 	result "S1b view target bulkMode=$mode: $st | rows via view=$(psql_q "SELECT count(*) FROM s1b_base_$mode") ${err:+| error: $err}"
 done

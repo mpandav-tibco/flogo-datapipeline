@@ -22,9 +22,10 @@
 // whole-object download). Otherwise, or for other download:true formats, the
 // object is spooled to a temporary file before the inner source is opened.
 //
-// Streaming: csv and jsonlines objects (without download:true) are streamed
-// straight from the store into the inner parser — no temp file, no
-// whole-object download before the first row. Other formats spool each
+// Streaming: csv, tsv and jsonlines objects (without download:true) are
+// streamed straight from the store into the inner parser — no temp file, no
+// whole-object download before the first row. A dropped connection is
+// resumed with ranged GETs from the last delivered byte (see resumableReader). Other formats spool each
 // object to a temp file that is deleted as soon as that object is consumed.
 // Every store call carries a context cancelled by Close.
 //
@@ -68,6 +69,7 @@ var readerAtCapable = map[string]bool{
 // file (see fileutil.OpenInput).
 var readerCapable = map[string]bool{
 	"csv":       true,
+	"tsv":       true,
 	"jsonlines": true,
 }
 
@@ -315,9 +317,15 @@ func (s *objstoreSource) openObject(ctx context.Context, obj objstore.Object) (s
 	// Streaming path: formats that parse a sequential stream read the object
 	// directly; the inner source closes the stream when it is closed.
 	if readerCapable[s.innerFormat] {
+		var rc io.ReadCloser
 		rc, err := s.store.GetReader(ctx, obj.Key)
 		if err != nil {
 			return nil, "", fmt.Errorf("get reader for %q: %w", obj.Key, err)
+		}
+		// Resume after a dropped connection with ranged GETs when the store
+		// supports them and the object size is known.
+		if rr, ok := s.store.(objstore.RangeReader); ok && obj.Size > 0 {
+			rc = newResumableReader(ctx, rr, obj.Key, obj.Size, rc)
 		}
 		innerCfg["reader"] = rc
 		innerSrc, err := source.New(s.innerFormat, innerCfg)
