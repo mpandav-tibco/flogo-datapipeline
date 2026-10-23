@@ -103,6 +103,10 @@ type kafkaSource struct {
 	failOnDeserialize bool
 	// deserializeErrors counts messages skipped because they could not be decoded.
 	deserializeErrors atomic.Int64
+	// skippedSinceMark is set when a message was consumed without producing a
+	// row (undecodable or HWM-filtered) since the last offset mark, so a poll
+	// that returns no rows still records a mark covering it. Guarded by pendingMu.
+	skippedSinceMark bool
 	// Offset-commit bookkeeping (guarded by pendingMu). The consumer runs on a
 	// read-ahead goroutine, so the offset a batch reaches at ReadBatch time is
 	// AHEAD of what the pipeline has processed. To avoid committing (and thus
@@ -568,15 +572,18 @@ done:
 	// pipeline's processed-row count to the exact offset to acknowledge. Only in
 	// "checkpoint" mode — otherwise Commit never prunes and marks would grow
 	// unbounded (auto mode lets sarama own offsets).
-	if ks.commitMode == "checkpoint" && len(batch.Rows) > 0 {
-		ks.pendingMu.Lock()
+	// A poll that only skipped messages also records a mark (at the same row
+	// count), so a checkpoint can commit past those messages.
+	ks.pendingMu.Lock()
+	if ks.commitMode == "checkpoint" && (len(batch.Rows) > 0 || ks.skippedSinceMark) {
+		ks.skippedSinceMark = false
 		snap := make(map[int32]int64, len(ks.pending))
 		for p, o := range ks.pending {
 			snap[p] = o
 		}
 		ks.marks = append(ks.marks, offMark{row: ks.returnedRows, offsets: snap})
-		ks.pendingMu.Unlock()
 	}
+	ks.pendingMu.Unlock()
 
 	// Batch mode: only signal end-of-stream once the stop boundary is reached
 	// AND the channel is fully drained, so no buffered messages are lost when
@@ -600,8 +607,25 @@ func (ks *kafkaSource) advancePast(env msgEnvelope) {
 	if off := env.msg.Offset + 1; off > ks.pending[env.msg.Partition] {
 		ks.pending[env.msg.Partition] = off
 	}
+	ks.skippedSinceMark = true
 	ks.lastSession = env.session
 	ks.pendingMu.Unlock()
+}
+
+// HasUncommitted implements source.UncommittedReporter: in commitMode
+// "checkpoint" it reports consumed offsets beyond the last committed target.
+func (ks *kafkaSource) HasUncommitted() bool {
+	if ks.commitMode != "checkpoint" {
+		return false
+	}
+	ks.pendingMu.Lock()
+	defer ks.pendingMu.Unlock()
+	for p, off := range ks.pending {
+		if off > ks.commitTarget[p] {
+			return true
+		}
+	}
+	return false
 }
 
 // DeserializeErrors reports how many messages were skipped as undecodable.

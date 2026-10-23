@@ -54,3 +54,33 @@ func TestOnDeserializeErrorValidation(t *testing.T) {
 		t.Fatalf("want validation error, got %v", err)
 	}
 }
+
+// A poll that only skips an undecodable message must still record an offset
+// mark and report uncommitted progress, so an idle checkpoint commits past it.
+func TestSkipOnlyPollRecordsMarkAndCommits(t *testing.T) {
+	ks := fakeSource(false, `{"a":1}`)
+	if _, err := ks.ReadBatch(10); err != nil && err != io.EOF {
+		t.Fatal(err)
+	}
+	if err := ks.Commit(1); err != nil {
+		t.Fatal(err)
+	}
+	if ks.HasUncommitted() {
+		t.Fatal("uncommitted after committing everything returned")
+	}
+	ks.handler.msgCh <- msgEnvelope{msg: &sarama.ConsumerMessage{Partition: 0, Offset: 1, Value: []byte("garbage")}}
+	b, _ := ks.ReadBatch(10)
+	if b.Len() != 0 {
+		t.Fatalf("rows=%d want 0", b.Len())
+	}
+	if !ks.HasUncommitted() {
+		t.Fatal("skipped message not reported as uncommitted")
+	}
+	_ = ks.Commit(1) // processed rows unchanged: the skip-only mark is at row 1
+	if got := ks.commitTarget[0]; got != 2 {
+		t.Fatalf("commit target=%d; want 2 (past the skipped message)", got)
+	}
+	if ks.HasUncommitted() {
+		t.Fatal("still uncommitted after commit")
+	}
+}

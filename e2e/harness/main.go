@@ -94,26 +94,24 @@ func produce(args []string) {
 	cfg := sarama.NewConfig()
 	cfg.Producer.Return.Successes = true
 	cfg.Producer.RequiredAcks = sarama.WaitForAll
-	cfg.Producer.Flush.Messages = 500
-	p, err := sarama.NewAsyncProducer([]string{*broker}, cfg)
+	cfg.Producer.Timeout = 10 * time.Second
+	p, err := sarama.NewSyncProducer([]string{*broker}, cfg)
 	if err != nil {
 		log.Fatal(err)
 	}
-	var wg sync.WaitGroup
+	defer p.Close()
 	var errs int64
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		for range p.Successes() {
+	batch := make([]*sarama.ProducerMessage, 0, 1000)
+	send := func() {
+		if len(batch) == 0 {
+			return
 		}
-	}()
-	go func() {
-		defer wg.Done()
-		for e := range p.Errors() {
-			atomic.AddInt64(&errs, 1)
-			log.Printf("produce error: %v", e)
+		if err := p.SendMessages(batch); err != nil {
+			errs++
+			log.Fatalf("produce: %v", err)
 		}
-	}()
+		batch = batch[:0]
+	}
 	every := 0
 	if *bad > 1 {
 		every = *n / (*bad - 1)
@@ -126,19 +124,21 @@ func produce(args []string) {
 			"id": id, "sensor_id": fmt.Sprintf("s-%d", id%50),
 			"temperature": float64(id%120) - 10, "ts": base.Add(time.Duration(id) * time.Second).Format(time.RFC3339),
 		})
-		p.Input() <- &sarama.ProducerMessage{Topic: *topic, Key: sarama.StringEncoder(strconv.Itoa(id)), Value: sarama.ByteEncoder(v)}
+		batch = append(batch, &sarama.ProducerMessage{Topic: *topic, Key: sarama.StringEncoder(strconv.Itoa(id)), Value: sarama.ByteEncoder(v)})
 		sent++
 		if every > 0 && i%every == every-1 && badSent < *bad-1 {
-			p.Input() <- &sarama.ProducerMessage{Topic: *topic, Value: sarama.StringEncoder("{not json")}
+			batch = append(batch, &sarama.ProducerMessage{Topic: *topic, Value: sarama.StringEncoder("{not json")})
 			badSent++
+		}
+		if len(batch) >= 1000 {
+			send()
 		}
 	}
 	if *bad > 0 {
-		p.Input() <- &sarama.ProducerMessage{Topic: *topic, Value: sarama.StringEncoder("trailing-garbage")}
+		batch = append(batch, &sarama.ProducerMessage{Topic: *topic, Value: sarama.StringEncoder("trailing-garbage")})
 		badSent++
 	}
-	p.AsyncClose()
-	wg.Wait()
+	send()
 	fmt.Printf("produced valid=%d bad=%d errors=%d\n", sent, badSent, errs)
 }
 

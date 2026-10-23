@@ -908,7 +908,10 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 				return fmt.Errorf("source read: %w", readErr)
 			}
 
-			if batch != nil && batch.Len() > 0 {
+			// Decided up front: once processed, batch is owned by the write
+			// stage or recycled and must not be read again.
+			idle := batch == nil || batch.Len() == 0
+			if !idle {
 				batchLen := int64(batch.Len())
 				out.RowsProcessed += batchLen
 				rowsSinceCkpt += batchLen
@@ -965,9 +968,19 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 					record.Put(transformed)
 				}
 
-				// Checkpoint at configured row interval or time interval.
-				rowTrigger := ckptIntervalRows > 0 && rowsSinceCkpt >= ckptIntervalRows
-				timeTrigger := ckptIntervalSecs > 0 && time.Since(lastCkpt) >= time.Duration(ckptIntervalSecs)*time.Second
+			} else if batch != nil {
+				record.Put(batch) // empty poll result (streaming source idle)
+			}
+
+			{
+				// Checkpoint at configured row interval or time interval. The
+				// time trigger is also evaluated on idle polls, so a quiet
+				// stream still persists its tail (rows processed since the
+				// last checkpoint, or source progress such as skipped Kafka
+				// messages) instead of replaying it after every restart.
+				rowTrigger := !idle && ckptIntervalRows > 0 && rowsSinceCkpt >= ckptIntervalRows
+				timeTrigger := ckptIntervalSecs > 0 && time.Since(lastCkpt) >= time.Duration(ckptIntervalSecs)*time.Second &&
+					(!idle || rowsSinceCkpt > 0 || hasUncommitted(pSrc))
 				if (rowTrigger || timeTrigger) && ctx.Err() != nil {
 					// Never checkpoint (or commit source offsets) once cancelled.
 					return ctx.Err()
@@ -1454,6 +1467,13 @@ func saveCheckpoint(runLog corelog.Logger, ckpt checkpoint.Checkpoint, runID, fo
 		}
 	}
 	return nil
+}
+
+// hasUncommitted reports whether src has consumed input it has not yet
+// acknowledged (see source.UncommittedReporter).
+func hasUncommitted(src source.Source) bool {
+	r, ok := src.(source.UncommittedReporter)
+	return ok && r.HasUncommitted()
 }
 
 // checkpointFailed applies checkpoint.onSaveError to a failed checkpoint: it

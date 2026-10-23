@@ -50,6 +50,15 @@ type Committer interface {
 	Commit(processedRows int64) error
 }
 
+// UncommittedReporter is an optional extension of Committer: it reports
+// whether the source has consumed input that is not yet acknowledged (e.g.
+// Kafka messages skipped as undecodable after the last checkpoint). The engine
+// uses it to take a time-based checkpoint on an idle stream, so that progress
+// is committed instead of being redelivered after every restart.
+type UncommittedReporter interface {
+	HasUncommitted() bool
+}
+
 // Reconciler is an optional Source interface for sources that can run an
 // independent trust-verification query against their own already-open
 // connection — separate from the pipeline's normal ReadBatch path — used by
