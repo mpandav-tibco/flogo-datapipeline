@@ -925,6 +925,12 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 				// Batch fully consumed from the buffer — release its bytes.
 				budget.release(item.bytes)
 
+				if txErr != nil && ctx.Err() != nil {
+					// The run is being cancelled (e.g. lookups aborted
+					// mid-flight). Not a row failure: stop before any
+					// checkpoint can advance past this batch, so it replays.
+					return ctx.Err()
+				}
 				if txErr != nil {
 					runLog.Warnf("transform error on batch of %d rows (routing to failed): %v", batchLen, txErr)
 					a.recorder.BatchFailed(a.ref, int(batchLen))
@@ -961,6 +967,10 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 				// Checkpoint at configured row interval or time interval.
 				rowTrigger := ckptIntervalRows > 0 && rowsSinceCkpt >= ckptIntervalRows
 				timeTrigger := ckptIntervalSecs > 0 && time.Since(lastCkpt) >= time.Duration(ckptIntervalSecs)*time.Second
+				if (rowTrigger || timeTrigger) && ctx.Err() != nil {
+					// Never checkpoint (or commit source offsets) once cancelled.
+					return ctx.Err()
+				}
 				if rowTrigger || timeTrigger {
 					if err := syncWrites(); err != nil {
 						return err
