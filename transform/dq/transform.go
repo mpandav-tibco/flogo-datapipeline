@@ -303,16 +303,30 @@ func (d *dqTransform) Apply(in *record.RecordBatch) (*record.RecordBatch, error)
 	var badRows [][]interface{}
 	rowsPassed, rowsFailed := 0, 0
 
+	checks := bindRowChecks(in, rowLevelExpectations)
+	// withScore appends the score cell to a row. Extended rows are carved out of
+	// one shared backing array (len==cap per row, filled by index only) rather
+	// than allocated one by one.
+	var scoreBuf []interface{}
+	withScore := func(row []interface{}, score float64) []interface{} {
+		n := len(row) + 1
+		if len(scoreBuf) < n {
+			scoreBuf = make([]interface{}, n*max(64, len(in.Rows)))
+		}
+		ext := scoreBuf[:n:n]
+		scoreBuf = scoreBuf[n:]
+		copy(ext, row)
+		ext[len(row)] = score
+		return ext
+	}
+
 	for i := range in.Rows {
-		rowScore, rowPassed := d.evaluateRow(in, i, rowLevelExpectations, &profile)
+		rowScore, rowPassed := evaluateRow(in.Rows[i], checks)
 		if rowPassed {
 			rowsPassed++
 			row := in.Rows[i]
 			if addScoreCol {
-				extended := make([]interface{}, len(row)+1)
-				copy(extended, row)
-				extended[len(row)] = rowScore
-				goodBatch.Rows = append(goodBatch.Rows, extended)
+				goodBatch.Rows = append(goodBatch.Rows, withScore(row, rowScore))
 			} else {
 				goodBatch.Rows = append(goodBatch.Rows, row)
 			}
@@ -326,10 +340,7 @@ func (d *dqTransform) Apply(in *record.RecordBatch) (*record.RecordBatch, error)
 				// Pass failing rows downstream with a warning; include in goodBatch.
 				row := in.Rows[i]
 				if addScoreCol {
-					extended := make([]interface{}, len(row)+1)
-					copy(extended, row)
-					extended[len(row)] = rowScore
-					goodBatch.Rows = append(goodBatch.Rows, extended)
+					goodBatch.Rows = append(goodBatch.Rows, withScore(row, rowScore))
 				} else {
 					goodBatch.Rows = append(goodBatch.Rows, row)
 				}
@@ -450,39 +461,57 @@ func (d *dqTransform) SetPipelineRef(ref string) {
 // faster than re-running each Expectation.Evaluate per row because it avoids
 // constructing a single-row BatchProfile; instead we use inline predicates that
 // mirror the expectation logic.
-func (d *dqTransform) evaluateRow(
-	batch *record.RecordBatch,
-	rowIdx int,
-	rowLevelExp []Expectation,
-	_ *BatchProfile,
-) (score float64, passed bool) {
-	if len(rowLevelExp) == 0 {
+func evaluateRow(row []interface{}, checks []rowCheck) (score float64, passed bool) {
+	if len(checks) == 0 {
 		return 1.0, true
 	}
-	total, pass := 0, 0
-	for _, exp := range rowLevelExp {
-		total++
-		if rowSatisfiesExpectation(batch, rowIdx, exp) {
+	pass := 0
+	for i := range checks {
+		if checks[i].satisfied(row) {
 			pass++
 		}
 	}
-	if total == 0 {
-		return 1.0, true
-	}
-	rowScore := float64(pass) / float64(total)
-	return rowScore, pass == total
+	return float64(pass) / float64(len(checks)), pass == len(checks)
 }
 
-// rowSatisfiesExpectation tests whether the value in the given row satisfies a
-// row-level expectation inline (without allocating a per-row profile).
-func rowSatisfiesExpectation(batch *record.RecordBatch, rowIdx int, exp Expectation) bool {
-	switch e := exp.(type) {
+// rowCheck is a row-level expectation with its column resolved to a position
+// for the current batch, so per-row evaluation never searches columns by name.
+type rowCheck struct {
+	exp Expectation
+	col int // -1 when the column is absent (cells read as nil)
+}
+
+func bindRowChecks(batch *record.RecordBatch, exps []Expectation) []rowCheck {
+	checks := make([]rowCheck, len(exps))
+	for i, exp := range exps {
+		checks[i] = rowCheck{exp: exp, col: -1}
+		switch e := exp.(type) {
+		case *expectColumnNotNull:
+			checks[i].col = batch.ColIndex(e.column)
+		case *expectColumnValuesBetween:
+			checks[i].col = batch.ColIndex(e.column)
+		case *expectColumnValuesInSet:
+			checks[i].col = batch.ColIndex(e.column)
+		case *expectColumnValuesInReferenceDataset:
+			checks[i].col = batch.ColIndex(e.column)
+		}
+	}
+	return checks
+}
+
+// satisfied tests whether the row satisfies the expectation inline (without
+// allocating a per-row profile). It matches RecordBatch.Value semantics: an
+// absent column or short row reads as nil.
+func (c *rowCheck) satisfied(row []interface{}) bool {
+	var val interface{}
+	if c.col >= 0 && c.col < len(row) {
+		val = row[c.col]
+	}
+	switch e := c.exp.(type) {
 	case *expectColumnNotNull:
-		val := batch.Value(rowIdx, e.column)
 		return val != nil
 
 	case *expectColumnValuesBetween:
-		val := batch.Value(rowIdx, e.column)
 		if val == nil {
 			return true // null is excluded from range check
 		}
@@ -493,39 +522,26 @@ func rowSatisfiesExpectation(batch *record.RecordBatch, rowIdx int, exp Expectat
 		return f >= e.lo && f <= e.hi
 
 	case *expectColumnValuesInSet:
-		val := batch.Value(rowIdx, e.column)
 		if val == nil {
 			return true
 		}
-		s := fmt.Sprintf("%v", val)
-		key := s
+		key := record.FormatValue(val)
 		if !e.caseSensitive {
-			key = strings.ToUpper(s)
+			key = strings.ToUpper(key)
 		}
 		_, ok := e.allowed[key]
 		return ok
 
-	case *expectColumnUnique:
-		// Uniqueness is a dataset-level property; at the row level we cannot
-		// determine if a value is unique without scanning the whole batch.
-		// For row-level scoring, treat uniqueness expectations as always passing.
-		return true
-
 	case *expectColumnValuesInReferenceDataset:
-		val := batch.Value(rowIdx, e.column)
 		if val == nil {
 			return true // null excluded from the referential check, same as the other row-level expectations
 		}
-		key := fmt.Sprintf("%v", val)
-		_, ok := e.refValues[key]
+		_, ok := e.refValues[record.FormatValue(val)]
 		return ok
 
-	case *expectColumnMeanBetween, *expectColumnStddevBelow, *expectTableRowCountBetween:
-		// These are purely dataset-level; they do not affect per-row scores.
-		return true
-
 	default:
-		// Unknown expectation type: pass through.
+		// Uniqueness is a dataset-level property (always passes per row);
+		// mean/stddev/row-count and unknown types do not affect row scores.
 		return true
 	}
 }
