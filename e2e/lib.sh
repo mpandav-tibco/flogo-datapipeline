@@ -87,3 +87,6 @@ run_secs() { grep -o "duration=[0-9a-zµ.]*" "$1" | tail -1 | cut -d= -f2; }
 
 mock_stats() { curl -s "http://$MOCK_ADDR/stats"; }
 mock_reset() { curl -s -X POST "http://$MOCK_ADDR/reset" >/dev/null; }
+
+# tcount TABLE -> row count, or 0 if the table does not exist yet.
+tcount() { local c; c=$(psql_q "SELECT count(*) FROM $1" 2>/dev/null | tr -dc '0-9' || true); echo "${c:-0}"; }

@@ -18,7 +18,7 @@ f=$(app s2 "{ \"name\": \"s2\", \"mode\": \"etl\",
 	\"sink\": { \"type\": \"jdbc\", \"driver\": \"postgres\", \"dsn\": \"$PG_DSN\", \"table\": \"$TABLE\", \"autoMigrate\": true, \"batchSize\": 1000 },
 	\"performance\": { \"batchSize\": 2000 },
 	\"checkpoint\": { \"type\": \"redis\", \"addr\": \"$REDIS_ADDR\", \"key\": \"s2-$TOPIC\", \"intervalRows\": $INTERVAL, \"intervalSeconds\": 5 } }")
-count() { psql_q "SELECT count(*) FROM $TABLE" 2>/dev/null || echo 0; }
+count() { tcount "$TABLE"; }
 
 start_app "$f" "$WORK/logs/s2-run1.log"
 while [ "$(count)" -lt $((N * 2 / 5)) ]; do sleep 0.3; done

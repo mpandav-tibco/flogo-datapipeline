@@ -16,7 +16,7 @@ for dl in ${MODES:-false true}; do
 		\"sink\": { \"type\": \"jdbc\", \"driver\": \"postgres\", \"dsn\": \"$PG_DSN\", \"table\": \"$table\", \"autoMigrate\": true, \"batchSize\": 1000 },
 		\"performance\": { \"batchSize\": 1000, \"sourceBufferBatches\": 1, \"maxMemoryMB\": 1 }, \"checkpoint\": { \"type\": \"none\" } }")
 	start_app "$f" "$WORK/logs/$name.log"
-	until [ "$(psql_q "SELECT count(*) FROM $table" 2>/dev/null || echo 0)" -gt 5000 ]; do sleep 0.3; done
+	until [ "$(tcount $table)" -gt 5000 ]; do sleep 0.3; done
 	docker restart -t 0 "$MINIO_CONTAINER" >/dev/null
 	st=$(wait_run "$WORK/logs/$name.log" 900); stop_app
 	err=$(grep -o "source read: [^\"]\{0,160\}" "$WORK/logs/$name.log" | head -1 || true)

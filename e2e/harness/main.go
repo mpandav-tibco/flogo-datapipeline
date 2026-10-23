@@ -121,7 +121,7 @@ func produce(args []string) {
 	for i := 0; i < *n; i++ {
 		id := *start + i
 		v, _ := json.Marshal(map[string]interface{}{
-			"id": id, "sensor_id": fmt.Sprintf("s-%d", id%50),
+			"id": id, "sensor_id": fmt.Sprintf("s-%d", id%50), "customer_id": id % 5000,
 			"temperature": float64(id%120) - 10, "ts": base.Add(time.Duration(id) * time.Second).Format(time.RFC3339),
 		})
 		batch = append(batch, &sarama.ProducerMessage{Topic: *topic, Key: sarama.StringEncoder(strconv.Itoa(id)), Value: sarama.ByteEncoder(v)})
@@ -147,14 +147,17 @@ func produce(args []string) {
 //	GET  /customers/{id}  enrichment: 404 for ids divisible by missing-every, else {name,tier}
 //	POST /ingest          REST sink target: 429 + Retry-After on every throttle-every'th call
 //	GET  /stats           JSON hit counters
-//	POST /reset           zero the counters
+//	POST /heal            all customers exist from now on
+//	POST /reset           zero the counters and restore missing customers
 func mock(args []string) {
 	fs := flag.NewFlagSet("mock", flag.ExitOnError)
 	addr := fs.String("addr", ":18080", "listen address")
 	latency := fs.Duration("latency", 5*time.Millisecond, "per-request latency")
-	missingEvery := fs.Int("missing-every", 10, "ids divisible by this are 404")
+	missingEveryFlag := fs.Int("missing-every", 10, "ids divisible by this are 404 (until POST /heal)")
 	throttleEvery := fs.Int64("throttle-every", 7, "every Nth ingest call returns 429")
 	_ = fs.Parse(args)
+	var missingEvery atomic.Int64
+	missingEvery.Store(int64(*missingEveryFlag))
 
 	var mu sync.Mutex
 	perKey := map[string]int{}
@@ -169,7 +172,7 @@ func mock(args []string) {
 		perKey[id]++
 		mu.Unlock()
 		n, err := strconv.Atoi(id)
-		if err != nil || n%*missingEvery == 0 {
+		if me := missingEvery.Load(); err != nil || (me > 0 && int64(n)%me == 0) {
 			atomic.AddInt64(&lookups404, 1)
 			http.NotFound(w, r)
 			return
@@ -228,7 +231,10 @@ func mock(args []string) {
 			"ingestRows": atomic.LoadInt64(&ingestRows), "distinctIngested": len(ingested), "duplicateIngested": dupIngest,
 		})
 	})
+	// /heal makes every customer exist from now on (keys "appear" upstream).
+	http.HandleFunc("/heal", func(w http.ResponseWriter, r *http.Request) { missingEvery.Store(0) })
 	http.HandleFunc("/reset", func(w http.ResponseWriter, r *http.Request) {
+		missingEvery.Store(int64(*missingEveryFlag))
 		mu.Lock()
 		perKey, ingested = map[string]int{}, map[string]int{}
 		mu.Unlock()

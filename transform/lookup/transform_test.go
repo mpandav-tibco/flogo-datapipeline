@@ -153,10 +153,10 @@ func TestLookup_Caches(t *testing.T) {
 
 func TestLRUCache_Eviction(t *testing.T) {
 	c := newCache(2)
-	c.Add("a", map[string]interface{}{"v": 1})
-	c.Add("b", map[string]interface{}{"v": 2})
+	c.Add("a", cacheEntry{data: map[string]interface{}{"v": 1}})
+	c.Add("b", cacheEntry{data: map[string]interface{}{"v": 2}})
 	_, _ = c.Get("a")                          // a becomes MRU
-	c.Add("c", map[string]interface{}{"v": 3}) // evicts b (LRU)
+	c.Add("c", cacheEntry{data: map[string]interface{}{"v": 3}}) // evicts b (LRU)
 	if _, ok := c.Get("b"); ok {
 		t.Error("b should have been evicted")
 	}
@@ -268,5 +268,39 @@ func TestLookup_CancelledRunFailsBatchEvenWithOnErrorNull(t *testing.T) {
 	out, err := tr.Apply(mkBatch("id", "a", "b"))
 	if err == nil || out != nil {
 		t.Fatalf("want batch failure on cancellation, got out=%v err=%v", out, err)
+	}
+}
+
+// Not-found answers expire after notFoundTtlMs, so a key that appears
+// upstream is picked up again; found answers expire only with cacheTtlMs.
+func TestLookup_NotFoundTTL(t *testing.T) {
+	var hits int64
+	var exists atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt64(&hits, 1)
+		if !exists.Load() {
+			http.NotFound(w, r)
+			return
+		}
+		fmt.Fprint(w, `{"name":"now-here"}`)
+	}))
+	defer srv.Close()
+	tr := newLookup(t, map[string]interface{}{
+		"keyField": "id", "url": srv.URL + "/{id}", "outputFields": []interface{}{"name"},
+		"notFoundTtlMs": 100.0,
+	})
+	out, _ := tr.Apply(mkBatch("id", "k", "k"))
+	if out.Rows[0][1] != nil || atomic.LoadInt64(&hits) != 1 {
+		t.Fatalf("first lookup: row=%v hits=%d", out.Rows[0], hits)
+	}
+	exists.Store(true)
+	out, _ = tr.Apply(mkBatch("id", "k")) // still within TTL: cached miss
+	if out.Rows[0][1] != nil || atomic.LoadInt64(&hits) != 1 {
+		t.Fatalf("within TTL: row=%v hits=%d", out.Rows[0], hits)
+	}
+	time.Sleep(150 * time.Millisecond)
+	out, _ = tr.Apply(mkBatch("id", "k", "k"))
+	if out.Rows[0][1] != "now-here" || atomic.LoadInt64(&hits) != 2 {
+		t.Fatalf("after TTL: row=%v hits=%d; want refreshed value, 2 hits", out.Rows[0], hits)
 	}
 }

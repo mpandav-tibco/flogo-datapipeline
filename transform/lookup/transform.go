@@ -21,7 +21,10 @@
 //
 // cacheNotFound (default true) also caches 404 (not-found) answers, so a key
 // missing from the reference system costs one HTTP call rather than one per
-// row. Set false when keys may appear while the pipeline runs.
+// row. Not-found answers expire after notFoundTtlMs (default 60000), so a key
+// that appears upstream while a long-running/streaming pipeline is up is
+// picked up within that window; set cacheNotFound false to never cache them.
+// cacheTtlMs (default 0 = never) likewise expires found answers.
 // maxResponseBytes (default 1 MiB) caps each response body; larger responses
 // are treated as an error.
 //
@@ -62,10 +65,12 @@ type lookupTransform struct {
 	concurrency  int
 	onError      string
 	client       *http.Client
-	cache        *lru.Cache[string, map[string]interface{}]
+	cache        *lru.Cache[string, cacheEntry]
 	sfGroup      singleflight.Group // zero value is ready; no init needed
 
 	cacheNotFound    bool
+	cacheTTL         time.Duration // found entries; 0 = never expire
+	notFoundTTL      time.Duration // not-found entries; 0 = never expire
 	maxResponseBytes int64
 	// ctx is the run context (see transform.ContextBinder); requests made with
 	// it abort as soon as the pipeline is cancelled.
@@ -97,6 +102,11 @@ func newLookupTransform(cfg map[string]interface{}) (transform.Transform, error)
 	if b, ok := cfg["cacheNotFound"].(bool); ok {
 		cacheNotFound = b
 	}
+	cacheTTLMs, _ := cfgutil.Int(cfg, "cacheTtlMs")
+	notFoundTTLMs := 60000
+	if v, ok := cfgutil.Int(cfg, "notFoundTtlMs"); ok && v >= 0 {
+		notFoundTTLMs = v
+	}
 	onError, _ := cfg["onError"].(string)
 	if onError == "" {
 		onError = "null"
@@ -122,6 +132,8 @@ func newLookupTransform(cfg map[string]interface{}) (transform.Transform, error)
 		cache:        newCache(cacheSize),
 
 		cacheNotFound:    cacheNotFound,
+		cacheTTL:         time.Duration(max(cacheTTLMs, 0)) * time.Millisecond,
+		notFoundTTL:      time.Duration(notFoundTTLMs) * time.Millisecond,
 		maxResponseBytes: int64(maxResponseBytes),
 		ctx:              context.Background(),
 	}, nil
@@ -164,7 +176,7 @@ func (l *lookupTransform) Apply(in *record.RecordBatch) (*record.RecordBatch, er
 	for i := range in.Rows {
 		key := keyOf(i)
 		// Cache hits are served inline; only misses pay for a goroutine.
-		if data, ok := l.cache.Get(key); ok {
+		if data, ok := l.cached(key); ok {
 			results[i] = result{idx: i, data: data}
 			continue
 		}
@@ -231,14 +243,49 @@ func (l *lookupTransform) Apply(in *record.RecordBatch) (*record.RecordBatch, er
 	return out, nil
 }
 
+// cacheEntry is a cached lookup answer; data nil = not found. A zero expires
+// never expires.
+type cacheEntry struct {
+	data    map[string]interface{}
+	expires time.Time
+}
+
+// cached returns a live cache entry for key, dropping it if expired.
+func (l *lookupTransform) cached(key string) (map[string]interface{}, bool) {
+	e, ok := l.cache.Get(key)
+	if !ok {
+		return nil, false
+	}
+	if !e.expires.IsZero() && time.Now().After(e.expires) {
+		l.cache.Remove(key)
+		return nil, false
+	}
+	return e.data, true
+}
+
+func (l *lookupTransform) store(key string, data map[string]interface{}) {
+	ttl := l.cacheTTL
+	if data == nil {
+		if !l.cacheNotFound {
+			return
+		}
+		ttl = l.notFoundTTL
+	}
+	e := cacheEntry{data: data}
+	if ttl > 0 {
+		e.expires = time.Now().Add(ttl)
+	}
+	l.cache.Add(key, e)
+}
+
 func (l *lookupTransform) fetchWithCache(key string) (map[string]interface{}, error) {
-	if v, ok := l.cache.Get(key); ok {
+	if v, ok := l.cached(key); ok {
 		return v, nil
 	}
 	v, err, _ := l.sfGroup.Do(key, func() (interface{}, error) {
 		data, err := l.fetch(key)
-		if err == nil && (data != nil || l.cacheNotFound) {
-			l.cache.Add(key, data) // nil data = cached not-found
+		if err == nil {
+			l.store(key, data) // nil data = not found
 		}
 		return data, err
 	})
@@ -309,7 +356,7 @@ func (l *lookupTransform) Close() error {
 
 // newCache builds a bounded LRU cache; cacheSize is always > 0 (validated at
 // construction), so the only possible New error can't occur here.
-func newCache(cap int) *lru.Cache[string, map[string]interface{}] {
-	c, _ := lru.New[string, map[string]interface{}](cap)
+func newCache(cap int) *lru.Cache[string, cacheEntry] {
+	c, _ := lru.New[string, cacheEntry](cap)
 	return c
 }
