@@ -306,17 +306,19 @@ func (d *dqTransform) Apply(in *record.RecordBatch) (*record.RecordBatch, error)
 	checks := bindRowChecks(in, rowLevelExpectations)
 	// withScore appends the score cell to a row. Extended rows are carved out of
 	// one shared backing array (len==cap per row, filled by index only) rather
-	// than allocated one by one.
+	// than allocated one by one. Short (ragged) rows are padded with nils so the
+	// score always lands under the score column.
 	var scoreBuf []interface{}
 	withScore := func(row []interface{}, score float64) []interface{} {
-		n := len(row) + 1
+		width := max(len(row), len(in.Columns))
+		n := width + 1
 		if len(scoreBuf) < n {
 			scoreBuf = make([]interface{}, n*max(64, len(in.Rows)))
 		}
 		ext := scoreBuf[:n:n]
 		scoreBuf = scoreBuf[n:]
 		copy(ext, row)
-		ext[len(row)] = score
+		ext[width] = score
 		return ext
 	}
 
