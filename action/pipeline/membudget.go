@@ -1,69 +1,8 @@
 package pipeline
 
 import (
-	"context"
-	"sync"
-
 	"github.com/mpandav-tibco/flogo-datapipeline/record"
 )
-
-// memBudget bounds the estimated bytes of batches buffered between the source
-// reader and the transform/write stage (performance.maxMemoryMB). The reader
-// blocks on a condition variable — not a sleep/poll loop — until enough
-// buffered batches are released, and wakes immediately on cancellation.
-type memBudget struct {
-	limit int64 // <= 0 disables the budget
-
-	mu   sync.Mutex
-	cond *sync.Cond
-	used int64
-}
-
-func newMemBudget(limit int64) *memBudget {
-	b := &memBudget{limit: limit}
-	b.cond = sync.NewCond(&b.mu)
-	return b
-}
-
-// waitForRoom blocks while the buffer already holds at least the limit (so a
-// single oversized batch can still pass when the buffer is empty — the
-// historical semantics). It returns false if ctx is cancelled first.
-func (b *memBudget) waitForRoom(ctx context.Context) bool {
-	if b.limit <= 0 {
-		return ctx.Err() == nil
-	}
-	stop := context.AfterFunc(ctx, func() {
-		b.mu.Lock()
-		b.cond.Broadcast()
-		b.mu.Unlock()
-	})
-	defer stop()
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	for b.used >= b.limit && ctx.Err() == nil {
-		b.cond.Wait()
-	}
-	return ctx.Err() == nil
-}
-
-func (b *memBudget) acquire(n int64) {
-	if b.limit <= 0 || n == 0 {
-		return
-	}
-	b.mu.Lock()
-	b.used += n
-	b.mu.Unlock()
-}
-
-func (b *memBudget) release(n int64) {
-	if b.limit <= 0 || n == 0 {
-		return
-	}
-	b.mu.Lock()
-	b.used -= n
-	b.mu.Unlock()
-	b.cond.Broadcast()
-}
 
 // batchBytes estimates the heap held by a batch's cell values. It sizes a
 // bounded sample of rows by their actual dynamic types (strings by length,

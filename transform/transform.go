@@ -89,8 +89,16 @@ func (p *Pipeline) BindContext(ctx context.Context) {
 // Apply runs the batch through all stages in order.
 // Returns nil if any stage reduces the batch to zero rows.
 func (p *Pipeline) Apply(in *record.RecordBatch) (*record.RecordBatch, error) {
+	return p.ApplyFrom(0, in)
+}
+
+// ApplyFrom runs the batch through stages[start:] — e.g. the rows a stateful
+// stage flushes at end of input must still pass through the stages after it.
+// Ownership rules are those of Apply.
+func (p *Pipeline) ApplyFrom(start int, in *record.RecordBatch) (*record.RecordBatch, error) {
 	cur := in
-	for i, t := range p.stages {
+	for i := start; i < len(p.stages); i++ {
+		t := p.stages[i]
 		if cur == nil || cur.Len() == 0 {
 			if cur != nil && cur != in {
 				record.Put(cur)

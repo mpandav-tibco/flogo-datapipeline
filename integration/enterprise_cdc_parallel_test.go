@@ -2,12 +2,12 @@ package integration
 
 // Enterprise scenario / architecture-safety regression: proves a delete-
 // capable jdbc sink (opColumn mode) is safe to use together with
-// transformWorkers > 1 (action/pipeline's ordered-parallel transform path,
-// "drainParallel" / parallelEligible in action.go).
+// transformWorkers > 1 (the engine's ordered-parallel chain replicas,
+// graphexec Node.Replicas — see chainReplicas in action/pipeline/engine.go).
 //
-// Audit finding: parallelEligible's exclusion list (HWM/DQ/window/schemadrift/
-// checkpoint/SinkOwner) does NOT explicitly test for opColumn. This is safe by
-// construction, not by accident: drainParallel only parallelizes the
+// The replica eligibility check (stateless transforms, no SinkOwner) does NOT
+// explicitly test for opColumn. This is safe by construction, not by
+// accident: replicas only parallelize the
 // TRANSFORM stage across worker goroutines (each with its own private
 // transform.Pipeline) — the actual sink write (and therefore a delete-capable
 // sink's rowsDeleted accumulator) always happens from the single ordered
@@ -99,7 +99,7 @@ func TestEnterprise_CDC_DeleteCapableSink_ParallelTransformWorkers(t *testing.T)
 			},
 		},
 		// Small batches + multiple workers force many batches to flow through
-		// drainParallel's worker pool concurrently — the scenario that would
+		// the replica worker pool concurrently — the scenario that would
 		// expose a data race in the sink's rowsDeleted accumulator if the write
 		// path were not, in fact, fully serialized through the collector.
 		Performance: pipeline.PerformanceDef{

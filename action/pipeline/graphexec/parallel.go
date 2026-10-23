@@ -39,7 +39,7 @@ func (rt *runtime) runParallelTransform(ctx context.Context, n *pnode) {
 		go func(op TransformOp) {
 			defer workers.Done()
 			for j := range jobs {
-				out, err := op.Apply(j.b)
+				out, err := applySafely(op, j.b)
 				results <- result{seq: j.seq, in: j.b, out: out, err: err}
 			}
 		}(op)
@@ -163,4 +163,15 @@ func (rt *runtime) finishParallelBatch(ctx context.Context, n *pnode, stat *Node
 	}
 	atomic.AddInt64(&stat.RowsOut, int64(out.Len()))
 	return rt.emit(ctx, n, out)
+}
+
+// applySafely runs op.Apply, turning a panic into an error so a worker never
+// crashes the process (and the collector still receives a result).
+func applySafely(op TransformOp, b *record.RecordBatch) (out *record.RecordBatch, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			out, err = nil, fmt.Errorf("transform panicked: %v", r)
+		}
+	}()
+	return op.Apply(b)
 }

@@ -184,7 +184,7 @@ flowchart TB
 
     subgraph binary["flogo-datapipeline binary (Go, single static binary)"]
         direction TB
-        engine["Flogo engine → action/pipeline<br/>(linear or graph runner)"]
+        engine["Flogo engine → action/pipeline<br/>(unified streaming executor)"]
         engine --> source["Source(s)"]
         source --> transforms["Transform chain"]
         transforms --> sink["Sink"]

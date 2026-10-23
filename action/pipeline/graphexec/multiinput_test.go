@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/mpandav-tibco/flogo-datapipeline/record"
 )
@@ -217,5 +218,43 @@ func TestMultiInput_RightBarrierIgnored(t *testing.T) {
 	}
 	if snk.rowCount() != 1 {
 		t.Fatalf("sink rows = %d, want 1", snk.rowCount())
+	}
+}
+
+// TestMultiInput_BudgetDoesNotDeadlock: a join drains its left input only
+// after the right side's EOF, so a shared memory budget filled by buffered
+// left batches must not block the right source forever.
+func TestMultiInput_BudgetDoesNotDeadlock(t *testing.T) {
+	var left, right [][]interface{}
+	for i := 0; i < 200; i++ {
+		left = append(left, []interface{}{fmt.Sprint(i), i})
+		right = append(right, []interface{}{fmt.Sprint(i), "v"})
+	}
+	snk := &memSink{}
+	g := &Graph{
+		Nodes: []Node{
+			{ID: "left", Kind: KindSource, Type: "mem", Cfg: map[string]interface{}{"op": &memSource{cols: joinTestCols, rows: left}}},
+			{ID: "right", Kind: KindSource, Type: "mem", Cfg: map[string]interface{}{"op": &memSource{cols: rightTestCols, rows: right}}},
+			{ID: "j", Kind: KindTransform, Type: "join", Cfg: map[string]interface{}{"op": newFakeMultiInput()}},
+			{ID: "sink", Kind: KindSink, Type: "mem", Cfg: map[string]interface{}{"op": snk}},
+		},
+		Edges: []Edge{{From: "left", To: "j:left"}, {From: "right", To: "j:right"}, {From: "j", To: "sink"}},
+	}
+	plan, err := Compile(g, testBuilders())
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err = plan.Run(ctx, Options{
+		BatchSize: 1, BufferDepth: 1,
+		Budget: NewMemoryBudget(4096),
+		SizeOf: func(*record.RecordBatch) int64 { return 1024 },
+	})
+	if err != nil {
+		t.Fatalf("Run: %v (deadlocked on the memory budget?)", err)
+	}
+	if snk.rowCount() != 200 {
+		t.Fatalf("sink rows = %d, want 200", snk.rowCount())
 	}
 }

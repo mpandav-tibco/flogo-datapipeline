@@ -79,13 +79,15 @@ field.
 The linear diagram above is the common case. A pipeline may instead declare an
 explicit **graph** (nodes + edges) for non-linear topologies — multiple sources,
 multiple sinks, or conditional routing. When the graph is **non-reducible** (it has
-a typed edge, or fan-out / fan-in ≥ 2) the engine runs it with a streaming **graph
-runner** ([`action/pipeline/graphexec`](../action/pipeline/graphexec)): one goroutine
-per node, one bounded channel per consumer, so the whole DAG streams concurrently
-with backpressure. A purely linear graph stays on the linear path. **All** transform
+a typed edge, or fan-out / fan-in ≥ 2) the engine runs it node-per-node on the same streaming executor
+([`action/pipeline/graphexec`](../action/pipeline/graphexec)) that runs linear
+pipelines: one goroutine per node, one bounded channel per consumer, so the whole
+DAG streams concurrently with backpressure. (A linear pipeline — or a purely linear
+graph — compiles to a three-node plan: source → fused transform chain → sink; see
+[engine unification](design/engine-unification.md).) **All** transform
 types are supported — the runner injects/harvests the `hwm` watermark, surfaces the
 `dq` gate report, and flushes `window` state — and the reported row counts carry over
-(checkpoint/resume is supported for stateless graphs; rejects ride `error` edges).
+(checkpoint/resume snapshots stateful nodes too; rejects ride `error` edges).
 See [Graph (DAG) execution](graph.md).
 
 ## State & durability

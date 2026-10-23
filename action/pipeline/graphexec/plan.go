@@ -278,7 +278,7 @@ func (p *Plan) HasStateful() bool {
 // Snapshotters returns every transform node whose operator implements
 // Snapshotter, keyed by node id — used by the caller to restore state before a
 // resumed Run (once, from a persisted checkpoint) and to capture state at
-// each checkpoint barrier (see graph_run.go's runGraph/runGraphScaled).
+// each checkpoint barrier (see the pipeline engine, action/pipeline/engine.go).
 func (p *Plan) Snapshotters() map[string]Snapshotter {
 	out := make(map[string]Snapshotter)
 	for _, n := range p.nodes {
@@ -364,6 +364,22 @@ func (p *Plan) Close() error {
 			if err := r.Close(); err != nil && first == nil {
 				first = err
 			}
+		}
+	}
+	return first
+}
+
+// CloseSinks closes every sink operator and returns the first error, so the
+// caller can surface errors that only occur at Close (e.g. an object-store
+// upload). Closed sinks are not closed again by Close.
+func (p *Plan) CloseSinks() error {
+	var first error
+	for _, n := range p.nodes {
+		if n.kind == KindSink && n.closer != nil {
+			if err := n.closer.Close(); err != nil && first == nil {
+				first = err
+			}
+			n.closer = nil
 		}
 	}
 	return first

@@ -87,8 +87,8 @@ explicit **graph** of nodes + edges for non-linear topologies — multiple sourc
 multiple sinks, or conditional routing. The `source`, `transforms[]`, and `sink`
 above still supply the standard nodes (`source`, `t{i}`, `sink`); any extra node
 carries its own `config`. When the graph is **non-reducible** (a typed edge, or
-fan-out / fan-in ≥ 2) a streaming graph runner executes it directly; a purely
-linear graph is ignored and the linear path runs.
+fan-out / fan-in ≥ 2) the engine runs it node-per-node; a purely linear graph
+runs exactly like the plain source → transforms → sink form.
 
 ```json
 "graph": {

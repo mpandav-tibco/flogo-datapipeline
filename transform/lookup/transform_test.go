@@ -155,7 +155,7 @@ func TestLRUCache_Eviction(t *testing.T) {
 	c := newCache(2)
 	c.Add("a", cacheEntry{data: map[string]interface{}{"v": 1}})
 	c.Add("b", cacheEntry{data: map[string]interface{}{"v": 2}})
-	_, _ = c.Get("a")                          // a becomes MRU
+	_, _ = c.Get("a")                                            // a becomes MRU
 	c.Add("c", cacheEntry{data: map[string]interface{}{"v": 3}}) // evicts b (LRU)
 	if _, ok := c.Get("b"); ok {
 		t.Error("b should have been evicted")

@@ -27,8 +27,9 @@
 //     (see Options.CheckpointRows / OnCheckpoint / ResumeFrom). Stateful graphs
 //     (a Flusher node) opt out via Plan.HasStateful until state snapshots land.
 //
-// The executor is gated behind an explicit graph: the linear path remains the
-// default and is untouched.
+// It is the pipeline's only executor: a linear definition compiles to a
+// three-node plan (source → fused transform chain → sink), an explicit
+// non-reducible graph to one node per graph node.
 package graphexec
 
 import (
@@ -261,6 +262,10 @@ type Options struct {
 	// LAST Run call.
 	KeepOpen bool
 
+	// DeferFlush skips the end-of-input Flush of stateful transform nodes
+	// (Flusher), for a caller running one plan over several partitions that
+	// flushes once after the last one.
+	DeferFlush bool
 	// SinkBufferDepth, when > 0, is the input channel depth of sink nodes
 	// (performance.sinkBufferBatches); other nodes use BufferDepth.
 	SinkBufferDepth int

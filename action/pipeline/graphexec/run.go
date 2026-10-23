@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -27,13 +28,26 @@ func (p *Plan) Run(ctx context.Context, opts Options) (*Result, error) {
 		res.Nodes[n.id] = &NodeStat{ID: n.id, Kind: n.kind}
 	}
 
+	// A multi-input node (e.g. a port-wired join) does not consume its left
+	// input until the right side reaches EOF, so a shared budget filled by
+	// left batches would block the right source forever. Such plans run
+	// without the budget; their channels are still bounded.
+	for _, n := range p.nodes {
+		if n.multiIn != nil {
+			opts.Budget = nil
+			break
+		}
+	}
+
 	rctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	// Hand the run context to I/O-performing transforms (see
 	// transform.ContextBinder) so cancellation aborts their in-flight calls.
 	for _, n := range p.nodes {
-		if cb, ok := n.tx.(interface{ BindContext(context.Context) }); ok {
-			cb.BindContext(rctx)
+		for _, op := range append([]TransformOp{n.tx}, n.replicas...) {
+			if cb, ok := op.(interface{ BindContext(context.Context) }); ok {
+				cb.BindContext(rctx)
+			}
 		}
 	}
 
@@ -134,6 +148,7 @@ func (p *Plan) Run(ctx context.Context, opts Options) (*Result, error) {
 		nodes.Add(1)
 		go func(n *pnode) {
 			defer nodes.Done()
+			defer rt.recoverNode(n.id)
 			switch n.kind {
 			case KindSource:
 				rt.runSource(rctx, n)
@@ -161,6 +176,15 @@ func (p *Plan) Run(ctx context.Context, opts Options) (*Result, error) {
 		runErr = ctx.Err()
 	}
 	return res, runErr
+}
+
+// recoverNode turns a panic in an operator (source, transform or sink code)
+// into a run failure instead of crashing the process. Deferred by every
+// goroutine that runs operator code.
+func (rt *runtime) recoverNode(id string) {
+	if r := recover(); r != nil {
+		rt.fail(fmt.Errorf("node %q panicked: %v\n%s", id, r, debug.Stack()))
+	}
 }
 
 // runtime carries the shared per-run wiring passed to each node goroutine.
@@ -382,7 +406,7 @@ func (rt *runtime) runTransform(ctx context.Context, n *pnode) {
 			if !ok {
 				// End-of-input: let the operator emit any rows it buffered (e.g. a
 				// window's still-open aggregates) before this node finishes.
-				if f, hasFlush := n.tx.(Flusher); hasFlush {
+				if f, hasFlush := n.tx.(Flusher); hasFlush && !rt.opts.DeferFlush {
 					fb, ferr := f.Flush()
 					if ferr != nil {
 						rt.fail(fmt.Errorf("transform %q flush: %w", n.id, ferr))
@@ -532,7 +556,7 @@ rightDone:
 		case m, ok := <-ch:
 			rt.release(m) // zero-value on close: no-op
 			if !ok {
-				if f, hasFlush := n.tx.(Flusher); hasFlush {
+				if f, hasFlush := n.tx.(Flusher); hasFlush && !rt.opts.DeferFlush {
 					fb, ferr := f.Flush()
 					if ferr != nil {
 						rt.fail(fmt.Errorf("transform %q flush: %w", n.id, ferr))
