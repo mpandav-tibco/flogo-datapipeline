@@ -61,7 +61,9 @@ func (s *writeStage) run() {
 		var o Output
 		n, err := s.safeWrite(req.batch, &o)
 		record.Put(req.batch)
-		s.written += int64(n)
+		// o.RowsWritten carries corrections for rows accepted by earlier
+		// writes that a buffering sink later failed to persist (negative).
+		s.written += int64(n) + o.RowsWritten
 		s.failed += o.RowsFailed
 		if err != nil {
 			s.err = err

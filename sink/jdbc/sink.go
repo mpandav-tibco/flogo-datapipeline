@@ -41,6 +41,7 @@ import (
 	"github.com/lib/pq"
 	corelog "github.com/project-flogo/core/support/log"
 
+	"github.com/mpandav-tibco/flogo-datapipeline/internal/cfgutil"
 	"github.com/mpandav-tibco/flogo-datapipeline/internal/sqlutil"
 	"github.com/mpandav-tibco/flogo-datapipeline/record"
 	"github.com/mpandav-tibco/flogo-datapipeline/sink"
@@ -143,7 +144,8 @@ func newJDBCSink(cfg map[string]interface{}) (sink.Sink, error) {
 
 	batchSize := 1000
 	if bsRaw, ok := cfg["batchSize"]; ok {
-		if bs, ok := bsRaw.(int); ok && bs > 0 {
+		// JSON-decoded definitions deliver numbers as float64; cfgutil accepts both.
+		if bs, ok := cfgutil.Int(cfg, "batchSize"); ok && bs > 0 {
 			batchSize = bs
 		} else {
 			jlog.Warnf("jdbc sink: 'batchSize' %v is invalid (must be a positive int); using default %d", bsRaw, batchSize)
@@ -272,6 +274,7 @@ func (s *jdbcSink) WriteBatch(batch *record.RecordBatch) error {
 	// wider than s.columns. We copy only the first len(s.columns) values so
 	// buildInsert always receives rows whose width matches s.columns.
 	ncols := len(s.columns)
+	prevLen := len(s.buf) // rows accepted by earlier calls, still buffered
 	for _, row := range batch.Rows {
 		rowCopy := s.allocRow(ncols)
 		copy(rowCopy, row)
@@ -280,9 +283,39 @@ func (s *jdbcSink) WriteBatch(batch *record.RecordBatch) error {
 	s.rowsBuffered += batch.Len()
 
 	if s.rowsBuffered >= s.batchSize {
-		return s.flush()
+		return s.flushReporting(prevLen)
 	}
 	return nil
+}
+
+// AtomicWrites implements sink.AtomicWriter: in the plain insert/upsert path a
+// flush is one statement or one transaction, so a failed WriteBatch+Flush
+// persists nothing. Delete-capable mode is excluded (rows are split into
+// upsert and delete sets with their own semantics).
+func (s *jdbcSink) AtomicWrites() bool { return s.opColumn == "" }
+
+// flushReporting flushes and, if that fails, hands back the buffered rows that
+// earlier WriteBatch calls had already accepted (the first prevLen rows) as a
+// sink.UnflushedRowsError, so the engine can isolate/dead-letter them rather
+// than losing them with the discarded buffer. Only the plain (non-opColumn)
+// path reports rows: they are in target-column layout and can be re-written.
+func (s *jdbcSink) flushReporting(prevLen int) error {
+	var prev [][]interface{}
+	if s.opColumn == "" && prevLen > 0 {
+		prev = append(prev, s.buf[:prevLen]...)
+	}
+	err := s.flush()
+	if err != nil && len(prev) > 0 {
+		cols := make([]record.Column, len(s.columns))
+		for i, name := range s.columns {
+			cols[i] = record.Column{Name: name, Type: record.TypeAny}
+			if i < len(s.schema) {
+				cols[i] = s.schema[i]
+			}
+		}
+		return &sink.UnflushedRowsError{Columns: cols, Rows: prev, Err: err}
+	}
+	return err
 }
 
 // writeBatchWithOp is WriteBatch's delete-capable path (opColumn configured).
@@ -706,9 +739,10 @@ func recordTypeToSQL(ct record.ColumnType, driver string) string {
 	}
 }
 
-// Flush writes all buffered rows to the database.
+// Flush writes all buffered rows to the database. Every buffered row was
+// accepted by an earlier WriteBatch, so a failure reports all of them.
 func (s *jdbcSink) Flush() error {
-	return s.flush()
+	return s.flushReporting(len(s.buf))
 }
 
 // flush dispatches to the plain insert-only path (the historical, unchanged
@@ -937,6 +971,39 @@ func stringsEqual(a, b []string) bool {
 	return true
 }
 
+// copyFlush writes rows with COPY in one transaction.
+func (s *jdbcSink) copyFlush(rows [][]interface{}) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("jdbc sink: begin tx: %w", err)
+	}
+	if err := s.copyRows(tx, rows); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("jdbc sink: commit tx: %w", err)
+	}
+	return nil
+}
+
+// copyUnsupported reports whether err means the target rejects COPY itself
+// (rather than the data): wrong_object_type (COPY into a view),
+// feature_not_supported, or a syntax error from an engine that does not parse
+// COPY FROM STDIN. Data errors (constraint violations, bad values) are not
+// included — those fail identically under INSERT.
+func copyUnsupported(err error) bool {
+	var pqErr *pq.Error
+	if !errors.As(err, &pqErr) {
+		return false
+	}
+	switch pqErr.Code {
+	case "42809", "0A000", "42601":
+		return true
+	}
+	return false
+}
+
 // copyRows streams rows into the table with the PostgreSQL COPY protocol
 // inside tx. Quoting matches the INSERT path (the table name is one quoted
 // identifier), so both modes resolve the same relation.
@@ -990,18 +1057,19 @@ func (s *jdbcSink) flushInsertsOnly() error {
 	// execute it directly; multiple chunks run in a single transaction so a
 	// partial failure rolls back atomically.
 	if s.useCopy {
-		tx, err := s.db.Begin()
-		if err != nil {
-			return fmt.Errorf("jdbc sink: begin tx: %w", err)
+		err := s.copyFlush(allRows)
+		if err == nil {
+			return nil
 		}
-		if err := s.copyRows(tx, allRows); err != nil {
-			_ = tx.Rollback()
+		if !copyUnsupported(err) {
 			return err
 		}
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("jdbc sink: commit tx: %w", err)
-		}
-		return nil
+		// The target cannot take COPY (e.g. a view, or a Postgres-compatible
+		// engine without COPY FROM STDIN). Nothing was written — the COPY ran
+		// in a rolled-back transaction — so switch this sink to multi-row
+		// INSERT for the rest of the run and write the same rows that way.
+		jlog.Warnf("jdbc sink: COPY not supported for table %q (%v); falling back to multi-row INSERT (set bulkMode \"insert\" to skip this probe)", s.table, err)
+		s.useCopy = false
 	}
 
 	maxRows := maxRowsPerInsert(s.driver, ncols)

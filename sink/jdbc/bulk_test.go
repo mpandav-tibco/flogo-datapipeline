@@ -132,3 +132,45 @@ func TestJDBCSink_LiveCopy(t *testing.T) {
 		t.Fatalf("COPY and INSERT produced different tables (len %d vs %d)", len(results["auto"]), len(results["insert"]))
 	}
 }
+
+// TestJDBCSink_LiveCopyFallsBackForView: COPY cannot target a view, but
+// INSERT can. The default bulkMode must fall back instead of failing the run.
+func TestJDBCSink_LiveCopyFallsBackForView(t *testing.T) {
+	dsn := os.Getenv("DP_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("set DP_TEST_PG_DSN to run the live JDBC COPY fallback test")
+	}
+	db, err := sql.Open("postgres", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	suffix := time.Now().UnixNano()
+	base, view := fmt.Sprintf("dp_copyfb_base_%d", suffix), fmt.Sprintf("dp_copyfb_view_%d", suffix)
+	if _, err := db.Exec(fmt.Sprintf(`CREATE TABLE %q (id bigint, name text); CREATE VIEW %q AS SELECT id, name FROM %q`, base, view, base)); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = db.Exec(fmt.Sprintf(`DROP VIEW IF EXISTS %q; DROP TABLE IF EXISTS %q`, view, base)) })
+
+	sk, err := newJDBCSink(map[string]interface{}{"driver": "postgres", "dsn": dsn, "table": view})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cols := []record.Column{{Name: "id", Type: record.TypeInt}, {Name: "name", Type: record.TypeString}}
+	for b := 0; b < 2; b++ { // the second flush must go straight to INSERT
+		if err := sk.WriteBatch(&record.RecordBatch{Columns: cols, Rows: [][]interface{}{{int64(2 * b), "a"}, {int64(2*b + 1), "b"}}}); err != nil {
+			t.Fatalf("WriteBatch %d: %v", b, err)
+		}
+		if err := sk.Flush(); err != nil {
+			t.Fatalf("Flush %d: %v", b, err)
+		}
+	}
+	_ = sk.Close()
+	var n int
+	if err := db.QueryRow(fmt.Sprintf(`SELECT count(*) FROM %q`, base)).Scan(&n); err != nil || n != 4 {
+		t.Fatalf("rows through view=%d err=%v; want 4", n, err)
+	}
+	if sk.(*jdbcSink).useCopy {
+		t.Fatal("sink still uses COPY after the target rejected it")
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -975,7 +976,7 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 					if err := syncWrites(); err != nil {
 						return err
 					}
-					if err := snk.Flush(); err != nil {
+					if err := a.flushSink(runLog, snk, dlq, out); err != nil {
 						return fmt.Errorf("sink flush (checkpoint): %w", err)
 					}
 					// Surface the checkpoint so operators can see progress being
@@ -1237,7 +1238,7 @@ func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input,
 	}
 
 	// Final flush.
-	if err := snk.Flush(); err != nil {
+	if err := a.flushSink(runLog, snk, dlq, out); err != nil {
 		return out, fmt.Errorf("sink final flush: %w", err)
 	}
 
@@ -1662,17 +1663,21 @@ func (p *plainDLQAdapter) InjectContext(_, _ string) {}
 // Happy path (no error from snk.WriteBatch): returns (nRows, nil) — zero extra
 // allocations, identical behaviour to the old single WriteBatch call.
 //
-// On batch-level error: falls back to writing each row individually in its own
-// single-row batch.  A row whose single-row write succeeds is already
-// delivered to snk and is counted as written — it is NOT written again, which
-// would duplicate it in non-idempotent sinks.  Rows that fail individually are
-// accumulated into a "bad" batch and — when a DLQ sink is configured —
-// forwarded to dlq via WriteBatchErrors so the error envelope carries the
-// per-row message.
+// On batch-level error: falls back to writing each row individually (see
+// isolateRows). A row whose single-row write succeeds is already delivered to
+// snk and is counted as written — it is NOT written again, which would
+// duplicate it in non-idempotent sinks. Rows that fail individually are
+// forwarded to the DLQ (when configured) with their per-row error message.
+//
+// Buffering sinks (e.g. jdbc) can fail a flush that also contained rows
+// accepted by EARLIER calls; they hand those back as sink.UnflushedRowsError.
+// Those rows were already counted as written, so they are isolated too and
+// each one that fails moves from out.RowsWritten to out.RowsFailed instead of
+// being lost silently.
 //
 // rowLevelWrite always returns nil from the error position unless an
 // unrecoverable infrastructure failure occurs (e.g. the DLQ sink itself
-// returns an error).  Individual row failures are recorded in out.RowsFailed
+// returns an error). Individual row failures are recorded in out.RowsFailed
 // and the run continues; the caller's out.RowsFailed > 0 check will set the
 // run status to "partial".
 //
@@ -1687,59 +1692,129 @@ func (a *DataPipelineAction) rowLevelWrite(
 	out *Output,
 ) (written int, err error) {
 	// --- happy path ---
-	if batchErr := snk.WriteBatch(batch); batchErr == nil {
+	batchErr := snk.WriteBatch(batch)
+	if batchErr == nil {
 		return batch.Len(), nil
-	} else {
-		runLog.Warnf("batch write failed (%d rows), falling back to per-row isolation: %v",
-			batch.Len(), batchErr)
 	}
+	runLog.Warnf("batch write failed (%d rows), falling back to per-row isolation: %v",
+		batch.Len(), batchErr)
 
 	// --- per-row isolation fallback ---
-	// Build reusable single-row batches to avoid heap allocations in the loop.
-	rowBatch := record.Get()
-	rowBatch.Columns = batch.Columns
-	rowBatch.Rows = make([][]interface{}, 1)
+	written, failed, err := a.isolateRows(runLog, snk, dlq, batch.Columns, batch.Rows)
+	out.RowsFailed += int64(failed)
+	if err != nil {
+		return written, err
+	}
+	var carry *sink.UnflushedRowsError
+	if errors.As(batchErr, &carry) {
+		if err := a.recoverUnflushed(runLog, snk, dlq, carry, out); err != nil {
+			return written, err
+		}
+	}
+	return written, nil
+}
+
+// recoverUnflushed re-writes rows a buffering sink failed to persist after
+// earlier calls had accepted them (and they were counted as written): each
+// row is retried in isolation; failures are dead-lettered and moved from
+// RowsWritten to RowsFailed.
+func (a *DataPipelineAction) recoverUnflushed(runLog corelog.Logger, snk sink.Sink, dlq dlqWriteSink, carry *sink.UnflushedRowsError, out *Output) error {
+	runLog.Warnf("sink flush failed with %d previously accepted rows; isolating them: %v", len(carry.Rows), carry.Err)
+	_, failed, err := a.isolateRows(runLog, snk, dlq, carry.Columns, carry.Rows)
+	out.RowsWritten -= int64(failed)
+	out.RowsFailed += int64(failed)
+	return err
+}
+
+// flushSink flushes the sink, recovering (isolating + dead-lettering) any
+// previously accepted rows a buffering sink reports as unpersisted instead of
+// failing the run on one bad row. Other flush errors are returned.
+func (a *DataPipelineAction) flushSink(runLog corelog.Logger, snk sink.Sink, dlq dlqWriteSink, out *Output) error {
+	err := snk.Flush()
+	var carry *sink.UnflushedRowsError
+	if err == nil || !errors.As(err, &carry) {
+		return err
+	}
+	return a.recoverUnflushed(runLog, snk, dlq, carry, out)
+}
+
+// isolateRows writes rows so that each one is persisted or rejected on its
+// own — every attempt is WriteBatch then Flush, so a buffering sink cannot
+// merely buffer a row — and dead-letters the ones that fail. Sinks with
+// all-or-nothing writes (sink.AtomicWriter) are isolated by bisection: a
+// failed chunk is split in halves until the bad rows are single, so a batch
+// with a few bad rows costs O(bad·log n) writes instead of n. Other sinks are
+// written one row at a time, since a failed multi-row attempt might already
+// have delivered part of the chunk.
+func (a *DataPipelineAction) isolateRows(runLog corelog.Logger, snk sink.Sink, dlq dlqWriteSink, cols []record.Column, rows [][]interface{}) (written, failed int, err error) {
+	// Reusable scratch batch (its Rows slice aliases rows, so never pooled with them).
+	chunk := record.Get()
+	chunk.Columns = cols
+	write := func(part [][]interface{}) error {
+		chunk.Rows = part
+		werr := snk.WriteBatch(chunk)
+		if werr == nil {
+			werr = snk.Flush()
+		}
+		return werr
+	}
 
 	var badRows [][]interface{}
 	var badErrs []string
-
-	for i, row := range batch.Rows {
-		rowBatch.Rows[0] = row
-
-		if rowErr := snk.WriteBatch(rowBatch); rowErr == nil {
-			written++
-		} else {
-			runLog.Debugf("row %d failed write (routing to DLQ): %v", i, rowErr)
-			badRows = append(badRows, row)
-			badErrs = append(badErrs, rowErr.Error())
-			out.RowsFailed++
+	reject := func(row []interface{}, rowErr error) {
+		runLog.Debugf("row failed write (routing to DLQ): %v", rowErr)
+		badRows = append(badRows, row)
+		badErrs = append(badErrs, rowErr.Error())
+		failed++
+	}
+	var bisect func(part [][]interface{})
+	bisect = func(part [][]interface{}) {
+		werr := write(part)
+		switch {
+		case werr == nil:
+			written += len(part)
+		case len(part) == 1:
+			reject(part[0], werr)
+		default:
+			mid := len(part) / 2
+			bisect(part[:mid:mid])
+			bisect(part[mid:])
 		}
 	}
 
-	// Release the single-row scratch batch — its Rows slice must not be
-	// pooled because it was reused across iterations and may alias batch.Rows.
-	rowBatch.Columns = nil
-	rowBatch.Rows = nil
-	record.Put(rowBatch)
+	if aw, ok := snk.(sink.AtomicWriter); ok && aw.AtomicWrites() && len(rows) > 1 {
+		mid := len(rows) / 2 // the whole set just failed; start from its halves
+		bisect(rows[:mid:mid])
+		bisect(rows[mid:])
+	} else {
+		for i := range rows {
+			if werr := write(rows[i : i+1 : i+1]); werr == nil {
+				written++
+			} else {
+				reject(rows[i], werr)
+			}
+		}
+	}
 
-	// Route bad rows to DLQ.
+	chunk.Columns = nil
+	chunk.Rows = nil
+	record.Put(chunk)
+
 	if len(badRows) > 0 && dlq != nil {
 		badBatch := record.Get()
-		badBatch.Columns = batch.Columns
+		badBatch.Columns = cols
 		badBatch.Rows = badRows
-
 		if dlqErr := dlq.WriteBatchErrors(badBatch, badErrs); dlqErr != nil {
 			// DLQ write failure is an unrecoverable infrastructure problem —
 			// surface it so the caller can abort the pipeline rather than silently
 			// losing the error evidence.
 			record.Put(badBatch)
-			return written, fmt.Errorf("dlq write: %w", dlqErr)
+			return written, failed, fmt.Errorf("dlq write: %w", dlqErr)
 		}
 		record.Put(badBatch)
 		runLog.Infof("routed %d failed rows to DLQ", len(badRows))
 	} else if len(badRows) > 0 {
 		runLog.Warnf("%d rows failed write and no DLQ is configured — rows are lost", len(badRows))
 	}
-
-	return written, nil
+	return written, failed, nil
 }
