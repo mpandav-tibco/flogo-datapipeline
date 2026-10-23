@@ -5,6 +5,7 @@ package sqlutil
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/mpandav-tibco/flogo-datapipeline/record"
@@ -31,11 +32,11 @@ func Placeholder(n int, driver string) string {
 	case "mysql":
 		return "?"
 	case "sqlserver", "mssql":
-		return fmt.Sprintf("@p%d", n)
+		return "@p" + strconv.Itoa(n)
 	case "oracle":
-		return fmt.Sprintf(":%d", n)
+		return ":" + strconv.Itoa(n)
 	default: // postgres
-		return fmt.Sprintf("$%d", n)
+		return "$" + strconv.Itoa(n)
 	}
 }
 

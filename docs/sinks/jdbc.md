@@ -17,6 +17,7 @@ optional automatic table creation and column migration. Implemented in
 | `autoMigrate` | bool | `false` | — | `CREATE TABLE IF NOT EXISTS` on first batch and `ALTER TABLE … ADD COLUMN` for new columns. When `conflictKey` is set, the created table also declares it as the `PRIMARY KEY` (required for Postgres's upsert; harmless elsewhere). |
 | `opColumn` | string | — | — | Turns on delete-capable mode (see below). Requires a non-empty `conflictKey`. |
 | `deleteValues` | `[]string` | `["d", "delete"]` | — | `opColumn` values (case-insensitive) that mean "delete this row" instead of upsert. |
+| `bulkMode` | string | `auto` | — | `auto` loads plain inserts (`driver: postgres`, `onConflict: insert`, no `opColumn`) with the PostgreSQL `COPY` protocol, typically several times faster than multi-row `INSERT`; every other combination uses multi-row `INSERT`. `insert` always uses multi-row `INSERT` (e.g. behind proxies or Postgres-compatible engines without `COPY FROM STDIN`). |
 
 ## Delete-capable mode (`opColumn`)
 
