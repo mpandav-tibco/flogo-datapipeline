@@ -24,7 +24,7 @@ BIN_STAGE="$REPO_ROOT/.dpbin"          # all compiled binaries (gitignored)
 DPSRC="$EXT/media/dp-src"              # bundled offline build tree (gitignored)
 OUT="$EXT/dist-vsix"                   # emitted VSIXs (gitignored)
 GO="${GO:-go}"
-FLOGO_GENERAL_SRC="${FLOGO_GENERAL_SRC:-$HOME/.vscode/extensions/tibco.flogo-2.26.5-2893/media/flogo-contributions/wistudio/v1/contributions/Tibco/General}"
+FLOGO_GENERAL_SRC="${FLOGO_GENERAL_SRC:-$HOME/.vscode/extensions/tibco.flogo-2.26.8-3377/media/flogo-contributions/wistudio/v1/contributions/Tibco/General}"
 
 # target triples: "GOOS GOARCH vsce-target"
 declare -a ALL=(
