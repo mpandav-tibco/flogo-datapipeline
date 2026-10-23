@@ -42,12 +42,24 @@ row-group), while others replay-and-skip.
 
 See the runnable [`examples/15-checkpoint-resume`](../examples/15-checkpoint-resume).
 
+### Window state format (upgrade / rollback)
+
+Checkpoints of windowed pipelines carry the window state. Since snapshot
+version 2, typed values (64-bit integers, decimals, timestamps) are tagged so
+they survive a restore with their exact type and precision. Version-1
+checkpoints written by earlier releases are still restored. An earlier release
+cannot read version-2 state, though: when rolling back, delete the checkpoints
+of windowed pipelines (or let them restart from the source) rather than
+resuming from them.
+
 ## Incremental load (high-water mark)
 
 For pipelines that run on a schedule against a growing table or feed, set
 `incremental.mode: hwm`. The engine injects a predicate so the source reads only rows
 whose `column` is greater than the stored mark, then advances the mark to the max seen
-this run.
+this run. The mark is advanced only when a run completes cleanly — never at a
+mid-run checkpoint, since a resumed run re-queries with the stored mark and
+skips the checkpointed rows.
 
 ```json
 "incremental": {

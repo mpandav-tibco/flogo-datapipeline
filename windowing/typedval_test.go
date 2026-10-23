@@ -77,3 +77,21 @@ func TestSpillAndRestorePreserveTypes(t *testing.T) {
 		}
 	}
 }
+
+// A restore that fails part-way must leave the operator empty, not holding
+// windows without deadline entries (they would never fire or be evicted).
+func TestRestoreFailureResetsState(t *testing.T) {
+	bad := `{"version":2,"maxEventTime":150,"hasEvent":true,"watermark":0,"keys":[` +
+		`{"key":["a"],"windows":[{"start":100,"end":200,"accs":[{"n":2}]}]},` +
+		`{"key":[{"$time":"not-a-time"}],"windows":[]}]}`
+	o, _ := New(Spec{Kind: Tumbling, SizeMs: 100}, []AggSpec{{As: "n", Fn: "count"}}, 0)
+	if err := o.Restore([]byte(bad)); err == nil {
+		t.Fatal("expected a decode error")
+	}
+	if n := o.OpenWindows(); n != 0 {
+		t.Fatalf("OpenWindows = %d after failed restore, want 0", n)
+	}
+	if res := o.Flush(); len(res) != 0 {
+		t.Fatalf("Flush after failed restore = %#v, want nothing", res)
+	}
+}

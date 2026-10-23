@@ -330,11 +330,27 @@ func waitForStart(startErr <-chan error, sigCh <-chan os.Signal, startReturned *
 	}
 }
 
-// shutdown stops the API server, cancels in-flight pipeline runs and waits for
-// them to close their sinks, then stops the engine and exits.
+// shutdown cancels in-flight pipeline runs (waiting for them to close their
+// sinks) while stopping the API server, then stops the engine and exits.
 func shutdown(e engine.Engine, apiSrv *api.Server, startErr <-chan error, startReturned bool) {
-	// Graceful shutdown: stop the API server first (so in-flight HTTP requests
-	// can complete), then stop the engine.
+	// Cancel in-flight pipeline runs and let them unwind — flush and close
+	// their sinks, release sources — before the engine stops. Exiting without
+	// this cut streaming pipelines off mid-write (truncated sink output).
+	// Cancelled runs save no checkpoint, so a restart resumes from the last
+	// durable one. This runs concurrently with the API server shutdown: a
+	// synchronous /run request only returns once its run is cancelled, so
+	// stopping the server first would stall for its whole timeout.
+	shutdownTimeout := 30 * time.Second
+	if v, err := time.ParseDuration(os.Getenv("PIPELINE_SHUTDOWN_TIMEOUT")); err == nil && v > 0 {
+		shutdownTimeout = v
+	}
+	type runsResult struct{ inFlight, left int }
+	runsDone := make(chan runsResult, 1)
+	go func() {
+		inFlight, left := pipeline.ShutdownRuns(shutdownTimeout)
+		runsDone <- runsResult{inFlight, left}
+	}()
+
 	if apiSrv != nil {
 		shutCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
@@ -343,20 +359,11 @@ func shutdown(e engine.Engine, apiSrv *api.Server, startErr <-chan error, startR
 		}
 	}
 
-	// Cancel in-flight pipeline runs and let them unwind — flush and close
-	// their sinks, release sources — before the engine stops. Exiting without
-	// this cut streaming pipelines off mid-write (truncated sink output).
-	// Cancelled runs save no checkpoint, so a restart resumes from the last
-	// durable one.
-	shutdownTimeout := 30 * time.Second
-	if v, err := time.ParseDuration(os.Getenv("PIPELINE_SHUTDOWN_TIMEOUT")); err == nil && v > 0 {
-		shutdownTimeout = v
-	}
-	if inFlight, left := pipeline.ShutdownRuns(shutdownTimeout); inFlight > 0 {
-		if left > 0 {
-			mlog.Warnf("shutdown: %d of %d pipeline runs still running after %s; exiting anyway", left, inFlight, shutdownTimeout)
+	if r := <-runsDone; r.inFlight > 0 {
+		if r.left > 0 {
+			mlog.Warnf("shutdown: %d of %d pipeline runs still running after %s; exiting anyway", r.left, r.inFlight, shutdownTimeout)
 		} else {
-			mlog.Infof("shutdown: %d in-flight pipeline run(s) cancelled and closed cleanly", inFlight)
+			mlog.Infof("shutdown: %d in-flight pipeline run(s) cancelled and closed cleanly", r.inFlight)
 		}
 	}
 	// A run executing inside e.Start() unblocks it once cancelled; let Start

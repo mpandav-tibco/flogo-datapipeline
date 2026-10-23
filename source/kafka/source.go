@@ -438,6 +438,27 @@ func (ks *kafkaSource) Cursor() json.RawMessage {
 	return data
 }
 
+// CursorAt implements checkpoint.PositionedCursorProvider: the offsets for the
+// processed boundary at processedRows (what Commit(processedRows) will
+// commit), falling back to the last committed target before any mark.
+func (ks *kafkaSource) CursorAt(processedRows int64) json.RawMessage {
+	ks.pendingMu.Lock()
+	target, _ := targetForRows(ks.marks, processedRows)
+	if target == nil {
+		target = ks.commitTarget
+	}
+	m := make(map[string]int64, len(target))
+	for p, o := range target {
+		m[strconv.Itoa(int(p))] = o
+	}
+	ks.pendingMu.Unlock()
+	data, err := json.Marshal(m)
+	if err != nil {
+		return json.RawMessage("null")
+	}
+	return data
+}
+
 // Commit acknowledges consumption up to processedRows — the pipeline's run-local
 // processed-row count, which trails the read-ahead position. It maps that count
 // to the exact offset via the recorded batch marks and commits only that offset,

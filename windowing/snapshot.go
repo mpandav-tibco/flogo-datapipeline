@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strconv"
 
 	"github.com/mpandav-tibco/flogo-datapipeline/record"
@@ -121,7 +122,10 @@ type windowSnapshot struct {
 // with the same config.
 func (o *Operator) Snapshot() ([]byte, error) {
 	var buf bytes.Buffer
-	buf.WriteString(`{"version":1,"maxEventTime":`)
+	// Version 2: typed values (int64, decimal, time, ...) are tagged, e.g.
+	// {"$int":"42"}. Version-1 snapshots (untagged) are still read; a
+	// pre-v2 engine cannot read v2 state, so a rollback must discard it.
+	buf.WriteString(`{"version":2,"maxEventTime":`)
 	buf.WriteString(strconv.FormatInt(o.maxEventTime, 10))
 	buf.WriteString(`,"hasEvent":`)
 	buf.WriteString(strconv.FormatBool(o.hasEvent))
@@ -209,7 +213,24 @@ func decodeKeyState(data []byte, aggs []AggSpec) (*keyState, error) {
 // state. It streams the "keys" array one element at a time via a JSON decoder,
 // so restoring a large (spilled) snapshot does not materialise the whole state in
 // memory. The operator must have been constructed with the same aggregations.
+//
+// On error the operator is reset to an empty state (never left half-restored:
+// partially restored windows would otherwise have no deadline entry and never
+// fire), so a caller that logs and continues really does start fresh.
 func (o *Operator) Restore(data []byte) error {
+	if err := o.restore(data); err != nil {
+		o.store.clear()
+		o.openWindowCount = 0
+		o.hasEvent = false
+		o.maxEventTime = 0
+		o.currentWatermark = math.MinInt64
+		o.rebuildDeadlines()
+		return err
+	}
+	return nil
+}
+
+func (o *Operator) restore(data []byte) error {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	tok, err := dec.Token()
 	if err != nil {

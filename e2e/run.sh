@@ -14,6 +14,7 @@ if ! curl -sf "http://$MOCK_ADDR/stats" >/dev/null; then
 	"$WORK/bin/harness" mock -addr "$MOCK_ADDR" -latency 2ms -missing-every 10 -throttle-every 7 >"$WORK/logs/mock.log" 2>&1 &
 	sleep 1
 fi
+bash e2e/seed_objects.sh
 echo "## Run $(date -u +%FT%TZ) ($(git rev-parse --short HEAD))" >>"$RESULTS"
 scenarios=("$@")
 [ ${#scenarios[@]} -eq 0 ] && scenarios=(s1 s1b s2 s3 s3b s4 s5 s6 s7)

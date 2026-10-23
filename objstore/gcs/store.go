@@ -23,14 +23,17 @@ package gcs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"cloud.google.com/go/storage"
 	"github.com/mpandav-tibco/flogo-datapipeline/objstore"
+	"google.golang.org/api/googleapi"
 	"google.golang.org/api/iterator"
 	"google.golang.org/api/option"
 )
@@ -151,6 +154,32 @@ func (s *gcsStore) GetReader(ctx context.Context, key string) (io.ReadCloser, er
 func (s *gcsStore) GetRange(ctx context.Context, key string, offset, length int64) (io.ReadCloser, error) {
 	r, err := s.client.Bucket(s.bucket).Object(key).NewRangeReader(ctx, offset, length)
 	if err != nil {
+		return nil, fmt.Errorf("gcs store: get range %q [%d,%d): %w", key, offset, offset+length, err)
+	}
+	return r, nil
+}
+
+// GetRangeIfMatch implements objstore.VersionedRangeReader. The read is pinned
+// to the generation whose ETag matches; gzip-encoded objects are refused
+// because GCS serves them decompressed and ignores the byte range.
+func (s *gcsStore) GetRangeIfMatch(ctx context.Context, key, etag string, offset, length int64) (io.ReadCloser, error) {
+	obj := s.client.Bucket(s.bucket).Object(key)
+	attrs, err := obj.Attrs(ctx)
+	if err != nil {
+		if errors.Is(err, storage.ErrObjectNotExist) {
+			return nil, fmt.Errorf("gcs store: %q: %w", key, objstore.ErrObjectChanged)
+		}
+		return nil, fmt.Errorf("gcs store: attrs %q: %w", key, err)
+	}
+	if attrs.Etag != etag || attrs.ContentEncoding == "gzip" {
+		return nil, fmt.Errorf("gcs store: %q: %w", key, objstore.ErrObjectChanged)
+	}
+	r, err := obj.If(storage.Conditions{GenerationMatch: attrs.Generation}).NewRangeReader(ctx, offset, length)
+	if err != nil {
+		var ge *googleapi.Error
+		if errors.Is(err, storage.ErrObjectNotExist) || (errors.As(err, &ge) && ge.Code == http.StatusPreconditionFailed) {
+			return nil, fmt.Errorf("gcs store: %q: %w", key, objstore.ErrObjectChanged)
+		}
 		return nil, fmt.Errorf("gcs store: get range %q [%d,%d): %w", key, offset, offset+length, err)
 	}
 	return r, nil

@@ -9,7 +9,7 @@ SIGTERM, and memory and temp-disk footprint.
 
 ```sh
 make test-integration-up     # Postgres, Kafka, MinIO, Redis, … (once)
-e2e/run.sh                   # build binary + harness, start mock API, run all
+e2e/run.sh                   # build binary + harness, start mock API, seed MinIO objects (e2e/seed_objects.sh, once), run all
 e2e/run.sh s2 s3b            # run selected scenarios
 make test-integration-down   # tear the stack down
 ```

@@ -28,6 +28,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/blob"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/bloberror"
@@ -212,6 +213,27 @@ func (s *adlsStore) GetRange(ctx context.Context, key string, offset, length int
 		Range: blob.HTTPRange{Offset: offset, Count: length},
 	})
 	if err != nil {
+		return nil, fmt.Errorf("adls store: get range %q [%d,%d): %w", key, offset, offset+length, err)
+	}
+	return resp.Body, nil
+}
+
+// GetRangeIfMatch implements objstore.VersionedRangeReader with If-Match.
+func (s *adlsStore) GetRangeIfMatch(ctx context.Context, key, etag string, offset, length int64) (io.ReadCloser, error) {
+	blobClient := s.client.ServiceClient().
+		NewContainerClient(s.container).
+		NewBlobClient(key)
+	et := azcore.ETag(etag)
+	resp, err := blobClient.DownloadStream(ctx, &blob.DownloadStreamOptions{
+		Range: blob.HTTPRange{Offset: offset, Count: length},
+		AccessConditions: &blob.AccessConditions{
+			ModifiedAccessConditions: &blob.ModifiedAccessConditions{IfMatch: &et},
+		},
+	})
+	if err != nil {
+		if bloberror.HasCode(err, bloberror.ConditionNotMet) {
+			return nil, fmt.Errorf("adls store: %q: %w", key, objstore.ErrObjectChanged)
+		}
 		return nil, fmt.Errorf("adls store: get range %q [%d,%d): %w", key, offset, offset+length, err)
 	}
 	return resp.Body, nil

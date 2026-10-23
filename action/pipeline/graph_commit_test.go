@@ -1,8 +1,11 @@
 package pipeline
 
 import (
+	"encoding/json"
+	"fmt"
 	"io"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"testing"
 
@@ -84,5 +87,47 @@ func TestGraphRun_CheckpointCommitsSource(t *testing.T) {
 	defer s.mu.Unlock()
 	if len(s.commits) < 2 || s.commits[0] != 8 || s.commits[1] != 16 {
 		t.Fatalf("commits=%v; want checkpoint-aligned commits starting [8 16 ...]", s.commits)
+	}
+}
+
+// positionedSource also reports a positioned cursor, like Kafka.
+type positionedSource struct {
+	committingSource
+	cursorAt []int64
+}
+
+func (s *positionedSource) Cursor() json.RawMessage { return json.RawMessage("null") }
+func (s *positionedSource) CursorAt(n int64) json.RawMessage {
+	s.mu.Lock()
+	s.cursorAt = append(s.cursorAt, n)
+	s.mu.Unlock()
+	return json.RawMessage(fmt.Sprintf(`{"rows":%d}`, n))
+}
+
+var lastPositioned *positionedSource
+
+func init() {
+	source.Register("positionedtest", func(map[string]interface{}) (source.Source, error) {
+		lastPositioned = &positionedSource{}
+		return lastPositioned, nil
+	})
+}
+
+// Every checkpoint token must carry the cursor of the position it checkpoints
+// (the value then committed), not the previous checkpoint's.
+func TestCheckpointToken_UsesPositionedCursor(t *testing.T) {
+	def := &Definition{
+		Source:     SourceDef{Type: "positionedtest", Options: map[string]interface{}{}},
+		Sink:       SinkDef{Type: "null"},
+		Checkpoint: CheckpointDef{Type: "file", Path: t.TempDir(), Key: "pos-cursor", IntervalRows: 8},
+	}
+	if _, err := runInline(t, def); err != nil {
+		t.Fatal(err)
+	}
+	s := lastPositioned
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.cursorAt) == 0 || !reflect.DeepEqual(s.cursorAt, s.commits) {
+		t.Fatalf("cursor positions %v must match the commits %v", s.cursorAt, s.commits)
 	}
 }

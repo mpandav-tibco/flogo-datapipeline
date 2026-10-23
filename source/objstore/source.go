@@ -322,10 +322,10 @@ func (s *objstoreSource) openObject(ctx context.Context, obj objstore.Object) (s
 		if err != nil {
 			return nil, "", fmt.Errorf("get reader for %q: %w", obj.Key, err)
 		}
-		// Resume after a dropped connection with ranged GETs when the store
-		// supports them and the object size is known.
-		if rr, ok := s.store.(objstore.RangeReader); ok && obj.Size > 0 {
-			rc = newResumableReader(ctx, rr, obj.Key, obj.Size, rc)
+		// Resume after a dropped connection with version-pinned ranged GETs
+		// when the store supports them and the object size and ETag are known.
+		if rr, ok := s.store.(objstore.VersionedRangeReader); ok && obj.Size > 0 && obj.ETag != "" {
+			rc = newResumableReader(ctx, rr, obj.Key, obj.ETag, obj.Size, rc)
 		}
 		innerCfg["reader"] = rc
 		innerSrc, err := source.New(s.innerFormat, innerCfg)

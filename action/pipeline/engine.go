@@ -249,7 +249,7 @@ func (a *DataPipelineAction) execute(ctx context.Context, in *Input, runLog core
 						// lose its buffered input on resume.
 						return checkpointFailed(runLog, def, "state snapshot", serr)
 					}
-					token := checkpoint.NewToken(def.Source.Type, pos, cursorOf(pSrc))
+					token := checkpoint.NewToken(def.Source.Type, pos, cursorOf(pSrc, pos-opts.ResumeFrom))
 					token.WindowState = state
 					if serr := ckpt.Save(ckptKey, token); serr != nil {
 						return checkpointFailed(runLog, def, "checkpoint save", serr)
@@ -315,7 +315,7 @@ func (a *DataPipelineAction) execute(ctx context.Context, in *Input, runLog core
 	// Scaled runs defer the stateful flush to here, once, across partitions.
 	if scaled && chain != nil {
 		if f, ok := interface{}(chainNode(plan)).(graphexec.Flusher); ok {
-			if ferr := a.flushDeferred(f, plan, env); ferr != nil {
+			if ferr := a.flushDeferred(ctx, f, plan, env); ferr != nil {
 				env.counts.addTo(out)
 				return out, ferr
 			}
@@ -642,7 +642,13 @@ func closePrebuilt(g *graphexec.Graph) {
 
 // flushDeferred emits a stateful chain's remaining output (scaled runs flush
 // once after the last partition) through the primary sink.
-func (a *DataPipelineAction) flushDeferred(f graphexec.Flusher, plan *graphexec.Plan, env *runEnv) error {
+func (a *DataPipelineAction) flushDeferred(ctx context.Context, f graphexec.Flusher, plan *graphexec.Plan, env *runEnv) error {
+	// The last Plan.Run cancelled the context it bound to the chain; the
+	// flushed rows pass through later stages (e.g. lookup), so re-bind them
+	// to the still-live run context.
+	if cb, ok := f.(interface{ BindContext(context.Context) }); ok {
+		cb.BindContext(ctx)
+	}
 	b, err := f.Flush()
 	if err != nil {
 		return fmt.Errorf("window flush: %w", err)
@@ -685,7 +691,7 @@ func (a *DataPipelineAction) saveFinalCheckpoint(runLog corelog.Logger, ckpt che
 	if err != nil {
 		return fmt.Errorf("state snapshot: %w", err)
 	}
-	token := checkpoint.NewToken(a.def.Source.Type, pos, cursorOf(src))
+	token := checkpoint.NewToken(a.def.Source.Type, pos, cursorOf(src, math.MaxInt64))
 	token.WindowState = state
 	if err := ckpt.Save(key, token); err != nil {
 		return fmt.Errorf("save: %w", err)
@@ -736,13 +742,25 @@ func restoreState(runLog corelog.Logger, snapshotters map[string]graphexec.Snaps
 	return nil
 }
 
-// cursorOf returns src's checkpoint cursor provider, if any.
-func cursorOf(src source.Source) checkpoint.CursorProvider {
+// cursorOf returns src's checkpoint cursor provider, if any, positioned at
+// localRows run-local processed rows — the value then passed to Commit — so
+// the token never carries the previous checkpoint's offsets.
+func cursorOf(src source.Source, localRows int64) checkpoint.CursorProvider {
+	if p, ok := src.(checkpoint.PositionedCursorProvider); ok {
+		return positionedCursor{p, localRows}
+	}
 	if p, ok := src.(checkpoint.CursorProvider); ok {
 		return p
 	}
 	return nil
 }
+
+type positionedCursor struct {
+	p    checkpoint.PositionedCursorProvider
+	rows int64
+}
+
+func (c positionedCursor) Cursor() json.RawMessage { return c.p.CursorAt(c.rows) }
 
 // sourceNodeSelfContained reports whether a DAG's "source" node carries its
 // own config (so the definition's source is not the primary source).

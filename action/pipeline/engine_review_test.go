@@ -105,3 +105,40 @@ func TestLinearChain_BindsRunContext(t *testing.T) {
 		t.Fatal("chain transform was not bound to a cancellable run context")
 	}
 }
+
+// ctxGuard fails a batch when its bound context is cancelled, like lookup.
+type ctxGuard struct{ ctx context.Context }
+
+func (g *ctxGuard) Apply(b *record.RecordBatch) (*record.RecordBatch, error) {
+	if g.ctx != nil && g.ctx.Err() != nil {
+		return nil, g.ctx.Err()
+	}
+	return b, nil
+}
+func (g *ctxGuard) Close() error                    { return nil }
+func (g *ctxGuard) Name() string                    { return "ctxguard" }
+func (g *ctxGuard) BindContext(ctx context.Context) { g.ctx = ctx }
+
+func init() {
+	transform.Register("ctxguard", func(map[string]interface{}) (transform.Transform, error) { return &ctxGuard{}, nil })
+}
+
+// The deferred window flush of a scaled linear run runs after the last
+// Plan.Run returned; stages after the window must not see a cancelled context.
+func TestScaledLinearWindow_FlushThroughContextBoundStage(t *testing.T) {
+	outPath := filepath.Join(t.TempDir(), "out.jsonl")
+	def := &Definition{
+		Source:  SourceDef{Type: "fakepart"},
+		Sink:    jsonlSink(outPath),
+		Scaling: ScalingDef{Mode: "sharded", InstanceIndex: 0, InstanceCount: 1},
+		Transforms: []TransformDef{scaledWindowTransform(),
+			{Type: "ctxguard", Extra: map[string]interface{}{"type": "ctxguard"}}},
+	}
+	out, err := runInline(t, def)
+	if err != nil || out.Status != "completed" {
+		t.Fatalf("status=%q err=%v", out.Status, err)
+	}
+	if n := len(readJSONL(t, outPath)); n != 4 {
+		t.Fatalf("sink rows = %d, want 4", n)
+	}
+}
