@@ -35,6 +35,7 @@ type pnode struct {
 	hasErr     bool
 	multiIn    MultiInputOp
 	closer     interface{ Close() error }
+	replicas   []TransformOp // extra parallel instances of tx (see Node.Replicas)
 }
 
 // Plan is a validated, ready-to-run graph: operators constructed, edges wired,
@@ -115,17 +116,29 @@ func Compile(g *Graph, b Builders) (*Plan, error) {
 				pn.src, pn.closer = op, op
 			}
 		case KindTransform:
-			op, err := b.Transform(n.Type, n.Cfg)
-			if err != nil {
-				return fail("graphexec: build transform %q (%s): %w", n.ID, n.Type, err)
+			if op, ok := n.Operator.(TransformOp); ok {
+				pn.tx, pn.closer = op, op
+			} else {
+				op, err := b.Transform(n.Type, n.Cfg)
+				if err != nil {
+					return fail("graphexec: build transform %q (%s): %w", n.ID, n.Type, err)
+				}
+				pn.tx, pn.closer = op, op
 			}
-			pn.tx, pn.closer = op, op
+			pn.replicas = n.Replicas
+			for _, r := range n.Replicas {
+				built = append(built, r)
+			}
 		case KindSink:
-			op, err := b.Sink(n.Type, n.Cfg)
-			if err != nil {
-				return fail("graphexec: build sink %q (%s): %w", n.ID, n.Type, err)
+			if op, ok := n.Operator.(SinkOp); ok {
+				pn.snk, pn.closer = op, op
+			} else {
+				op, err := b.Sink(n.Type, n.Cfg)
+				if err != nil {
+					return fail("graphexec: build sink %q (%s): %w", n.ID, n.Type, err)
+				}
+				pn.snk, pn.closer = op, op
 			}
-			pn.snk, pn.closer = op, op
 		default:
 			return fail("graphexec: node %q has unknown kind %q", n.ID, n.Kind)
 		}
@@ -347,6 +360,33 @@ func (p *Plan) Close() error {
 				first = err
 			}
 		}
+		for _, r := range n.replicas {
+			if err := r.Close(); err != nil && first == nil {
+				first = err
+			}
+		}
 	}
 	return first
+}
+
+// Sinks returns every sink operator in the plan, keyed by node id.
+func (p *Plan) Sinks() map[string]SinkOp {
+	out := make(map[string]SinkOp)
+	for _, n := range p.nodes {
+		if n.kind == KindSink {
+			out[n.id] = n.snk
+		}
+	}
+	return out
+}
+
+// sourceCount returns the number of source nodes.
+func (p *Plan) sourceCount() int {
+	c := 0
+	for _, n := range p.nodes {
+		if n.kind == KindSource {
+			c++
+		}
+	}
+	return c
 }

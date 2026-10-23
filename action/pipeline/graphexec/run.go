@@ -6,6 +6,7 @@ import (
 	"io"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/mpandav-tibco/flogo-datapipeline/record"
 )
@@ -76,7 +77,11 @@ func (p *Plan) Run(ctx context.Context, opts Options) (*Result, error) {
 			leftWG[n.id] = lwg
 			continue
 		}
-		inCh[n.id] = make(chan pmsg, opts.bufferDepth())
+		depth := opts.bufferDepth()
+		if n.kind == KindSink && opts.SinkBufferDepth > 0 {
+			depth = opts.SinkBufferDepth
+		}
+		inCh[n.id] = make(chan pmsg, depth)
 		wg := &sync.WaitGroup{}
 		wg.Add(n.inDeg)
 		inWG[n.id] = wg
@@ -112,7 +117,10 @@ func (p *Plan) Run(ctx context.Context, opts Options) (*Result, error) {
 	// The source emits a drain barrier every CheckpointRows rows; the coordinator
 	// waits for every sink to flush at the barrier, persists the source position,
 	// then releases the source to continue — so a crash resumes with no data loss.
-	if opts.CheckpointRows > 0 && opts.OnCheckpoint != nil {
+	// Mid-run barriers need one source: with several, the barrier position is
+	// ambiguous and the sources would race to drive one coordinator. A
+	// multi-source graph checkpoints at end of run only.
+	if (opts.CheckpointRows > 0 || opts.CheckpointInterval > 0) && opts.OnCheckpoint != nil && p.sourceCount() == 1 {
 		rt.cpOn = true
 		rt.cpSinks = p.sinkCount()
 		rt.cpBarrierCh = make(chan int64)
@@ -132,6 +140,8 @@ func (p *Plan) Run(ctx context.Context, opts Options) (*Result, error) {
 			case KindTransform:
 				if n.multiIn != nil {
 					rt.runMultiInputTransform(rctx, n)
+				} else if len(n.replicas) > 0 {
+					rt.runParallelTransform(rctx, n)
 				} else {
 					rt.runTransform(rctx, n)
 				}
@@ -181,6 +191,7 @@ type runtime struct {
 type pmsg struct {
 	batch   *record.RecordBatch
 	barrier int64
+	bytes   int64 // memory budget charged by the source; released on receipt
 }
 
 // runCheckpointCoord drives one checkpoint round at a time: it reads the source
@@ -281,10 +292,14 @@ func (rt *runtime) runSource(ctx context.Context, n *pnode) {
 		}
 	}
 
-	var rows, nextBarrier int64
+	var rows, nextBarrier, rowsSinceBarrier int64
 	var epoch int64
+	lastBarrier := time.Now()
+	resetRowTrigger := func() {
+		nextBarrier = rows + int64(rt.opts.CheckpointRows)
+	}
 	if rt.cpOn {
-		nextBarrier = int64(rt.opts.CheckpointRows)
+		resetRowTrigger()
 	}
 	for {
 		select {
@@ -292,37 +307,55 @@ func (rt *runtime) runSource(ctx context.Context, n *pnode) {
 			return
 		default:
 		}
+		if !rt.opts.Budget.WaitForRoom(ctx) {
+			return
+		}
 		b, err := n.src.ReadBatch(size)
 		if b != nil && b.Len() > 0 {
 			rows += int64(b.Len())
+			rowsSinceBarrier += int64(b.Len())
 			atomic.AddInt64(&stat.RowsOut, int64(b.Len()))
 			atomic.AddInt64(&rt.res.RowsRead, int64(b.Len()))
-			if !rt.emit(ctx, n, b) {
+			var nb int64
+			if rt.opts.Budget.enabled() && rt.opts.SizeOf != nil {
+				nb = rt.opts.SizeOf(b)
+				rt.opts.Budget.Acquire(nb)
+			}
+			if !rt.emitBytes(ctx, n, b, nb) {
 				return
 			}
 		} else if b != nil {
 			record.Put(b)
 		}
-		// Drain barrier: once we cross a checkpoint boundary, hand the coordinator
-		// our position, broadcast the barrier, then PAUSE until it has flushed every
-		// sink and persisted the position. Pausing means fan-in nodes never have to
+		// Drain barrier: once we cross a checkpoint boundary (rows, or time —
+		// also on an idle poll when rows are pending or the source holds
+		// unacknowledged progress), hand the coordinator our position,
+		// broadcast the barrier, then PAUSE until it has flushed every sink and
+		// persisted the position. Pausing means fan-in nodes never have to
 		// buffer to align barriers — no more rows are in flight behind this one.
-		if rt.cpOn && err == nil && rows >= nextBarrier {
-			nextBarrier += int64(rt.opts.CheckpointRows)
-			epoch++
-			pos := rt.opts.ResumeFrom + rows
-			select {
-			case rt.cpBarrierCh <- pos:
-			case <-ctx.Done():
-				return
-			}
-			if !rt.emitBarrier(ctx, n, epoch) {
-				return
-			}
-			select {
-			case <-rt.cpResumeCh:
-			case <-ctx.Done():
-				return
+		if rt.cpOn && err == nil {
+			rowDue := rt.opts.CheckpointRows > 0 && rows >= nextBarrier
+			timeDue := rt.opts.CheckpointInterval > 0 && time.Since(lastBarrier) >= rt.opts.CheckpointInterval &&
+				(rowsSinceBarrier > 0 || (rt.opts.HasUncommitted != nil && rt.opts.HasUncommitted()))
+			if rowDue || timeDue {
+				epoch++
+				pos := rt.opts.ResumeFrom + rows
+				select {
+				case rt.cpBarrierCh <- pos:
+				case <-ctx.Done():
+					return
+				}
+				if !rt.emitBarrier(ctx, n, epoch) {
+					return
+				}
+				select {
+				case <-rt.cpResumeCh:
+				case <-ctx.Done():
+					return
+				}
+				rowsSinceBarrier = 0
+				lastBarrier = time.Now()
+				resetRowTrigger()
 			}
 		}
 		if err == io.EOF {
@@ -345,6 +378,7 @@ func (rt *runtime) runTransform(ctx context.Context, n *pnode) {
 		case <-ctx.Done():
 			return
 		case m, ok := <-ch:
+			rt.release(m) // zero-value on close: no-op
 			if !ok {
 				// End-of-input: let the operator emit any rows it buffered (e.g. a
 				// window's still-open aggregates) before this node finishes.
@@ -467,6 +501,7 @@ func (rt *runtime) runMultiInputTransform(ctx context.Context, n *pnode) {
 		case <-ctx.Done():
 			return
 		case m, ok := <-rt.rightCh[n.id]:
+			rt.release(m) // zero-value on close: no-op
 			if !ok {
 				goto rightDone
 			}
@@ -495,6 +530,7 @@ rightDone:
 		case <-ctx.Done():
 			return
 		case m, ok := <-ch:
+			rt.release(m) // zero-value on close: no-op
 			if !ok {
 				if f, hasFlush := n.tx.(Flusher); hasFlush {
 					fb, ferr := f.Flush()
@@ -565,6 +601,7 @@ func (rt *runtime) runSink(ctx context.Context, n *pnode) {
 		case <-ctx.Done():
 			return
 		case m, ok := <-ch:
+			rt.release(m) // zero-value on close: no-op
 			if !ok {
 				if err := n.snk.Flush(); err != nil {
 					rt.fail(fmt.Errorf("sink %q flush: %w", n.id, err))
@@ -614,12 +651,22 @@ func (rt *runtime) runSink(ctx context.Context, n *pnode) {
 // Error edges are not touched here (they carry failed rows — see emitError). A
 // single success edge is the fast path: the batch is forwarded without copying.
 func (rt *runtime) emit(ctx context.Context, n *pnode, b *record.RecordBatch) bool {
+	return rt.emitBytes(ctx, n, b, 0)
+}
+
+// emitBytes is emit for a source batch charged nb bytes against the memory
+// budget. The fast path hands the charge to the consumer (released when it
+// receives the batch); when the batch is split across edges it is released
+// once routing has copied the rows out.
+func (rt *runtime) emitBytes(ctx context.Context, n *pnode, b *record.RecordBatch, nb int64) bool {
 	if b == nil {
+		rt.opts.Budget.Release(nb)
 		return true
 	}
 	if len(n.out) == 1 && n.out[0].etype == EdgeSuccess {
-		return rt.send(ctx, n.out[0], b)
+		return rt.sendBytes(ctx, n.out[0], b, nb)
 	}
+	defer rt.opts.Budget.Release(nb)
 	buckets := make([]*record.RecordBatch, len(n.out))
 	// Condition edges are bound to this batch's column layout once, then
 	// evaluated on positional rows; a map is built only for edges whose
@@ -709,6 +756,13 @@ func (rt *runtime) emitError(ctx context.Context, n *pnode, b *record.RecordBatc
 // target routes to its dedicated right/left channel instead of the ordinary
 // merged one.
 func (rt *runtime) send(ctx context.Context, e *pedge, b *record.RecordBatch) bool {
+	return rt.sendBytes(ctx, e, b, 0)
+}
+
+// release returns a received message's memory-budget charge.
+func (rt *runtime) release(m pmsg) { rt.opts.Budget.Release(m.bytes) }
+
+func (rt *runtime) sendBytes(ctx context.Context, e *pedge, b *record.RecordBatch, nb int64) bool {
 	ch := rt.inCh[e.to.id]
 	if e.to.multiIn != nil {
 		if e.toPort == "right" {
@@ -718,9 +772,10 @@ func (rt *runtime) send(ctx context.Context, e *pedge, b *record.RecordBatch) bo
 		}
 	}
 	select {
-	case ch <- pmsg{batch: b}:
+	case ch <- pmsg{batch: b, bytes: nb}:
 		return true
 	case <-ctx.Done():
+		rt.opts.Budget.Release(nb)
 		record.Put(b)
 		return false
 	}
