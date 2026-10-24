@@ -2,6 +2,7 @@ package podlog
 
 import (
 	"bufio"
+	"compress/gzip"
 	"context"
 	"encoding/hex"
 	"io"
@@ -69,6 +70,9 @@ type openLogFile struct {
 	// a restart, or a newer rotation reached while back-pressured): at its end
 	// the tailer moves on without the rotation grace.
 	rotated bool
+	// gz marks a kubelet-compressed rotation read through gzip: its on-disk
+	// size is not comparable with the (decompressed) offset.
+	gz bool
 	// missingSince is when the path was first seen absent while its container
 	// directory still exists — normally the instant between kubelet's rename
 	// and the runtime creating the new file.
@@ -337,29 +341,60 @@ func fpMatch(saved, cur string) bool {
 	return saved == cur || (saved != "" && len(saved) < len(cur) && strings.HasPrefix(cur, saved))
 }
 
-// rotatedSiblings returns the uncompressed rotated files of path
-// (kubelet names them <path>.<timestamp>), oldest first.
+// rotatedSiblings returns the rotated files of path in rotation order,
+// oldest first. kubelet names them <path>.<YYYYMMDD-hhmmss> and later gzips
+// all but the most recent to <path>.<ts>.gz; the order comes from the
+// timestamp in the name (a .gz file's mtime is when it was compressed). While
+// kubelet compresses, both copies may exist briefly: the uncompressed one is
+// listed, so a file is never read twice.
 func rotatedSiblings(path string) []string {
 	matches, _ := filepath.Glob(path + ".*")
-	type fm struct {
-		p string
-		t time.Time
-	}
-	var out []fm
+	byTS := map[string]string{}
 	for _, m := range matches {
-		if strings.HasSuffix(m, ".gz") || strings.HasSuffix(m, ".tmp") {
+		if strings.HasSuffix(m, ".tmp") {
 			continue
 		}
-		if fi, err := os.Stat(m); err == nil && fi.Mode().IsRegular() {
-			out = append(out, fm{m, fi.ModTime()})
+		fi, err := os.Stat(m)
+		if err != nil || !fi.Mode().IsRegular() {
+			continue
 		}
+		ts := strings.TrimSuffix(strings.TrimPrefix(m, path+"."), ".gz")
+		if prev, ok := byTS[ts]; ok && !strings.HasSuffix(prev, ".gz") {
+			continue // keep the uncompressed copy
+		}
+		byTS[ts] = m
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].t.Before(out[j].t) })
-	ps := make([]string, len(out))
-	for i, o := range out {
-		ps[i] = o.p
+	keys := make([]string, 0, len(byTS))
+	for k := range byTS {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	ps := make([]string, len(keys))
+	for i, k := range keys {
+		ps[i] = byTS[k]
 	}
 	return ps
+}
+
+// fingerprintPath fingerprints the (decompressed) content of the file at
+// path: a compressed rotation has the same fingerprint as the original.
+func fingerprintPath(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	if !strings.HasSuffix(path, ".gz") {
+		return fingerprint(f)
+	}
+	zr, err := gzip.NewReader(f)
+	if err != nil {
+		return ""
+	}
+	defer zr.Close()
+	buf := make([]byte, fpLen)
+	n, _ := io.ReadFull(zr, buf)
+	return hex.EncodeToString(buf[:n])
 }
 
 // resumeRotated looks for the rotated sibling the saved position belongs to
@@ -367,13 +402,7 @@ func rotatedSiblings(path string) []string {
 // rotated after it and the live file follow (see advance).
 func (t *tailer) resumeRotated(path string, meta podMeta, saved position) *openLogFile {
 	for _, sp := range rotatedSiblings(path) {
-		f, err := os.Open(sp)
-		if err != nil {
-			continue
-		}
-		match := fpMatch(saved.Fingerprint, fingerprint(f))
-		f.Close()
-		if !match {
+		if !fpMatch(saved.Fingerprint, fingerprintPath(sp)) {
 			continue
 		}
 		of := t.openFileAt(sp, meta, saved.Offset)
@@ -422,10 +451,30 @@ func (t *tailer) advance(ctx context.Context, of *openLogFile) bool {
 			return false
 		}
 	}
+	// Locate the file just finished among the rotated siblings — by identity,
+	// else by content (kubelet may have replaced it with its .gz copy) — and
+	// take the next one after it. If it is gone (deleted as the oldest), every
+	// remaining sibling is newer.
+	sibs := rotatedSiblings(of.key)
+	at := -1
+	for i, sp := range sibs {
+		if fi, err := os.Stat(sp); err == nil && os.SameFile(fi, old) {
+			at = i
+			break
+		}
+	}
+	if at < 0 {
+		for i, sp := range sibs {
+			if fp := fingerprintPath(sp); fp != "" && (fpMatch(of.fp, fp) || fpMatch(fp, of.fp)) {
+				at = i
+				break
+			}
+		}
+	}
 	next, rotated := "", false
-	for _, sp := range rotatedSiblings(of.key) {
+	for _, sp := range sibs[at+1:] {
 		fi, err := os.Stat(sp)
-		if err != nil || os.SameFile(fi, old) || (curErr == nil && os.SameFile(fi, cur)) || fi.ModTime().Before(old.ModTime()) {
+		if err != nil || (curErr == nil && os.SameFile(fi, cur)) {
 			continue
 		}
 		next, rotated = sp, true
@@ -472,7 +521,7 @@ func (t *tailer) finish(ctx context.Context, of *openLogFile) {
 // them into logical records, and emits them. It returns the number of records
 // emitted. Rotation detected mid-stream causes a reopen from offset 0.
 func (t *tailer) drain(ctx context.Context, of *openLogFile) (int, error) {
-	if fi, err := of.f.Stat(); err == nil && fi.Size() < of.offset {
+	if fi, err := of.f.Stat(); err == nil && !of.gz && fi.Size() < of.offset {
 		// File was truncated or replaced in place — reopen from the start.
 		if t.recon != nil {
 			t.recon.addRotation(t.node)
@@ -494,7 +543,7 @@ func (t *tailer) drain(ctx context.Context, of *openLogFile) (int, error) {
 	// A file first seen shorter than fpLen got a short fingerprint; complete
 	// it once the file has grown so positions and idempotency keys use the
 	// same stable fingerprint a restarted collector computes.
-	if len(of.fp) < 2*fpLen {
+	if !of.gz && len(of.fp) < 2*fpLen {
 		if fi, err := of.f.Stat(); err == nil && fi.Size() >= fpLen {
 			of.fp = fingerprint(of.f)
 		}
@@ -587,20 +636,38 @@ func (t *tailer) openFileAt(path string, meta podMeta, start int64) *openLogFile
 	if err != nil {
 		return nil
 	}
-	fp := fingerprint(f)
+	of := &openLogFile{
+		key:    path,
+		f:      f,
+		offset: start,
+		meta:   meta,
+		st:     &stitcher{startPattern: t.startPattern, maxLines: t.maxLines},
+	}
+	if strings.HasSuffix(path, ".gz") {
+		// A kubelet-compressed rotation: read it decompressed. Offsets and
+		// the fingerprint refer to the decompressed content, i.e. the same
+		// values as for the original file.
+		zr, err := gzip.NewReader(f)
+		if err != nil {
+			f.Close()
+			return nil
+		}
+		if _, err := io.CopyN(io.Discard, zr, start); err != nil && start > 0 {
+			f.Close()
+			return nil
+		}
+		of.gz = true
+		of.fp = fingerprintPath(path)
+		of.reader = bufio.NewReaderSize(zr, 1<<20)
+		return of
+	}
+	of.fp = fingerprint(f)
 	if _, err := f.Seek(start, io.SeekStart); err != nil {
 		f.Close()
 		return nil
 	}
-	return &openLogFile{
-		key:    path,
-		f:      f,
-		reader: bufio.NewReaderSize(f, 1<<20),
-		offset: start,
-		fp:     fp,
-		meta:   meta,
-		st:     &stitcher{startPattern: t.startPattern, maxLines: t.maxLines},
-	}
+	of.reader = bufio.NewReaderSize(f, 1<<20)
+	return of
 }
 
 // flushAndClose emits a deleted file's pending stitched record, then closes

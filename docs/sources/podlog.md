@@ -68,8 +68,12 @@ Use a [parse](../transforms/parse.md) transform to structure `message` into type
   the runtime reopening a fresh `0.log`. The tailer follows the file it has open to its
   end (with a 1 s grace for the runtime's last write), then switches to the new file. A
   collector that was down across a rotation finishes the rotated file from its saved
-  offset before the new one. While back-pressured over several rotations, the uncompressed
-  rotated files are read in order; kubelet's gzip-compressed older rotations are not read.
+  offset before the new one. While back-pressured (e.g. the sink is down) over several
+  rotations, every rotated file kubelet still keeps is read in rotation order — including
+  the older ones kubelet has gzip-compressed (`0.log.<ts>.gz`, read decompressed; offsets
+  and fingerprints refer to the original content, so a position saved before compression
+  still resumes). Only files kubelet has already deleted (beyond `containerLogMaxFiles`)
+  are out of reach.
 - **Pod deletion:** a removed pod's files are read to the end before their handles close.
 - Files are fingerprinted (first 256 bytes) to recognise them across restarts.
 
