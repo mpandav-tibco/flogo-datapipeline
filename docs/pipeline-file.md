@@ -121,6 +121,7 @@ Resume an interrupted run from the last saved source position.
 | `intervalRows` | `10000` | checkpoint every N rows |
 | `intervalSeconds` | `30` | …or every N seconds |
 | `deleteOnSuccess` | — | remove the checkpoint after a clean finish |
+| `onCorrupt` | `fail` | File backend: an unreadable stored checkpoint stops the run (`fail`), or is moved aside (`<file>.corrupt-<ts>`) and the run starts without it (`reset`). Use `reset` for sources that keep their own resume state (podlog), where a restart loop on a bad file would stop collection. |
 | `onSaveError` | `continue` | `continue` logs a failed checkpoint save and keeps going (the previous checkpoint and uncommitted source offsets stay in force); `fail` stops the run |
 | `key` | per-run id | stable key for single-instance streaming resume |
 | `path` | temp dir | **file** backend: directory for checkpoint files |

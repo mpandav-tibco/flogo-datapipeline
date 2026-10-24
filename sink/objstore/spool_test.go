@@ -31,7 +31,7 @@ func TestSpoolFlushSucceedsWhileStoreDown(t *testing.T) {
 	defer storeDown.Store(false)
 	s, err := newObjstoreSink("testflaky", map[string]interface{}{
 		"key": "{pod}/part-{uuid}.ndjson", "format": "jsonlines", "root": root, "rollMaxSeconds": 3600,
-		"spoolDir": spool, "spoolCloseWaitSeconds": 1,
+		"spoolDir": spool, "spoolMinFreePercent": 0, "spoolCloseWaitSeconds": 1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -69,7 +69,7 @@ func TestSpoolRecoversAfterRestart(t *testing.T) {
 	root, spool := t.TempDir(), t.TempDir()
 	storeDown.Store(true)
 	s, err := newObjstoreSink("testflaky", map[string]interface{}{
-		"key": "logs/part-{uuid}.ndjson", "format": "jsonlines", "root": root, "rollMaxSeconds": 3600, "spoolDir": spool, "spoolCloseWaitSeconds": 1,
+		"key": "logs/part-{uuid}.ndjson", "format": "jsonlines", "root": root, "rollMaxSeconds": 3600, "spoolDir": spool, "spoolMinFreePercent": 0, "spoolCloseWaitSeconds": 1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -102,7 +102,7 @@ func TestSpoolFullBlocksCheckpoint(t *testing.T) {
 	defer storeDown.Store(false)
 	s, err := newObjstoreSink("testflaky", map[string]interface{}{
 		"key": "logs/part-{uuid}.ndjson", "format": "jsonlines", "root": root, "rollMaxSeconds": 3600,
-		"spoolDir": spool, "spoolMaxBytes": 30,
+		"spoolDir": spool, "spoolMinFreePercent": 0, "spoolMaxBytes": 30,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -179,7 +179,7 @@ func TestSpoolStopsWithLastUser(t *testing.T) {
 	root, spool := t.TempDir(), t.TempDir()
 	cfg := map[string]interface{}{
 		"key": "{pod}/part-{uuid}.ndjson", "format": "jsonlines", "root": root, "rollMaxSeconds": 3600,
-		"spoolDir": spool, "spoolCloseWaitSeconds": 1,
+		"spoolDir": spool, "spoolMinFreePercent": 0, "spoolCloseWaitSeconds": 1,
 	}
 	a, err := newObjstoreSink("testflaky", cfg)
 	if err != nil {
@@ -216,4 +216,62 @@ func TestSpoolStopsWithLastUser(t *testing.T) {
 		t.Fatal("uploader still running after its last user closed")
 	}
 	waitRows(t, root, 2)
+}
+
+// Below spoolMinFreePercent free on the node filesystem, a spool with a
+// backlog stops growing (back-pressure) instead of pushing the node into
+// DiskPressure; without a backlog, flushing goes on.
+func TestSpoolStopsGrowingOnLowDisk(t *testing.T) {
+	if _, _, ok := diskFree(t.TempDir()); !ok {
+		t.Skip("disk statistics unavailable on this OS")
+	}
+	root, spool := t.TempDir(), t.TempDir()
+	storeDown.Store(true)
+	defer storeDown.Store(false)
+	s, err := newObjstoreSink("testflaky", map[string]interface{}{
+		"key": "logs/part-{uuid}.ndjson", "format": "jsonlines", "root": root, "rollMaxSeconds": 3600,
+		"spoolDir": spool, "spoolMinFreePercent": 100, "spoolCloseWaitSeconds": 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	_ = s.WriteBatch(oneRow(1))
+	if err := s.Flush(); err != nil {
+		t.Fatalf("first flush (no backlog) must succeed: %v", err)
+	}
+	_ = s.WriteBatch(oneRow(2))
+	if err := s.Flush(); err == nil || !strings.Contains(err.Error(), "spoolMinFreePercent") {
+		t.Fatalf("want a low-disk refusal with a backlog, got %v", err)
+	}
+	storeDown.Store(false)
+	waitRows(t, root, 1)
+	deadline := time.Now().Add(5 * time.Second)
+	for s.Flush() != nil {
+		if time.Now().After(deadline) {
+			t.Fatal("flush still refused after the backlog was uploaded")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	waitRows(t, root, 2)
+}
+
+// Corrupt metadata cannot be fixed by retrying: the object is moved aside
+// (data kept for manual recovery) and no longer blocks the spool.
+func TestSpoolSetsAsideCorruptMetadata(t *testing.T) {
+	root, spool := t.TempDir(), t.TempDir()
+	base := filepath.Join(spool, "obj-bad")
+	_ = os.WriteFile(base+dataSuffix, []byte("{\"msg\":\"x\"}\n"), 0o644)
+	_ = os.WriteFile(base+metaSuffix, []byte(`{"key":`), 0o644)
+	u, err := spoolFor(spool, "testflaky", map[string]interface{}{"root": root}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer u.release()
+	if !u.waitEmpty(5 * time.Second) {
+		t.Fatal("corrupt object still counted as pending")
+	}
+	if m, _ := filepath.Glob(base + dataSuffix + ".corrupt-*"); len(m) != 1 {
+		t.Fatalf("data not kept aside: %v", m)
+	}
 }

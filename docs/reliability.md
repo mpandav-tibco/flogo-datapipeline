@@ -31,6 +31,7 @@ row-group), while others replay-and-skip.
 | `intervalRows` | `10000` | save every N rows |
 | `intervalSeconds` | `30` | …or every N seconds (whichever first) |
 | `deleteOnSuccess` | — | drop the checkpoint after a clean finish |
+| `onCorrupt` | `fail` | unreadable stored checkpoint at run start: `fail` (stop) or `reset` (move aside, start without it; file backend) |
 | `onSaveError` | `continue` | what a failed save does: `continue` (log; previous checkpoint retained, replay window grows) or `fail` (stop the run so a broken checkpoint store is noticed) |
 
 ### Backends

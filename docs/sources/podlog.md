@@ -41,14 +41,15 @@ Use a [parse](../transforms/parse.md) transform to structure `message` into type
 | `bounded` | bool | `false` | — | Test/drain mode: return EOF once the tree is drained and idle. |
 | `includeNamespaces` | `[]string` | all | — | If non-empty, only these namespaces are tailed. |
 | `excludeNamespaces` | `[]string` | none | — | Namespaces to skip (e.g. `["kube-system"]`). |
-| `maxLineBytes` | int | `1048576` | — | Cap on one physical line. A writer that never terminates a line has it emitted in pieces of this size instead of buffering without limit. |
+| `maxLineBytes` | int | `1048576` | — | Cap on one record: a physical line, a line the runtime split into CRI partial chunks (e.g. a multi-MB payload log), or a stitched multiline record. Longer ones are split into consecutive records of about this size, never dropped. |
 | `multiline` | object | — | — | Multiline reassembly (see below). |
 
 ### `multiline` sub-object
 
 | Key | Type | Default | Required | Description |
 |---|---|---|:--:|---|
-| `startPattern` | string | — | — | Regex marking a **new** record's first line (e.g. a timestamp). Empty = disabled (one line per record). |
+| `startPattern` | string | — | — | Regex marking a **new** record's first line (e.g. a timestamp). Other lines continue a record that **began with a start line**; a container that never logs a start line (sidecar, nginx, JSON logger) keeps one record per line. Empty = disabled. |
+| `continuePattern` | string | — | — | Optional regex of lines that continue the previous record even when it did not begin with a start line, e.g. `^(\s+at \|\s*Caused by:)` for a stack trace printed without a header. Can be used alone. |
 | `flushIdleMs` | int | `2000` | — | Emit a pending stitched record after the file is idle this long. |
 | `maxLines` | int | `500` | — | Safety cap on stitched lines per record (`0` = unlimited). |
 
@@ -57,7 +58,9 @@ Use a [parse](../transforms/parse.md) transform to structure `message` into type
 - **CRI envelope:** parses `<RFC3339Nano> <stream> <F|P> <message>`; partial (`P`) lines
   are concatenated automatically.
 - **Multiline stitching:** when `startPattern` is set, lines that do not match it are
-  appended to the previous record; a pending record is flushed after `flushIdleMs` of
+  appended to the previous record if that record began with a start line (or if they match
+  `continuePattern`). The collector reads every container on the node, so a pattern written
+  for one application does not glue other containers' lines together; a pending record is flushed after `flushIdleMs` of
   inactivity, and capped at `maxLines`. `stdout` and `stderr` share one CRI file but are
   stitched **separately**, so a stack trace on `stderr` interleaved with `stdout` lines stays
   one record. The committed position never passes the first line that either stream still
@@ -86,7 +89,10 @@ Use a [parse](../transforms/parse.md) transform to structure `message` into type
   [durable spool](../sinks/objstore.md#durable-spool-rolling) so that a sink outage does not
   stall reading.
 - **Memory:** about 32 KiB of read buffer per open file, plus pending multiline records.
-  Hundreds of containers per node fit in well under 256 MiB.
+  Hundreds of containers per node fit in well under 256 MiB. Records are bounded in bytes
+  as well as in count: at most 16 MiB of messages queued between the tailer and the
+  pipeline, and 8 MiB per batch. Applications that log large payloads cannot run the
+  collector out of memory.
 - Files are fingerprinted (first 256 bytes) to recognise them across restarts.
 
 ## Example — DaemonSet collector with Java/BW stack-trace stitching

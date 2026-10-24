@@ -193,6 +193,12 @@ type CheckpointDef struct {
 	// are retained, so nothing is lost but the replay window grows — while
 	// "fail" stops the run so an unhealthy checkpoint store is noticed.
 	OnSaveError string `json:"onSaveError,omitempty"`
+	// OnCorrupt selects what an unreadable stored checkpoint does at run
+	// start: "fail" (default) stops the run; "reset" moves it aside and
+	// starts without it — for sources that keep their own resume state
+	// (e.g. podlog), where a restart loop on a bad file would stop
+	// collection for good.
+	OnCorrupt string `json:"onCorrupt,omitempty"`
 }
 
 // failOnCheckpointError reports whether checkpoint persistence failures abort the run.
@@ -686,6 +692,11 @@ func (d *Definition) validate() error {
 	case "", "continue", "fail":
 	default:
 		return fmt.Errorf("pipeline definition: checkpoint.onSaveError must be \"continue\" or \"fail\", got %q", d.Checkpoint.OnSaveError)
+	}
+	switch d.Checkpoint.OnCorrupt {
+	case "", "fail", "reset":
+	default:
+		return fmt.Errorf("pipeline definition: checkpoint.onCorrupt must be \"fail\" or \"reset\", got %q", d.Checkpoint.OnCorrupt)
 	}
 	if d.Incremental.Mode == "hwm" {
 		if d.Incremental.Column == "" {

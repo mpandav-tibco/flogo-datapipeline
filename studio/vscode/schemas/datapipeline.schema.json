@@ -681,6 +681,12 @@
               "description": "Remove the checkpoint file/key when the pipeline exits cleanly.",
               "default": false
             },
+            "onCorrupt": {
+              "type": "string",
+              "enum": ["fail", "reset"],
+              "description": "What an unreadable stored checkpoint does at run start: 'fail' stops the run; 'reset' moves it aside and starts without it (for sources with their own resume state, e.g. podlog). File backend.",
+              "default": "fail"
+            },
             "onSaveError": {
               "type": "string",
               "enum": ["continue", "fail"],

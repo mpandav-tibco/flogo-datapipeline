@@ -87,6 +87,9 @@ type logRecord struct {
 	// next record's first line. Committing the current position instead would
 	// skip an unwritten record on resume (silent loss).
 	endOffset int64
+	// startOffset is the file offset of the record's first byte (its first
+	// physical line, or first CRI partial chunk).
+	startOffset int64
 }
 
 // stitcher reassembles physical CRI lines into logical log records.
@@ -106,13 +109,21 @@ type logRecord struct {
 // The stitcher is single-goroutine; one instance is kept per open file.
 type stitcher struct {
 	startPattern matcher
+	// continuePattern (optional) marks lines that continue the previous
+	// record even when that record did not begin with a start line (e.g. a
+	// stack trace printed by printStackTrace, without a timestamp header).
+	continuePattern matcher
+	// maxBytes caps one logical record (CRI partial reassembly and multiline
+	// stitching; 0 = unlimited). A longer record is split, never dropped.
+	maxBytes int
 
 	// CRI partial-line accumulator.
-	partialBuf strings.Builder
-	partialTS  string
-	partialStr string
-	partialEnd int64
-	inPartial  bool
+	partialBuf   strings.Builder
+	partialTS    string
+	partialStr   string
+	partialEnd   int64
+	partialStart int64
+	inPartial    bool
 
 	// Application-multiline accumulator (the pending logical record).
 	pending    *logRecord
@@ -129,6 +140,14 @@ type stitcher struct {
 	// pendingLines counts the physical lines folded into the pending record so
 	// far (1 for the start line, +1 per continuation).
 	pendingLines int
+	// anchored: the pending record began with a startPattern line. Only an
+	// anchored record takes arbitrary continuation lines, so a container whose
+	// lines never match startPattern (a sidecar, nginx, a JSON logger on the
+	// same node) gets one record per line instead of glued blocks.
+	anchored bool
+	// capped: the last record was split by maxLines/maxBytes; the lines that
+	// follow are its remainder and stay stitched (anchored).
+	capped bool
 }
 
 // matcher abstracts the start-of-record test so the tailer can inject a
@@ -146,62 +165,96 @@ type matcher interface {
 //
 // Records still buffered when the file goes idle are released via flush().
 func (s *stitcher) push(line criLine, lineEnd int64) (logRecord, bool) {
+	return s.pushAt(line, -1, lineEnd)
+}
+
+// pushAt is push with the physical line's start offset, so the stitcher can
+// report where its buffered (not yet emitted) bytes begin (bufferedStart).
+func (s *stitcher) pushAt(line criLine, lineStart, lineEnd int64) (logRecord, bool) {
+	entryStart := lineStart
 	// --- level 1: reassemble CRI partial lines ---
 	if line.partial {
 		if !s.inPartial {
 			s.inPartial = true
+			s.partialStart = lineStart
 			s.partialTS = line.timestamp
 			s.partialStr = line.stream
 			s.partialBuf.Reset()
 		}
 		s.partialBuf.WriteString(line.message)
 		s.partialEnd = lineEnd
-		return logRecord{}, false
-	}
-	if s.inPartial {
+		if s.maxBytes <= 0 || s.partialBuf.Len() < s.maxBytes {
+			return logRecord{}, false
+		}
+		// A line that never ends (e.g. a multi-MB payload, split by the runtime
+		// into 16 KiB partial chunks): cut it here as if it were complete.
+		line = criLine{timestamp: s.partialTS, stream: s.partialStr, message: s.partialBuf.String(), valid: true}
+		entryStart = s.partialStart
+		s.inPartial = false
+		s.partialBuf.Reset()
+	} else if s.inPartial {
 		s.partialBuf.WriteString(line.message)
 		line.message = s.partialBuf.String()
 		line.timestamp = s.partialTS
 		line.stream = s.partialStr
+		entryStart = s.partialStart
 		s.inPartial = false
 		s.partialBuf.Reset()
 	}
 
-	entry := logRecord{timestamp: line.timestamp, stream: line.stream, message: line.message, endOffset: lineEnd}
+	entry := logRecord{timestamp: line.timestamp, stream: line.stream, message: line.message, endOffset: lineEnd, startOffset: entryStart}
 
 	// --- level 2: application multiline stitching ---
-	if s.startPattern == nil {
+	if s.startPattern == nil && s.continuePattern == nil {
 		return entry, true
 	}
 
-	if s.pending == nil {
-		// First entry — becomes the pending record regardless of pattern.
-		s.startPending(entry, lineEnd)
-		return logRecord{}, false
+	isStart := s.startPattern != nil && s.startPattern.MatchString(entry.message)
+	isCont := !isStart && s.pending != nil &&
+		(s.anchored || (s.continuePattern != nil && s.continuePattern.MatchString(entry.message)))
+	if !isCont {
+		// A new logical record begins: flush the pending one (with the offset of
+		// ITS last line), then buffer this line as the new pending record —
+		// unless nothing can ever continue it (not a start line, and no
+		// continuePattern): then it is complete on its own, emitted now.
+		// The remainder of a record split by a cap continues as one record.
+		continued := !isStart && s.pending == nil && s.capped
+		s.capped = false
+		var completed logRecord
+		hadPending := s.pending != nil
+		if hadPending {
+			completed = s.finishPending()
+		}
+		if !isStart && !continued && s.continuePattern == nil && !hadPending {
+			return entry, true
+		}
+		s.startPending(entry, lineEnd, isStart || continued)
+		return completed, hadPending
 	}
 
-	if s.startPattern.MatchString(entry.message) {
-		// A new logical record begins: flush the pending one (with the offset of
-		// ITS last line), then buffer this line as the new pending record.
+	// Continuation line: append to the pending record and extend its offset —
+	// unless that would push it past maxBytes: then emit it first and let this
+	// line open its (anchored) remainder.
+	if s.maxBytes > 0 && s.pendingBuf.Len() > 0 && s.pendingBuf.Len()+1+len(entry.message) > s.maxBytes {
 		completed := s.finishPending()
-		s.startPending(entry, lineEnd)
+		s.startPending(entry, lineEnd, true)
 		return completed, true
 	}
-
-	// Continuation line: append to the pending record and extend its offset.
 	s.pendingBuf.WriteByte('\n')
 	s.pendingBuf.WriteString(entry.message)
 	s.pendingEnd = lineEnd
 	s.pendingLines++
-	if s.maxLines > 0 && s.pendingLines >= s.maxLines {
+	if (s.maxLines > 0 && s.pendingLines >= s.maxLines) || (s.maxBytes > 0 && s.pendingBuf.Len() >= s.maxBytes) {
 		// Safety cap reached: emit the (capped) record now. The next line opens a
 		// fresh pending record, so overflow lines are not lost.
+		s.capped = true
 		return s.finishPending(), true
 	}
 	return logRecord{}, false
 }
 
-func (s *stitcher) startPending(entry logRecord, lineEnd int64) {
+func (s *stitcher) startPending(entry logRecord, lineEnd int64, anchored bool) {
+	s.anchored = anchored
 	rec := entry
 	s.pending = &rec
 	s.pendingBuf.Reset()
@@ -222,9 +275,17 @@ func (s *stitcher) finishPending() logRecord {
 // flush returns any record still buffered (a trailing multiline record, or a
 // dangling CRI partial line). Called when a file is closed or has been idle
 // long enough that further continuation lines are not expected.
-// buffering reports whether lines are held (a pending multiline record or a
-// CRI partial line).
-func (s *stitcher) buffering() bool { return s.pending != nil || s.inPartial }
+// bufferedStart is the offset of the first byte still held (pending record
+// or partial line); ok is false when nothing is buffered.
+func (s *stitcher) bufferedStart() (int64, bool) {
+	switch {
+	case s.pending != nil:
+		return s.pending.startOffset, true // a dangling partial follows it
+	case s.inPartial:
+		return s.partialStart, true
+	}
+	return 0, false
+}
 
 func (s *stitcher) flush() (logRecord, bool) {
 	if s.inPartial {

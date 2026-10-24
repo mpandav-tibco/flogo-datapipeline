@@ -801,6 +801,20 @@ func spoolMaxBytes(cfg map[string]interface{}) int64 {
 	return 5 << 30
 }
 
+// spoolMinFreePercent reads spoolMinFreePercent (default 20; 0 disables the
+// check). kubelet's default hard eviction thresholds are nodefs.available<10%
+// and imagefs.available<15% (the same filesystem on many nodes): stopping
+// above both keeps the spool from causing an eviction.
+func spoolMinFreePercent(cfg map[string]interface{}) int {
+	if _, has := cfg["spoolMinFreePercent"]; has {
+		if v := int64FromCfg(cfg, "spoolMinFreePercent"); v >= 0 {
+			return int(v)
+		}
+		return 0
+	}
+	return 20
+}
+
 // spoolCloseWait reads spoolCloseWaitSeconds (default 10).
 func spoolCloseWait(cfg map[string]interface{}) time.Duration {
 	if v := int64FromCfg(cfg, "spoolCloseWaitSeconds"); v > 0 {

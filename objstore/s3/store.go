@@ -39,6 +39,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/mpandav-tibco/flogo-datapipeline/objstore"
+	corelog "github.com/project-flogo/core/support/log"
 )
 
 func init() {
@@ -80,7 +81,16 @@ func newS3Store(cfg map[string]interface{}) (objstore.Store, error) {
 	var awsCfg aws.Config
 	var err error
 
-	if accessKeyIDEnv != "" && secretKeyEnv != "" {
+	useEnv := accessKeyIDEnv != "" && secretKeyEnv != ""
+	if useEnv && os.Getenv(accessKeyIDEnv) == "" && os.Getenv(secretKeyEnv) == "" {
+		// Both referenced variables are unset: no static credentials are
+		// provided in this environment (e.g. IRSA / an instance profile on
+		// AWS, where the key secret is simply not mounted). Use the default
+		// chain, as the AWS SDK itself does for empty credential variables.
+		s3Log.Infof("s3 store: %s and %s are not set; using the AWS default credential chain (IRSA, instance profile, ~/.aws)", accessKeyIDEnv, secretKeyEnv)
+		useEnv = false
+	}
+	if useEnv {
 		keyID := os.Getenv(accessKeyIDEnv)
 		secret := os.Getenv(secretKeyEnv)
 		token := ""
@@ -308,3 +318,5 @@ func (s *s3Store) Delete(ctx context.Context, key string) error {
 // Close is a no-op for S3 — the AWS SDK manages HTTP connection pools
 // independently of any per-client state.
 func (s *s3Store) Close() error { return nil }
+
+var s3Log = corelog.ChildLogger(corelog.RootLogger(), "s3-store")

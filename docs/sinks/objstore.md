@@ -20,6 +20,7 @@ object naming, **partitioning**, and **rolling**. Implemented in
 | `rollMaxSeconds` | int | `0` | — | Roll the object at this age (seconds). `0` = no time roll. |
 | `spoolDir` | string | — | — | Rolling sinks only: durable local spool directory (see [Durable spool](#durable-spool-rolling)). Empty or `none` = no spool: upload synchronously at each flush (use `none` when the value comes from a property, because resolvers treat an empty value as unset). |
 | `spoolMaxBytes` | int | `5368709120` | — | Spool capacity (bytes of sealed, not-yet-uploaded objects). When full, flushes fail (back-pressure) until uploads catch up. |
+| `spoolMinFreePercent` | int | `20` | — | While objects await upload, stop growing the spool when the filesystem has less free space than this percentage. Flushes then fail (back-pressure) instead of driving the node into DiskPressure, where kubelet evicts pods (default thresholds: 10% nodefs, 15% imagefs). `0` disables the check. Linux/macOS. |
 | `spoolCloseWaitSeconds` | int | `10` | — | On sink close, how long to wait for the spool to finish uploading. Whatever remains stays on disk and is uploaded by the next process. |
 
 ### S3 keys
@@ -115,7 +116,7 @@ set, `Flush` makes data durable **on local disk** instead of remotely:
 4. On start, sealed objects left by a previous process are uploaded. `*.part` files are
    discarded because their rows are past the last checkpoint and will be replayed.
 
-When `spoolMaxBytes` is reached, flushes fail, so checkpoints stop and the pipeline
+When `spoolMaxBytes` is reached, or the disk falls below `spoolMinFreePercent` free, flushes fail, so checkpoints stop and the pipeline
 back-pressures exactly as it does without a spool. Size the spool for
 `ingest rate × longest outage to ride out`. Use a node path that survives pod restarts
 (a `hostPath`), and give the dead-letter sink its own spool directory.
@@ -130,7 +131,9 @@ Gauges (label `spool`): `flogo_objstore_spool_bytes`, `flogo_objstore_spool_obje
 
 ## Credential resolution (S3)
 
-1. `accessKeyIdEnv` **and** `secretAccessKeyEnv` set → read both env vars.
+1. `accessKeyIdEnv` **and** `secretAccessKeyEnv` set → read both env vars. If **neither**
+   variable is set in the environment (e.g. the key secret is not mounted on AWS with IRSA),
+   the default chain (3.) is used; if only one is set, the store fails to open.
 2. Else inline `accessKeyId`/`secretAccessKey` (Studio/dev).
 3. Else the AWS default chain (env → `~/.aws` → IRSA / instance profile).
 

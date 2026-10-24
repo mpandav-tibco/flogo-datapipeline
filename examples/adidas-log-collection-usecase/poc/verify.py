@@ -27,6 +27,7 @@ import sys
 
 SEQ = re.compile(r"\[seq=(\d+) inst=([0-9a-f]+)(?: lines=(\d+))?\]")
 DONE = re.compile(r"EMIT_DONE total=(\d+)")
+PAYLOAD = re.compile(r" (Q+) \[seq=\d+ inst=[0-9a-f]+ bytes=(\d+)\]")
 LEVELS = {"TRACE", "DEBUG", "INFO", "WARN", "WARNING", "ERROR", "FATAL"}
 
 
@@ -136,9 +137,17 @@ def main():
             st["total"] = int(d.group(1))
         if lines is not None and raw.count("\n") != int(lines):
             broken_multiline.append({"pod": k[1], "seq": seq, "want_lines": int(lines) + 1, "got_lines": raw.count("\n") + 1})
+        if "bytes=" in raw:  # payload logged through CRI partial chunks: must arrive whole
+            pm = PAYLOAD.search(raw)
+            if not pm or len(pm.group(1)) != int(pm.group(2)):
+                broken_multiline.append({"pod": k[1], "seq": seq, "payload": True})
+        if raw.count("[seq=") > 1:  # several log lines glued into one record
+            broken_multiline.append({"pod": k[1], "seq": seq, "glued": raw.count("[seq=")})
         ts = parse_ts(rec.get("@timestamp"))
         if source == "s3":
-            if ts is None or rec.get("log_level") not in LEVELS or not isinstance(rec.get("severity"), int) \
+            # non-BW containers (sidecars) do not parse: level UNKNOWN is right
+            level_ok = rec.get("log_level") in LEVELS or (rec.get("container") != "bwapp" and rec.get("log_level") == "UNKNOWN")
+            if ts is None or not level_ok or not isinstance(rec.get("severity"), int) \
                     or not rec.get("index_hint") or not rec.get("idempotency_key"):
                 bad_fields += 1
             services[rec.get("service_name")] += 1

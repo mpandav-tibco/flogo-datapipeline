@@ -588,6 +588,7 @@ func openCheckpoint(def *Definition) (checkpoint.Checkpoint, error) {
 		"passwordEnv": cd.PasswordEnv,
 		"keyPrefix":   cd.KeyPrefix,
 		"ttlSeconds":  cd.TTLSeconds,
+		"onCorrupt":   cd.OnCorrupt,
 	}
 	return checkpoint.New(cd.Type, cfg)
 }
