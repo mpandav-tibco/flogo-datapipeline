@@ -304,3 +304,34 @@ func TestDoubleRotationWhileBehind(t *testing.T) {
 		t.Errorf("read %d records, want exactly 10", n)
 	}
 }
+
+// Without a checkpoint store the engine acknowledges written rows through
+// source.Committer; Commit must persist the delivered positions.
+func TestCommitPersistsPositions(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "ns_pod_uid", "c")
+	_ = os.MkdirAll(dir, 0o755)
+	w, _ := os.Create(filepath.Join(dir, "0.log"))
+	for i := 0; i < 3; i++ {
+		_, _ = w.WriteString(testCRILine(i))
+	}
+	w.Close()
+	posFile := filepath.Join(t.TempDir(), "positions.json")
+	src, err := newPodlogSource(map[string]interface{}{"root": root, "positionFile": posFile, "fromBeginning": true, "bounded": true, "pollMs": 50})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for {
+		b, err := src.ReadBatch(10)
+		if err != nil || (b != nil && b.Len() == 3) {
+			break
+		}
+	}
+	if err := src.(interface{ Commit(int64) error }).Commit(1 << 62); err != nil {
+		t.Fatal(err)
+	}
+	_ = src.Close()
+	if r := drainAll(t, root, posFile); len(r) != 0 {
+		t.Fatalf("restart re-read %d records after Commit, want 0", len(r))
+	}
+}

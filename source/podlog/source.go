@@ -331,6 +331,15 @@ func (s *podlogSource) Cursor() json.RawMessage {
 	return s.positions.snapshot()
 }
 
+// Commit implements source.Committer. The engine calls it once every row
+// handed out so far is durably written: after a checkpoint is saved, and at
+// the end of a run that has no checkpoint store. Persisting the delivered
+// positions then is exactly what Cursor does.
+func (s *podlogSource) Commit(int64) error {
+	s.Cursor()
+	return nil
+}
+
 func (s *podlogSource) Close() error {
 	if s.closed.Swap(true) {
 		return nil

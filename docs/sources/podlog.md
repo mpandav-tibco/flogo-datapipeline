@@ -59,9 +59,11 @@ Use a [parse](../transforms/parse.md) transform to structure `message` into type
 - **Multiline stitching:** when `startPattern` is set, lines that do not match it are
   appended to the previous record; a pending record is flushed after `flushIdleMs` of
   inactivity, and capped at `maxLines`.
-- **At-least-once:** the position registry is persisted only at checkpoints, after the sink
-  has made the records durable — never on shutdown — so a crash or restart resumes from
-  the last committed offset (a few duplicate lines are possible, none are lost).
+- **At-least-once:** the position registry is persisted only once the sink has made the
+  records durable — at checkpoints, at the end of a run (or of a shutdown drain), or when
+  the engine acknowledges written rows without a checkpoint store (`source.Committer`) —
+  never for records still in flight. A crash resumes from the last committed offset (a
+  few duplicate lines are possible, none are lost).
 - **Rotation-safe:** kubelet rotates a log by renaming `0.log` to `0.log.<timestamp>` and
   the runtime reopening a fresh `0.log`. The tailer follows the file it has open to its
   end (with a 1 s grace for the runtime's last write), then switches to the new file. A

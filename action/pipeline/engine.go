@@ -337,6 +337,11 @@ func (a *DataPipelineAction) execute(ctx context.Context, in *Input, runLog core
 			} else {
 				a.recorder.CheckpointSaved(a.ref)
 			}
+		} else if c, ok := primary.(source.Committer); ok && primary != nil {
+			// Everything read is written: acknowledge it, as at a clean end.
+			if cerr := c.Commit(math.MaxInt64); cerr != nil {
+				runLog.Warnf("source commit failed (continuing): %v", cerr)
+			}
 		}
 		return out, err
 	}
