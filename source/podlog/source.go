@@ -286,13 +286,13 @@ func (s *podlogSource) trackPending(er enrichedRecord) {
 	// file, refreshed once it grew past the fingerprint window.)
 	switch {
 	case !ok:
-		s.pending[er.fileKey] = position{Offset: er.endOffset, Fingerprint: er.fp}
+		s.pending[er.fileKey] = position{Offset: er.commitOffset, Fingerprint: er.fp}
 	case !fpMatch(cur.Fingerprint, er.fp):
 		s.carryBytes += cur.Offset - s.committedOffset(er.fileKey, cur.Fingerprint)
 		s.committed[er.fileKey] = position{Fingerprint: er.fp}
-		s.pending[er.fileKey] = position{Offset: er.endOffset, Fingerprint: er.fp}
-	case er.endOffset > cur.Offset:
-		s.pending[er.fileKey] = position{Offset: er.endOffset, Fingerprint: er.fp}
+		s.pending[er.fileKey] = position{Offset: er.commitOffset, Fingerprint: er.fp}
+	case er.commitOffset > cur.Offset:
+		s.pending[er.fileKey] = position{Offset: er.commitOffset, Fingerprint: er.fp}
 	}
 	s.mu.Unlock()
 }
@@ -323,6 +323,9 @@ func (s *podlogSource) Cursor() json.RawMessage {
 		s.positions.set(key, p)
 	}
 	s.pending = map[string]position{}
+	for _, key := range s.positions.gc() {
+		delete(s.committed, key)
+	}
 	s.mu.Unlock()
 	if err := s.positions.persist(); err != nil {
 		plog.Warnf("podlog source: persist positions: %v", err)

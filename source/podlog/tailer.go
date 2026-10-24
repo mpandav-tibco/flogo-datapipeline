@@ -17,6 +17,12 @@ import (
 // detect rotation (a fresh file at the same path has different first bytes).
 const fpLen = 256
 
+// readBufSize is the per-open-file read buffer. Memory scales with the number
+// of tailed files (hundreds per node), and ReadBytes grows its result beyond
+// the buffer anyway, so a large buffer only costs RSS (1 MiB × 400 files OOMed
+// the collector in the 400-containers/node scale test).
+const readBufSize = 32 << 10
+
 // podMeta is the Kubernetes context derived from a CRI pod-log directory name.
 // containerd/CRI-O lay logs out as:
 //
@@ -40,8 +46,74 @@ type enrichedRecord struct {
 	timestamp string
 	message   string
 	fileKey   string
-	endOffset int64
-	fp        string
+	endOffset int64 // end of the record's last line: its identity in the file
+	// commitOffset is how far the file's position may advance once this
+	// record is delivered: every byte before it is in this or an earlier
+	// record (<= endOffset when another stream still buffers earlier lines).
+	commitOffset int64
+	fp           string
+}
+
+// streamStitchers stitches each CRI stream of a file separately: stdout and
+// stderr lines interleave in one file, and a stack trace on one stream must
+// not be glued to a record of the other (nor CRI partial chunks mixed). It
+// also tracks where each stream's buffered, not yet emitted lines begin, so
+// the file position is never committed past a line still buffered.
+type streamStitchers struct {
+	startPattern matcher
+	maxLines     int
+	byStream     map[string]*stitcher
+	start        map[string]int64
+	order        []string
+}
+
+func (t *tailer) newStitchers() *streamStitchers {
+	return &streamStitchers{startPattern: t.startPattern, maxLines: t.maxLines,
+		byStream: map[string]*stitcher{}, start: map[string]int64{}}
+}
+
+func (ss *streamStitchers) push(line criLine, lineStart, lineEnd int64) (logRecord, bool) {
+	st, ok := ss.byStream[line.stream]
+	if !ok {
+		st = &stitcher{startPattern: ss.startPattern, maxLines: ss.maxLines}
+		ss.byStream[line.stream] = st
+		ss.order = append(ss.order, line.stream)
+	}
+	if _, buffering := ss.start[line.stream]; !buffering {
+		ss.start[line.stream] = lineStart
+	}
+	rec, done := st.push(line, lineEnd)
+	if done {
+		if st.buffering() {
+			ss.start[line.stream] = lineStart // the current line opened a new record
+		} else {
+			delete(ss.start, line.stream)
+		}
+	}
+	return rec, done
+}
+
+// flush returns every stream's buffered record, oldest first.
+func (ss *streamStitchers) flush() []logRecord {
+	var out []logRecord
+	for _, stream := range ss.order {
+		if rec, ok := ss.byStream[stream].flush(); ok {
+			out = append(out, rec)
+		}
+		delete(ss.start, stream)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].endOffset < out[j].endOffset })
+	return out
+}
+
+// safeOffset caps a position at the first byte still buffered in any stream.
+func (ss *streamStitchers) safeOffset(end int64) int64 {
+	for _, s := range ss.start {
+		if s < end {
+			end = s
+		}
+	}
+	return end
 }
 
 // openLogFile is an actively tailed CRI log file.
@@ -52,7 +124,7 @@ type openLogFile struct {
 	offset int64
 	fp     string
 	meta   podMeta
-	st     *stitcher
+	st     *streamStitchers
 	// partial accumulates bytes read past the last newline (an incomplete final
 	// line), across as many drains as it takes for the newline to arrive. Its
 	// length is NOT added to offset until the line is completed, so a crash
@@ -113,6 +185,8 @@ type tailer struct {
 	// unbounded poll loop. Used by tests and batch/drain scenarios so ReadBatch
 	// terminates deterministically with io.EOF.
 	bounded bool
+	// initialScanDone is set after the first scan (see fromBeginning).
+	initialScanDone bool
 	// rotationGrace: see defaultRotationGrace.
 	rotationGrace time.Duration
 	// recon receives files-open and rotation counts for reconciliation metrics.
@@ -162,7 +236,7 @@ func (t *tailer) run(ctx context.Context) {
 		if t.flushIdle > 0 {
 			for _, of := range t.open {
 				if !of.lastData.IsZero() && time.Since(of.lastData) >= t.flushIdle {
-					if rec, ok := of.st.flush(); ok {
+					for _, rec := range of.st.flush() {
 						if !t.emit(ctx, of, rec) {
 							t.closeAll()
 							return
@@ -266,7 +340,9 @@ func (t *tailer) scan(ctx context.Context) {
 		}
 		t.flushAndClose(ctx, of)
 		delete(t.open, key)
+		delete(t.delivered, key)
 	}
+	t.initialScanDone = true
 	if t.recon != nil {
 		t.recon.setFilesOpen(t.node, len(t.open))
 	}
@@ -309,8 +385,11 @@ func (t *tailer) openFile(path string, meta podMeta) *openLogFile {
 			f.Close()
 			return of
 		}
-	} else if !t.fromBeginning {
-		// Brand-new file and configured to skip history: start at end.
+	} else if !t.fromBeginning && !t.positions.existed && !t.initialScanDone {
+		// fromBeginning=false skips only the history present when the
+		// collector first starts on a node (no registry yet). Files that
+		// appear later — new pods, container restarts, also while the
+		// collector was restarting — are read from their first line.
 		if fi, err := f.Stat(); err == nil {
 			start = fi.Size()
 		}
@@ -325,11 +404,11 @@ func (t *tailer) openFile(path string, meta podMeta) *openLogFile {
 	return &openLogFile{
 		key:    path,
 		f:      f,
-		reader: bufio.NewReaderSize(f, 1<<20),
+		reader: bufio.NewReaderSize(f, readBufSize),
 		offset: start,
 		fp:     fp,
 		meta:   meta,
-		st:     &stitcher{startPattern: t.startPattern, maxLines: t.maxLines},
+		st:     t.newStitchers(),
 	}
 }
 
@@ -507,12 +586,13 @@ func (t *tailer) finish(ctx context.Context, of *openLogFile) {
 	if len(of.partial) > 0 {
 		full := of.partial
 		of.partial = nil
+		start := of.offset
 		of.offset += int64(len(full))
-		if rec, ok := of.st.push(parseCRILine(strings.TrimRight(string(full), "\r\n")), of.offset); ok {
+		if rec, ok := of.st.push(parseCRILine(strings.TrimRight(string(full), "\r\n")), start, of.offset); ok {
 			t.emit(ctx, of, rec)
 		}
 	}
-	if rec, ok := of.st.flush(); ok {
+	for _, rec := range of.st.flush() {
 		t.emit(ctx, of, rec)
 	}
 }
@@ -578,6 +658,7 @@ func (t *tailer) drain(ctx context.Context, of *openLogFile) (int, error) {
 		}
 		// Advance by every byte of the logical line, including the partial
 		// chunks consumed by earlier drains.
+		lineStart := of.offset
 		of.offset += int64(len(full))
 		text := strings.TrimRight(string(full), "\r\n")
 		if cap(of.partial) > 64<<10 {
@@ -588,7 +669,7 @@ func (t *tailer) drain(ctx context.Context, of *openLogFile) (int, error) {
 
 		cri := parseCRILine(text)
 		of.lastData = time.Now()
-		rec, ok := of.st.push(cri, of.offset)
+		rec, ok := of.st.push(cri, lineStart, of.offset)
 		if !ok {
 			continue
 		}
@@ -607,14 +688,19 @@ func (t *tailer) emit(ctx context.Context, of *openLogFile, rec logRecord) bool 
 		message:   rec.message,
 		fileKey:   of.key,
 		endOffset: rec.endOffset,
-		fp:        of.fp,
+		// Positions may only advance to the first byte still buffered in
+		// any stream's stitcher (another stream may hold earlier lines).
+		commitOffset: of.st.safeOffset(rec.endOffset),
+		fp:           of.fp,
 	}
 	select {
 	case t.out <- er:
 		if t.delivered == nil {
 			t.delivered = map[string]position{}
 		}
-		t.delivered[of.key] = position{Offset: rec.endOffset, Fingerprint: of.fp}
+		if d, ok := t.delivered[of.key]; !ok || d.Fingerprint != of.fp || er.commitOffset > d.Offset {
+			t.delivered[of.key] = position{Offset: er.commitOffset, Fingerprint: of.fp}
+		}
 		return true
 	case <-ctx.Done():
 		return false
@@ -641,7 +727,7 @@ func (t *tailer) openFileAt(path string, meta podMeta, start int64) *openLogFile
 		f:      f,
 		offset: start,
 		meta:   meta,
-		st:     &stitcher{startPattern: t.startPattern, maxLines: t.maxLines},
+		st:     t.newStitchers(),
 	}
 	if strings.HasSuffix(path, ".gz") {
 		// A kubelet-compressed rotation: read it decompressed. Offsets and
@@ -658,7 +744,7 @@ func (t *tailer) openFileAt(path string, meta podMeta, start int64) *openLogFile
 		}
 		of.gz = true
 		of.fp = fingerprintPath(path)
-		of.reader = bufio.NewReaderSize(zr, 1<<20)
+		of.reader = bufio.NewReaderSize(zr, readBufSize)
 		return of
 	}
 	of.fp = fingerprint(f)
@@ -666,7 +752,7 @@ func (t *tailer) openFileAt(path string, meta podMeta, start int64) *openLogFile
 		f.Close()
 		return nil
 	}
-	of.reader = bufio.NewReaderSize(f, 1<<20)
+	of.reader = bufio.NewReaderSize(f, readBufSize)
 	return of
 }
 
@@ -691,7 +777,7 @@ func (t *tailer) closeAll() {
 // stack trace) is delivered rather than dropped.
 func (t *tailer) flushAll(ctx context.Context) {
 	for _, of := range t.open {
-		if rec, ok := of.st.flush(); ok {
+		for _, rec := range of.st.flush() {
 			if !t.emit(ctx, of, rec) {
 				return
 			}

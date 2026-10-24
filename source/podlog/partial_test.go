@@ -38,7 +38,7 @@ func TestDrainReassemblesMultiChunkLine(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if rec, ok := of.st.flush(); ok {
+	for _, rec := range of.st.flush() {
 		tl.out <- enrichedRecord{message: rec.message}
 	}
 	close(tl.out)

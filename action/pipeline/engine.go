@@ -437,6 +437,9 @@ func (a *DataPipelineAction) buildLinearGraph(runLog corelog.Logger, env *runEnv
 	if err != nil {
 		return nil, nil, fmt.Errorf("sink open: %w", err)
 	}
+	if ra, ok := snk.(metrics.RecorderAware); ok {
+		ra.SetRecorder(a.recorder)
+	}
 	sinkNode := graphexec.Node{ID: "sink", Kind: graphexec.KindSink, Type: def.Sink.Type,
 		Operator: &managedSink{snk: snk, dlq: dlq, env: env, typ: def.Sink.Type}}
 	g := &graphexec.Graph{Nodes: []graphexec.Node{{ID: "source", Kind: graphexec.KindSource, Type: def.Source.Type, PreBuilt: src}}}
@@ -555,6 +558,9 @@ func (a *DataPipelineAction) engineBuilders(env *runEnv, dlq dlqWriteSink) graph
 			s, err := sink.New(typ, cfg)
 			if err != nil {
 				return nil, err
+			}
+			if ra, ok := s.(metrics.RecorderAware); ok {
+				ra.SetRecorder(a.recorder)
 			}
 			return &managedSink{snk: s, dlq: dlq, env: env, typ: typ}, nil
 		},

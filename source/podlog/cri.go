@@ -222,6 +222,10 @@ func (s *stitcher) finishPending() logRecord {
 // flush returns any record still buffered (a trailing multiline record, or a
 // dangling CRI partial line). Called when a file is closed or has been idle
 // long enough that further continuation lines are not expected.
+// buffering reports whether lines are held (a pending multiline record or a
+// CRI partial line).
+func (s *stitcher) buffering() bool { return s.pending != nil || s.inPartial }
+
 func (s *stitcher) flush() (logRecord, bool) {
 	if s.inPartial {
 		rec := logRecord{

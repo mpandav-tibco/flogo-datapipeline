@@ -58,13 +58,14 @@ def fetch(prefix, minio, bucket, cache, cluster):
     """Mirror the scenario's objects + node DLQs into cache; return object metadata."""
     mc = "docker exec %s sh -c 'mc alias set l http://localhost:9000 minioadmin minioadmin >/dev/null && %%s'" % minio
     listing = sh(mc % ("mc ls --recursive --json l/%s/" % bucket), check=False)
-    objs = {}
+    objs, all_keys = {}, []
     for line in listing.splitlines():
         try:
             o = json.loads(line)
         except ValueError:
             continue
         key = o.get("key", "")
+        all_keys.append(key)
         if o.get("type") == "file" and key.startswith(prefix + "-team-"):
             objs[key] = o
     remote = "/tmp/verify-%s" % prefix
@@ -79,6 +80,17 @@ def fetch(prefix, minio, bucket, cache, cluster):
         sh("docker cp %s:%s/. %s" % (minio, remote, cache))
     sh(mc % ("rm -rf %s" % remote), check=False)
     dlq = []
+    # DLQ shipped to S3 (_dlq/...): all scenarios share it; filtered by namespace below.
+    dlq_dir = os.path.join(cache, "_dlq")
+    if any(k.startswith("_dlq/") for k in all_keys):
+        sh(mc % ("rm -rf %s/_dlq && mc mirror -q --overwrite l/%s/_dlq %s/_dlq >/dev/null 2>&1 || true" % (remote, bucket, remote)), check=False)
+        sh("docker cp %s:%s/_dlq %s 2>/dev/null || true" % (minio, remote, dlq_dir), check=False)
+        sh(mc % ("rm -rf %s" % remote), check=False)
+        for dp, _, files in os.walk(dlq_dir):
+            for fn in files:
+                if fn.endswith(".ndjson"):
+                    with open(os.path.join(dp, fn)) as f:
+                        dlq += [l for l in f if l.strip()]
     nodes = sh("k3d node list -o json")
     for n in json.loads(nodes):
         if cluster in n["name"] and n["role"] in ("server", "agent"):

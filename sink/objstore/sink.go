@@ -47,6 +47,7 @@ import (
 	corelog "github.com/project-flogo/core/support/log"
 
 	"github.com/google/uuid"
+	"github.com/mpandav-tibco/flogo-datapipeline/metrics"
 	"github.com/mpandav-tibco/flogo-datapipeline/objstore"
 	"github.com/mpandav-tibco/flogo-datapipeline/record"
 	"github.com/mpandav-tibco/flogo-datapipeline/sink"
@@ -82,7 +83,36 @@ type objstoreSink struct {
 	closed   bool   // guards a second Close()
 
 	innerClosed bool // inner sink closed (the temp file is complete)
-	uploaded    bool // temp file committed to the object store
+	uploaded    bool // temp file committed to the object store (or sealed in the spool)
+
+	spool *spoolUploader // non-nil: the object is sealed in the spool instead of uploaded
+}
+
+// nopStore stands in for the store of a spooled object (the spool uploader
+// owns the real one).
+type nopStore struct{ objstore.Store }
+
+func (nopStore) Close() error { return nil }
+
+// seal completes a spooled object and hands it to the uploader.
+func (s *objstoreSink) seal(meta spoolMeta) error {
+	if s.closed {
+		return nil
+	}
+	if !s.innerClosed {
+		if err := s.inner.Close(); err != nil {
+			return err
+		}
+		s.innerClosed = true
+	}
+	if !s.uploaded {
+		if err := s.spool.seal(s.tmpPath, meta); err != nil {
+			return err
+		}
+		s.uploaded = true
+	}
+	s.closed = true
+	return nil
 }
 
 func newObjstoreSink(provider string, cfg map[string]interface{}) (sink.Sink, error) {
@@ -130,6 +160,13 @@ func int64FromCfg(cfg map[string]interface{}, k string) int64 {
 }
 
 func newSingleObjstoreSink(provider string, cfg map[string]interface{}) (*objstoreSink, error) {
+	return newObjstoreObject(provider, cfg, nil)
+}
+
+// newObjstoreObject opens one destination object. With a spool, the object is
+// written into the spool directory and sealed there (see spool.go); it then
+// needs no store of its own.
+func newObjstoreObject(provider string, cfg map[string]interface{}, spool *spoolUploader) (*objstoreSink, error) {
 	keyTemplate, _ := cfg["key"].(string)
 	if keyTemplate == "" {
 		return nil, fmt.Errorf("%s sink: 'key' (destination object key) is required", provider)
@@ -142,27 +179,41 @@ func newSingleObjstoreSink(provider string, cfg map[string]interface{}) (*objsto
 	// Expand date macros in the key template at sink creation time.
 	key := expandKeyMacros(keyTemplate)
 
-	store, err := objstore.New(provider, cfg)
-	if err != nil {
-		return nil, fmt.Errorf("%s sink: open store: %w", provider, err)
+	var store objstore.Store = nopStore{}
+	if spool == nil {
+		st, err := objstore.New(provider, cfg)
+		if err != nil {
+			return nil, fmt.Errorf("%s sink: open store: %w", provider, err)
+		}
+		store = st
 	}
 
 	// Build the inner sink config.
 	innerCfg := buildInnerCfg(cfg, innerFormat)
 
-	// The inner sink writes to a local temp file; Close() uploads it.
-	tmp, err := os.CreateTemp("", "flogo-datapipeline-objsink-*")
-	if err != nil {
-		_ = store.Close()
-		return nil, fmt.Errorf("%s sink: create temp file: %w", provider, err)
-	}
-	tmpPath := tmp.Name()
-	// Close the file descriptor immediately; the inner sink will reopen it by
-	// path. This avoids double-open issues on Windows.
-	if err := tmp.Close(); err != nil {
-		_ = os.Remove(tmpPath)
-		_ = store.Close()
-		return nil, fmt.Errorf("%s sink: close temp file: %w", provider, err)
+	// The inner sink writes to a local temp file (in the spool when there is
+	// one); Close() uploads it, or seal() hands it to the spool uploader.
+	var tmpPath string
+	if spool != nil {
+		p, err := spool.newPartFile()
+		if err != nil {
+			return nil, fmt.Errorf("%s sink: create spool file: %w", provider, err)
+		}
+		tmpPath = p
+	} else {
+		tmp, err := os.CreateTemp("", "flogo-datapipeline-objsink-*")
+		if err != nil {
+			_ = store.Close()
+			return nil, fmt.Errorf("%s sink: create temp file: %w", provider, err)
+		}
+		tmpPath = tmp.Name()
+		// Close the file descriptor immediately; the inner sink will reopen it
+		// by path. This avoids double-open issues on Windows.
+		if err := tmp.Close(); err != nil {
+			_ = os.Remove(tmpPath)
+			_ = store.Close()
+			return nil, fmt.Errorf("%s sink: close temp file: %w", provider, err)
+		}
 	}
 	innerCfg["path"] = tmpPath
 	inner, err := sink.New(innerFormat, innerCfg)
@@ -178,6 +229,7 @@ func newSingleObjstoreSink(provider string, cfg map[string]interface{}) (*objsto
 		key:      key,
 		inner:    inner,
 		tmpPath:  tmpPath,
+		spool:    spool,
 	}, nil
 }
 
@@ -367,6 +419,16 @@ type partitionedObjstoreSink struct {
 	keyTemplate string
 	fields      []string
 	children    map[string]sink.Sink // field-resolved key → child sink
+	spool       *spoolUploader       // shared by the rolling children, if spooled
+	rec         metrics.Recorder
+}
+
+// SetRecorder implements metrics.RecorderAware (spool gauges).
+func (p *partitionedObjstoreSink) SetRecorder(rec metrics.Recorder) {
+	p.rec = rec
+	if p.spool != nil {
+		p.spool.setRecorder(rec)
+	}
 }
 
 func newPartitionedSink(provider string, cfg map[string]interface{}, keyTemplate string, fields []string) (sink.Sink, error) {
@@ -419,6 +481,13 @@ func (p *partitionedObjstoreSink) child(resolvedKey string) (sink.Sink, error) {
 	c, err := newLeafSink(p.provider, childCfg)
 	if err != nil {
 		return nil, err
+	}
+	if r, ok := c.(*rollingObjstoreSink); ok {
+		r.waitOnClose = false // the partitioned sink waits once, in Close
+		if r.spool != nil && p.rec != nil {
+			r.spool.setRecorder(p.rec)
+		}
+		p.spool = r.spool
 	}
 	p.children[resolvedKey] = c
 	return c, nil
@@ -494,6 +563,9 @@ func (p *partitionedObjstoreSink) Close() error {
 			errs = append(errs, err)
 		}
 	}
+	if p.spool != nil && len(errs) == 0 {
+		p.spool.waitEmpty(spoolCloseWait(p.cfg))
+	}
 	return errors.Join(errs...)
 }
 
@@ -518,6 +590,11 @@ type rollingObjstoreSink struct {
 	cur     *objstoreSink
 	curKey  string
 	started time.Time
+
+	// spool, when configured, receives sealed objects (see spool.go);
+	// waitOnClose makes Close wait (bounded) for the spool to drain.
+	spool       *spoolUploader
+	waitOnClose bool
 
 	// pending holds rolled objects whose upload (or manifest) failed. Their
 	// temp files are kept and retried at the next Flush; Flush fails while any
@@ -552,6 +629,16 @@ func newRollingObjstoreSink(provider string, cfg map[string]interface{}, maxByte
 	if !strings.Contains(keyTmpl, "{uuid}") {
 		r.token = newUUID()[:8]
 	}
+	// "none" disables the spool explicitly: property resolvers commonly treat
+	// an empty value as unset and fall back to the default directory.
+	if dir, _ := cfg["spoolDir"].(string); dir != "" && !strings.EqualFold(strings.TrimSpace(dir), "none") {
+		sp, err := spoolFor(dir, provider, cfg, spoolMaxBytes(cfg))
+		if err != nil {
+			return nil, fmt.Errorf("%s sink: %w", provider, err)
+		}
+		r.spool = sp
+		r.waitOnClose = true
+	}
 	// Objects are opened lazily on first write, so a run that rolls on its last
 	// batch does not leave an empty trailing object (and spurious manifest).
 	return r, nil
@@ -579,7 +666,7 @@ func (r *rollingObjstoreSink) openNext() error {
 		childCfg[k] = v
 	}
 	childCfg["key"] = key
-	c, err := newSingleObjstoreSink(r.provider, childCfg)
+	c, err := newObjstoreObject(r.provider, childCfg, r.spool)
 	if err != nil {
 		return err
 	}
@@ -616,6 +703,9 @@ func (r *rollingObjstoreSink) roll() error {
 // finish uploads a rolled object and writes its manifest sidecar; both steps
 // are idempotent, so a retry after a partial failure redoes only what is left.
 func (r *rollingObjstoreSink) finish(f finishedObject) error {
+	if r.spool != nil {
+		return f.obj.seal(spoolMeta{Key: f.key, Records: f.records, Bytes: f.bytes, OpenedAt: f.started, ClosedAt: time.Now()})
+	}
 	if err := f.obj.finalize(); err != nil {
 		return err
 	}
@@ -668,6 +758,13 @@ func (r *rollingObjstoreSink) WriteBatch(batch *record.RecordBatch) error {
 // manifest). A checkpoint taken after a successful Flush therefore never
 // covers rows that exist only in a local temp file.
 func (r *rollingObjstoreSink) Flush() error {
+	if r.spool != nil {
+		// With a spool, Flush seals instead of uploading; refuse the
+		// checkpoint while the spool is over its cap (back-pressure).
+		if err := r.spool.full(); err != nil {
+			return err
+		}
+	}
 	err := r.retryPending()
 	if r.cur != nil && r.cur.records > 0 {
 		err = errors.Join(err, r.roll())
@@ -679,6 +776,29 @@ func (r *rollingObjstoreSink) Flush() error {
 // without rolling/uploading it. Per-row write isolation uses it: it only needs
 // to know whether each row was accepted, and an upload per row would create
 // one object per row. Durability comes from the next checkpoint Flush.
+// SetRecorder implements metrics.RecorderAware (spool gauges).
+func (r *rollingObjstoreSink) SetRecorder(rec metrics.Recorder) {
+	if r.spool != nil {
+		r.spool.setRecorder(rec)
+	}
+}
+
+// spoolMaxBytes reads spoolMaxBytes (default 5 GiB).
+func spoolMaxBytes(cfg map[string]interface{}) int64 {
+	if v := int64FromCfg(cfg, "spoolMaxBytes"); v > 0 {
+		return v
+	}
+	return 5 << 30
+}
+
+// spoolCloseWait reads spoolCloseWaitSeconds (default 10).
+func spoolCloseWait(cfg map[string]interface{}) time.Duration {
+	if v := int64FromCfg(cfg, "spoolCloseWaitSeconds"); v > 0 {
+		return time.Duration(v) * time.Second
+	}
+	return 10 * time.Second
+}
+
 func (r *rollingObjstoreSink) FlushLocal() error {
 	if r.cur == nil {
 		return nil
@@ -688,6 +808,12 @@ func (r *rollingObjstoreSink) FlushLocal() error {
 
 func (r *rollingObjstoreSink) Close() error {
 	err := r.Flush()
+	if r.spool != nil && r.waitOnClose && err == nil {
+		// Best effort: give the uploader a moment to ship what was just
+		// sealed (e.g. before a node goes away); anything left is uploaded by
+		// the next process.
+		r.spool.waitEmpty(spoolCloseWait(r.cfg))
+	}
 	if r.cur != nil { // opened but never written
 		r.cur.abort()
 		r.cur = nil
@@ -705,29 +831,34 @@ func (r *rollingObjstoreSink) Close() error {
 // with the object key, record count, byte size, and open/close timestamps, so an
 // auditor can reconcile "what the node saw" against "what landed" object by object.
 func (r *rollingObjstoreSink) writeManifest(objectKey string, records, bytes int64, started time.Time) error {
-	manifest := map[string]interface{}{
-		"object":       objectKey,
-		"record_count": records,
-		"bytes":        bytes,
-		"opened_at":    started.UTC().Format(time.RFC3339),
-		"closed_at":    time.Now().UTC().Format(time.RFC3339),
-	}
-	data, err := json.Marshal(manifest)
-	if err != nil {
-		return err
-	}
 	store, err := objstore.New(r.provider, r.cfg)
 	if err != nil {
 		return err
 	}
 	defer store.Close()
+	return putManifest(store, objectKey, records, bytes, started, time.Now())
+}
+
+// putManifest writes the audit sidecar <objectKey>.manifest.json.
+func putManifest(store objstore.Store, objectKey string, records, bytes int64, opened, closed time.Time) error {
+	manifest := map[string]interface{}{
+		"object":       objectKey,
+		"record_count": records,
+		"bytes":        bytes,
+		"opened_at":    opened.UTC().Format(time.RFC3339),
+		"closed_at":    closed.UTC().Format(time.RFC3339),
+	}
+	data, err := json.Marshal(manifest)
+	if err != nil {
+		return err
+	}
 	w, err := store.PutWriter(context.Background(), objectKey+".manifest.json")
 	if err != nil {
-		return fmt.Errorf("%s sink: open manifest writer: %w", r.provider, err)
+		return fmt.Errorf("open manifest writer: %w", err)
 	}
 	if _, err := w.Write(data); err != nil {
 		_ = w.Close()
-		return fmt.Errorf("%s sink: write manifest: %w", r.provider, err)
+		return fmt.Errorf("write manifest: %w", err)
 	}
 	return w.Close()
 }

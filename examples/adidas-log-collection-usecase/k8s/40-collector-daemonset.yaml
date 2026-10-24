@@ -41,6 +41,9 @@ spec:
       # pod resumes exactly there (no replay). PIPELINE_SHUTDOWN_TIMEOUT below
       # must stay under this grace period.
       terminationGracePeriodSeconds: 30
+      # Never evicted before workloads under node pressure: losing the
+      # collector while pods keep logging is how logs get lost.
+      priorityClassName: system-node-critical
       containers:
         - name: collector
           image: flogo-datapipeline:arm64-local
