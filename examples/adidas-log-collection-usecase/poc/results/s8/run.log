@@ -1,0 +1,5 @@
+[17:03:24] s8: collector: image=flogo-datapipeline:poc S3_KEY={namespace}/{YYYY}/{MM}/{DD}/{HH}/{node}-{mm}-{uuid}.ndjson SPOOL_DIR=<default>; writer: CONTAINERS=400 RATE=8 TOTAL=3000 ROTATE_BYTES=131072 CHURN=0.25 NAMESPACES=24; fault: none
+[17:03:24] s8: writers started
+[17:10:01] s8: writers done after 397s: synthlog: node=k3d-adidas-poc-server-0 containers=400 churned=100 elapsed=387s synthlog: node=k3d-adidas-poc-agent-0 containers=400 churned=90 elapsed=387s synthlog: node=k3d-adidas-poc-agent-1 containers=400 churned=114 elapsed=387s 
+[17:11:24] s8: s8: instances=1200 finished=0/1200 events=3588200 missing=0 gaps=1200 dup=0 s3=3588200 dlq=0 multiline_broken=0
+[17:14:58] s8: verified in 609s — OK instances=1200/1200 events=3600000 missing=0 gaps=0 dup=0 multiline_broken=0 dlq=0 s3_objects=8424 p95_latency=3.811641s

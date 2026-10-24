@@ -20,6 +20,9 @@ TITLES = {
     "c7": "CONTROL: s7 without compressed-rotation support",
     "c2": "CONTROL: collector crash on the pre-fix collector",
     "c4": "CONTROL: rotation stress on the pre-fix collector",
+    "s8": "Scale — 400 containers/node (1,200 total), ~3,200 events/s/node, rotation+gzip, pod churn",
+    "s9": "Scale + S3 outage (180 s) while 25% of pods are deleted — durable spool on",
+    "c9": "CONTROL: s9 with the spool disabled",
 }
 
 
@@ -49,7 +52,7 @@ def top(path):
 
 def main():
     rows = []
-    for s in ["s1", "s2", "s2r", "s3", "s4", "s5", "s6", "s7", "c2", "c4", "c7"]:
+    for s in ["s1", "s2", "s2r", "s3", "s4", "s5", "s6", "s7", "s8", "s9", "c2", "c4", "c7", "c9"]:
         d = os.path.join(RES, s)
         v = load(os.path.join(d, "verify.json"))
         if not v:
@@ -60,7 +63,7 @@ def main():
         try:
             per_pod = int(re.search(r'EMIT_TOTAL, value: "(\d+)"', open(os.path.join(d, "workload.yaml")).read()).group(1))
         except (OSError, AttributeError):
-            per_pod = 0
+            per_pod = run.get("per_instance") or 0  # scale scenarios (run-scale.sh)
         emitted = per_pod * (run.get("expected_instances") or 0)
         undelivered = max(0, emitted - events) if emitted else 0
         dur = run.get("duration_s") or 0

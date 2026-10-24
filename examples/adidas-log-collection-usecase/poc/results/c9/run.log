@@ -1,0 +1,17 @@
+[16:34:45] c9: collector: image=flogo-datapipeline:poc S3_KEY={namespace}/{YYYY}/{MM}/{DD}/{HH}/{node}-{mm}-{uuid}.ndjson SPOOL_DIR=none; writer: CONTAINERS=400 RATE=8 TOTAL=3000 ROTATE_BYTES=131072 CHURN=0.25 NAMESPACES=24; fault: s3-outage 300 180
+[16:34:45] c9: writers started
+[16:39:46] c9: FAULT s3-outage: S3 DOWN for 180s
+[16:41:22] c9: writers done after 397s: synthlog: node=k3d-adidas-poc-server-0 containers=400 churned=96 elapsed=387s synthlog: node=k3d-adidas-poc-agent-1 containers=400 churned=109 elapsed=387s synthlog: node=k3d-adidas-poc-agent-0 containers=400 churned=96 elapsed=386s 
+[16:42:46] c9: FAULT s3-outage: S3 back UP
+[16:42:47] c9: subprocess.CalledProcessError: Command 'docker exec miniobench sh -c 'mc alias set l http://localhost:9000 minioadmin minioadmin >/dev/null && rm -rf /tmp/verify-c9 && mkdir -p /tmp/verify-c9'' returned non-zero exit status 1.
+[16:44:46] c9: c9: instances=1200 finished=0/1200 events=3372539 missing=0 gaps=132 dup=37463 s3=3410002 dlq=0 multiline_broken=0
+[16:46:44] c9: c9: instances=1200 finished=899/1200 events=3383108 missing=0 gaps=124 dup=37783 s3=3420891 dlq=0 multiline_broken=0
+[16:48:46] c9: c9: instances=1200 finished=899/1200 events=3383108 missing=0 gaps=124 dup=37783 s3=3420891 dlq=0 multiline_broken=0
+[16:50:49] c9: c9: instances=1200 finished=899/1200 events=3383108 missing=0 gaps=124 dup=37783 s3=3420891 dlq=0 multiline_broken=0
+[16:52:46] c9: c9: instances=1200 finished=899/1200 events=3383108 missing=0 gaps=124 dup=37783 s3=3420891 dlq=0 multiline_broken=0
+[16:54:44] c9: c9: instances=1200 finished=899/1200 events=3383108 missing=0 gaps=124 dup=37783 s3=3420891 dlq=0 multiline_broken=0
+[16:56:45] c9: c9: instances=1200 finished=899/1200 events=3383108 missing=0 gaps=124 dup=37783 s3=3420891 dlq=0 multiline_broken=0
+[16:58:45] c9: c9: instances=1200 finished=899/1200 events=3383108 missing=0 gaps=124 dup=37783 s3=3420891 dlq=0 multiline_broken=0
+[17:00:44] c9: c9: instances=1200 finished=899/1200 events=3383108 missing=0 gaps=124 dup=37783 s3=3420891 dlq=0 multiline_broken=0
+[17:00:44] c9: TIMEOUT waiting for complete delivery
+[17:01:58] c9: verified in 1559s — FAILED instances=899/1200 events=3383108 missing=0 gaps=124 dup=37783 multiline_broken=0 dlq=0 s3_objects=7030 p95_latency=185.127281s
