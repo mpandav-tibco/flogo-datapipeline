@@ -81,6 +81,36 @@
       "value": "60"
     },
     {
+      "name": "CHECKPOINT_SECONDS",
+      "type": "integer",
+      "value": 30
+    },
+    {
+      "name": "S3_KEY",
+      "type": "string",
+      "value": "{namespace}/{pod}/{YYYY}/{MM}/{DD}/{node}-{HH}{mm}-{uuid}.ndjson"
+    },
+    {
+      "name": "S3_DLQ_KEY",
+      "type": "string",
+      "value": "_dlq/{node}/{YYYY}/{MM}/{DD}/{HH}{mm}-{uuid}.ndjson"
+    },
+    {
+      "name": "SPOOL_DIR",
+      "type": "string",
+      "value": "/var/lib/flogo-datapipeline/spool"
+    },
+    {
+      "name": "SPOOL_DLQ_DIR",
+      "type": "string",
+      "value": "/var/lib/flogo-datapipeline/spool-dlq"
+    },
+    {
+      "name": "SPOOL_MAX_BYTES",
+      "type": "integer",
+      "value": 5368709120
+    },
+    {
       "name": "BATCH_SIZE",
       "type": "integer",
       "value": "1000"
@@ -181,7 +211,7 @@
           {
             "type": "map",
             "fields": {
-              "@timestamp": "=$log_text",
+              "@timestamp": "=$log_time",
               "event_time": "=string.replace(nvl($log_ts, $log_time), ',', '.')",
               "log_level": "=upper(nvl($log_level, 'UNKNOWN'))",
               "severity": "=coerce.toInt(decode(upper(nvl($log_level, 'INFO')), 'FATAL', 5, 'ERROR', 4, 'WARN', 3, 'WARNING', 3, 'INFO', 2, 'DEBUG', 1, 'TRACE', 0, 2))",
@@ -190,7 +220,7 @@
               "thread": "=$log_thread",
               "message": "=nvl($log_text, $message)",
               "raw_log": "=$message",
-              "service_name": "=regex.replace($pod, '-[a-z0-9]+-[a-z0-9]{5}$', '')",
+              "service_name": "=iif(regex.match($pod, '-[bcdfghjklmnpqrstvwxz2456789]{6,10}-[bcdfghjklmnpqrstvwxz2456789]{5}$'), regex.replace($pod, '-[bcdfghjklmnpqrstvwxz2456789]{6,10}-[bcdfghjklmnpqrstvwxz2456789]{5}$', ''), regex.replace($pod, '-[bcdfghjklmnpqrstvwxz2456789]{5}$', ''))",
               "namespace": "=$namespace",
               "pod": "=$pod",
               "container": "=$container",
@@ -241,15 +271,25 @@
           }
         ],
         "dlq": {
-          "type": "jsonlines",
+          "type": "s3-sink",
           "options": {
-            "path": "/var/lib/flogo-datapipeline/dlq/dlq.ndjson"
+            "bucket": "$property[S3_BUCKET]",
+            "key": "$property[S3_DLQ_KEY]",
+            "format": "jsonlines",
+            "region": "$property[S3_REGION]",
+            "endpoint": "$property[S3_ENDPOINT]",
+            "forcePathStyle": "$property[S3_FORCE_PATH_STYLE]",
+            "accessKeyIdEnv": "$property[S3_ACCESS_KEY_ENV]",
+            "secretAccessKeyEnv": "$property[S3_SECRET_KEY_ENV]",
+            "rollMaxSeconds": "$property[ROLL_MAX_SECONDS]",
+            "spoolDir": "$property[SPOOL_DLQ_DIR]",
+            "spoolMaxBytes": "$property[SPOOL_MAX_BYTES]"
           }
         },
         "sink": {
           "type": "s3-sink",
           "bucket": "$property[S3_BUCKET]",
-          "key": "{namespace}/{pod}/{YYYY}/{MM}/{DD}/{node}-{HH}{mm}-{uuid}.ndjson",
+          "key": "$property[S3_KEY]",
           "format": "jsonlines",
           "region": "$property[S3_REGION]",
           "endpoint": "$property[S3_ENDPOINT]",
@@ -257,7 +297,9 @@
           "accessKeyIdEnv": "$property[S3_ACCESS_KEY_ENV]",
           "secretAccessKeyEnv": "$property[S3_SECRET_KEY_ENV]",
           "rollMaxBytes": "$property[ROLL_MAX_BYTES]",
-          "rollMaxSeconds": "$property[ROLL_MAX_SECONDS]"
+          "rollMaxSeconds": "$property[ROLL_MAX_SECONDS]",
+          "spoolDir": "$property[SPOOL_DIR]",
+          "spoolMaxBytes": "$property[SPOOL_MAX_BYTES]"
         },
         "performance": {
           "batchSize": "$property[BATCH_SIZE]",
@@ -266,10 +308,15 @@
         "scaling": {
           "mode": "single"
         },
+        "restart": {
+          "onFailure": true,
+          "initialBackoffMs": 2000,
+          "maxBackoffMs": 30000
+        },
         "checkpoint": {
           "type": "file",
           "path": "/var/lib/flogo-datapipeline/ckpt",
-          "intervalSeconds": 5
+          "intervalSeconds": "$property[CHECKPOINT_SECONDS]"
         },
         "observability": {
           "metrics": "prometheus",

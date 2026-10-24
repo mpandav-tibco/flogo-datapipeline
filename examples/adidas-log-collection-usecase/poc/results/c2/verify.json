@@ -1,0 +1,134 @@
+{
+ "scenario": "c2",
+ "ok": false,
+ "instances": 30,
+ "finished_instances": 0,
+ "expected_instances": 30,
+ "distinct_events_delivered": 91353,
+ "records_in_s3": 94517,
+ "records_in_dlq": 0,
+ "s3_objects": 55,
+ "missing_events": 0,
+ "gaps_in_unfinished": 4039,
+ "duplicate_records": 3164,
+ "broken_multiline": 0,
+ "records_without_seq": 0,
+ "bad_field_records": 0,
+ "manifest_mismatches": 0,
+ "latency_s": {
+  "p50": 33.075412,
+  "p95": 77.252588,
+  "p99": 148.041846,
+  "max": 166.686296
+ },
+ "unfinished": [
+  {
+   "pod": "customer-service-57968548c-smz5p",
+   "max_seq": 3175,
+   "gaps": 0
+  },
+  {
+   "pod": "inventory-service-6df966995-mdtn7",
+   "max_seq": 3172,
+   "gaps": 0
+  },
+  {
+   "pod": "order-service-6cd9bc89f5-9fpdv",
+   "max_seq": 3185,
+   "gaps": 0
+  },
+  {
+   "pod": "payment-service-5795c6d767-9zp5q",
+   "max_seq": 3166,
+   "gaps": 0
+  },
+  {
+   "pod": "shipment-service-6b9ff6c967-bgtv5",
+   "max_seq": 3191,
+   "gaps": 0
+  },
+  {
+   "pod": "customer-service-57968548c-6lkw7",
+   "max_seq": 3156,
+   "gaps": 0
+  },
+  {
+   "pod": "inventory-service-6df966995-6f8k5",
+   "max_seq": 3188,
+   "gaps": 0
+  },
+  {
+   "pod": "order-service-6cd9bc89f5-c9gpj",
+   "max_seq": 4351,
+   "gaps": 0
+  },
+  {
+   "pod": "payment-service-5795c6d767-r54gt",
+   "max_seq": 3198,
+   "gaps": 0
+  },
+  {
+   "pod": "shipment-service-6b9ff6c967-vwm5b",
+   "max_seq": 1593,
+   "gaps": 0
+  },
+  {
+   "pod": "customer-service-57968548c-6xxq8",
+   "max_seq": 3165,
+   "gaps": 0
+  },
+  {
+   "pod": "inventory-service-6df966995-s9kl7",
+   "max_seq": 1585,
+   "gaps": 0
+  },
+  {
+   "pod": "order-service-6cd9bc89f5-vkb9k",
+   "max_seq": 3172,
+   "gaps": 0
+  },
+  {
+   "pod": "payment-service-5795c6d767-tdt9n",
+   "max_seq": 4310,
+   "gaps": 0
+  },
+  {
+   "pod": "shipment-service-6b9ff6c967-vh8qg",
+   "max_seq": 1583,
+   "gaps": 0
+  },
+  {
+   "pod": "customer-service-57968548c-phbh6",
+   "max_seq": 3163,
+   "gaps": 0
+  },
+  {
+   "pod": "inventory-service-6df966995-dpvw9",
+   "max_seq": 1585,
+   "gaps": 0
+  },
+  {
+   "pod": "order-service-6cd9bc89f5-qxwhn",
+   "max_seq": 3195,
+   "gaps": 0
+  },
+  {
+   "pod": "payment-service-5795c6d767-ts4gh",
+   "max_seq": 3167,
+   "gaps": 0
+  },
+  {
+   "pod": "shipment-service-6b9ff6c967-9vljj",
+   "max_seq": 3181,
+   "gaps": 0
+  }
+ ],
+ "broken_multiline_samples": [],
+ "service_names": {
+  "order-service": 22737,
+  "payment-service": 22205,
+  "customer-service": 17406,
+  "shipment-service": 16311,
+  "inventory-service": 15858
+ }
+}

@@ -60,6 +60,9 @@ type validateTransform struct {
 	// execution for a routing validate but leaves drop/fail and default-discard
 	// validates eligible for the parallel transform path.
 	routesToRealSink bool
+	// rejects, when set, receives "route" violations instead of errorSink:
+	// the engine binds the pipeline's DLQ when no errorSink is configured.
+	rejects transform.RejectWriter
 
 	// Rule field positions for the most recent column layout.
 	boundCols []record.Column
@@ -114,6 +117,16 @@ func newValidateTransform(cfg map[string]interface{}) (transform.Transform, erro
 
 func (v *validateTransform) Name() string { return "validate" }
 
+// UseDefaultRejects implements transform.RejectRouter: a routing validate
+// without its own errorSink sends rejected rows to the pipeline's DLQ.
+func (v *validateTransform) UseDefaultRejects(w transform.RejectWriter) bool {
+	if v.onViolation != "route" || v.routesToRealSink {
+		return false
+	}
+	v.rejects = w
+	return true
+}
+
 // OwnsExternalSink reports that a routing validate writes rows to its own
 // configured error sink, so the engine must keep it single-threaded: the
 // parallel transform path builds one pipeline per worker, which would open
@@ -129,8 +142,10 @@ func (v *validateTransform) Apply(in *record.RecordBatch) (*record.RecordBatch, 
 	var badRows [][]interface{}
 
 	v.bind(in.Columns)
-	// Only "fail" reports the violation text; the other modes just need a verdict.
-	wantMsgs := v.onViolation == "fail"
+	// "fail" reports the violation text, and so does "route" to the DLQ (the
+	// reason is recorded with each rejected row); "drop" just needs a verdict.
+	wantMsgs := v.onViolation == "fail" || (v.onViolation == "route" && v.rejects != nil)
+	var reasons []string
 	for i, row := range in.Rows {
 		if violations := v.checkRow(row, wantMsgs); len(violations) == 0 {
 			good.Rows = append(good.Rows, in.Rows[i])
@@ -141,13 +156,21 @@ func (v *validateTransform) Apply(in *record.RecordBatch) (*record.RecordBatch, 
 				return nil, fmt.Errorf("validate: row %d failed: %v", i, violations)
 			case "route":
 				badRows = append(badRows, in.Rows[i])
+				reasons = append(reasons, "validate: "+strings.Join(violations, "; "))
 				// "drop": silently discard
 			}
 		}
 	}
 
-	// Route bad rows to error sink.
-	if len(badRows) > 0 && v.onViolation == "route" && v.errorSink != nil {
+	if len(badRows) > 0 && v.onViolation == "route" && v.rejects != nil {
+		errBatch := &record.RecordBatch{Columns: in.Columns, Rows: badRows}
+		if err := v.rejects.WriteRejects(errBatch, reasons); err != nil {
+			// Never drop rejected rows silently: fail the batch so the engine
+			// handles it (DLQ / abort) and the source position does not pass it.
+			record.Put(good)
+			return nil, fmt.Errorf("validate: routing %d rejected rows: %w", len(badRows), err)
+		}
+	} else if len(badRows) > 0 && v.onViolation == "route" && v.errorSink != nil {
 		errBatch := record.Get()
 		errBatch.Columns = in.Columns
 		errBatch.Rows = badRows

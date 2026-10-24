@@ -55,6 +55,19 @@ type ContextBinder interface {
 	BindContext(ctx context.Context)
 }
 
+// RejectWriter receives rows a transform rejects, each with its reason.
+type RejectWriter interface {
+	WriteRejects(b *record.RecordBatch, reasons []string) error
+}
+
+// RejectRouter is implemented by transforms that route rejected rows to an
+// error destination (e.g. validate with onViolation "route"). When the
+// transform has no destination of its own, the engine offers the pipeline's
+// DLQ; UseDefaultRejects returns true if the transform will use it.
+type RejectRouter interface {
+	UseDefaultRejects(w RejectWriter) bool
+}
+
 // Pipeline chains multiple transforms in sequence.
 // The output of transform N is the input of transform N+1.
 type Pipeline struct {

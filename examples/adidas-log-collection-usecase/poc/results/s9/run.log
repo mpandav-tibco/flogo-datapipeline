@@ -1,0 +1,6 @@
+[16:05:50] s9: collector: image=flogo-datapipeline:poc S3_KEY={namespace}/{YYYY}/{MM}/{DD}/{HH}/{node}-{mm}-{uuid}.ndjson SPOOL_DIR=<default>; writer: CONTAINERS=400 RATE=8 TOTAL=3000 ROTATE_BYTES=131072 CHURN=0.25 NAMESPACES=24; fault: s3-outage 300 180
+[16:05:50] s9: writers started
+[16:06:05] s9: writers done after 15s: synthlog: node=k3d-adidas-poc-agent-0 containers=400 churned=100 elapsed=387s synthlog: node=k3d-adidas-poc-agent-1 containers=400 churned=89 elapsed=387s synthlog: node=k3d-adidas-poc-server-0 containers=400 churned=89 elapsed=387s 
+[16:10:50] s9: FAULT s3-outage: S3 DOWN for 180s
+[16:13:51] s9: FAULT s3-outage: S3 back UP
+[16:13:51] s9: subprocess.CalledProcessError: Command 'docker exec miniobench sh -c 'mc alias set l http://localhost:9000 minioadmin minioadmin >/dev/null && rm -rf /tmp/verify-s9 && mkdir -p /tmp/verify-s9'' returned non-zero exit status 1.

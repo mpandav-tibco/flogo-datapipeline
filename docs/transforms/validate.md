@@ -11,7 +11,7 @@ Applies per-field rules and, on violation, **routes** bad rows to an error sink 
 |---|---|---|:--:|---|
 | `rules` | `[]object` | — | ✅ | Per-field rules (see below). |
 | `onViolation` | string | `route` | — | `route` (to the error sink), `fail` (abort), or `drop` (silently discard). |
-| `errorSinkType` | string | — | — | Sink type for routed rows (e.g. `dlq`, `null`). Defaults to a discard sink. |
+| `errorSinkType` | string | — | — | Sink type for routed rows (e.g. `dlq`, `null`). Without it, routed rows go to the pipeline's `dlq` (with the violated rules as the reason, counted as failed); with no `dlq` either, they are discarded. |
 | `errorSinkConfig` | object | `{}` | — | Configuration for that error sink. |
 
 ### Rule object

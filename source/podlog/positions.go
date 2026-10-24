@@ -32,6 +32,9 @@ type positionStore struct {
 	path string
 	mu   sync.Mutex
 	m    map[string]position
+	// existed reports that a registry was found at startup (not the very
+	// first run of this collector on the node).
+	existed bool
 }
 
 func newPositionStore(path string) (*positionStore, error) {
@@ -49,12 +52,38 @@ func newPositionStore(path string) (*positionStore, error) {
 		}
 		return nil, err
 	}
+	ps.existed = true
 	if len(data) > 0 {
 		if err := json.Unmarshal(data, &ps.m); err != nil {
 			return nil, err
 		}
 	}
 	return ps, nil
+}
+
+// gc drops the positions of files whose container log directory no longer
+// exists (the pod was removed), so the registry — rewritten at every
+// checkpoint — does not grow with every pod ever seen on the node. It returns
+// the removed keys.
+func (ps *positionStore) gc() []string {
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+	gone := map[string]bool{}
+	var removed []string
+	for key := range ps.m {
+		dir := filepath.Dir(key)
+		isGone, checked := gone[dir]
+		if !checked {
+			_, err := os.Stat(dir)
+			isGone = os.IsNotExist(err)
+			gone[dir] = isGone
+		}
+		if isGone {
+			delete(ps.m, key)
+			removed = append(removed, key)
+		}
+	}
+	return removed
 }
 
 func (ps *positionStore) get(key string) (position, bool) {

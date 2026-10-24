@@ -2,6 +2,8 @@ package pipeline
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -40,6 +42,33 @@ type runEnv struct {
 	runLog corelog.Logger
 	runID  string
 	counts *runCounters
+	// drain is closed when shutdown asks the run to finish cleanly; nil when
+	// the plan cannot drain (stateful plans resume from checkpointed state).
+	drain     <-chan struct{}
+	drainOnce sync.Once
+	drained   atomic.Bool
+}
+
+// errDrained ends a run that shutdown stopped after draining. It wraps
+// context.Canceled: the run is reported "cancelled" and never restarted.
+var errDrained = fmt.Errorf("stopped by shutdown after draining (final checkpoint saved): %w", context.Canceled)
+
+// wasDrained reports whether a source stopped reading because of shutdown.
+func (e *runEnv) wasDrained() bool { return e.drained.Load() }
+
+// draining reports whether shutdown asked the run to stop reading.
+func (e *runEnv) draining() bool {
+	if e.drain == nil {
+		return false
+	}
+	select {
+	case <-e.drain:
+		e.drainOnce.Do(func() { e.runLog.Infof("shutdown: stopping reads and draining the run (final checkpoint follows)") })
+		e.drained.Store(true)
+		return true
+	default:
+		return false
+	}
 }
 
 // ─── source ──────────────────────────────────────────────────────────────────
@@ -52,6 +81,11 @@ type meteredSource struct {
 }
 
 func (m *meteredSource) ReadBatch(size int) (*record.RecordBatch, error) {
+	if m.env.draining() {
+		// Shutdown asked the run to finish cleanly: report end of input so
+		// the plan drains, flushes and takes its final checkpoint.
+		return nil, io.EOF
+	}
 	t0 := time.Now()
 	b, err := m.Source.ReadBatch(size)
 	if b != nil && b.Len() > 0 {
@@ -71,14 +105,22 @@ func (m *meteredSource) Unwrap() source.Source { return m.Source }
 // a linear definition keeps exactly the per-batch behaviour it always had
 // (pooling, stage statistics, ordering) while running on the graph engine.
 // A transform error counts the batch as failed and the run continues — the
-// linear semantics (an explicit graph node without an error edge aborts).
+// linear semantics (an explicit graph node without an error edge aborts). The
+// failed batch's rows go to the DLQ when one is configured, so they are
+// accounted for rather than lost.
 type chainOp struct {
 	p   *transform.Pipeline
 	env *runEnv
+	dlq dlqWriteSink
+	rej *dlqRejects // rows routed to the DLQ by stages (validate), per batch
 }
 
-func newChainOp(p *transform.Pipeline, env *runEnv) graphexec.TransformOp {
-	c := &chainOp{p: p, env: env}
+func newChainOp(p *transform.Pipeline, env *runEnv, dlq dlqWriteSink) graphexec.TransformOp {
+	c := &chainOp{p: p, env: env, dlq: dlq}
+	if dlq != nil {
+		c.rej = &dlqRejects{dlq: dlq, env: env}
+		bindRejects(p, c.rej)
+	}
 	if w, idx := windowStage(p); w != nil {
 		return &windowedChainOp{chainOp: c, win: w, winIdx: idx}
 	}
@@ -87,18 +129,48 @@ func newChainOp(p *transform.Pipeline, env *runEnv) graphexec.TransformOp {
 
 func (c *chainOp) Apply(in *record.RecordBatch) (*record.RecordBatch, error) {
 	n := in.Len()
+	if c.rej != nil {
+		c.rej.reset()
+	}
 	t1 := time.Now()
 	out, err := c.p.Apply(in)
 	d := time.Since(t1)
 	a, rl := c.env.a, c.env.runLog
 	switch {
 	case err != nil:
-		rl.Warnf("transform error on batch of %d rows (routing to failed): %v", n, err)
 		a.recorder.BatchFailed(a.ref, n)
 		c.env.counts.failed.Add(int64(n))
-		return nil, nil // consumed: the engine recycles the input
+		if c.dlq == nil {
+			rl.Errorf("transform error on batch of %d rows — rows NOT delivered (configure a dlq to keep them): %v", n, err)
+			return nil, nil // consumed: the engine recycles the input
+		}
+		// The input batch is still valid (the transform pipeline never
+		// recycles its input); it may hold in-place edits of earlier stages.
+		// Rows a stage already routed to the DLQ (and counted) are skipped.
+		failedBatch := in
+		if routed := c.rej.routedCount(); routed > 0 {
+			c.env.counts.failed.Add(-int64(routed))
+			failedBatch = &record.RecordBatch{Columns: in.Columns}
+			for _, r := range in.Rows {
+				if !c.rej.wasRouted(r) {
+					failedBatch.Rows = append(failedBatch.Rows, r)
+				}
+			}
+		}
+		reasons := make([]string, failedBatch.Len())
+		for i := range reasons {
+			reasons[i] = "transform: " + err.Error()
+		}
+		if derr := c.dlq.WriteBatchErrors(failedBatch, reasons); derr != nil {
+			// Neither delivered nor dead-lettered: abort, so the source is not
+			// checkpointed past these rows and they are replayed.
+			return nil, fmt.Errorf("transform error (%v) and dead-lettering the batch failed: %w", err, derr)
+		}
+		rl.Warnf("transform error on batch of %d rows — dead-lettered: %v", n, err)
+		return nil, nil
 	case out == nil:
-		c.env.counts.dropped.Add(int64(n))
+		// Rows routed to the DLQ are already counted as failed.
+		c.env.counts.dropped.Add(int64(n - c.rej.routedCount()))
 		a.recorder.BatchTransformed(a.ref, n, 0, d)
 	default:
 		a.recorder.BatchTransformed(a.ref, n, out.Len(), d)
@@ -185,6 +257,13 @@ func (m *managedSink) Flush() error {
 	var o Output
 	err := m.env.a.flushSink(m.env.runLog, m.snk, m.dlq, &o)
 	m.merge(0, &o)
+	// Rows dead-lettered before a checkpoint must be durable when it is
+	// taken, like the rows written to the sink.
+	if err == nil && m.dlq != nil {
+		if derr := m.dlq.Flush(); derr != nil {
+			err = fmt.Errorf("dlq flush: %w", derr)
+		}
+	}
 	return err
 }
 
@@ -199,6 +278,65 @@ func (m *managedSink) Close() error { return m.snk.Close() }
 
 // Unwrap returns the wrapped sink (StatsReporter / Reconciler lookups).
 func (m *managedSink) Unwrap() sink.Sink { return m.snk }
+
+// dlqRejects adapts the pipeline DLQ for transforms that route rejected rows
+// (transform.RejectRouter), counting them as failed so read = written + failed
+// reconciles.
+type dlqRejects struct {
+	dlq dlqWriteSink
+	env *runEnv
+	// routed holds the rows routed during the current batch (identified by
+	// their backing array), so the chain neither dead-letters nor counts
+	// them twice. Each chain (and replica) has its own instance.
+	routed map[*interface{}]struct{}
+}
+
+func (d *dlqRejects) WriteRejects(b *record.RecordBatch, reasons []string) error {
+	if err := d.dlq.WriteBatchErrors(b, reasons); err != nil {
+		return err
+	}
+	d.env.counts.failed.Add(int64(b.Len()))
+	if d.routed == nil {
+		d.routed = map[*interface{}]struct{}{}
+	}
+	for _, r := range b.Rows {
+		if len(r) > 0 {
+			d.routed[&r[0]] = struct{}{}
+		}
+	}
+	return nil
+}
+
+func (d *dlqRejects) reset() {
+	for k := range d.routed {
+		delete(d.routed, k)
+	}
+}
+
+func (d *dlqRejects) routedCount() int {
+	if d == nil {
+		return 0
+	}
+	return len(d.routed)
+}
+
+func (d *dlqRejects) wasRouted(r []interface{}) bool {
+	if d == nil || len(r) == 0 {
+		return false
+	}
+	_, ok := d.routed[&r[0]]
+	return ok
+}
+
+// bindRejects offers the DLQ to every stage that routes rejected rows and has
+// no destination of its own.
+func bindRejects(p *transform.Pipeline, w transform.RejectWriter) {
+	for _, st := range p.Stages() {
+		if rr, ok := st.(transform.RejectRouter); ok {
+			rr.UseDefaultRejects(w)
+		}
+	}
+}
 
 // lockedDLQ serialises a DLQ shared by several sink nodes, which run on their
 // own goroutines.

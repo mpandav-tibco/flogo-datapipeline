@@ -1,0 +1,12 @@
+[14:25:56] s7: workload: --namespaces 3 --apps 2 --rate 30 --total 30000 → 6 emitter pods; fault: s3-outage 90 90
+[14:25:56] s7: workload applied
+[14:27:26] s7: FAULT s3-outage: S3 endpoint DOWN for 90s
+[14:28:56] s7: FAULT s3-outage: S3 endpoint back UP
+[14:29:19] s7: s7: instances=6 finished=0/6 events=75251 missing=0 gaps=0 dup=4744 s3=79995 dlq=0 multiline_broken=0
+[14:29:51] s7: s7: instances=6 finished=0/6 events=98477 missing=0 gaps=0 dup=4744 s3=103221 dlq=0 multiline_broken=0
+[14:30:24] s7: s7: instances=6 finished=0/6 events=114712 missing=0 gaps=0 dup=4744 s3=119456 dlq=0 multiline_broken=0
+[14:30:58] s7: s7: instances=6 finished=0/6 events=128795 missing=0 gaps=0 dup=4744 s3=133539 dlq=0 multiline_broken=0
+[14:31:31] s7: s7: instances=6 finished=0/6 events=142700 missing=0 gaps=0 dup=4744 s3=147444 dlq=0 multiline_broken=0
+[14:32:05] s7: s7: instances=6 finished=0/6 events=161296 missing=0 gaps=0 dup=4744 s3=166040 dlq=0 multiline_broken=0
+[14:32:39] s7: s7: instances=6 finished=2/6 events=175040 missing=0 gaps=0 dup=4744 s3=179784 dlq=0 multiline_broken=0
+[14:33:16] s7: verified in 437s — OK events=180000 missing=0 gaps=0 dup=4744 multiline_broken=0 dlq=0 p95_latency=83.270258s

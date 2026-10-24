@@ -36,7 +36,7 @@ Use a [parse](../transforms/parse.md) transform to structure `message` into type
 | `root` | string | `/var/log/pods` | — | CRI pod-log root directory. |
 | `node` | string | — | — | Node name stamped on every record (for multi-node reconciliation). |
 | `positionFile` | string | — | — | Crash-safe byte-offset registry file. Strongly recommended in production. |
-| `fromBeginning` | bool | `false` | — | Read existing files from offset 0; otherwise tail from EOF. |
+| `fromBeginning` | bool | `false` | — | `true`: read every existing file from offset 0. `false`: on the first start (no saved position), skip what is already on disk and tail from EOF. Files that appear later (new pods, restarted containers) are always read from offset 0. |
 | `pollMs` | int | `500` | — | Idle poll interval (ms). |
 | `bounded` | bool | `false` | — | Test/drain mode: return EOF once the tree is drained and idle. |
 | `includeNamespaces` | `[]string` | all | — | If non-empty, only these namespaces are tailed. |
@@ -58,10 +58,36 @@ Use a [parse](../transforms/parse.md) transform to structure `message` into type
   are concatenated automatically.
 - **Multiline stitching:** when `startPattern` is set, lines that do not match it are
   appended to the previous record; a pending record is flushed after `flushIdleMs` of
-  inactivity, and capped at `maxLines`.
-- **At-least-once:** the position registry is persisted only after the sink acknowledges,
-  so a crash resumes from the last committed offset (a few duplicate lines are possible).
-- **Rotation-safe:** file fingerprints prevent misresumes across log rotation.
+  inactivity, and capped at `maxLines`. `stdout` and `stderr` share one CRI file but are
+  stitched **separately**, so a stack trace on `stderr` interleaved with `stdout` lines stays
+  one record. The committed position never passes the first line that either stream still
+  buffers.
+- **At-least-once:** the position registry is persisted only once the sink has made the
+  records durable — at checkpoints, at the end of a run (or of a shutdown drain), or when
+  the engine acknowledges written rows without a checkpoint store (`source.Committer`) —
+  never for records still in flight. A crash resumes from the last committed offset (a
+  few duplicate lines are possible, none are lost).
+- **Rotation-safe:** kubelet rotates a log by renaming `0.log` to `0.log.<timestamp>` and
+  the runtime reopening a fresh `0.log`. The tailer follows the file it has open to its
+  end (with a 1 s grace for the runtime's last write), then switches to the new file. A
+  collector that was down across a rotation finishes the rotated file from its saved
+  offset before the new one. While back-pressured (e.g. the sink is down) over several
+  rotations, every rotated file kubelet still keeps is read in rotation order — including
+  the older ones kubelet has gzip-compressed (`0.log.<ts>.gz`, read decompressed; offsets
+  and fingerprints refer to the original content, so a position saved before compression
+  still resumes). Only files kubelet has already deleted (beyond `containerLogMaxFiles`)
+  are out of reach.
+- **Pod deletion:** a removed pod's files are read to the end before their handles close.
+  Registry entries of pods whose log directory is gone are dropped at the next
+  checkpoint, so the position file and in-memory state do not grow with pod churn.
+  If the sink is down when a pod is deleted, the source is back-pressured. The open
+  handle keeps the deleted file readable only until the run restarts after a failed
+  checkpoint. Use the object-store sink's
+  [durable spool](../sinks/objstore.md#durable-spool-rolling) so that a sink outage does not
+  stall reading.
+- **Memory:** about 32 KiB of read buffer per open file, plus pending multiline records.
+  Hundreds of containers per node fit in well under 256 MiB.
+- Files are fingerprinted (first 256 bytes) to recognise them across restarts.
 
 ## Example — DaemonSet collector with Java/BW stack-trace stitching
 

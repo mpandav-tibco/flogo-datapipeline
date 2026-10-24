@@ -35,3 +35,19 @@ data:
   ROLL_MAX_BYTES: "4194304"                           # 4 MiB
   ROLL_MAX_SECONDS: "60"
   BATCH_SIZE: "1000"
+  # Every checkpoint uploads the open S3 objects (with their manifests) BEFORE
+  # the read positions advance, so this is both the delivery latency and the
+  # most a crash can replay (duplicates, never loss).
+  CHECKPOINT_SECONDS: "30"
+  # S3 object layout. Per pod is best for forensics; at estate scale prefer per
+  # namespace (pod/service stay fields in every record) to cut PUTs ~100x:
+  #   "{namespace}/{YYYY}/{MM}/{DD}/{HH}/{node}-{mm}-{uuid}.ndjson"
+  S3_KEY: "{namespace}/{pod}/{YYYY}/{MM}/{DD}/{node}-{HH}{mm}-{uuid}.ndjson"
+  S3_DLQ_KEY: "_dlq/{node}/{YYYY}/{MM}/{DD}/{HH}{mm}-{uuid}.ndjson"
+  # Durable node-local spool (hostPath): checkpoints seal objects here and a
+  # background uploader ships them, so collection never stops while S3 is
+  # unreachable. Tolerated outage = SPOOL_MAX_BYTES / node log rate.
+  # Set both to "none" to disable (an empty value falls back to the default).
+  SPOOL_DIR: "/var/lib/flogo-datapipeline/spool"
+  SPOOL_DLQ_DIR: "/var/lib/flogo-datapipeline/spool-dlq"   # separate spool for the S3 dead-letter sink
+  SPOOL_MAX_BYTES: "5368709120"

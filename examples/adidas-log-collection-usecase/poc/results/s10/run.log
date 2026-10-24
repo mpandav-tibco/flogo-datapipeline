@@ -1,0 +1,8 @@
+[17:20:14] s10: collector: image=flogo-datapipeline:poc S3_KEY={namespace}/{YYYY}/{MM}/{DD}/{HH}/{node}-{mm}-{uuid}.ndjson SPOOL_DIR=<default>; writer: CONTAINERS=400 RATE=8 TOTAL=3000 ROTATE_BYTES=131072 CHURN=0.25 NAMESPACES=24; fault: s3-outage-kill 240 180 330 k3d-adidas-poc-agent-0
+[17:20:14] s10: writers started
+[17:24:15] s10: FAULT: S3 DOWN for 180s
+[17:25:46] s10: FAULT: kill -9 of the collector on k3d-adidas-poc-agent-0 (pid 272223) with 1368 spool files
+[17:26:50] s10: writers done after 396s: synthlog: node=k3d-adidas-poc-agent-0 containers=400 churned=115 elapsed=387s synthlog: node=k3d-adidas-poc-server-0 containers=400 churned=96 elapsed=387s synthlog: node=k3d-adidas-poc-agent-1 containers=400 churned=102 elapsed=387s 
+[17:27:16] s10: FAULT: S3 back UP
+[17:27:16] s10: subprocess.CalledProcessError: Command 'docker exec miniobench sh -c 'mc alias set l http://localhost:9000 minioadmin minioadmin >/dev/null && rm -rf /tmp/verify-s10 && mkdir -p /tmp/verify-s10'' returned non-zero exit status 1.
+[17:30:52] s10: verified in 555s — OK instances=1200/1200 events=3600000 missing=0 gaps=0 dup=3200 multiline_broken=0 dlq=0 s3_objects=8448 p95_latency=182.753706s

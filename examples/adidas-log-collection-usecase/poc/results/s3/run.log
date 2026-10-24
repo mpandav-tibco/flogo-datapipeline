@@ -1,0 +1,9 @@
+[11:02:38] s3: workload: --namespaces 6 --apps 5 --rate 10 --total 8000 → 30 emitter pods; fault: s3-outage 90 120
+[11:02:38] s3: workload applied
+[11:04:08] s3: FAULT s3-outage: S3 endpoint DOWN for 120s
+[11:06:09] s3: FAULT s3-outage: S3 endpoint back UP
+[11:06:22] s3: s3: instances=30 finished=0/30 events=111190 missing=0 gaps=0 dup=3270 s3=114460 dlq=0 multiline_broken=0
+[11:06:56] s3: s3: instances=30 finished=0/30 events=188374 missing=0 gaps=0 dup=13332 s3=201706 dlq=0 multiline_broken=0
+[11:07:31] s3: s3: instances=30 finished=0/30 events=212237 missing=0 gaps=0 dup=13332 s3=225569 dlq=0 multiline_broken=0
+[11:08:06] s3: s3: instances=30 finished=3/30 events=236117 missing=0 gaps=0 dup=13332 s3=249449 dlq=0 multiline_broken=0
+[11:08:46] s3: verified in 363s — OK events=240000 missing=0 gaps=0 dup=13332 multiline_broken=0 dlq=0 p95_latency=138.011715s

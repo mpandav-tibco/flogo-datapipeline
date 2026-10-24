@@ -1,0 +1,139 @@
+{
+ "scenario": "c9",
+ "ok": false,
+ "instances": 1200,
+ "finished_instances": 899,
+ "expected_instances": 1200,
+ "distinct_events_delivered": 3383108,
+ "records_in_s3": 3420891,
+ "records_in_dlq": 0,
+ "s3_objects": 7030,
+ "missing_events": 0,
+ "gaps_in_unfinished": 124,
+ "duplicate_records": 37783,
+ "broken_multiline": 0,
+ "records_without_seq": 0,
+ "bad_field_records": 0,
+ "manifest_mismatches": 0,
+ "latency_s": {
+  "p50": 3.243338,
+  "p95": 185.127281,
+  "p99": 222.419413,
+  "max": 272.496355
+ },
+ "unfinished": [
+  {
+   "pod": "shipment-service-k9zzcllhl-gcfb2",
+   "max_seq": 2348,
+   "gaps": 0
+  },
+  {
+   "pod": "pricing-service-74nr8nlhf-klnx8",
+   "max_seq": 2348,
+   "gaps": 0
+  },
+  {
+   "pod": "pricing-service-6xvlrhjqj-x9stx",
+   "max_seq": 2348,
+   "gaps": 0
+  },
+  {
+   "pod": "customer-service-hl6rnql5m-mzmhp",
+   "max_seq": 2348,
+   "gaps": 0
+  },
+  {
+   "pod": "shipment-service-zncb5vblq-shmbn",
+   "max_seq": 2342,
+   "gaps": 1
+  },
+  {
+   "pod": "pricing-service-wpbpfd86v-rs9f9",
+   "max_seq": 2342,
+   "gaps": 1
+  },
+  {
+   "pod": "shipment-service-2qsrbxdw9-r6qvh",
+   "max_seq": 2341,
+   "gaps": 1
+  },
+  {
+   "pod": "shipment-service-hjtpfbbzk-t2pvn",
+   "max_seq": 2341,
+   "gaps": 1
+  },
+  {
+   "pod": "order-service-jmvs9qmwg-ppmkj",
+   "max_seq": 2336,
+   "gaps": 0
+  },
+  {
+   "pod": "order-service-c746bbtx2-slhdw",
+   "max_seq": 2148,
+   "gaps": 0
+  },
+  {
+   "pod": "shipment-service-vdlssvkl2-96nln",
+   "max_seq": 2148,
+   "gaps": 0
+  },
+  {
+   "pod": "inventory-service-zqs8g52n6-nns79",
+   "max_seq": 2348,
+   "gaps": 0
+  },
+  {
+   "pod": "notification-service-fd2nmv6zl-z4dkb",
+   "max_seq": 2348,
+   "gaps": 0
+  },
+  {
+   "pod": "catalog-service-qcrfx6ngc-wn4h5",
+   "max_seq": 2348,
+   "gaps": 0
+  },
+  {
+   "pod": "payment-service-nhncvjstg-4xr78",
+   "max_seq": 2342,
+   "gaps": 1
+  },
+  {
+   "pod": "catalog-service-78nxmtldx-mdjpl",
+   "max_seq": 2342,
+   "gaps": 1
+  },
+  {
+   "pod": "inventory-service-f2cprsbqg-r8gbd",
+   "max_seq": 2341,
+   "gaps": 1
+  },
+  {
+   "pod": "inventory-service-c9whwfp2h-lc6hh",
+   "max_seq": 2341,
+   "gaps": 1
+  },
+  {
+   "pod": "inventory-service-jl94f2hc2-rkzjg",
+   "max_seq": 2124,
+   "gaps": 1
+  },
+  {
+   "pod": "loyalty-service-7sw5rn2wp-dz65b",
+   "max_seq": 2124,
+   "gaps": 1
+  }
+ ],
+ "broken_multiline_samples": [],
+ "service_names": {
+  "loyalty-service": 351699,
+  "catalog-service": 346835,
+  "order-service": 346567,
+  "pricing-service": 343287,
+  "notification-service": 341213,
+  "customer-service": 341168,
+  "payment-service": 338936,
+  "inventory-service": 338442,
+  "returns-service": 337872,
+  "shipment-service": 334872
+ }
+}

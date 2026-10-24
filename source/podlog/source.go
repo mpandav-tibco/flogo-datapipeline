@@ -79,7 +79,9 @@ type podlogSource struct {
 	pending map[string]position
 	// committed holds the last durably-persisted offset per file, so Cursor()
 	// can compute the newly-committed byte delta for the reconciliation metric.
-	committed map[string]int64
+	committed map[string]position
+	// carryBytes holds bytes of files rotated away since the last Cursor.
+	carryBytes int64
 
 	// recon accumulates reconciliation totals (lines read, bytes committed,
 	// rotations) for the shutdown summary + Prometheus counters.
@@ -151,6 +153,7 @@ func newPodlogSource(cfg map[string]interface{}) (source.Source, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t := &tailer{
+		rotationGrace: defaultRotationGrace,
 		root:          c.root,
 		node:          c.node,
 		fromBeginning: c.fromBeginning,
@@ -174,7 +177,7 @@ func newPodlogSource(cfg map[string]interface{}) (source.Source, error) {
 		cancel:    cancel,
 		schema:    podlogColumns,
 		pending:   map[string]position{},
-		committed: map[string]int64{},
+		committed: map[string]position{},
 	}
 	// The tailer reports open-file count and rotations for reconciliation.
 	t.recon = &s.recon
@@ -276,10 +279,31 @@ func (s *podlogSource) rowFor(er enrichedRecord) []interface{} {
 func (s *podlogSource) trackPending(er enrichedRecord) {
 	s.mu.Lock()
 	cur, ok := s.pending[er.fileKey]
-	if !ok || er.endOffset > cur.Offset {
-		s.pending[er.fileKey] = position{Offset: er.endOffset, Fingerprint: er.fp}
+	// A fingerprint that does not extend the pending one is the next file at
+	// this path (rotation): records arrive in file order, so it supersedes the
+	// old file's offset; the old file's uncommitted bytes are carried into
+	// the reconciliation metric. (A fingerprint that extends it is the same
+	// file, refreshed once it grew past the fingerprint window.)
+	switch {
+	case !ok:
+		s.pending[er.fileKey] = position{Offset: er.commitOffset, Fingerprint: er.fp}
+	case !fpMatch(cur.Fingerprint, er.fp):
+		s.carryBytes += cur.Offset - s.committedOffset(er.fileKey, cur.Fingerprint)
+		s.committed[er.fileKey] = position{Fingerprint: er.fp}
+		s.pending[er.fileKey] = position{Offset: er.commitOffset, Fingerprint: er.fp}
+	case er.commitOffset > cur.Offset:
+		s.pending[er.fileKey] = position{Offset: er.commitOffset, Fingerprint: er.fp}
 	}
 	s.mu.Unlock()
+}
+
+// committedOffset is the committed offset of the file with fingerprint fp at
+// key (0 when another file's position is committed there). Caller holds mu.
+func (s *podlogSource) committedOffset(key, fp string) int64 {
+	if c, ok := s.committed[key]; ok && (fpMatch(c.Fingerprint, fp) || fpMatch(fp, c.Fingerprint)) {
+		return c.Offset
+	}
+	return 0
 }
 
 // Cursor implements checkpoint.CursorProvider. The pipeline calls it after the
@@ -289,15 +313,19 @@ func (s *podlogSource) trackPending(er enrichedRecord) {
 // in the implementation plan). Returns the registry snapshot for audit.
 func (s *podlogSource) Cursor() json.RawMessage {
 	s.mu.Lock()
-	var committedDelta int64
+	committedDelta := s.carryBytes
+	s.carryBytes = 0
 	for key, p := range s.pending {
-		if prev := s.committed[key]; p.Offset > prev {
+		if prev := s.committedOffset(key, p.Fingerprint); p.Offset > prev {
 			committedDelta += p.Offset - prev
-			s.committed[key] = p.Offset
 		}
+		s.committed[key] = p
 		s.positions.set(key, p)
 	}
 	s.pending = map[string]position{}
+	for _, key := range s.positions.gc() {
+		delete(s.committed, key)
+	}
 	s.mu.Unlock()
 	if err := s.positions.persist(); err != nil {
 		plog.Warnf("podlog source: persist positions: %v", err)
@@ -306,26 +334,29 @@ func (s *podlogSource) Cursor() json.RawMessage {
 	return s.positions.snapshot()
 }
 
+// Commit implements source.Committer. The engine calls it once every row
+// handed out so far is durably written: after a checkpoint is saved, and at
+// the end of a run that has no checkpoint store. Persisting the delivered
+// positions then is exactly what Cursor does.
+func (s *podlogSource) Commit(int64) error {
+	s.Cursor()
+	return nil
+}
+
 func (s *podlogSource) Close() error {
 	if s.closed.Swap(true) {
 		return nil
 	}
 	s.cancel()
-	// Best-effort final persist so the last acknowledged offsets survive a clean
-	// shutdown (a crash falls back to the last checkpoint-time persist).
+	// Pending offsets are NOT persisted here: they cover records handed to the
+	// pipeline, not records the sink has made durable (a cancelled run, or one
+	// that failed, may still hold them in flight). Only Cursor — called after a
+	// checkpoint's sink flush — advances the registry; a restart replays from
+	// there (at-least-once).
 	s.mu.Lock()
-	var committedDelta int64
-	for key, p := range s.pending {
-		if prev := s.committed[key]; p.Offset > prev {
-			committedDelta += p.Offset - prev
-			s.committed[key] = p.Offset
-		}
-		s.positions.set(key, p)
-	}
 	s.pending = map[string]position{}
 	s.mu.Unlock()
-	s.recon.addBytesCommitted(s.cfg.node, committedDelta)
-	err := s.positions.persist()
+	var err error
 	// Auditable reconciliation summary — always logged, even without Prometheus,
 	// so an operator can confirm read == committed at shutdown.
 	plog.Infof("podlog reconciliation — node=%s linesRead=%d bytesCommitted=%d rotations=%d",

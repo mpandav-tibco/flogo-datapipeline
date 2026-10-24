@@ -281,7 +281,7 @@ func (a *DataPipelineAction) Run(
 		a.lineageStart(runID)
 
 		start := time.Now()
-		out, runErr := a.executePipeline(ctx, in, runLog, runID)
+		out, runErr := a.runWithRestart(ctx, in, runLog, runID)
 		totalDur := time.Since(start)
 		out.DurationMs = totalDur.Milliseconds()
 
@@ -306,6 +306,37 @@ func (a *DataPipelineAction) Run(
 		handler.Done()
 	}()
 	return nil
+}
+
+// runWithRestart executes the pipeline and, when restart.onFailure is set,
+// executes it again after a backoff whenever it fails — each attempt is a
+// fresh plan that resumes from the last checkpoint — until it succeeds or the
+// run is stopped. The backoff resets after an attempt that ran for a while.
+func (a *DataPipelineAction) runWithRestart(ctx context.Context, in *Input, runLog corelog.Logger, runID string) (*Output, error) {
+	policy := a.def.Restart
+	attempt := 0
+	for {
+		t0 := time.Now()
+		out, err := a.executePipeline(ctx, in, runLog, runID)
+		if err == nil || !policy.OnFailure || ctx.Err() != nil || errors.Is(err, context.Canceled) {
+			return out, err
+		}
+		if time.Since(t0) > 5*time.Minute {
+			attempt = 0
+		}
+		attempt++
+		delay := policy.backoff(attempt)
+		runLog.Errorf("pipeline run attempt %d failed (processed=%d written=%d): %v — restarting from the last checkpoint in %s (restart.onFailure)",
+			attempt, out.RowsProcessed, out.RowsWritten, err, delay)
+		a.recorder.PipelineComplete(a.ref, "failed", out.RowsProcessed, out.RowsWritten, out.RowsFailed, time.Since(t0))
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+			return out, err
+		case <-drainSignal(ctx):
+			return out, err
+		}
+	}
 }
 
 // stallThreshold returns the stall detection duration for this pipeline.
@@ -880,11 +911,17 @@ func (a *DataPipelineAction) isolateRows(runLog corelog.Logger, snk sink.Sink, d
 	// Reusable scratch batch (its Rows slice aliases rows, so never pooled with them).
 	chunk := record.Get()
 	chunk.Columns = cols
+	// Sinks whose Flush is expensive (an object-store rolling sink uploads)
+	// expose a local flush that is enough to learn whether a row was accepted.
+	flush := snk.Flush
+	if lf, ok := snk.(interface{ FlushLocal() error }); ok {
+		flush = lf.FlushLocal
+	}
 	write := func(part [][]interface{}) error {
 		chunk.Rows = part
 		werr := snk.WriteBatch(chunk)
 		if werr == nil {
-			werr = snk.Flush()
+			werr = flush()
 		}
 		return werr
 	}

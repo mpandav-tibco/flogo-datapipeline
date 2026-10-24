@@ -18,6 +18,9 @@ object naming, **partitioning**, and **rolling**. Implemented in
 | `format` | string | — | ✅ | Inner sink type. Format-specific keys (e.g. `compression`) pass through. |
 | `rollMaxBytes` | int | `0` | — | Roll (close + upload) the object at this size. `0` = no size roll. |
 | `rollMaxSeconds` | int | `0` | — | Roll the object at this age (seconds). `0` = no time roll. |
+| `spoolDir` | string | — | — | Rolling sinks only: durable local spool directory (see [Durable spool](#durable-spool-rolling)). Empty or `none` = no spool: upload synchronously at each flush (use `none` when the value comes from a property, because resolvers treat an empty value as unset). |
+| `spoolMaxBytes` | int | `5368709120` | — | Spool capacity (bytes of sealed, not-yet-uploaded objects). When full, flushes fail (back-pressure) until uploads catch up. |
+| `spoolCloseWaitSeconds` | int | `10` | — | On sink close, how long to wait for the spool to finish uploading. Whatever remains stays on disk and is uploaded by the next process. |
 
 ### S3 keys
 
@@ -72,8 +75,58 @@ rolling).
   `{namespace}`): a child object is written per distinct value. Empty values → `_unknown`;
   values are sanitized (`/`, `\`, `..` → `_`).
 - **Rolling** — `rollMaxBytes > 0` or `rollMaxSeconds > 0`: objects close and upload when
-  they hit the size or age limit; a `{seq}` counter increments per roll. Each rolled object
+  they hit the size or age limit; a `{seq}` counter increments per roll (when the key has no
+  `{uuid}`, `{seq}` also carries a short per-sink token so restarts and recreated partitions
+  never overwrite earlier objects, e.g. `part-1a2b3c4d-0000.ndjson`). Each rolled object
   gets a `<key>.manifest.json` sidecar (`record_count`, `bytes`, `opened_at`, `closed_at`).
+
+### Durability with checkpoints (rolling)
+
+A rolling sink's `Flush` — which the engine calls at every checkpoint — uploads the open
+object(s) with their manifests. A checkpoint is therefore only taken once every row before
+it is **in the object store**, never just in the local temp file: a crashed or OOM-killed
+collector replays from the last checkpoint (duplicates possible, no loss). Consequences:
+
+- The checkpoint interval is the delivery latency and the object cadence per partition
+  (`rollMaxBytes`/`rollMaxSeconds` still cap objects between checkpoints).
+- An upload that fails is kept (temp file intact) and retried at the next flush; the
+  flush — and so the checkpoint — fails until it succeeds. Rows are never dead-lettered
+  because of an upload failure.
+- Partitioned children are released after each flush, so per-key state (e.g. one per pod)
+  does not accumulate as keys churn.
+
+A non-rolling single object is uploaded only at `Close`; with checkpointing enabled, use a
+rolling sink so checkpoints cover uploaded data.
+
+### Durable spool (rolling)
+
+Without a spool, an object-store outage stops checkpoints, which back-pressures the source.
+For a node-local log collector that is not enough: kubelet keeps deleting rotated files and
+removed pods' logs, so a long outage would still lose data at the source. With `spoolDir`
+set, `Flush` makes data durable **on local disk** instead of remotely:
+
+1. The rolling object is written directly into `spoolDir` (`*.part`).
+2. At a flush or roll it is fsynced, renamed to `*.data`, and an atomic `*.meta` sidecar
+   (key, manifest) is written. Then the flush returns, so the checkpoint and source positions
+   advance.
+3. Background workers (4 per spool directory) upload sealed objects plus their
+   manifests. Failed uploads are retried with backoff (1 s → 30 s) for as long as needed.
+   An object is deleted from the spool only after its upload has succeeded.
+4. On start, sealed objects left by a previous process are uploaded. `*.part` files are
+   discarded because their rows are past the last checkpoint and will be replayed.
+
+When `spoolMaxBytes` is reached, flushes fail, so checkpoints stop and the pipeline
+back-pressures exactly as it does without a spool. Size the spool for
+`ingest rate × longest outage to ride out`. Use a node path that survives pod restarts
+(a `hostPath`), and give the dead-letter sink its own spool directory.
+
+Gauges (label `spool`): `flogo_objstore_spool_bytes`, `flogo_objstore_spool_objects`,
+`flogo_objstore_spool_upload_failures`, `flogo_objstore_spool_uploaded_objects`. Alert on
+`spool_bytes` approaching `spoolMaxBytes`.
+
+> The spool lives on the node. Losing the node's disk loses what has not been uploaded yet.
+> Without a spool, the same data would be lost anyway, because it would still be only in the
+> pod logs on that node.
 
 ## Credential resolution (S3)
 

@@ -1,0 +1,89 @@
+{
+ "scenario": "s6",
+ "ok": true,
+ "instances": 41,
+ "finished_instances": 30,
+ "expected_instances": 30,
+ "distinct_events_delivered": 274021,
+ "records_in_s3": 274021,
+ "records_in_dlq": 0,
+ "s3_objects": 387,
+ "missing_events": 0,
+ "gaps_in_unfinished": 0,
+ "duplicate_records": 0,
+ "broken_multiline": 0,
+ "records_without_seq": 0,
+ "bad_field_records": 0,
+ "manifest_mismatches": 0,
+ "latency_s": {
+  "p50": 15.341599,
+  "p95": 29.174431,
+  "p99": 30.716412,
+  "max": 39.197026
+ },
+ "unfinished": [
+  {
+   "pod": "order-service-5cc767777f-vc5cv",
+   "max_seq": 3146,
+   "gaps": 0
+  },
+  {
+   "pod": "customer-service-669d6c85c5-x7gr2",
+   "max_seq": 3134,
+   "gaps": 0
+  },
+  {
+   "pod": "customer-service-669d6c85c5-dglf6",
+   "max_seq": 3113,
+   "gaps": 0
+  },
+  {
+   "pod": "payment-service-7dd8f8f5ff-9bnvw",
+   "max_seq": 3108,
+   "gaps": 0
+  },
+  {
+   "pod": "order-service-5cc767777f-m76bv",
+   "max_seq": 3097,
+   "gaps": 0
+  },
+  {
+   "pod": "payment-service-7dd8f8f5ff-f9vgl",
+   "max_seq": 3108,
+   "gaps": 0
+  },
+  {
+   "pod": "shipment-service-8646bb7fff-47nzf",
+   "max_seq": 3091,
+   "gaps": 0
+  },
+  {
+   "pod": "customer-service-669d6c85c5-x4gx4",
+   "max_seq": 3043,
+   "gaps": 0
+  },
+  {
+   "pod": "inventory-service-5cdb7f6c67-7p7q2",
+   "max_seq": 3067,
+   "gaps": 0
+  },
+  {
+   "pod": "order-service-5cc767777f-n6rn8",
+   "max_seq": 3058,
+   "gaps": 0
+  },
+  {
+   "pod": "payment-service-7dd8f8f5ff-crbgr",
+   "max_seq": 3056,
+   "gaps": 0
+  }
+ ],
+ "broken_multiline_samples": [],
+ "service_names": {
+  "order-service": 57301,
+  "customer-service": 57290,
+  "payment-service": 57272,
+  "shipment-service": 51091,
+  "inventory-service": 51067
+ }
+}

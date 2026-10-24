@@ -1,0 +1,22 @@
+[11:37:28] c4: workload: --namespaces 3 --apps 2 --rate 400 --total 150000 → 6 emitter pods; fault: none
+[11:37:28] c4: workload applied
+[11:38:31] c4: c4: instances=6 finished=0/6 events=48844 missing=0 gaps=0 dup=0 s3=48844 dlq=0 multiline_broken=0
+[11:39:03] c4: c4: instances=6 finished=0/6 events=48844 missing=0 gaps=0 dup=0 s3=48844 dlq=0 multiline_broken=0
+[11:39:35] c4: c4: instances=6 finished=0/6 events=48844 missing=0 gaps=0 dup=0 s3=48844 dlq=0 multiline_broken=0
+[11:40:08] c4: c4: instances=6 finished=0/6 events=48844 missing=0 gaps=0 dup=0 s3=48844 dlq=0 multiline_broken=0
+[11:40:40] c4: c4: instances=6 finished=0/6 events=48844 missing=0 gaps=0 dup=0 s3=48844 dlq=0 multiline_broken=0
+[11:41:12] c4: c4: instances=6 finished=0/6 events=48844 missing=0 gaps=0 dup=0 s3=48844 dlq=0 multiline_broken=0
+[11:41:44] c4: c4: instances=6 finished=0/6 events=48844 missing=0 gaps=0 dup=0 s3=48844 dlq=0 multiline_broken=0
+[11:42:16] c4: c4: instances=6 finished=0/6 events=48844 missing=0 gaps=0 dup=0 s3=48844 dlq=0 multiline_broken=0
+[11:42:48] c4: c4: instances=6 finished=0/6 events=48844 missing=0 gaps=0 dup=0 s3=48844 dlq=0 multiline_broken=0
+[11:43:20] c4: c4: instances=6 finished=0/6 events=48844 missing=0 gaps=0 dup=0 s3=48844 dlq=0 multiline_broken=0
+[11:43:52] c4: c4: instances=6 finished=0/6 events=48844 missing=0 gaps=0 dup=0 s3=48844 dlq=0 multiline_broken=0
+[11:44:24] c4: c4: instances=6 finished=0/6 events=48844 missing=0 gaps=0 dup=0 s3=48844 dlq=0 multiline_broken=0
+[11:44:56] c4: c4: instances=6 finished=0/6 events=48844 missing=0 gaps=0 dup=0 s3=48844 dlq=0 multiline_broken=0
+[11:45:28] c4: c4: instances=6 finished=0/6 events=48844 missing=0 gaps=0 dup=0 s3=48844 dlq=0 multiline_broken=0
+[11:46:00] c4: c4: instances=6 finished=0/6 events=48844 missing=0 gaps=0 dup=0 s3=48844 dlq=0 multiline_broken=0
+[11:46:33] c4: c4: instances=6 finished=0/6 events=48844 missing=0 gaps=0 dup=0 s3=48844 dlq=0 multiline_broken=0
+[11:47:05] c4: c4: instances=6 finished=0/6 events=48844 missing=0 gaps=0 dup=0 s3=48844 dlq=0 multiline_broken=0
+[11:47:37] c4: c4: instances=6 finished=0/6 events=48844 missing=0 gaps=0 dup=0 s3=48844 dlq=0 multiline_broken=0
+[11:47:37] c4: TIMEOUT waiting for complete delivery
+[11:47:39] c4: verified in 609s — FAILED events=48844 missing=0 gaps=0 dup=0 multiline_broken=0 dlq=0 p95_latency=4.750331s

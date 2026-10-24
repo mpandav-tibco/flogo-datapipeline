@@ -1,0 +1,38 @@
+{
+ "scenario": "s9",
+ "ok": true,
+ "instances": 1200,
+ "finished_instances": 1200,
+ "expected_instances": 1200,
+ "distinct_events_delivered": 3600000,
+ "records_in_s3": 3600000,
+ "records_in_dlq": 0,
+ "s3_objects": 8424,
+ "missing_events": 0,
+ "gaps_in_unfinished": 0,
+ "duplicate_records": 0,
+ "broken_multiline": 0,
+ "records_without_seq": 0,
+ "bad_field_records": 0,
+ "manifest_mismatches": 0,
+ "latency_s": {
+  "p50": 2.67452,
+  "p95": 171.198308,
+  "p99": 186.38799,
+  "max": 196.12854
+ },
+ "unfinished": [],
+ "broken_multiline_samples": [],
+ "service_names": {
+  "customer-service": 360000,
+  "shipment-service": 360000,
+  "returns-service": 360000,
+  "order-service": 360000,
+  "pricing-service": 360000,
+  "loyalty-service": 360000,
+  "inventory-service": 360000,
+  "payment-service": 360000,
+  "catalog-service": 360000,
+  "notification-service": 360000
+ }
+}

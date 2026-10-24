@@ -1,0 +1,1 @@
+s3: instances=30 finished=30/30 events=240000 missing=0 gaps=0 dup=13332 s3=253332 dlq=0 multiline_broken=0

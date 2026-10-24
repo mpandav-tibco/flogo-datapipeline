@@ -1,0 +1,29 @@
+[11:22:16] c2: workload: --namespaces 6 --apps 5 --rate 10 --total 8000 → 30 emitter pods; fault: collector-kill 120 k3d-adidas-poc-agent-0
+[11:22:16] c2: workload applied
+[11:24:17] c2: FAULT collector-kill: kill -9 of the collector process (pid 134426, container 8d78c4b86fb15f6f42f1523fa37bb66aafe4e179a1eb3c01b706467b59eb1b2d) on k3d-adidas-poc-agent-0 — no shutdown handling
+[11:24:39] c2: c2: instances=30 finished=0/30 events=77695 missing=0 gaps=0 dup=0 s3=77695 dlq=0 multiline_broken=0
+[11:25:12] c2: c2: instances=30 finished=0/30 events=83192 missing=0 gaps=0 dup=3164 s3=86356 dlq=0 multiline_broken=0
+[11:25:46] c2: c2: instances=30 finished=0/30 events=91353 missing=0 gaps=4039 dup=3164 s3=94517 dlq=0 multiline_broken=0
+[11:26:20] c2: c2: instances=30 finished=0/30 events=91353 missing=0 gaps=4039 dup=3164 s3=94517 dlq=0 multiline_broken=0
+[11:26:53] c2: c2: instances=30 finished=0/30 events=91353 missing=0 gaps=4039 dup=3164 s3=94517 dlq=0 multiline_broken=0
+[11:27:26] c2: c2: instances=30 finished=0/30 events=91353 missing=0 gaps=4039 dup=3164 s3=94517 dlq=0 multiline_broken=0
+[11:27:59] c2: c2: instances=30 finished=0/30 events=91353 missing=0 gaps=4039 dup=3164 s3=94517 dlq=0 multiline_broken=0
+[11:28:32] c2: c2: instances=30 finished=0/30 events=91353 missing=0 gaps=4039 dup=3164 s3=94517 dlq=0 multiline_broken=0
+[11:29:05] c2: c2: instances=30 finished=0/30 events=91353 missing=0 gaps=4039 dup=3164 s3=94517 dlq=0 multiline_broken=0
+[11:29:38] c2: c2: instances=30 finished=0/30 events=91353 missing=0 gaps=4039 dup=3164 s3=94517 dlq=0 multiline_broken=0
+[11:30:11] c2: c2: instances=30 finished=0/30 events=91353 missing=0 gaps=4039 dup=3164 s3=94517 dlq=0 multiline_broken=0
+[11:30:44] c2: c2: instances=30 finished=0/30 events=91353 missing=0 gaps=4039 dup=3164 s3=94517 dlq=0 multiline_broken=0
+[11:31:17] c2: c2: instances=30 finished=0/30 events=91353 missing=0 gaps=4039 dup=3164 s3=94517 dlq=0 multiline_broken=0
+[11:31:50] c2: c2: instances=30 finished=0/30 events=91353 missing=0 gaps=4039 dup=3164 s3=94517 dlq=0 multiline_broken=0
+[11:32:24] c2: c2: instances=30 finished=0/30 events=91353 missing=0 gaps=4039 dup=3164 s3=94517 dlq=0 multiline_broken=0
+[11:32:57] c2: c2: instances=30 finished=0/30 events=91353 missing=0 gaps=4039 dup=3164 s3=94517 dlq=0 multiline_broken=0
+[11:33:30] c2: c2: instances=30 finished=0/30 events=91353 missing=0 gaps=4039 dup=3164 s3=94517 dlq=0 multiline_broken=0
+[11:34:03] c2: c2: instances=30 finished=0/30 events=91353 missing=0 gaps=4039 dup=3164 s3=94517 dlq=0 multiline_broken=0
+[11:34:36] c2: c2: instances=30 finished=0/30 events=91353 missing=0 gaps=4039 dup=3164 s3=94517 dlq=0 multiline_broken=0
+[11:35:10] c2: c2: instances=30 finished=0/30 events=91353 missing=0 gaps=4039 dup=3164 s3=94517 dlq=0 multiline_broken=0
+[11:35:43] c2: c2: instances=30 finished=0/30 events=91353 missing=0 gaps=4039 dup=3164 s3=94517 dlq=0 multiline_broken=0
+[11:36:16] c2: c2: instances=30 finished=0/30 events=91353 missing=0 gaps=4039 dup=3164 s3=94517 dlq=0 multiline_broken=0
+[11:36:50] c2: c2: instances=30 finished=0/30 events=91353 missing=0 gaps=4039 dup=3164 s3=94517 dlq=0 multiline_broken=0
+[11:37:23] c2: c2: instances=30 finished=0/30 events=91353 missing=0 gaps=4039 dup=3164 s3=94517 dlq=0 multiline_broken=0
+[11:37:23] c2: TIMEOUT waiting for complete delivery
+[11:37:26] c2: verified in 907s — FAILED events=91353 missing=0 gaps=4039 dup=3164 multiline_broken=0 dlq=0 p95_latency=77.252588s

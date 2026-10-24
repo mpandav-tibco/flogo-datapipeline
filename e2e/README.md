@@ -27,7 +27,7 @@ per-run logs, RSS samples and temp-disk samples in `$E2E_WORK/logs`.
 | `s4_lookup_cache.sh` | lookup enrichment vs the mock API: batch call counts; streaming staleness when keys appear upstream | HTTP calls; null-enrichment counts; stale rows |
 | `s5_rest_sink.sh` | REST sink vs mock returning 429 + `Retry-After` | every row exactly once; concurrency speed-up |
 | `s6_podlog.sh` | CRI log lines written in several chunks while tailing; SIGTERM | records exact/whole; saved offset = file size |
-| `s7_api_graceful.sh` | management API during a streaming run; SIGTERM mid-stream; restart | API 200; `cancelled`; no missing ids |
+| `s7_api_graceful.sh` | management API during a streaming run; SIGTERM mid-stream; restart | API 200; the run drains on SIGTERM (`cancelled` with a final checkpoint) — restart replays nothing; no missing ids |
 
 `harness/` holds the generators and the mock HTTP service
 (`harness gen|produce|mock`). Endpoints, credentials and container names
