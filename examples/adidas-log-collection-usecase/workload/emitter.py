@@ -21,6 +21,15 @@ Environment:
   NAMESPACE      k8s namespace (for context)  (default: $POD_NAMESPACE or "unknown")
   RATE_PER_SEC   request log lines per second (default: 5)
   ERROR_EVERY    ~1 error+stacktrace per N req (default: 40)
+  EMIT_TOTAL     stop after this many log events and idle (default: 0 = forever)
+  EXIT_WHEN_DONE exit instead of idling once EMIT_TOTAL is reached (default: false)
+
+Verifiability (for the no-loss proof): every log event ends with
+"[seq=<n> inst=<id>]" — a per-process sequence and a random instance id — and
+a stack-trace event's first line also carries "lines=<k>", the number of
+continuation lines that must be stitched into it. When EMIT_TOTAL is set the
+last event is "EMIT_DONE total=<n>", so a verifier reading the destination
+knows exactly which events must be there.
 """
 import os
 import random
@@ -32,6 +41,10 @@ APP_NAME = os.environ.get("APP_NAME") or os.environ.get("HOSTNAME", "Rest_Sample
 NAMESPACE = os.environ.get("NAMESPACE") or os.environ.get("POD_NAMESPACE", "unknown")
 RATE = max(1, int(os.environ.get("RATE_PER_SEC", "5")))
 ERROR_EVERY = max(1, int(os.environ.get("ERROR_EVERY", "40")))
+TOTAL = int(os.environ.get("EMIT_TOTAL", "0"))
+EXIT_WHEN_DONE = os.environ.get("EXIT_WHEN_DONE", "").lower() in ("1", "true", "yes")
+INST = "%08x" % random.getrandbits(32)
+SEQ = 0
 
 APP = APP_NAME.replace("-", "_")
 
@@ -83,18 +96,36 @@ def ts():
     return now.strftime("%Y-%m-%dT%H:%M:%S,") + "%03d" % (now.microsecond // 1000)
 
 
+class Done(Exception):
+    pass
+
+
+def next_seq():
+    global SEQ
+    SEQ += 1
+    return SEQ
+
+
 def emit(level, thread, process, msg):
+    seq = next_seq()
+    if TOTAL and seq == TOTAL:
+        level, msg = "INFO", "EMIT_DONE total=%d" % TOTAL
     logger = "com.tibco.bw.%s.%s" % (APP, process)
-    sys.stdout.write("%s %-5s [%s] %s - %s\n" % (ts(), level, thread, logger, msg))
+    sys.stdout.write("%s %-5s [%s] %s - %s [seq=%d inst=%s]\n" % (ts(), level, thread, logger, msg, seq, INST))
+    if TOTAL and seq >= TOTAL:
+        raise Done()
 
 
 def emit_stack(thread, process):
+    if TOTAL and SEQ + 1 >= TOTAL:
+        return emit("INFO", thread, process, "")
+    seq = next_seq()
     logger = "com.tibco.bw.%s.%s" % (APP, process)
     trace = random.choice(STACKTRACES)
     # First line carries the timestamp/level so the collector treats the whole
     # trace (continuation lines have no leading timestamp) as one record.
-    sys.stdout.write("%s %-5s [%s] %s - Unhandled fault in process instance %d\n"
-                     % (ts(), "ERROR", thread, logger, random.randint(1000, 9999)))
+    sys.stdout.write("%s %-5s [%s] %s - Unhandled fault in process instance %d [seq=%d inst=%s lines=%d]\n"
+                     % (ts(), "ERROR", thread, logger, random.randint(1000, 9999), seq, INST, len(trace)))
     for line in trace:
         sys.stdout.write(line + "\n")
 
@@ -138,3 +169,8 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         pass
+    except Done:
+        sys.stdout.flush()
+        if not EXIT_WHEN_DONE:
+            while True:  # keep the pod (and its log file) alive
+                time.sleep(3600)

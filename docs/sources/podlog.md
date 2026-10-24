@@ -59,9 +59,17 @@ Use a [parse](../transforms/parse.md) transform to structure `message` into type
 - **Multiline stitching:** when `startPattern` is set, lines that do not match it are
   appended to the previous record; a pending record is flushed after `flushIdleMs` of
   inactivity, and capped at `maxLines`.
-- **At-least-once:** the position registry is persisted only after the sink acknowledges,
-  so a crash resumes from the last committed offset (a few duplicate lines are possible).
-- **Rotation-safe:** file fingerprints prevent misresumes across log rotation.
+- **At-least-once:** the position registry is persisted only at checkpoints, after the sink
+  has made the records durable — never on shutdown — so a crash or restart resumes from
+  the last committed offset (a few duplicate lines are possible, none are lost).
+- **Rotation-safe:** kubelet rotates a log by renaming `0.log` to `0.log.<timestamp>` and
+  the runtime reopening a fresh `0.log`. The tailer follows the file it has open to its
+  end (with a 1 s grace for the runtime's last write), then switches to the new file. A
+  collector that was down across a rotation finishes the rotated file from its saved
+  offset before the new one. While back-pressured over several rotations, the uncompressed
+  rotated files are read in order; kubelet's gzip-compressed older rotations are not read.
+- **Pod deletion:** a removed pod's files are read to the end before their handles close.
+- Files are fingerprinted (first 256 bytes) to recognise them across restarts.
 
 ## Example — DaemonSet collector with Java/BW stack-trace stitching
 

@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -59,7 +60,28 @@ type openLogFile struct {
 	// lastData is when this file last produced a complete line; used to flush a
 	// pending multiline record once the file has been idle for flushIdle.
 	lastData time.Time
+	// rotatedSeen is when the path was first seen to name a different file
+	// than this handle (kubelet renamed it and the runtime reopened a fresh
+	// one). The handle keeps draining for rotationGrace after that, since the
+	// runtime may still flush a last write into the renamed file.
+	rotatedSeen time.Time
+	// rotated is set when this handle is on a rotated-away file (resumed after
+	// a restart, or a newer rotation reached while back-pressured): at its end
+	// the tailer moves on without the rotation grace.
+	rotated bool
+	// missingSince is when the path was first seen absent while its container
+	// directory still exists — normally the instant between kubelet's rename
+	// and the runtime creating the new file.
+	missingSince time.Time
 }
+
+// missingGrace is how long a path may be absent (container directory still
+// present) before its handle is treated as deleted and closed.
+const missingGrace = 30 * time.Second
+
+// defaultRotationGrace is how long a rotated-away file keeps being drained
+// before the tailer switches to the file now at its path.
+const defaultRotationGrace = time.Second
 
 // tailer discovers and tails every CRI log file under root, emitting stitched,
 // enriched records onto out. It is the node-local collection engine that
@@ -87,12 +109,19 @@ type tailer struct {
 	// unbounded poll loop. Used by tests and batch/drain scenarios so ReadBatch
 	// terminates deterministically with io.EOF.
 	bounded bool
+	// rotationGrace: see defaultRotationGrace.
+	rotationGrace time.Duration
 	// recon receives files-open and rotation counts for reconciliation metrics.
 	// May be nil (metrics disabled path in tests).
 	recon *reconCounters
 
 	open map[string]*openLogFile
 	out  chan enrichedRecord
+	// delivered is the furthest position handed downstream per path in this
+	// process. A handle reopened in the same process resumes from it rather
+	// than from the (older) checkpointed position, so nothing is re-read; the
+	// persisted registry still governs restarts (at-least-once).
+	delivered map[string]position
 }
 
 func (t *tailer) run(ctx context.Context) {
@@ -210,12 +239,29 @@ func (t *tailer) scan(ctx context.Context) {
 			t.open[path] = of
 		}
 	}
-	// Close handles whose file was deleted.
+	// Close handles whose file was deleted — after reading what it still
+	// holds: the open handle keeps the unlinked file readable, and a removed
+	// pod's last lines are often written just before its logs are deleted. A
+	// path that is only briefly absent while its container directory exists
+	// is a rotation in progress: keep the handle (drain follows the rotation).
 	for key, of := range t.open {
-		if !seen[key] {
-			t.flushAndClose(ctx, of)
-			delete(t.open, key)
+		if seen[key] {
+			of.missingSince = time.Time{}
+			continue
 		}
+		if _, err := os.Stat(filepath.Dir(key)); err == nil {
+			if of.missingSince.IsZero() {
+				of.missingSince = time.Now()
+			}
+			if time.Since(of.missingSince) < missingGrace {
+				continue
+			}
+		}
+		if _, err := t.drain(ctx, of); err != nil && ctx.Err() != nil {
+			return
+		}
+		t.flushAndClose(ctx, of)
+		delete(t.open, key)
 	}
 	if t.recon != nil {
 		t.recon.setFilesOpen(t.node, len(t.open))
@@ -243,14 +289,21 @@ func (t *tailer) openFile(path string, meta podMeta) *openLogFile {
 	fp := fingerprint(f)
 
 	var start int64
-	if saved, ok := t.positions.get(path); ok && saved.Fingerprint == fp {
+	if saved, ok := t.resumePoint(path); ok && fpMatch(saved.Fingerprint, fp) {
 		start = saved.Offset
 	} else if ok {
 		// A saved position exists but the fingerprint differs — the file at this
-		// path is a fresh one (containerd rotates by rename+recreate). Read from
-		// the start so no rotated-in data is skipped, and count the rotation.
+		// path is a fresh one (containerd rotates by rename+recreate). If the
+		// file the position belongs to is still on disk as an uncompressed
+		// rotated sibling, finish it from the saved offset (and any newer
+		// rotated siblings) before the live file; otherwise read the live file
+		// from the start. Either way no rotated-in data is skipped.
 		if t.recon != nil {
 			t.recon.addRotation(t.node)
+		}
+		if of := t.resumeRotated(path, meta, saved); of != nil {
+			f.Close()
+			return of
 		}
 	} else if !t.fromBeginning {
 		// Brand-new file and configured to skip history: start at end.
@@ -273,6 +326,145 @@ func (t *tailer) openFile(path string, meta podMeta) *openLogFile {
 		fp:     fp,
 		meta:   meta,
 		st:     &stitcher{startPattern: t.startPattern, maxLines: t.maxLines},
+	}
+}
+
+// fpMatch reports whether a file with fingerprint cur is the file a position
+// with fingerprint saved was recorded for. A file first seen while shorter
+// than fpLen has a shorter saved fingerprint, which must be a prefix of the
+// current one.
+func fpMatch(saved, cur string) bool {
+	return saved == cur || (saved != "" && len(saved) < len(cur) && strings.HasPrefix(cur, saved))
+}
+
+// rotatedSiblings returns the uncompressed rotated files of path
+// (kubelet names them <path>.<timestamp>), oldest first.
+func rotatedSiblings(path string) []string {
+	matches, _ := filepath.Glob(path + ".*")
+	type fm struct {
+		p string
+		t time.Time
+	}
+	var out []fm
+	for _, m := range matches {
+		if strings.HasSuffix(m, ".gz") || strings.HasSuffix(m, ".tmp") {
+			continue
+		}
+		if fi, err := os.Stat(m); err == nil && fi.Mode().IsRegular() {
+			out = append(out, fm{m, fi.ModTime()})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].t.Before(out[j].t) })
+	ps := make([]string, len(out))
+	for i, o := range out {
+		ps[i] = o.p
+	}
+	return ps
+}
+
+// resumeRotated looks for the rotated sibling the saved position belongs to
+// and returns a handle on it at the saved offset, keyed by path; the files
+// rotated after it and the live file follow (see advance).
+func (t *tailer) resumeRotated(path string, meta podMeta, saved position) *openLogFile {
+	for _, sp := range rotatedSiblings(path) {
+		f, err := os.Open(sp)
+		if err != nil {
+			continue
+		}
+		match := fpMatch(saved.Fingerprint, fingerprint(f))
+		f.Close()
+		if !match {
+			continue
+		}
+		of := t.openFileAt(sp, meta, saved.Offset)
+		if of == nil {
+			return nil
+		}
+		of.key = path
+		of.rotated = true
+		return of
+	}
+	return nil
+}
+
+// advance handles the end of a drained file: when the handle no longer refers
+// to the file at its path (rotation), it finishes the old file — its partial
+// last line and pending multiline record — and moves on from offset 0 to the
+// next file in rotation order: the oldest uncompressed rotated sibling newer
+// than the old file (several rotations happened while it was being read),
+// else the live file. The order is recomputed each time, so files that
+// vanished are skipped and a rotation in the middle is never jumped over. It
+// returns true when it switched (the caller keeps draining).
+func (t *tailer) advance(ctx context.Context, of *openLogFile) bool {
+	old, err := of.f.Stat()
+	if err != nil {
+		return false
+	}
+	cur, curErr := os.Stat(of.key)
+	if !of.rotated {
+		if curErr != nil {
+			return false // path gone: rotation in progress, or pod removed
+		}
+		if os.SameFile(cur, old) {
+			of.rotatedSeen = time.Time{}
+			return false
+		}
+		// The runtime may still flush a last write into the renamed file.
+		if of.rotatedSeen.IsZero() {
+			of.rotatedSeen = time.Now()
+			return false
+		}
+		since := of.rotatedSeen
+		if of.lastData.After(since) {
+			since = of.lastData
+		}
+		if time.Since(since) < t.rotationGrace {
+			return false
+		}
+	}
+	next, rotated := "", false
+	for _, sp := range rotatedSiblings(of.key) {
+		fi, err := os.Stat(sp)
+		if err != nil || os.SameFile(fi, old) || (curErr == nil && os.SameFile(fi, cur)) || fi.ModTime().Before(old.ModTime()) {
+			continue
+		}
+		next, rotated = sp, true
+		break
+	}
+	if next == "" {
+		if curErr != nil || os.SameFile(cur, old) {
+			return false // nothing newer yet; scan decides about a vanished path
+		}
+		next = of.key
+	}
+	nf := t.openFileAt(next, of.meta, 0)
+	if nf == nil {
+		return false // vanished meanwhile: the next drain recomputes the order
+	}
+	t.finish(ctx, of)
+	nf.key = of.key
+	nf.rotated = rotated
+	of.f.Close()
+	*of = *nf
+	if t.recon != nil {
+		t.recon.addRotation(t.node)
+	}
+	return true
+}
+
+// finish emits what a file that will receive no more writes still holds: an
+// unterminated last line and the pending multiline record.
+func (t *tailer) finish(ctx context.Context, of *openLogFile) {
+	if len(of.partial) > 0 {
+		full := of.partial
+		of.partial = nil
+		of.offset += int64(len(full))
+		if rec, ok := of.st.push(parseCRILine(strings.TrimRight(string(full), "\r\n")), of.offset); ok {
+			t.emit(ctx, of, rec)
+		}
+	}
+	if rec, ok := of.st.flush(); ok {
+		t.emit(ctx, of, rec)
 	}
 }
 
@@ -299,6 +491,15 @@ func (t *tailer) drain(ctx context.Context, of *openLogFile) (int, error) {
 		*of = *reopened
 	}
 
+	// A file first seen shorter than fpLen got a short fingerprint; complete
+	// it once the file has grown so positions and idempotency keys use the
+	// same stable fingerprint a restarted collector computes.
+	if len(of.fp) < 2*fpLen {
+		if fi, err := of.f.Stat(); err == nil && fi.Size() >= fpLen {
+			of.fp = fingerprint(of.f)
+		}
+	}
+
 	emitted := 0
 	for {
 		line, err := of.reader.ReadBytes('\n')
@@ -307,11 +508,17 @@ func (t *tailer) drain(ctx context.Context, of *openLogFile) (int, error) {
 			// drains) and stop without advancing the offset.
 			of.partial = append(of.partial, line...)
 			if t.maxLineBytes <= 0 || len(of.partial) < t.maxLineBytes {
+				if t.advance(ctx, of) {
+					continue
+				}
 				return emitted, nil
 			}
 			// Oversized unterminated line: emit what we have as one line.
 			line = nil
 		} else if err == io.EOF {
+			if t.advance(ctx, of) {
+				continue
+			}
 			return emitted, nil
 		} else if err != nil {
 			return emitted, err
@@ -355,10 +562,24 @@ func (t *tailer) emit(ctx context.Context, of *openLogFile, rec logRecord) bool 
 	}
 	select {
 	case t.out <- er:
+		if t.delivered == nil {
+			t.delivered = map[string]position{}
+		}
+		t.delivered[of.key] = position{Offset: rec.endOffset, Fingerprint: of.fp}
 		return true
 	case <-ctx.Done():
 		return false
 	}
+}
+
+// resumePoint returns the position to resume path from: the in-process
+// delivered position when it is ahead of the persisted one for the same file.
+func (t *tailer) resumePoint(path string) (position, bool) {
+	saved, ok := t.positions.get(path)
+	if d, dok := t.delivered[path]; dok && (!ok || d.Fingerprint != saved.Fingerprint || d.Offset > saved.Offset) {
+		return d, true
+	}
+	return saved, ok
 }
 
 func (t *tailer) openFileAt(path string, meta podMeta, start int64) *openLogFile {
@@ -387,9 +608,7 @@ func (t *tailer) openFileAt(path string, meta podMeta, start int64) *openLogFile
 // dropping it when the output buffer is momentarily full would silently lose
 // the file's last record.
 func (t *tailer) flushAndClose(ctx context.Context, of *openLogFile) {
-	if rec, ok := of.st.flush(); ok {
-		t.emit(ctx, of, rec)
-	}
+	t.finish(ctx, of)
 	of.f.Close()
 }
 

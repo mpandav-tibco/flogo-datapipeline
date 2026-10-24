@@ -35,3 +35,7 @@ data:
   ROLL_MAX_BYTES: "4194304"                           # 4 MiB
   ROLL_MAX_SECONDS: "60"
   BATCH_SIZE: "1000"
+  # Every checkpoint uploads the open S3 objects (with their manifests) BEFORE
+  # the read positions advance, so this is both the delivery latency and the
+  # most a crash can replay (duplicates, never loss).
+  CHECKPOINT_SECONDS: "30"

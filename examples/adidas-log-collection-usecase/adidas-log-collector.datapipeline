@@ -81,6 +81,11 @@
       "value": "60"
     },
     {
+      "name": "CHECKPOINT_SECONDS",
+      "type": "integer",
+      "value": 30
+    },
+    {
       "name": "BATCH_SIZE",
       "type": "integer",
       "value": "1000"
@@ -181,7 +186,7 @@
           {
             "type": "map",
             "fields": {
-              "@timestamp": "=$log_text",
+              "@timestamp": "=$log_time",
               "event_time": "=string.replace(nvl($log_ts, $log_time), ',', '.')",
               "log_level": "=upper(nvl($log_level, 'UNKNOWN'))",
               "severity": "=coerce.toInt(decode(upper(nvl($log_level, 'INFO')), 'FATAL', 5, 'ERROR', 4, 'WARN', 3, 'WARNING', 3, 'INFO', 2, 'DEBUG', 1, 'TRACE', 0, 2))",
@@ -266,10 +271,15 @@
         "scaling": {
           "mode": "single"
         },
+        "restart": {
+          "onFailure": true,
+          "initialBackoffMs": 2000,
+          "maxBackoffMs": 30000
+        },
         "checkpoint": {
           "type": "file",
           "path": "/var/lib/flogo-datapipeline/ckpt",
-          "intervalSeconds": 5
+          "intervalSeconds": "$property[CHECKPOINT_SECONDS]"
         },
         "observability": {
           "metrics": "prometheus",

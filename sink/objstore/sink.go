@@ -44,6 +44,8 @@ import (
 	"strings"
 	"time"
 
+	corelog "github.com/project-flogo/core/support/log"
+
 	"github.com/google/uuid"
 	"github.com/mpandav-tibco/flogo-datapipeline/objstore"
 	"github.com/mpandav-tibco/flogo-datapipeline/record"
@@ -78,6 +80,9 @@ type objstoreSink struct {
 	tmpPath  string // path of the local temp file the inner sink writes to
 	records  int64  // rows written to this object (for the manifest record_count)
 	closed   bool   // guards a second Close()
+
+	innerClosed bool // inner sink closed (the temp file is complete)
+	uploaded    bool // temp file committed to the object store
 }
 
 func newObjstoreSink(provider string, cfg map[string]interface{}) (sink.Sink, error) {
@@ -208,20 +213,51 @@ func (s *objstoreSink) Close() error {
 	if s.closed {
 		return nil
 	}
-	s.closed = true
-	// Flush and close the inner sink first.
-	innerErr := s.inner.Close()
+	if err := s.finalize(); err != nil {
+		s.abort()
+		return err
+	}
+	return nil
+}
 
-	var uploadErr error
-	if s.tmpPath != "" {
-		// Upload the temp file to the object store, then remove it (even on error).
-		uploadErr = s.uploadTmpFile()
+// finalize completes the temp file and uploads it, then releases the store.
+// It is retryable: after a failed upload the temp file is kept, so a later
+// call uploads it again (the rolling sink retries at the next Flush).
+func (s *objstoreSink) finalize() error {
+	if s.closed {
+		return nil
+	}
+	if !s.innerClosed {
+		if err := s.inner.Close(); err != nil {
+			return err
+		}
+		s.innerClosed = true
+	}
+	if s.tmpPath != "" && !s.uploaded {
+		if err := s.uploadTmpFile(); err != nil {
+			return err
+		}
+		s.uploaded = true
 		_ = os.Remove(s.tmpPath)
 	}
+	s.closed = true
+	return s.store.Close()
+}
 
-	storeErr := s.store.Close()
-
-	return errors.Join(innerErr, uploadErr, storeErr)
+// abort discards the object: removes the temp file and releases the store.
+func (s *objstoreSink) abort() {
+	if s.closed {
+		return
+	}
+	s.closed = true
+	if !s.innerClosed {
+		_ = s.inner.Close()
+		s.innerClosed = true
+	}
+	if s.tmpPath != "" && !s.uploaded {
+		_ = os.Remove(s.tmpPath)
+	}
+	_ = s.store.Close()
 }
 
 // uploadTmpFile opens the temp file and uploads it to the object store.
@@ -422,9 +458,30 @@ func (p *partitionedObjstoreSink) WriteBatch(batch *record.RecordBatch) error {
 
 func (p *partitionedObjstoreSink) Flush() error {
 	var errs []error
-	for _, c := range p.children {
+	for k, c := range p.children {
 		if err := c.Flush(); err != nil {
 			errs = append(errs, err)
+			continue
+		}
+		// A rolling child has uploaded everything on Flush; drop it so the
+		// map does not grow with every key ever seen (e.g. one per pod, with
+		// pods churning). The next row for that key opens a fresh child.
+		if r, ok := c.(*rollingObjstoreSink); ok && r.idle() {
+			delete(p.children, k)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// FlushLocal flushes every child to its local temp file without uploading
+// (see rollingObjstoreSink.FlushLocal).
+func (p *partitionedObjstoreSink) FlushLocal() error {
+	var errs []error
+	for _, c := range p.children {
+		if lf, ok := c.(interface{ FlushLocal() error }); ok {
+			errs = append(errs, lf.FlushLocal())
+		} else {
+			errs = append(errs, c.Flush())
 		}
 	}
 	return errors.Join(errs...)
@@ -453,9 +510,27 @@ type rollingObjstoreSink struct {
 	maxBytes   int64
 	maxSeconds int64
 
-	seq     int
+	seq int
+	// token makes rolled keys unique across sink instances when the key has
+	// no {uuid}: partitioned children are recreated after each flush and a
+	// restarted run starts seq at 0 again, which would overwrite objects.
+	token   string
 	cur     *objstoreSink
 	curKey  string
+	started time.Time
+
+	// pending holds rolled objects whose upload (or manifest) failed. Their
+	// temp files are kept and retried at the next Flush; Flush fails while any
+	// remain, so a checkpoint never covers rows not yet in the object store.
+	pending []finishedObject
+}
+
+// finishedObject is a rolled object awaiting upload + manifest.
+type finishedObject struct {
+	obj     *objstoreSink
+	key     string
+	records int64
+	bytes   int64
 	started time.Time
 }
 
@@ -474,6 +549,9 @@ func newRollingObjstoreSink(provider string, cfg map[string]interface{}, maxByte
 		maxBytes:   maxBytes,
 		maxSeconds: maxSeconds,
 	}
+	if !strings.Contains(keyTmpl, "{uuid}") {
+		r.token = newUUID()[:8]
+	}
 	// Objects are opened lazily on first write, so a run that rolls on its last
 	// batch does not leave an empty trailing object (and spurious manifest).
 	return r, nil
@@ -491,7 +569,11 @@ func insertSeqBeforeExt(key string) string {
 }
 
 func (r *rollingObjstoreSink) openNext() error {
-	key := strings.ReplaceAll(r.keyTmpl, "{seq}", fmt.Sprintf("%04d", r.seq))
+	seq := fmt.Sprintf("%04d", r.seq)
+	if r.token != "" {
+		seq = r.token + "-" + seq
+	}
+	key := strings.ReplaceAll(r.keyTmpl, "{seq}", seq)
 	childCfg := make(map[string]interface{}, len(r.cfg))
 	for k, v := range r.cfg {
 		childCfg[k] = v
@@ -517,25 +599,48 @@ func (r *rollingObjstoreSink) shouldRoll() bool {
 	return false
 }
 
+// roll closes the current object and uploads it with its manifest. On
+// failure the object is kept in pending (temp file intact) for a retry.
 func (r *rollingObjstoreSink) roll() error {
-	// Detach the current object first so a Close error cannot leave a half-closed
-	// child that the deferred sink Close would then try to close again.
-	cur := r.cur
-	r.cur = nil // next write opens a fresh object lazily
-	records := cur.records
-	bytes := cur.currentBytes()
-	key := r.curKey
-	started := r.started
-	// Close (upload) the current object, then write its manifest sidecar.
-	if err := cur.Close(); err != nil {
-		return err
-	}
-	if err := r.writeManifest(key, records, bytes, started); err != nil {
-		return err
-	}
+	// Detach the current object first; the next write opens a fresh one.
+	f := finishedObject{obj: r.cur, key: r.curKey, records: r.cur.records, bytes: r.cur.currentBytes(), started: r.started}
+	r.cur = nil
 	r.seq++
+	if err := r.finish(f); err != nil {
+		r.pending = append(r.pending, f)
+		return err
+	}
 	return nil
 }
+
+// finish uploads a rolled object and writes its manifest sidecar; both steps
+// are idempotent, so a retry after a partial failure redoes only what is left.
+func (r *rollingObjstoreSink) finish(f finishedObject) error {
+	if err := f.obj.finalize(); err != nil {
+		return err
+	}
+	if f.records > 0 {
+		return r.writeManifest(f.key, f.records, f.bytes, f.started)
+	}
+	return nil
+}
+
+// retryPending re-attempts the uploads that failed earlier.
+func (r *rollingObjstoreSink) retryPending() error {
+	var errs []error
+	left := r.pending[:0]
+	for _, f := range r.pending {
+		if err := r.finish(f); err != nil {
+			errs = append(errs, err)
+			left = append(left, f)
+		}
+	}
+	r.pending = left
+	return errors.Join(errs...)
+}
+
+// idle reports that nothing is buffered: no open object, no failed uploads.
+func (r *rollingObjstoreSink) idle() bool { return r.cur == nil && len(r.pending) == 0 }
 
 func (r *rollingObjstoreSink) WriteBatch(batch *record.RecordBatch) error {
 	if r.cur == nil {
@@ -547,12 +652,34 @@ func (r *rollingObjstoreSink) WriteBatch(batch *record.RecordBatch) error {
 		return err
 	}
 	if r.shouldRoll() {
-		return r.roll()
+		// The rows are safely in the rolled object's temp file even if its
+		// upload failed: it is retried at the next Flush, which fails (and so
+		// blocks the checkpoint) until it succeeds. Reporting the failure here
+		// would make the engine dead-letter rows that are not lost.
+		if err := r.roll(); err != nil {
+			objLog.Warnf("%s sink: upload of %q failed (will retry at next flush): %v", r.provider, r.pending[len(r.pending)-1].key, err)
+		}
 	}
 	return nil
 }
 
+// Flush makes every row written so far durable in the object store: failed
+// uploads are retried and the current object is rolled (uploaded with its
+// manifest). A checkpoint taken after a successful Flush therefore never
+// covers rows that exist only in a local temp file.
 func (r *rollingObjstoreSink) Flush() error {
+	err := r.retryPending()
+	if r.cur != nil && r.cur.records > 0 {
+		err = errors.Join(err, r.roll())
+	}
+	return err
+}
+
+// FlushLocal writes buffered rows to the current object's local temp file
+// without rolling/uploading it. Per-row write isolation uses it: it only needs
+// to know whether each row was accepted, and an upload per row would create
+// one object per row. Durability comes from the next checkpoint Flush.
+func (r *rollingObjstoreSink) FlushLocal() error {
 	if r.cur == nil {
 		return nil
 	}
@@ -560,21 +687,18 @@ func (r *rollingObjstoreSink) Flush() error {
 }
 
 func (r *rollingObjstoreSink) Close() error {
-	if r.cur == nil {
-		return nil
+	err := r.Flush()
+	if r.cur != nil { // opened but never written
+		r.cur.abort()
+		r.cur = nil
 	}
-	records := r.cur.records
-	bytes := r.cur.currentBytes()
-	key := r.curKey
-	started := r.started
-	if err := r.cur.Close(); err != nil {
-		return err
+	if err != nil {
+		for _, f := range r.pending {
+			f.obj.abort()
+		}
+		r.pending = nil
 	}
-	r.cur = nil
-	if records > 0 {
-		return r.writeManifest(key, records, bytes, started)
-	}
-	return nil
+	return err
 }
 
 // writeManifest writes an audit-grade sidecar next to the object: <key>.manifest.json
@@ -609,6 +733,8 @@ func (r *rollingObjstoreSink) writeManifest(objectKey string, records, bytes int
 }
 
 var _ sink.Sink = (*rollingObjstoreSink)(nil)
+
+var objLog = corelog.ChildLogger(corelog.RootLogger(), "objstore-sink")
 
 // newUUID returns a random RFC-4122 v4 UUID string. Used to make object keys
 // unique per run (e.g. "orders-{uuid}.parquet") so concurrent writers and

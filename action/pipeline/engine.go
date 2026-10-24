@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -163,6 +164,13 @@ func (a *DataPipelineAction) execute(ctx context.Context, in *Input, runLog core
 		return out, fmt.Errorf("graph compile: %w", err)
 	}
 	defer plan.Close()
+	// A stateless plan can finish cleanly on shutdown (sources report end of
+	// input, everything read is written, final checkpoint). A stateful plan
+	// would flush half-open windows instead; it is cancelled and resumes from
+	// its checkpointed state.
+	if !plan.HasStateful() {
+		env.drain = drainSignal(ctx)
+	}
 
 	primary := source.Source(src)
 	if primary == nil {
@@ -278,10 +286,13 @@ func (a *DataPipelineAction) execute(ctx context.Context, in *Input, runLog core
 		if runErr != nil {
 			return runErr
 		}
+		drained := env.wasDrained()
 		// Scaled runs persist each partition's final position so a restart
-		// skips completed partitions' rows.
+		// skips completed partitions' rows. A partition stopped by shutdown
+		// keeps its position (never deleted) and is reported unfinished, so the
+		// scaling driver does not mark it done.
 		if scaled && checkpointing && !stateful {
-			if def.Checkpoint.DeleteOnSuccess {
+			if def.Checkpoint.DeleteOnSuccess && !drained {
 				_ = ckpt.Delete(ckptKey)
 			} else if serr := ckpt.Save(ckptKey, checkpoint.NewToken(def.Source.Type, opts.ResumeFrom+res.RowsRead, nil)); serr != nil {
 				if ferr := checkpointFailed(runLog, def, fmt.Sprintf("final checkpoint for partition %q", ckptKey), serr); ferr != nil {
@@ -290,6 +301,9 @@ func (a *DataPipelineAction) execute(ctx context.Context, in *Input, runLog core
 			} else {
 				a.recorder.CheckpointSaved(a.ref)
 			}
+		}
+		if drained {
+			return errDrained
 		}
 		return nil
 	}
@@ -305,6 +319,26 @@ func (a *DataPipelineAction) execute(ctx context.Context, in *Input, runLog core
 			gs = append(gs, *ns)
 		}
 		out.Metadata = map[string]interface{}{"graphStats": gs}
+	}
+	if err == nil && env.wasDrained() {
+		err = errDrained
+	}
+	if errors.Is(err, errDrained) && !scaled {
+		// Stopped by shutdown after draining: everything read is written.
+		// Save the exact position so a restart resumes there — but this is
+		// not a complete run: no deleteOnSuccess, watermark or reconciliation.
+		env.counts.addTo(out)
+		if cerr := plan.CloseSinks(); cerr != nil {
+			return out, fmt.Errorf("sink close: %w", cerr)
+		}
+		if checkpointing {
+			if cerr := a.saveFinalCheckpoint(runLog, ckpt, resumeKey, out.RowsProcessed, primary, snapshotters, dag); cerr != nil {
+				runLog.Warnf("final checkpoint after drain failed (a restart replays from the previous one): %v", cerr)
+			} else {
+				a.recorder.CheckpointSaved(a.ref)
+			}
+		}
+		return out, err
 	}
 	if err != nil {
 		env.counts.addTo(out)
@@ -412,7 +446,7 @@ func (a *DataPipelineAction) buildLinearGraph(runLog corelog.Logger, env *runEnv
 		_ = snk.Close()
 		return nil, nil, fmt.Errorf("transforms build: %w", err)
 	}
-	op := newChainOp(p, env)
+	op := newChainOp(p, env, dlq)
 	chain := chainOf(op)
 
 	// transformWorkers > 1: ordered parallel replicas of the chain, when every
@@ -434,7 +468,7 @@ func (a *DataPipelineAction) buildLinearGraph(runLog corelog.Logger, env *runEnv
 					_ = snk.Close()
 					return nil, nil, fmt.Errorf("transforms build (worker %d): %w", i, rerr)
 				}
-				replicas = append(replicas, newChainOp(rp, env))
+				replicas = append(replicas, newChainOp(rp, env, dlq))
 			}
 			runLog.Infof("transformWorkers=%d — parallel transform across %d workers with ordered output", workers, workers)
 		} else {

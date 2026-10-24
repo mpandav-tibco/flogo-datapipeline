@@ -27,6 +27,8 @@ mkdir -p /tmp/adidas-gocache
 # and no network, and keep Go workspace mode on (do NOT set GOWORK=off).
 GENERAL_PATH="$(awk -F'=>' '/=>/{gsub(/^[ \t]+|[ \t]+$/,"",$2); print $2}' "$REPO_ROOT/go.work" 2>/dev/null | head -1)"
 echo ">> flogo-general local module: ${GENERAL_PATH:-<none>}"
+# -tags tibco_hooks compiles in the TIBCO App Startup/Shutdown triggers the
+# pipeline's "startup" trigger needs (see cmd/flogo-datapipeline/tibco_hooks.go).
 docker run --rm \
   -v "$REPO_ROOT":/src \
   -v "$HOME/go/pkg/mod":/go/pkg/mod \
@@ -35,7 +37,7 @@ docker run --rm \
   ${GENERAL_PATH:+-v "$GENERAL_PATH":"$GENERAL_PATH":ro} \
   -e CGO_ENABLED=1 -e GOCACHE=/gocache \
   -w /src "$GOIMG" \
-  go build -trimpath -ldflags="-s -w" -o /out/flogo-dp-linux-arm64 ./cmd/flogo-datapipeline
+  go build -tags tibco_hooks -trimpath -ldflags="-s -w" -o /out/flogo-dp-linux-arm64 ./cmd/flogo-datapipeline
 
 echo ">> [2/4] building collector image $COLLECTOR_IMG"
 docker build -t "$COLLECTOR_IMG" "$HERE"

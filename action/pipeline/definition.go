@@ -9,6 +9,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/project-flogo/core/app/resource"
 	"github.com/project-flogo/core/data/property"
@@ -326,6 +327,33 @@ type SchemaDriftDef struct {
 //	    "innerOptions": { "bucket": "my-dlq", "prefix": "pipeline/errors" }
 //	  }
 //	}
+//
+// RestartDef is the restart policy for runs started by a trigger (Run). A
+// failed run is executed again after an exponential backoff, resuming from its
+// last checkpoint, until it succeeds or the process shuts down. Every failed
+// attempt is still logged and reported (status "failed") so outages stay
+// visible. Direct runs (API, SDK) are never restarted.
+//
+//	"restart": { "onFailure": true, "initialBackoffMs": 1000, "maxBackoffMs": 60000 }
+type RestartDef struct {
+	OnFailure        bool `json:"onFailure,omitempty"`
+	InitialBackoffMs int  `json:"initialBackoffMs,omitempty"` // default 1000
+	MaxBackoffMs     int  `json:"maxBackoffMs,omitempty"`     // default 60000
+}
+
+// backoff returns the delay before restart attempt n (1-based).
+func (r RestartDef) backoff(n int) time.Duration {
+	d := time.Duration(orDefaultInt(r.InitialBackoffMs, 1000)) * time.Millisecond
+	maxD := time.Duration(orDefaultInt(r.MaxBackoffMs, 60000)) * time.Millisecond
+	for i := 1; i < n && d < maxD; i++ {
+		d *= 2
+	}
+	if d > maxD {
+		d = maxD
+	}
+	return d
+}
+
 type DLQDef struct {
 	// Type is the sink type for the DLQ destination (e.g. "jdbc", "file", "null").
 	// Required when the DLQ block is present; if empty the DLQ is disabled.
@@ -532,6 +560,11 @@ type Definition struct {
 	// means no contract — existing pipelines are entirely unaffected. See
 	// ContractDef.
 	Contract *ContractDef `json:"contract,omitempty"`
+
+	// Restart re-runs a failed triggered run (e.g. a long-running streaming
+	// collector after its object store was briefly unreachable). Off by
+	// default.
+	Restart RestartDef `json:"restart,omitempty"`
 
 	// Graph is the OPTIONAL explicit DAG topology (nodes + edges), authored in
 	// Studio (or written by hand). It is ADDITIVE: validated when present (unique

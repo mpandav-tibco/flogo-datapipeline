@@ -72,8 +72,28 @@ rolling).
   `{namespace}`): a child object is written per distinct value. Empty values → `_unknown`;
   values are sanitized (`/`, `\`, `..` → `_`).
 - **Rolling** — `rollMaxBytes > 0` or `rollMaxSeconds > 0`: objects close and upload when
-  they hit the size or age limit; a `{seq}` counter increments per roll. Each rolled object
+  they hit the size or age limit; a `{seq}` counter increments per roll (when the key has no
+  `{uuid}`, `{seq}` also carries a short per-sink token so restarts and recreated partitions
+  never overwrite earlier objects, e.g. `part-1a2b3c4d-0000.ndjson`). Each rolled object
   gets a `<key>.manifest.json` sidecar (`record_count`, `bytes`, `opened_at`, `closed_at`).
+
+### Durability with checkpoints (rolling)
+
+A rolling sink's `Flush` — which the engine calls at every checkpoint — uploads the open
+object(s) with their manifests. A checkpoint is therefore only taken once every row before
+it is **in the object store**, never just in the local temp file: a crashed or OOM-killed
+collector replays from the last checkpoint (duplicates possible, no loss). Consequences:
+
+- The checkpoint interval is the delivery latency and the object cadence per partition
+  (`rollMaxBytes`/`rollMaxSeconds` still cap objects between checkpoints).
+- An upload that fails is kept (temp file intact) and retried at the next flush; the
+  flush — and so the checkpoint — fails until it succeeds. Rows are never dead-lettered
+  because of an upload failure.
+- Partitioned children are released after each flush, so per-key state (e.g. one per pod)
+  does not accumulate as keys churn.
+
+A non-rolling single object is uploaded only at `Close`; with checkpointing enabled, use a
+rolling sink so checkpoints cover uploaded data.
 
 ## Credential resolution (S3)
 
