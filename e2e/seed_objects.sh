@@ -5,7 +5,7 @@
 source "$(dirname "$0")/lib.sh"
 NET="${COMPOSE_NETWORK:-flogo-datapipeline_default}"
 mc() {
-	docker run --rm --network "$NET" -v "$WORK/objs:/objs" --entrypoint sh minio/mc:latest -c \
+	docker run --rm --network "$NET" -v "$WORK/objs:/objs" --entrypoint sh minio/minio:latest -c \
 		"mc alias set l http://minio:9000 minioadmin minioadmin >/dev/null && $*"
 }
 if mc "mc stat l/dp-test-bucket/e2e/csv/part-3.csv" >/dev/null 2>&1; then

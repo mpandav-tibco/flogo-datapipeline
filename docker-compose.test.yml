@@ -50,9 +50,11 @@ services:
       MINIO_ROOT_PASSWORD: minioadmin
     ports: [ "9000:9000", "9001:9001" ]
 
-  # One-shot: create the bucket the S3 tests expect. Idempotent (-p).
+  # One-shot: create the bucket the S3 tests expect. Idempotent (-p). Uses the
+  # server image, which ships the mc client: minio/mc is no longer pullable
+  # from Docker Hub.
   minio-init:
-    image: minio/mc:latest
+    image: minio/minio:latest
     depends_on: [ minio ]
     restart: "no"
     entrypoint: [ "/bin/sh", "-c" ]
