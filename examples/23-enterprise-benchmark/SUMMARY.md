@@ -12,7 +12,7 @@ showcases.
 | Dataset | **53,000,000 rows** (CSV 5.2G / JSONL 11.7G / Parquet 1.7G) |
 | Matrix cases passed | **30 / 30** |
 | Total rows moved (matrix) | **1,590,000,000** |
-| Peak throughput | **1,509,284/s** (`el05_csv_null`) |
+| Peak throughput | **1,522,770/s** (`el05_csv_null`) |
 | Sources | csv, jsonl, parquet, postgres, kafka, s3 |
 | Sinks | parquet, postgres, kafka, s3, null |
 | Transforms | filter, map, validate, schemadrift, dq, hwm, lookup |
@@ -20,6 +20,10 @@ showcases.
 See [reports/matrix.md](reports/matrix.md), [reports/elt.md](reports/elt.md),
 [reports/enterprise.md](reports/enterprise.md) and [reports/graph.md](reports/graph.md)
 for the full tables.
+
+**Before/after vs the POC baseline** — throughput, duration, memory, CPU and
+cost per row for every case: [reports/improvements.md](reports/improvements.md)
+(CSV for charts: [reports/improvements.csv](reports/improvements.csv)).
 
 Before/after comparison for the unified execution engine (same-day A/B vs
 `master`): [reports/engine-unification.md](reports/engine-unification.md).
@@ -32,10 +36,10 @@ statically-linked binary, no cluster, no JVM, no external runtime.
 | Metric | Value |
 |--------|-------|
 | Instances | **1** (single-instance; sharded/distributed modes exist but were not needed) |
-| Deployed binary size | **7.6 to 14.2 MB per app (all-in-one harness 57.9 MB)** |
+| Deployed binary size | **8.8 to 15.3 MB per app (all-in-one harness 57.8 MB)** |
 | Host | Apple M1 Pro · 10 cores · 32 GB RAM |
-| Peak memory (RSS) across matrix | **26–846 MB** |
-| CPU used (avg cores) across matrix | **0.8–3.2 of 10 cores** |
+| Peak memory (RSS) across matrix | **26–828 MB** |
+| CPU used (avg cores) across matrix | **0.7–3.2 of 10 cores** |
 
 53,000,000 rows were moved by a single process peaking at a few hundred MB of RAM and a
 fraction of the host's cores — no cluster to provision, license, or scale.
@@ -49,12 +53,12 @@ engine, and CGO-free unless it uses the sqlite driver.
 
 | Deployed pipeline | Binary |
 |-------------------|-------:|
-| `csv -> null` | **7.6 MB** |
-| `csv -> postgres (+lib/pq)` | **8.2 MB** |
-| `csv -> s3 (+AWS SDK +parquet)` | **14.0 MB** |
-| `kafka -> parquet (+sarama)` | **13.6 MB** |
-| `csv -> filter/validate/map -> s3` | **14.2 MB** |
-| _all-in-one benchmark binary (every source x sink)_ | 57.9 MB |
+| `csv -> null` | **8.8 MB** |
+| `csv -> postgres (+lib/pq)` | **9.4 MB** |
+| `csv -> s3 (+AWS SDK +parquet)` | **14.5 MB** |
+| `kafka -> parquet (+sarama)` | **14.1 MB** |
+| `csv -> filter/validate/map -> s3` | **15.3 MB** |
+| _all-in-one benchmark binary (every source x sink)_ | 57.8 MB |
 
 ## ELT round
 
@@ -63,14 +67,14 @@ engine, and CGO-free unless it uses the sqlite driver.
 ## Reliability
 
 - **DLQ isolation:** 50,589,628 good + 2,410,372 rejected = 53,000,000 processed, no rows lost.
-- **Checkpoint/resume:** interrupted after 11,000,000 rows, resumed and finished (completed).
+- **Checkpoint/resume:** interrupted after 12,000,000 rows, resumed and finished (completed).
 
 ## Graph (DAG) fan-out
 
 The streaming graph runner routes **one source read to N sinks in a
-single pass** - the linear engine would need one full pass per sink. 5 non-reducible DAGs ran at up to **1,486,009/s**, matching the linear engine while doing N-way fan-out; a 5-way regional router finishes ~5.7x sooner than five linear passes and reads the source once.
+single pass** - the linear engine would need one full pass per sink. 5 non-reducible DAGs ran at up to **1,496,879/s**, matching the linear engine while doing N-way fan-out; a 5-way regional router finishes ~5.7x sooner than five linear passes and reads the source once.
 
-The **multi-source consolidation** DAG (`graph05_multi_consolidate`) fans **three feeds in** (CSV + JSON Lines + Parquet, 159,000,000 rows) through a filter -> map -> validate chain and **six sinks out** in one 516 MB pass at 777,582/s - a shape the single-source/single-sink linear engine cannot express at all.
+The **multi-source consolidation** DAG (`graph05_multi_consolidate`) fans **three feeds in** (CSV + JSON Lines + Parquet, 159,000,000 rows) through a filter -> map -> validate chain and **six sinks out** in one 538 MB pass at 773,704/s - a shape the single-source/single-sink linear engine cannot express at all.
 
 See [reports/graph.md](reports/graph.md).
 

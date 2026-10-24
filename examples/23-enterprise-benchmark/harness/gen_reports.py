@@ -294,6 +294,10 @@ def summary(results, cases, elt, ent, meta, host, binsizes, graph=None):
         "[reports/enterprise.md](reports/enterprise.md) and [reports/graph.md](reports/graph.md)",
         "for the full tables.", "",
     ]
+    if os.path.exists(os.path.join(REPORTS, "improvements.md")):
+        lines += ["**Before/after vs the POC baseline** — throughput, duration, memory, CPU and",
+                  "cost per row for every case: [reports/improvements.md](reports/improvements.md)",
+                  "(CSV for charts: [reports/improvements.csv](reports/improvements.csv)).", ""]
     if os.path.exists(os.path.join(REPORTS, "engine-unification.md")):
         lines += ["Before/after comparison for the unified execution engine (same-day A/B vs",
                   "`master`): [reports/engine-unification.md](reports/engine-unification.md).", ""]

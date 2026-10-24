@@ -1,0 +1,8 @@
+{
+ "el05_csv_null": 7.6,
+ "el02_csv_postgres": 8.2,
+ "el04_csv_s3": 14.0,
+ "el14_kafka_parquet": 13.6,
+ "etl04_csv_full_s3": 14.2,
+ "all_in_one": 57.9
+}

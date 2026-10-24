@@ -1,0 +1,9 @@
+{
+ "cpu_model": "Apple M1 Pro",
+ "logical_cores": 10,
+ "physical_cores": 10,
+ "ram_gb": 32,
+ "binary_size_mb": 57.9,
+ "instances": 1,
+ "scaling": "single"
+}

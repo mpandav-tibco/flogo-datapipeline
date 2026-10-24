@@ -81,6 +81,7 @@ python3 harness/run_elt.py                 # 3 in-database transforms
 python3 harness/run_enterprise.py          # DLQ + checkpoint/resume
 python3 harness/gen_graph_pipes.py         # -> pipes/graph0*.datapipeline (DAGs)
 python3 harness/run_graph.py               # 5 graph fan-out DAGs (needs minio for graph04)
+python3 harness/gen_comparison.py          # -> reports/improvements.{md,csv} (vs harness/baseline_poc/)
 python3 harness/gen_reports.py             # -> SUMMARY.md, reports/*.md
 
 ./scripts/teardown-infra.sh                # tear the containers down
@@ -120,7 +121,8 @@ as one small static file (see the *Footprint & TCO* table in
 
 ```
 pipes/       30 pipeline definitions (the showcase) + 5 graph DAGs + 4 _prep loaders
-harness/     gen_pipes, gen_graph_pipes, seed, run_matrix, run_elt, run_enterprise, run_graph, gen_reports, lib
+harness/     gen_pipes, gen_graph_pipes, seed, run_matrix, run_elt, run_enterprise, run_graph, gen_comparison, gen_reports, lib;
+             baseline_poc/ (POC results the comparison is measured against)
 scripts/     setup-infra, build, build-lean, gen-data, run-benchmark, teardown-infra
 sql/         warehouse schema (orders_raw / _sink / _clean / _rejects)
 reports/     generated result tables      SUMMARY.md  headline
