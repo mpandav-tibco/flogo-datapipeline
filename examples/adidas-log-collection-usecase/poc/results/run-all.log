@@ -1,0 +1,73 @@
+/Users/milindpandav/git/flogo-datapipeline/examples/adidas-log-collection-usecase/poc/run-scenario.sh: line 30: 25555 Terminated: 15          ( echo "time,pod,node,cpu_m,mem_mi" > "$OUT/collector_top.csv"; while true; do
+    t=$(date +%s); $K -n logging top pods --no-headers 2> /dev/null | while read -r p c m; do
+        n=$($K -n logging get pod "$p" -o jsonpath='{.spec.nodeName}' 2>/dev/null); echo "$t,$p,$n,${c%m},${m%Mi}" >> "$OUT/collector_top.csv";
+    done; sleep 10;
+done )
+[10:50:36] s1: verified in 545s — OK events=720000 missing=0 gaps=0 dup=0 multiline_broken=0 dlq=0 p95_latency=19.592599s
+/Users/milindpandav/git/flogo-datapipeline/examples/adidas-log-collection-usecase/poc/run-scenario.sh: line 30: 42122 Terminated: 15          ( echo "time,pod,node,cpu_m,mem_mi" > "$OUT/collector_top.csv"; while true; do
+    t=$(date +%s); $K -n logging top pods --no-headers 2> /dev/null | while read -r p c m; do
+        n=$($K -n logging get pod "$p" -o jsonpath='{.spec.nodeName}' 2>/dev/null); echo "$t,$p,$n,${c%m},${m%Mi}" >> "$OUT/collector_top.csv";
+    done; sleep 10;
+done )
+[10:52:40] s2: FAULT collector-kill: SIGKILL collector container 330c82a25b27fdc03faf6b7643e0b38adac6d6994b1f3706c8607f084e6ef336 on k3d-adidas-poc-agent-0
+[10:56:34] s2: verified in 349s — OK events=240000 missing=0 gaps=0 dup=0 multiline_broken=0 dlq=0 p95_latency=29.355312s
+/Users/milindpandav/git/flogo-datapipeline/examples/adidas-log-collection-usecase/poc/run-scenario.sh: line 30: 52486 Terminated: 15          ( echo "time,pod,node,cpu_m,mem_mi" > "$OUT/collector_top.csv"; while true; do
+    t=$(date +%s); $K -n logging top pods --no-headers 2> /dev/null | while read -r p c m; do
+        n=$($K -n logging get pod "$p" -o jsonpath='{.spec.nodeName}' 2>/dev/null); echo "$t,$p,$n,${c%m},${m%Mi}" >> "$OUT/collector_top.csv";
+    done; sleep 10;
+done )
+[10:58:39] s2r: FAULT collector-roll: rolling restart of the DaemonSet started
+[11:02:34] s2r: verified in 350s — OK events=240000 missing=0 gaps=0 dup=0 multiline_broken=0 dlq=0 p95_latency=29.261758s
+/Users/milindpandav/git/flogo-datapipeline/examples/adidas-log-collection-usecase/poc/run-scenario.sh: line 30: 62795 Terminated: 15          ( echo "time,pod,node,cpu_m,mem_mi" > "$OUT/collector_top.csv"; while true; do
+    t=$(date +%s); $K -n logging top pods --no-headers 2> /dev/null | while read -r p c m; do
+        n=$($K -n logging get pod "$p" -o jsonpath='{.spec.nodeName}' 2>/dev/null); echo "$t,$p,$n,${c%m},${m%Mi}" >> "$OUT/collector_top.csv";
+    done; sleep 10;
+done )
+[11:04:08] s3: FAULT s3-outage: S3 endpoint DOWN for 120s
+[11:06:09] s3: FAULT s3-outage: S3 endpoint back UP
+[11:08:46] s3: verified in 363s — OK events=240000 missing=0 gaps=0 dup=13332 multiline_broken=0 dlq=0 p95_latency=138.011715s
+/Users/milindpandav/git/flogo-datapipeline/examples/adidas-log-collection-usecase/poc/run-scenario.sh: line 30: 73257 Terminated: 15          ( echo "time,pod,node,cpu_m,mem_mi" > "$OUT/collector_top.csv"; while true; do
+    t=$(date +%s); $K -n logging top pods --no-headers 2> /dev/null | while read -r p c m; do
+        n=$($K -n logging get pod "$p" -o jsonpath='{.spec.nodeName}' 2>/dev/null); echo "$t,$p,$n,${c%m},${m%Mi}" >> "$OUT/collector_top.csv";
+    done; sleep 10;
+done )
+[11:13:03] s4: verified in 242s — OK events=900000 missing=0 gaps=0 dup=0 multiline_broken=0 dlq=0 p95_latency=2.177422s
+/Users/milindpandav/git/flogo-datapipeline/examples/adidas-log-collection-usecase/poc/run-scenario.sh: line 30: 80636 Terminated: 15          ( echo "time,pod,node,cpu_m,mem_mi" > "$OUT/collector_top.csv"; while true; do
+    t=$(date +%s); $K -n logging top pods --no-headers 2> /dev/null | while read -r p c m; do
+        n=$($K -n logging get pod "$p" -o jsonpath='{.spec.nodeName}' 2>/dev/null); echo "$t,$p,$n,${c%m},${m%Mi}" >> "$OUT/collector_top.csv";
+    done; sleep 10;
+done )
+[11:14:12] s5: verified in 65s — OK events=120000 missing=0 gaps=0 dup=0 multiline_broken=0 dlq=0 p95_latency=29.28646s
+/Users/milindpandav/git/flogo-datapipeline/examples/adidas-log-collection-usecase/poc/run-scenario.sh: line 30: 82739 Terminated: 15          ( echo "time,pod,node,cpu_m,mem_mi" > "$OUT/collector_top.csv"; while true; do
+    t=$(date +%s); $K -n logging top pods --no-headers 2> /dev/null | while read -r p c m; do
+        n=$($K -n logging get pod "$p" -o jsonpath='{.spec.nodeName}' 2>/dev/null); echo "$t,$p,$n,${c%m},${m%Mi}" >> "$OUT/collector_top.csv";
+    done; sleep 10;
+done )
+[11:16:17] s6: FAULT node-restart: node k3d-adidas-poc-agent-1 restarted
+[11:22:04] s6: verified in 462s — OK events=274021 missing=0 gaps=0 dup=0 multiline_broken=0 dlq=0 p95_latency=29.174431s
+/Users/milindpandav/git/flogo-datapipeline/examples/adidas-log-collection-usecase/poc/run-scenario.sh: line 30: 96608 Terminated: 15          ( echo "time,pod,node,cpu_m,mem_mi" > "$OUT/collector_top.csv"; while true; do
+    t=$(date +%s); $K -n logging top pods --no-headers 2> /dev/null | while read -r p c m; do
+        n=$($K -n logging get pod "$p" -o jsonpath='{.spec.nodeName}' 2>/dev/null); echo "$t,$p,$n,${c%m},${m%Mi}" >> "$OUT/collector_top.csv";
+    done; sleep 10;
+done )
+[11:24:17] c2: FAULT collector-kill: kill -9 of the collector process (pid 134426, container 8d78c4b86fb15f6f42f1523fa37bb66aafe4e179a1eb3c01b706467b59eb1b2d) on k3d-adidas-poc-agent-0 — no shutdown handling
+[11:37:23] c2: TIMEOUT waiting for complete delivery
+[11:37:26] c2: verified in 907s — FAILED events=91353 missing=0 gaps=4039 dup=3164 multiline_broken=0 dlq=0 p95_latency=77.252588s
+/Users/milindpandav/git/flogo-datapipeline/examples/adidas-log-collection-usecase/poc/run-scenario.sh: line 30: 23358 Terminated: 15          ( echo "time,pod,node,cpu_m,mem_mi" > "$OUT/collector_top.csv"; while true; do
+    t=$(date +%s); $K -n logging top pods --no-headers 2> /dev/null | while read -r p c m; do
+        n=$($K -n logging get pod "$p" -o jsonpath='{.spec.nodeName}' 2>/dev/null); echo "$t,$p,$n,${c%m},${m%Mi}" >> "$OUT/collector_top.csv";
+    done; sleep 10;
+done )
+[11:47:37] c4: TIMEOUT waiting for complete delivery
+[11:47:39] c4: verified in 609s — FAILED events=48844 missing=0 gaps=0 dup=0 multiline_broken=0 dlq=0 p95_latency=4.750331s
+| # | Scenario | Result | Events delivered | Lost | Duplicates | Broken multiline | DLQ | p95 latency | Collector CPU avg / peak (per node) | Collector peak RSS |
+|---|----------|--------|-----------------:|-----:|-----------:|-----------------:|----:|------------:|------------------------------------:|-------------------:|
+| s1 | Steady state — 60 BW-app pods, 12 namespaces | ✅ PASS | 720,000 | **0** | 0 | 0 | 0 | 20s | 36m / 50m | 154 Mi |
+| s2 | Collector crash (SIGKILL) mid-stream | ✅ PASS | 240,000 | **0** | 0 | 0 | 0 | 29s | 28m / 52m | 104 Mi |
+| s2r | Collector rolling upgrade (SIGTERM) mid-stream | ✅ PASS | 240,000 | **0** | 0 | 0 | 0 | 29s | 26m / 37m | 112 Mi |
+| s3 | S3 outage (120 s) mid-stream | ✅ PASS | 240,000 | **0** | 13,332 | 0 | 0 | 138s | 23m / 83m | 88 Mi |
+| s4 | Log-rotation stress — ~1,000 events/s/pod, rotation at 1 MiB | ✅ PASS | 900,000 | **0** | 0 | 0 | 0 | 2s | 124m / 211m | 129 Mi |
+| s5 | Short-lived pods — 40 Jobs deleted 5 s after finishing | ✅ PASS | 120,000 | **0** | 0 | 0 | 0 | 29s | 42m / 82m | 104 Mi |
+| s6 | Worker node restart mid-stream | ✅ PASS | 274,021 | **0** | 0 | 0 | 0 | 29s | 28m / 43m | 109 Mi |
+| c2 | CONTROL: collector crash on the pre-fix collector | ❌ FAIL | 91,353 | **4,039** | 3,164 | 0 | 0 | 77s | 12m / 47m | 75 Mi |
+| c4 | CONTROL: rotation stress on the pre-fix collector | ❌ FAIL | 48,844 | **0** | 0 | 0 | 0 | 5s | 8m / 121m | 54 Mi |

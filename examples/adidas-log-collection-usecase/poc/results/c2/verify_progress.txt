@@ -1,0 +1,1 @@
+c2: instances=30 finished=0/30 events=91353 missing=0 gaps=4039 dup=3164 s3=94517 dlq=0 multiline_broken=0

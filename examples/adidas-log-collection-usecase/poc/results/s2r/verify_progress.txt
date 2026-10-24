@@ -1,0 +1,1 @@
+s2r: instances=30 finished=30/30 events=240000 missing=0 gaps=0 dup=0 s3=240000 dlq=0 multiline_broken=0

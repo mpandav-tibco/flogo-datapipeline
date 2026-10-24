@@ -1,0 +1,16 @@
+time,pod,node,cpu_m,mem_mi
+1792835843,adidas-log-collector-pjs8m,k3d-adidas-poc-server-0,43,32
+1792835843,adidas-log-collector-tmzbg,k3d-adidas-poc-agent-0,75,96
+1792835843,adidas-log-collector-wxsh4,k3d-adidas-poc-agent-1,92,70
+1792835853,adidas-log-collector-pjs8m,k3d-adidas-poc-server-0,43,32
+1792835853,adidas-log-collector-tmzbg,k3d-adidas-poc-agent-0,75,96
+1792835853,adidas-log-collector-wxsh4,k3d-adidas-poc-agent-1,92,70
+1792835863,adidas-log-collector-pjs8m,k3d-adidas-poc-server-0,43,32
+1792835863,adidas-log-collector-tmzbg,k3d-adidas-poc-agent-0,85,66
+1792835863,adidas-log-collector-wxsh4,k3d-adidas-poc-agent-1,92,70
+1792835874,adidas-log-collector-pjs8m,k3d-adidas-poc-server-0,20,50
+1792835874,adidas-log-collector-tmzbg,k3d-adidas-poc-agent-0,8,66
+1792835874,adidas-log-collector-wxsh4,k3d-adidas-poc-agent-1,46,100
+1792835884,adidas-log-collector-pjs8m,k3d-adidas-poc-server-0,20,50
+1792835884,adidas-log-collector-tmzbg,k3d-adidas-poc-agent-0,8,66
+1792835884,adidas-log-collector-wxsh4,k3d-adidas-poc-agent-1,46,100

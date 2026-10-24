@@ -1,0 +1,25 @@
+{
+ "scenario": "c4",
+ "ok": false,
+ "instances": 6,
+ "finished_instances": 0,
+ "expected_instances": 6,
+ "distinct_events_delivered": 48844,
+ "records_in_s3": 48844,
+ "records_in_dlq": 0,
+ "s3_objects": 11,
+ "missing_events": 0,
+ "gaps_in_unfinished": 0,
+ "duplicate_records": 0,
+ "broken_multiline": 0,
+ "records_without_seq": 0,
+ "bad_field_records": 0,
+ "manifest_mismatches": 0,
+ "latency_s": {
+  "p50": 2.588515,
+  "p95": 4.750331,
+  "p99": 4.960004,
+  "max": 5.193064
+ },
+ "broken_multiline_samples": []
+}

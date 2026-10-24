@@ -195,7 +195,7 @@
               "thread": "=$log_thread",
               "message": "=nvl($log_text, $message)",
               "raw_log": "=$message",
-              "service_name": "=regex.replace($pod, '-[a-z0-9]+-[a-z0-9]{5}$', '')",
+              "service_name": "=iif(regex.match($pod, '-[bcdfghjklmnpqrstvwxz2456789]{6,10}-[bcdfghjklmnpqrstvwxz2456789]{5}$'), regex.replace($pod, '-[bcdfghjklmnpqrstvwxz2456789]{6,10}-[bcdfghjklmnpqrstvwxz2456789]{5}$', ''), regex.replace($pod, '-[bcdfghjklmnpqrstvwxz2456789]{5}$', ''))",
               "namespace": "=$namespace",
               "pod": "=$pod",
               "container": "=$container",

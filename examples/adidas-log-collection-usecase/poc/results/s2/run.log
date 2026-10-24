@@ -1,0 +1,10 @@
+[11:49:03] s2: workload: --namespaces 6 --apps 5 --rate 10 --total 8000 → 30 emitter pods; fault: collector-kill 120 k3d-adidas-poc-agent-0
+[11:49:03] s2: workload applied
+[11:51:03] s2: FAULT collector-kill: kill -9 of the collector process (pid 149348, container 4a8c45a3616eeecc55b11d18eb45688511f105d938ee65fb0f4e747da53b1bca) on k3d-adidas-poc-agent-0 — no shutdown handling
+[11:51:26] s2: s2: instances=30 finished=0/30 events=91944 missing=0 gaps=0 dup=0 s3=91944 dlq=0 multiline_broken=0
+[11:52:00] s2: s2: instances=30 finished=0/30 events=116236 missing=0 gaps=0 dup=0 s3=116236 dlq=0 multiline_broken=0
+[11:52:34] s2: s2: instances=30 finished=0/30 events=140274 missing=0 gaps=0 dup=0 s3=140274 dlq=0 multiline_broken=0
+[11:53:09] s2: s2: instances=30 finished=0/30 events=169078 missing=0 gaps=0 dup=0 s3=169078 dlq=0 multiline_broken=0
+[11:53:44] s2: s2: instances=30 finished=0/30 events=212145 missing=0 gaps=0 dup=0 s3=212145 dlq=0 multiline_broken=0
+[11:54:20] s2: s2: instances=30 finished=0/30 events=235972 missing=0 gaps=0 dup=0 s3=235972 dlq=0 multiline_broken=0
+[11:55:01] s2: verified in 352s — OK events=240000 missing=0 gaps=0 dup=0 multiline_broken=0 dlq=0 p95_latency=29.270045s

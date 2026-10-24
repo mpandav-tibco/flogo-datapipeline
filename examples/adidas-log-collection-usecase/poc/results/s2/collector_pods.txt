@@ -1,0 +1,4 @@
+NAME                         READY   STATUS    RESTARTS        AGE    IP            NODE                      NOMINATED NODE   READINESS GATES
+adidas-log-collector-79qnx   1/1     Running   0               6m     10.42.2.181   k3d-adidas-poc-server-0   <none>           <none>
+adidas-log-collector-gkvxf   1/1     Running   0               6m1s   10.42.1.253   k3d-adidas-poc-agent-1    <none>           <none>
+adidas-log-collector-lmxls   1/1     Running   1 (3m58s ago)   6m     10.42.0.241   k3d-adidas-poc-agent-0    <none>           <none>

@@ -1,0 +1,13 @@
+[11:14:16] s6: workload: --namespaces 6 --apps 5 --rate 10 --total 8000 → 30 emitter pods; fault: node-restart 120 k3d-adidas-poc-agent-1
+[11:14:17] s6: workload applied
+[11:16:17] s6: FAULT node-restart: node k3d-adidas-poc-agent-1 restarted
+[11:16:40] s6: s6: instances=30 finished=0/30 events=91958 missing=0 gaps=0 dup=0 s3=91958 dlq=0 multiline_broken=0
+[11:17:14] s6: s6: instances=41 finished=0/30 events=125597 missing=0 gaps=0 dup=0 s3=125597 dlq=0 multiline_broken=0
+[11:17:48] s6: s6: instances=41 finished=0/30 events=149144 missing=0 gaps=0 dup=0 s3=149144 dlq=0 multiline_broken=0
+[11:18:23] s6: s6: instances=41 finished=0/30 events=172755 missing=0 gaps=0 dup=0 s3=172755 dlq=0 multiline_broken=0
+[11:18:58] s6: s6: instances=41 finished=0/30 events=206364 missing=0 gaps=0 dup=0 s3=206364 dlq=0 multiline_broken=0
+[11:19:34] s6: s6: instances=41 finished=6/30 events=234246 missing=0 gaps=0 dup=0 s3=234246 dlq=0 multiline_broken=0
+[11:20:10] s6: s6: instances=41 finished=19/30 events=243903 missing=0 gaps=0 dup=0 s3=243903 dlq=0 multiline_broken=0
+[11:20:46] s6: s6: instances=41 finished=19/30 events=252637 missing=0 gaps=0 dup=0 s3=252637 dlq=0 multiline_broken=0
+[11:21:22] s6: s6: instances=41 finished=19/30 events=270264 missing=0 gaps=0 dup=0 s3=270264 dlq=0 multiline_broken=0
+[11:22:04] s6: verified in 462s — OK events=274021 missing=0 gaps=0 dup=0 multiline_broken=0 dlq=0 p95_latency=29.174431s

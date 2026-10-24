@@ -1,0 +1,7 @@
+[11:08:47] s4: workload: --namespaces 3 --apps 2 --rate 400 --total 150000 → 6 emitter pods; fault: none
+[11:08:47] s4: workload applied
+[11:09:54] s4: s4: instances=6 finished=0/6 events=332511 missing=0 gaps=0 dup=0 s3=332511 dlq=0 multiline_broken=0
+[11:10:34] s4: s4: instances=6 finished=0/6 events=536829 missing=0 gaps=0 dup=0 s3=536829 dlq=0 multiline_broken=0
+[11:11:18] s4: s4: instances=6 finished=0/6 events=765977 missing=0 gaps=0 dup=0 s3=765977 dlq=0 multiline_broken=0
+[11:12:04] s4: s4: instances=6 finished=0/6 events=891097 missing=0 gaps=0 dup=0 s3=891097 dlq=0 multiline_broken=0
+[11:13:03] s4: verified in 242s — OK events=900000 missing=0 gaps=0 dup=0 multiline_broken=0 dlq=0 p95_latency=2.177422s

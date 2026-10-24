@@ -1,0 +1,1 @@
+s6: instances=41 finished=30/30 events=274021 missing=0 gaps=0 dup=0 s3=274021 dlq=0 multiline_broken=0

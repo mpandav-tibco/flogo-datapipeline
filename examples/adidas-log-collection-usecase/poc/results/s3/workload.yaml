@@ -1,0 +1,845 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: s3-team-01
+  labels: { tier: apps, poc-scenario: s3 }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-service
+  namespace: s3-team-01
+spec:
+  replicas: 1
+  selector: { matchLabels: { app.kubernetes.io/name: order-service } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: order-service, app.kubernetes.io/part-of: bw-apps, poc-scenario: s3 } }
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+      - name: bwapp
+        image: bwce-emitter:poc
+        imagePullPolicy: Never
+        resources: { requests: { cpu: 10m, memory: 24Mi }, limits: { memory: 64Mi } }
+        env:
+          - { name: APP_NAME, value: order-service }
+          - { name: RATE_PER_SEC, value: "10" }
+          - { name: ERROR_EVERY, value: "40" }
+          - { name: EMIT_TOTAL, value: "8000" }
+          - { name: EXIT_WHEN_DONE, value: "false" }
+          - name: POD_NAMESPACE
+            valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: inventory-service
+  namespace: s3-team-01
+spec:
+  replicas: 1
+  selector: { matchLabels: { app.kubernetes.io/name: inventory-service } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: inventory-service, app.kubernetes.io/part-of: bw-apps, poc-scenario: s3 } }
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+      - name: bwapp
+        image: bwce-emitter:poc
+        imagePullPolicy: Never
+        resources: { requests: { cpu: 10m, memory: 24Mi }, limits: { memory: 64Mi } }
+        env:
+          - { name: APP_NAME, value: inventory-service }
+          - { name: RATE_PER_SEC, value: "10" }
+          - { name: ERROR_EVERY, value: "40" }
+          - { name: EMIT_TOTAL, value: "8000" }
+          - { name: EXIT_WHEN_DONE, value: "false" }
+          - name: POD_NAMESPACE
+            valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: customer-service
+  namespace: s3-team-01
+spec:
+  replicas: 1
+  selector: { matchLabels: { app.kubernetes.io/name: customer-service } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: customer-service, app.kubernetes.io/part-of: bw-apps, poc-scenario: s3 } }
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+      - name: bwapp
+        image: bwce-emitter:poc
+        imagePullPolicy: Never
+        resources: { requests: { cpu: 10m, memory: 24Mi }, limits: { memory: 64Mi } }
+        env:
+          - { name: APP_NAME, value: customer-service }
+          - { name: RATE_PER_SEC, value: "10" }
+          - { name: ERROR_EVERY, value: "40" }
+          - { name: EMIT_TOTAL, value: "8000" }
+          - { name: EXIT_WHEN_DONE, value: "false" }
+          - name: POD_NAMESPACE
+            valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payment-service
+  namespace: s3-team-01
+spec:
+  replicas: 1
+  selector: { matchLabels: { app.kubernetes.io/name: payment-service } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: payment-service, app.kubernetes.io/part-of: bw-apps, poc-scenario: s3 } }
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+      - name: bwapp
+        image: bwce-emitter:poc
+        imagePullPolicy: Never
+        resources: { requests: { cpu: 10m, memory: 24Mi }, limits: { memory: 64Mi } }
+        env:
+          - { name: APP_NAME, value: payment-service }
+          - { name: RATE_PER_SEC, value: "10" }
+          - { name: ERROR_EVERY, value: "40" }
+          - { name: EMIT_TOTAL, value: "8000" }
+          - { name: EXIT_WHEN_DONE, value: "false" }
+          - name: POD_NAMESPACE
+            valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: shipment-service
+  namespace: s3-team-01
+spec:
+  replicas: 1
+  selector: { matchLabels: { app.kubernetes.io/name: shipment-service } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: shipment-service, app.kubernetes.io/part-of: bw-apps, poc-scenario: s3 } }
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+      - name: bwapp
+        image: bwce-emitter:poc
+        imagePullPolicy: Never
+        resources: { requests: { cpu: 10m, memory: 24Mi }, limits: { memory: 64Mi } }
+        env:
+          - { name: APP_NAME, value: shipment-service }
+          - { name: RATE_PER_SEC, value: "10" }
+          - { name: ERROR_EVERY, value: "40" }
+          - { name: EMIT_TOTAL, value: "8000" }
+          - { name: EXIT_WHEN_DONE, value: "false" }
+          - name: POD_NAMESPACE
+            valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: s3-team-02
+  labels: { tier: apps, poc-scenario: s3 }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-service
+  namespace: s3-team-02
+spec:
+  replicas: 1
+  selector: { matchLabels: { app.kubernetes.io/name: order-service } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: order-service, app.kubernetes.io/part-of: bw-apps, poc-scenario: s3 } }
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+      - name: bwapp
+        image: bwce-emitter:poc
+        imagePullPolicy: Never
+        resources: { requests: { cpu: 10m, memory: 24Mi }, limits: { memory: 64Mi } }
+        env:
+          - { name: APP_NAME, value: order-service }
+          - { name: RATE_PER_SEC, value: "10" }
+          - { name: ERROR_EVERY, value: "40" }
+          - { name: EMIT_TOTAL, value: "8000" }
+          - { name: EXIT_WHEN_DONE, value: "false" }
+          - name: POD_NAMESPACE
+            valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: inventory-service
+  namespace: s3-team-02
+spec:
+  replicas: 1
+  selector: { matchLabels: { app.kubernetes.io/name: inventory-service } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: inventory-service, app.kubernetes.io/part-of: bw-apps, poc-scenario: s3 } }
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+      - name: bwapp
+        image: bwce-emitter:poc
+        imagePullPolicy: Never
+        resources: { requests: { cpu: 10m, memory: 24Mi }, limits: { memory: 64Mi } }
+        env:
+          - { name: APP_NAME, value: inventory-service }
+          - { name: RATE_PER_SEC, value: "10" }
+          - { name: ERROR_EVERY, value: "40" }
+          - { name: EMIT_TOTAL, value: "8000" }
+          - { name: EXIT_WHEN_DONE, value: "false" }
+          - name: POD_NAMESPACE
+            valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: customer-service
+  namespace: s3-team-02
+spec:
+  replicas: 1
+  selector: { matchLabels: { app.kubernetes.io/name: customer-service } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: customer-service, app.kubernetes.io/part-of: bw-apps, poc-scenario: s3 } }
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+      - name: bwapp
+        image: bwce-emitter:poc
+        imagePullPolicy: Never
+        resources: { requests: { cpu: 10m, memory: 24Mi }, limits: { memory: 64Mi } }
+        env:
+          - { name: APP_NAME, value: customer-service }
+          - { name: RATE_PER_SEC, value: "10" }
+          - { name: ERROR_EVERY, value: "40" }
+          - { name: EMIT_TOTAL, value: "8000" }
+          - { name: EXIT_WHEN_DONE, value: "false" }
+          - name: POD_NAMESPACE
+            valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payment-service
+  namespace: s3-team-02
+spec:
+  replicas: 1
+  selector: { matchLabels: { app.kubernetes.io/name: payment-service } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: payment-service, app.kubernetes.io/part-of: bw-apps, poc-scenario: s3 } }
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+      - name: bwapp
+        image: bwce-emitter:poc
+        imagePullPolicy: Never
+        resources: { requests: { cpu: 10m, memory: 24Mi }, limits: { memory: 64Mi } }
+        env:
+          - { name: APP_NAME, value: payment-service }
+          - { name: RATE_PER_SEC, value: "10" }
+          - { name: ERROR_EVERY, value: "40" }
+          - { name: EMIT_TOTAL, value: "8000" }
+          - { name: EXIT_WHEN_DONE, value: "false" }
+          - name: POD_NAMESPACE
+            valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: shipment-service
+  namespace: s3-team-02
+spec:
+  replicas: 1
+  selector: { matchLabels: { app.kubernetes.io/name: shipment-service } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: shipment-service, app.kubernetes.io/part-of: bw-apps, poc-scenario: s3 } }
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+      - name: bwapp
+        image: bwce-emitter:poc
+        imagePullPolicy: Never
+        resources: { requests: { cpu: 10m, memory: 24Mi }, limits: { memory: 64Mi } }
+        env:
+          - { name: APP_NAME, value: shipment-service }
+          - { name: RATE_PER_SEC, value: "10" }
+          - { name: ERROR_EVERY, value: "40" }
+          - { name: EMIT_TOTAL, value: "8000" }
+          - { name: EXIT_WHEN_DONE, value: "false" }
+          - name: POD_NAMESPACE
+            valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: s3-team-03
+  labels: { tier: apps, poc-scenario: s3 }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-service
+  namespace: s3-team-03
+spec:
+  replicas: 1
+  selector: { matchLabels: { app.kubernetes.io/name: order-service } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: order-service, app.kubernetes.io/part-of: bw-apps, poc-scenario: s3 } }
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+      - name: bwapp
+        image: bwce-emitter:poc
+        imagePullPolicy: Never
+        resources: { requests: { cpu: 10m, memory: 24Mi }, limits: { memory: 64Mi } }
+        env:
+          - { name: APP_NAME, value: order-service }
+          - { name: RATE_PER_SEC, value: "10" }
+          - { name: ERROR_EVERY, value: "40" }
+          - { name: EMIT_TOTAL, value: "8000" }
+          - { name: EXIT_WHEN_DONE, value: "false" }
+          - name: POD_NAMESPACE
+            valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: inventory-service
+  namespace: s3-team-03
+spec:
+  replicas: 1
+  selector: { matchLabels: { app.kubernetes.io/name: inventory-service } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: inventory-service, app.kubernetes.io/part-of: bw-apps, poc-scenario: s3 } }
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+      - name: bwapp
+        image: bwce-emitter:poc
+        imagePullPolicy: Never
+        resources: { requests: { cpu: 10m, memory: 24Mi }, limits: { memory: 64Mi } }
+        env:
+          - { name: APP_NAME, value: inventory-service }
+          - { name: RATE_PER_SEC, value: "10" }
+          - { name: ERROR_EVERY, value: "40" }
+          - { name: EMIT_TOTAL, value: "8000" }
+          - { name: EXIT_WHEN_DONE, value: "false" }
+          - name: POD_NAMESPACE
+            valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: customer-service
+  namespace: s3-team-03
+spec:
+  replicas: 1
+  selector: { matchLabels: { app.kubernetes.io/name: customer-service } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: customer-service, app.kubernetes.io/part-of: bw-apps, poc-scenario: s3 } }
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+      - name: bwapp
+        image: bwce-emitter:poc
+        imagePullPolicy: Never
+        resources: { requests: { cpu: 10m, memory: 24Mi }, limits: { memory: 64Mi } }
+        env:
+          - { name: APP_NAME, value: customer-service }
+          - { name: RATE_PER_SEC, value: "10" }
+          - { name: ERROR_EVERY, value: "40" }
+          - { name: EMIT_TOTAL, value: "8000" }
+          - { name: EXIT_WHEN_DONE, value: "false" }
+          - name: POD_NAMESPACE
+            valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payment-service
+  namespace: s3-team-03
+spec:
+  replicas: 1
+  selector: { matchLabels: { app.kubernetes.io/name: payment-service } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: payment-service, app.kubernetes.io/part-of: bw-apps, poc-scenario: s3 } }
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+      - name: bwapp
+        image: bwce-emitter:poc
+        imagePullPolicy: Never
+        resources: { requests: { cpu: 10m, memory: 24Mi }, limits: { memory: 64Mi } }
+        env:
+          - { name: APP_NAME, value: payment-service }
+          - { name: RATE_PER_SEC, value: "10" }
+          - { name: ERROR_EVERY, value: "40" }
+          - { name: EMIT_TOTAL, value: "8000" }
+          - { name: EXIT_WHEN_DONE, value: "false" }
+          - name: POD_NAMESPACE
+            valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: shipment-service
+  namespace: s3-team-03
+spec:
+  replicas: 1
+  selector: { matchLabels: { app.kubernetes.io/name: shipment-service } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: shipment-service, app.kubernetes.io/part-of: bw-apps, poc-scenario: s3 } }
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+      - name: bwapp
+        image: bwce-emitter:poc
+        imagePullPolicy: Never
+        resources: { requests: { cpu: 10m, memory: 24Mi }, limits: { memory: 64Mi } }
+        env:
+          - { name: APP_NAME, value: shipment-service }
+          - { name: RATE_PER_SEC, value: "10" }
+          - { name: ERROR_EVERY, value: "40" }
+          - { name: EMIT_TOTAL, value: "8000" }
+          - { name: EXIT_WHEN_DONE, value: "false" }
+          - name: POD_NAMESPACE
+            valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: s3-team-04
+  labels: { tier: apps, poc-scenario: s3 }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-service
+  namespace: s3-team-04
+spec:
+  replicas: 1
+  selector: { matchLabels: { app.kubernetes.io/name: order-service } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: order-service, app.kubernetes.io/part-of: bw-apps, poc-scenario: s3 } }
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+      - name: bwapp
+        image: bwce-emitter:poc
+        imagePullPolicy: Never
+        resources: { requests: { cpu: 10m, memory: 24Mi }, limits: { memory: 64Mi } }
+        env:
+          - { name: APP_NAME, value: order-service }
+          - { name: RATE_PER_SEC, value: "10" }
+          - { name: ERROR_EVERY, value: "40" }
+          - { name: EMIT_TOTAL, value: "8000" }
+          - { name: EXIT_WHEN_DONE, value: "false" }
+          - name: POD_NAMESPACE
+            valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: inventory-service
+  namespace: s3-team-04
+spec:
+  replicas: 1
+  selector: { matchLabels: { app.kubernetes.io/name: inventory-service } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: inventory-service, app.kubernetes.io/part-of: bw-apps, poc-scenario: s3 } }
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+      - name: bwapp
+        image: bwce-emitter:poc
+        imagePullPolicy: Never
+        resources: { requests: { cpu: 10m, memory: 24Mi }, limits: { memory: 64Mi } }
+        env:
+          - { name: APP_NAME, value: inventory-service }
+          - { name: RATE_PER_SEC, value: "10" }
+          - { name: ERROR_EVERY, value: "40" }
+          - { name: EMIT_TOTAL, value: "8000" }
+          - { name: EXIT_WHEN_DONE, value: "false" }
+          - name: POD_NAMESPACE
+            valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: customer-service
+  namespace: s3-team-04
+spec:
+  replicas: 1
+  selector: { matchLabels: { app.kubernetes.io/name: customer-service } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: customer-service, app.kubernetes.io/part-of: bw-apps, poc-scenario: s3 } }
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+      - name: bwapp
+        image: bwce-emitter:poc
+        imagePullPolicy: Never
+        resources: { requests: { cpu: 10m, memory: 24Mi }, limits: { memory: 64Mi } }
+        env:
+          - { name: APP_NAME, value: customer-service }
+          - { name: RATE_PER_SEC, value: "10" }
+          - { name: ERROR_EVERY, value: "40" }
+          - { name: EMIT_TOTAL, value: "8000" }
+          - { name: EXIT_WHEN_DONE, value: "false" }
+          - name: POD_NAMESPACE
+            valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payment-service
+  namespace: s3-team-04
+spec:
+  replicas: 1
+  selector: { matchLabels: { app.kubernetes.io/name: payment-service } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: payment-service, app.kubernetes.io/part-of: bw-apps, poc-scenario: s3 } }
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+      - name: bwapp
+        image: bwce-emitter:poc
+        imagePullPolicy: Never
+        resources: { requests: { cpu: 10m, memory: 24Mi }, limits: { memory: 64Mi } }
+        env:
+          - { name: APP_NAME, value: payment-service }
+          - { name: RATE_PER_SEC, value: "10" }
+          - { name: ERROR_EVERY, value: "40" }
+          - { name: EMIT_TOTAL, value: "8000" }
+          - { name: EXIT_WHEN_DONE, value: "false" }
+          - name: POD_NAMESPACE
+            valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: shipment-service
+  namespace: s3-team-04
+spec:
+  replicas: 1
+  selector: { matchLabels: { app.kubernetes.io/name: shipment-service } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: shipment-service, app.kubernetes.io/part-of: bw-apps, poc-scenario: s3 } }
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+      - name: bwapp
+        image: bwce-emitter:poc
+        imagePullPolicy: Never
+        resources: { requests: { cpu: 10m, memory: 24Mi }, limits: { memory: 64Mi } }
+        env:
+          - { name: APP_NAME, value: shipment-service }
+          - { name: RATE_PER_SEC, value: "10" }
+          - { name: ERROR_EVERY, value: "40" }
+          - { name: EMIT_TOTAL, value: "8000" }
+          - { name: EXIT_WHEN_DONE, value: "false" }
+          - name: POD_NAMESPACE
+            valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: s3-team-05
+  labels: { tier: apps, poc-scenario: s3 }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-service
+  namespace: s3-team-05
+spec:
+  replicas: 1
+  selector: { matchLabels: { app.kubernetes.io/name: order-service } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: order-service, app.kubernetes.io/part-of: bw-apps, poc-scenario: s3 } }
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+      - name: bwapp
+        image: bwce-emitter:poc
+        imagePullPolicy: Never
+        resources: { requests: { cpu: 10m, memory: 24Mi }, limits: { memory: 64Mi } }
+        env:
+          - { name: APP_NAME, value: order-service }
+          - { name: RATE_PER_SEC, value: "10" }
+          - { name: ERROR_EVERY, value: "40" }
+          - { name: EMIT_TOTAL, value: "8000" }
+          - { name: EXIT_WHEN_DONE, value: "false" }
+          - name: POD_NAMESPACE
+            valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: inventory-service
+  namespace: s3-team-05
+spec:
+  replicas: 1
+  selector: { matchLabels: { app.kubernetes.io/name: inventory-service } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: inventory-service, app.kubernetes.io/part-of: bw-apps, poc-scenario: s3 } }
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+      - name: bwapp
+        image: bwce-emitter:poc
+        imagePullPolicy: Never
+        resources: { requests: { cpu: 10m, memory: 24Mi }, limits: { memory: 64Mi } }
+        env:
+          - { name: APP_NAME, value: inventory-service }
+          - { name: RATE_PER_SEC, value: "10" }
+          - { name: ERROR_EVERY, value: "40" }
+          - { name: EMIT_TOTAL, value: "8000" }
+          - { name: EXIT_WHEN_DONE, value: "false" }
+          - name: POD_NAMESPACE
+            valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: customer-service
+  namespace: s3-team-05
+spec:
+  replicas: 1
+  selector: { matchLabels: { app.kubernetes.io/name: customer-service } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: customer-service, app.kubernetes.io/part-of: bw-apps, poc-scenario: s3 } }
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+      - name: bwapp
+        image: bwce-emitter:poc
+        imagePullPolicy: Never
+        resources: { requests: { cpu: 10m, memory: 24Mi }, limits: { memory: 64Mi } }
+        env:
+          - { name: APP_NAME, value: customer-service }
+          - { name: RATE_PER_SEC, value: "10" }
+          - { name: ERROR_EVERY, value: "40" }
+          - { name: EMIT_TOTAL, value: "8000" }
+          - { name: EXIT_WHEN_DONE, value: "false" }
+          - name: POD_NAMESPACE
+            valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payment-service
+  namespace: s3-team-05
+spec:
+  replicas: 1
+  selector: { matchLabels: { app.kubernetes.io/name: payment-service } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: payment-service, app.kubernetes.io/part-of: bw-apps, poc-scenario: s3 } }
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+      - name: bwapp
+        image: bwce-emitter:poc
+        imagePullPolicy: Never
+        resources: { requests: { cpu: 10m, memory: 24Mi }, limits: { memory: 64Mi } }
+        env:
+          - { name: APP_NAME, value: payment-service }
+          - { name: RATE_PER_SEC, value: "10" }
+          - { name: ERROR_EVERY, value: "40" }
+          - { name: EMIT_TOTAL, value: "8000" }
+          - { name: EXIT_WHEN_DONE, value: "false" }
+          - name: POD_NAMESPACE
+            valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: shipment-service
+  namespace: s3-team-05
+spec:
+  replicas: 1
+  selector: { matchLabels: { app.kubernetes.io/name: shipment-service } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: shipment-service, app.kubernetes.io/part-of: bw-apps, poc-scenario: s3 } }
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+      - name: bwapp
+        image: bwce-emitter:poc
+        imagePullPolicy: Never
+        resources: { requests: { cpu: 10m, memory: 24Mi }, limits: { memory: 64Mi } }
+        env:
+          - { name: APP_NAME, value: shipment-service }
+          - { name: RATE_PER_SEC, value: "10" }
+          - { name: ERROR_EVERY, value: "40" }
+          - { name: EMIT_TOTAL, value: "8000" }
+          - { name: EXIT_WHEN_DONE, value: "false" }
+          - name: POD_NAMESPACE
+            valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: s3-team-06
+  labels: { tier: apps, poc-scenario: s3 }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-service
+  namespace: s3-team-06
+spec:
+  replicas: 1
+  selector: { matchLabels: { app.kubernetes.io/name: order-service } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: order-service, app.kubernetes.io/part-of: bw-apps, poc-scenario: s3 } }
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+      - name: bwapp
+        image: bwce-emitter:poc
+        imagePullPolicy: Never
+        resources: { requests: { cpu: 10m, memory: 24Mi }, limits: { memory: 64Mi } }
+        env:
+          - { name: APP_NAME, value: order-service }
+          - { name: RATE_PER_SEC, value: "10" }
+          - { name: ERROR_EVERY, value: "40" }
+          - { name: EMIT_TOTAL, value: "8000" }
+          - { name: EXIT_WHEN_DONE, value: "false" }
+          - name: POD_NAMESPACE
+            valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: inventory-service
+  namespace: s3-team-06
+spec:
+  replicas: 1
+  selector: { matchLabels: { app.kubernetes.io/name: inventory-service } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: inventory-service, app.kubernetes.io/part-of: bw-apps, poc-scenario: s3 } }
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+      - name: bwapp
+        image: bwce-emitter:poc
+        imagePullPolicy: Never
+        resources: { requests: { cpu: 10m, memory: 24Mi }, limits: { memory: 64Mi } }
+        env:
+          - { name: APP_NAME, value: inventory-service }
+          - { name: RATE_PER_SEC, value: "10" }
+          - { name: ERROR_EVERY, value: "40" }
+          - { name: EMIT_TOTAL, value: "8000" }
+          - { name: EXIT_WHEN_DONE, value: "false" }
+          - name: POD_NAMESPACE
+            valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: customer-service
+  namespace: s3-team-06
+spec:
+  replicas: 1
+  selector: { matchLabels: { app.kubernetes.io/name: customer-service } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: customer-service, app.kubernetes.io/part-of: bw-apps, poc-scenario: s3 } }
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+      - name: bwapp
+        image: bwce-emitter:poc
+        imagePullPolicy: Never
+        resources: { requests: { cpu: 10m, memory: 24Mi }, limits: { memory: 64Mi } }
+        env:
+          - { name: APP_NAME, value: customer-service }
+          - { name: RATE_PER_SEC, value: "10" }
+          - { name: ERROR_EVERY, value: "40" }
+          - { name: EMIT_TOTAL, value: "8000" }
+          - { name: EXIT_WHEN_DONE, value: "false" }
+          - name: POD_NAMESPACE
+            valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payment-service
+  namespace: s3-team-06
+spec:
+  replicas: 1
+  selector: { matchLabels: { app.kubernetes.io/name: payment-service } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: payment-service, app.kubernetes.io/part-of: bw-apps, poc-scenario: s3 } }
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+      - name: bwapp
+        image: bwce-emitter:poc
+        imagePullPolicy: Never
+        resources: { requests: { cpu: 10m, memory: 24Mi }, limits: { memory: 64Mi } }
+        env:
+          - { name: APP_NAME, value: payment-service }
+          - { name: RATE_PER_SEC, value: "10" }
+          - { name: ERROR_EVERY, value: "40" }
+          - { name: EMIT_TOTAL, value: "8000" }
+          - { name: EXIT_WHEN_DONE, value: "false" }
+          - name: POD_NAMESPACE
+            valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: shipment-service
+  namespace: s3-team-06
+spec:
+  replicas: 1
+  selector: { matchLabels: { app.kubernetes.io/name: shipment-service } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: shipment-service, app.kubernetes.io/part-of: bw-apps, poc-scenario: s3 } }
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+      - name: bwapp
+        image: bwce-emitter:poc
+        imagePullPolicy: Never
+        resources: { requests: { cpu: 10m, memory: 24Mi }, limits: { memory: 64Mi } }
+        env:
+          - { name: APP_NAME, value: shipment-service }
+          - { name: RATE_PER_SEC, value: "10" }
+          - { name: ERROR_EVERY, value: "40" }
+          - { name: EMIT_TOTAL, value: "8000" }
+          - { name: EXIT_WHEN_DONE, value: "false" }
+          - name: POD_NAMESPACE
+            valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+

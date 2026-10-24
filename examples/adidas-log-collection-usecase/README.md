@@ -139,7 +139,15 @@ adidas-log-collection-usecase/
     deploy-real-bwce.sh               # optional: build+deploy the real licensed BWCE app
     verify.sh                         # end-to-end verification (+ S3 listing)
     teardown.sh                       # cleanup
-  REPORT.md                           # tested run results
+  poc/                                # 3-node no-loss POC: cluster, verifiable workload, fault injection, verifier
+    cluster.sh                        # k3d 3-node cluster (kubelet rotation at 1 MiB) + images + MinIO
+    deploy-collector.sh               # collector from the k8s/ manifests; only config differs per env
+    workload.py                       # BW-app Deployments/Jobs running the verifiable emitter
+    run-scenario.sh                   # one scenario: workload + fault + wait until verified + evidence
+    run-all.sh                        # the full scenario matrix → results/SUMMARY.md
+    verify.py                         # reads S3 (+ node DLQs) back and proves every event arrived
+  POC-REPORT.md                       # 3-node POC results (no-loss proof, faults, footprint, findings)
+  REPORT.md                           # earlier 2-node functional run (July)
 ```
 
 ---
@@ -195,14 +203,23 @@ build on a re-run: `SKIP_BUILD=1 bash scripts/deploy.sh`.
    **`severity`** (via `decode`), an **`is_error`** flag, **`service_name`**
    (`regex.replace` strips the pod hash), a daily **`index_hint`**, plus
    `cluster/environment/collector/ingest_time`.
-4. **`validate`** — `message` not-null; violations are **routed to the DLQ**
-   instead of poisoning the stream.
+4. **`validate`** — `message` not-null; violations are **routed to the pipeline
+   DLQ** (with the violated rule, counted as failed) instead of poisoning the stream.
+   A transform that fails on a batch dead-letters that batch the same way.
 5. **`s3-sink`** — writes **NDJSON** to the `adidas-logs` bucket with a
    record-partitioned key
-   `{namespace}/{pod}/{YYYY}/{MM}/{DD}/{node}-{HH}{mm}-{uuid}.ndjson`, **rolling**
-   every `rollMaxSeconds` (60s) or `rollMaxBytes` (4 MiB). MinIO is addressed via
+   `{namespace}/{pod}/{YYYY}/{MM}/{DD}/{node}-{HH}{mm}-{uuid}.ndjson`. Every
+   **checkpoint** (`CHECKPOINT_SECONDS`, 30s) uploads the open objects with their
+   `.manifest.json` *before* the read positions advance, so a checkpoint never covers
+   a line that is not in S3; objects also roll at `rollMaxBytes` (4 MiB). MinIO is addressed via
    `endpoint` + `forcePathStyle`; credentials come from the pod env
    (`MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY`), never from the pipeline file.
+
+**Delivery guarantee:** at-least-once, provable. A crash replays at most one
+checkpoint interval (duplicates carry the same `idempotency_key`); a rolling upgrade
+(SIGTERM) drains — stops reading, uploads, saves the exact position — so it replays
+nothing; an S3 outage fails the checkpoint and the run is restarted with backoff
+(`restart.onFailure`) from the last checkpoint. See [POC-REPORT.md](POC-REPORT.md).
 
 The DaemonSet injects `NODE_NAME` (from `spec.nodeName`) and the MinIO secret, and
 mounts `/var/log/pods` (read-only) + a per-node state dir. It tolerates all taints
@@ -296,9 +313,8 @@ replicas. **The collector pipeline is identical for both** — it only sees cons
 - The collector is a **DaemonSet**, so it scales automatically with nodes — 3
   nodes = 3 collectors, 30 nodes = 30, with no coordinator.
 - Each collector only reads its **own** node's logs, so throughput scales linearly
-  with the cluster. On this 2-node laptop cluster the pipeline sustained
-  **~200 records/s per node while CPU-throttled** (see [REPORT.md](REPORT.md)) —
-  already in the ballpark of 25M/day, with real nodes far larger.
+  with the cluster. Measured on the 3-node POC cluster — see
+  [POC-REPORT.md](POC-REPORT.md) for throughput, CPU and memory per node.
 - Tune per environment via the pipeline: `performance.batchSize`,
   `sink.rollMaxBytes` / `rollMaxSeconds`, `pollMs`, and `includeNamespaces` /
   `excludeNamespaces`.
