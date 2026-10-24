@@ -1,0 +1,1 @@
+c7: instances=6 finished=6/6 events=152231 missing=27769 gaps=0 dup=0 s3=152231 dlq=0 multiline_broken=0

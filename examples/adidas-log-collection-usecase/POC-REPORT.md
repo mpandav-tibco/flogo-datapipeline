@@ -1,7 +1,7 @@
 # POC Report — adidas BW6 log collection, verified on a 3-node Kubernetes cluster
 
 **Date:** 2026-10-24 · **Branch:** `poc/adidas-3node-hardening`
-**Result:** ✅ No log line lost in any of 7 production failure scenarios — proven
+**Result:** ✅ No log line lost in any of 8 production failure scenarios — proven
 event by event, not inferred from counters. The same scenarios on the collector as it
 was before this POC lose up to **95%** of the logs.
 
@@ -43,12 +43,14 @@ Reproduce: `poc/cluster.sh up && poc/run-all.sh` (see `poc/`).
 | s4 | Log-rotation stress — 6 pods × ~1,000 events/s, rotation at 1 MiB | ✅ PASS | 900,000 | 900,000 | **0** | **0** | 0 | 0 | 2 s | 124m / 211m | 129 Mi |
 | s5 | Short-lived pods — 40 Jobs, pods deleted 5 s after finishing | ✅ PASS | 120,000 | 120,000 | **0** | **0** | 0 | 0 | 30 s | 73m / 92m | 100 Mi |
 | s6 | Worker node restart (kubelet, runtime and its pods) mid-stream | ✅ PASS | 240,000 | 274,021 ³ | **0** | **0** | 0 | 0 | 29 s | 28m / 43m | 109 Mi |
+| s7 | S3 outage (90 s) while kubelet keeps rotating with **unchanged** settings (5 files) — ~3 rotations per pod while behind, older ones gzip-compressed before being read | ✅ PASS | 180,000 | 180,000 | **0** | **0** | 4,744 ¹ | 0 | 83 s ² | 22m / 61m | 55 Mi |
 | c2 | **Control:** s2 on the collector *before* this POC | ❌ FAIL | 240,000 | 91,353 | **148,647** | **4,039** | 3,164 | 0 | 77 s | 12m / 47m | 75 Mi |
 | c4 | **Control:** s4 on the collector *before* this POC | ❌ FAIL | 900,000 | 48,844 | **851,156** | 0 | 0 | 0 | 5 s | 8m / 121m | 54 Mi |
+| c7 | **Control:** s7 without reading compressed rotations | ❌ FAIL | 180,000 | 152,231 | **27,769** | **27,769** | 0 | 0 | 44 s | 12m / 45m | 57 Mi |
 
 CPU is in millicores (`50m` = 0.05 core), sampled per collector pod every 10 s.
 
-¹ The checkpoint during the outage failed after some partitions' objects were already
+¹ The checkpoint during an outage failed after some partitions' objects were already
 uploaded; the restarted run re-delivers that interval. All duplicates carry the same
 `idempotency_key`. ² Includes the 120 s the object store was down. ³ Includes the
 partial output of the emitters that died with the node and were restarted (new
@@ -88,6 +90,7 @@ Running the real use case under failure surfaced issues that unit tests and the 
 | 8 | Other: duplicate re-reads during the rotation gap; rotated sibling skipped during double rotation; S3 objects could be overwritten when the key has no `{uuid}`; per-pod partition state grew with pod churn. | Duplicates, rare loss, slow memory growth. |
 | 9 | Example: `@timestamp` was mapped to the log *message*; the collector image was built without the App Startup trigger (crash loop on start). | Wrong OpenSearch time field; the example didn't start. |
 | 10 | Example: `service_name` stripped one segment too many for Job / CronJob / DaemonSet pods (`catalog-service-x7k2p` → `catalog`). Now uses Kubernetes' generated-suffix alphabet to tell `-<rs-hash>-<5>` from `-<5>`. | Wrong grouping in OpenSearch for non-Deployment workloads. |
+| 11 | **Compressed rotations skipped.** kubelet gzips every rotated log except the newest; the collector only read uncompressed files. | While behind (S3 outage) or down, a pod could rotate only ~1–2 times before lines were lost (c7: 15%), independent of `containerLogMaxFiles`. Now `.gz` rotations are read too — tolerance is everything kubelet keeps (s7: 0 lost). |
 
 ## 6. Recommendations for adidas production
 
@@ -101,11 +104,21 @@ Running the real use case under failure surfaced issues that unit tests and the 
    duplicates after an S3 outage then become no-ops.
 4. **Alerting:** alert on `flogo_pipeline_runs_total{status="failed"}` (restarts),
    `rows_read − rows_written − rows_failed > 0` sustained, and collector restarts.
-5. **Kubelet rotation:** keep `containerLogMaxFiles ≥ 5`. The collector reads uncompressed
-   rotated files it has not finished; kubelet's gzip-compressed older rotations are not
-   read, so an S3 outage longer than ~4 rotations of a pod's log (at 10 MiB) could lose data.
-   The restart backoff (≤ 30 s) keeps that window small.
-6. **Shutdown budget:** keep `PIPELINE_SHUTDOWN_TIMEOUT` (25 s) below
+5. **Kubelet rotation — no infra change needed.** The collector follows every rotation and
+   reads every rotated file kubelet still keeps, compressed or not. With kubelet's defaults
+   (`containerLogMaxSize=10Mi`, `containerLogMaxFiles=5`) a container can log ~40 MiB while
+   the collector cannot ship (S3 outage) before kubelet deletes data — e.g. ~45 min for a
+   chatty BW app at 15 KB/s. Only an outage longer than that, for that container, can lose
+   lines; the restart backoff (≤ 30 s) resumes shipping as soon as S3 is back.
+6. **Beyond kubelet's retention — durable node spool (next step).** To make outage
+   tolerance independent of kubelet entirely, the collector can keep reading during an
+   outage into a size-capped spool on the node (`hostPath`, e.g. 5 GiB): objects are sealed
+   and fsynced there at each checkpoint (positions advance), and a background uploader
+   ships them to S3 with retry, including after a restart. Tolerance = spool size ÷ node
+   log rate (5 GiB at 1 MB/s ≈ 85 min of the whole node), with a metric/alert when it
+   fills. Durability is unchanged — the spool sits on the same node disk as the kubelet
+   logs it replaces. Estimated 2–3 days including tests and a POC scenario.
+7. **Shutdown budget:** keep `PIPELINE_SHUTDOWN_TIMEOUT` (25 s) below
    `terminationGracePeriodSeconds` (30 s), as in `k8s/40-collector-daemonset.yaml`.
 
 ## 7. Limits of this test

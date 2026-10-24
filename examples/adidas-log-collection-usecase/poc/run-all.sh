@@ -14,16 +14,21 @@
 #   s4  log-rotation stress: 6 pods at ~1,000 events/s each, kubelet rotating at 1 MiB
 #   s5  short-lived pods: 40 Jobs that log and are deleted 5 s after finishing
 #   s6  node restart: a worker node (kubelet + runtime + its pods) restarts mid-stream
+#   s7  long S3 outage while kubelet keeps rotating (fixed rotation size/count):
+#       each pod's log rotates ~3 times while the collector is behind, so kubelet
+#       gzips rotations the collector has not read yet
 #   c2  CONTROL: s2 on the pre-fix collector (master before this work)
 #   c4  CONTROL: s4 on the pre-fix collector
+#   c7  CONTROL: s7 on the collector without compressed-rotation support
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLUSTER="${CLUSTER:-adidas-poc}"
 FIXED_IMG="${COLLECTOR_IMG:-flogo-datapipeline:poc}"
 CONTROL_IMG="${CONTROL_IMG:-flogo-datapipeline:poc-master}"
+NOGZ_IMG="${NOGZ_IMG:-flogo-datapipeline:poc-nogz}"
 AGENT0="k3d-$CLUSTER-agent-0"
 AGENT1="k3d-$CLUSTER-agent-1"
-ALL=(s1 s2 s2r s3 s4 s5 s6 c2 c4)
+ALL=(s1 s2 s2r s3 s4 s5 s6 s7 c2 c4 c7)
 SEL=("$@"); [ ${#SEL[@]} -eq 0 ] && SEL=("${ALL[@]}")
 current=""
 
@@ -44,6 +49,8 @@ for s in "${SEL[@]}"; do
   s4)  collector "$FIXED_IMG";   run s4  --namespaces 3 --apps 2 --rate 400 --total 150000 ;;
   s5)  collector "$FIXED_IMG";   run s5  --namespaces 4 --apps 10 --rate 50 --total 3000 --kind job ;;
   s6)  collector "$FIXED_IMG";   run s6  --namespaces 6 --apps 5 --rate 10 --total 8000 -- node-restart 120 "$AGENT1" ;;
+  s7)  collector "$FIXED_IMG";   run s7  --namespaces 3 --apps 2 --rate 30 --total 30000 -- s3-outage 90 90 ;;
+  c7)  collector "$NOGZ_IMG";    TIMEOUT=900 run c7 --namespaces 3 --apps 2 --rate 30 --total 30000 -- s3-outage 90 90 ;;
   c2)  collector "$CONTROL_IMG"; TIMEOUT=900 run c2 --namespaces 6 --apps 5 --rate 10 --total 8000 -- collector-kill 120 "$AGENT0" ;;
   c4)  collector "$CONTROL_IMG"; TIMEOUT=600 run c4 --namespaces 3 --apps 2 --rate 400 --total 150000 ;;
   *) echo "unknown scenario $s" >&2 ;;

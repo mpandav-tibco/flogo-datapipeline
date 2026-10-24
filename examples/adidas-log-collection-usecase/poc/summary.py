@@ -16,6 +16,8 @@ TITLES = {
     "s4": "Log-rotation stress — ~1,000 events/s/pod, rotation at 1 MiB",
     "s5": "Short-lived pods — 40 Jobs deleted 5 s after finishing",
     "s6": "Worker node restart mid-stream",
+    "s7": "S3 outage while kubelet rotates + gzips unread logs (~3 rotations/pod)",
+    "c7": "CONTROL: s7 without compressed-rotation support",
     "c2": "CONTROL: collector crash on the pre-fix collector",
     "c4": "CONTROL: rotation stress on the pre-fix collector",
 }
@@ -47,7 +49,7 @@ def top(path):
 
 def main():
     rows = []
-    for s in ["s1", "s2", "s2r", "s3", "s4", "s5", "s6", "c2", "c4"]:
+    for s in ["s1", "s2", "s2r", "s3", "s4", "s5", "s6", "s7", "c2", "c4", "c7"]:
         d = os.path.join(RES, s)
         v = load(os.path.join(d, "verify.json"))
         if not v:
