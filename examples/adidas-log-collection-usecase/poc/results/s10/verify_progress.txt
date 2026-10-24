@@ -1,0 +1,1 @@
+s10: instances=1200 finished=1200/1200 events=3600000 missing=0 gaps=0 dup=3200 s3=3603200 dlq=0 multiline_broken=0

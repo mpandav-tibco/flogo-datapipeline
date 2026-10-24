@@ -1,7 +1,7 @@
 # POC Report — adidas BW6 log collection, verified on a 3-node Kubernetes cluster
 
 **Date:** 2026-10-24 · **Branch:** `poc/adidas-prod-review`
-**Result:** ✅ No log line lost in any of 10 production failure and scale scenarios — proven
+**Result:** ✅ No log line lost in any of 11 production failure and scale scenarios — proven
 event by event, not inferred from counters — up to **400 containers per node, 3.6 M events
 in 6.5 min, through a 3-minute S3 outage during which a quarter of the pods were deleted**.
 The same scenarios on the collector as it was before this POC lose up to **95%** of the logs.
@@ -47,6 +47,7 @@ Reproduce: `poc/cluster.sh up && poc/run-all.sh` (see `poc/`).
 | s7 | S3 outage (90 s) while kubelet keeps rotating with **unchanged** settings (5 files) — ~3 rotations per pod while behind, older ones gzip-compressed before being read | ✅ PASS | 180,000 | 180,000 | **0** | **0** | 4,744 ¹ | 0 | 83 s ² | 22m / 61m | 55 Mi |
 | s8 | **Scale** — 400 containers per node (1,200 total, 24 namespaces), ~3,200 events/s per node, rotation at 128 KiB (~every 70 s, ~5 per pod) + gzip, stdout/stderr interleaved, 25% of pods deleted 5 s after finishing ⁴ | ✅ PASS | 3,600,000 | 3,600,000 | **0** | **0** | 0 | 0 | 4 s | 139m / 311m | 127 Mi |
 | s9 | **Scale + S3 outage (180 s)** — s8 with S3 down while the pods finish and a quarter of them are **deleted**; durable spool on | ✅ PASS | 3,600,000 | 3,600,000 | **0** | **0** | **0** | 0 | 171 s ² | 148m / 339m | 152 Mi |
+| s10 | **Scale + S3 outage (180 s) + collector `kill -9`** while its spool holds the outage backlog (1,368 files) | ✅ PASS | 3,600,000 | 3,600,000 | **0** | **0** | 3,200 ¹ | 0 | 183 s ² | 146m / 349m | 127 Mi |
 | c2 | **Control:** s2 on the collector *before* this POC | ❌ FAIL | 240,000 | 91,353 | **148,647** | **4,039** | 3,164 | 0 | 77 s | 12m / 47m | 75 Mi |
 | c4 | **Control:** s4 on the collector *before* this POC | ❌ FAIL | 900,000 | 48,844 | **851,156** | 0 | 0 | 0 | 5 s | 8m / 121m | 54 Mi |
 | c7 | **Control:** s7 without reading compressed rotations | ❌ FAIL | 180,000 | 152,231 | **27,769** | **27,769** | 0 | 0 | 44 s | 12m / 45m | 57 Mi |
@@ -55,7 +56,8 @@ Reproduce: `poc/cluster.sh up && poc/run-all.sh` (see `poc/`).
 CPU is in millicores (`50m` = 0.05 core), sampled per collector pod every 10 s.
 
 ¹ The checkpoint during an outage failed after some partitions' objects were already
-uploaded; the restarted run re-delivers that interval. All duplicates carry the same
+uploaded, or (s10) the killed collector had rows after its last checkpoint; the restarted
+run re-delivers that interval. All duplicates carry the same
 `idempotency_key`. ² Includes the 120 s the object store was down. ³ Includes the
 partial output of the emitters that died with the node and were restarted (new
 instances); every instance's sequence is gap-free. ⁴ s8/s9/c9 use a synthetic node writer
@@ -158,7 +160,7 @@ and the evidence. "Proven" means a live scenario with event-by-event verificatio
 
 | # | Case | Status | Evidence |
 |---|------|--------|----------|
-| 1 | Collector crash / OOM-kill / `kill -9` | ✅ Proven | s2 (0 lost); positions only advance after durable flush |
+| 1 | Collector crash / OOM-kill / `kill -9` | ✅ Proven | s2 (0 lost); s10: killed during an S3 outage with 672 sealed objects (270 MB) in the spool — the restarted collector uploaded them and replayed only the unsealed rest (0 lost) |
 | 2 | Rolling upgrade / SIGTERM / node drain | ✅ Proven | s2r (0 lost, 0 duplicates): drain, upload, exact final position |
 | 3 | S3 outage — short | ✅ Proven | s3, s7 |
 | 4 | S3 outage — longer than kubelet keeps the logs | ✅ Proven | s9 (spool); tolerance = `SPOOL_MAX_BYTES` ÷ node rate, alert on `flogo_objstore_spool_bytes` |

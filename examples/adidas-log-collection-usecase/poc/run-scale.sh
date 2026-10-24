@@ -3,7 +3,7 @@
 # (kubelet-style rotation + gzip, stdout/stderr, stack traces, pod churn); the
 # collector ships them; the verifier proves every event arrived.
 #
-#   poc/run-scale.sh <name> [KEY=VALUE writer settings...] [-- s3-outage <at> <secs>]
+#   poc/run-scale.sh <name> [KEY=VALUE writer settings...] [-- s3-outage <at> <secs> | s3-outage-kill <at> <secs> <kill-at> <node>]
 #
 # Writer settings (see synthlog.py): CONTAINERS RATE TOTAL ROTATE_BYTES MAX_FILES
 # CHURN DELETE_AFTER NAMESPACES. Collector config overrides come from the
@@ -94,6 +94,19 @@ trap 'kill $SAMPLER 2>/dev/null' EXIT
 if [ ${#FAULT[@]} -gt 0 ] && [ "${FAULT[0]}" = "s3-outage" ]; then
   ( sleep "${FAULT[1]}"; docker stop "$MINIO" >/dev/null; log "FAULT s3-outage: S3 DOWN for ${FAULT[2]}s"
     sleep "${FAULT[2]}"; docker start "$MINIO" >/dev/null; log "FAULT s3-outage: S3 back UP" ) &
+  FAULTPID=$!
+fi
+# s3-outage-kill <at> <secs> <kill-at> <node>: S3 down, then kill -9 the
+# collector on <node> while its spool holds the outage backlog.
+if [ ${#FAULT[@]} -gt 0 ] && [ "${FAULT[0]}" = "s3-outage-kill" ]; then
+  ( sleep "${FAULT[1]}"; docker stop "$MINIO" >/dev/null; log "FAULT: S3 DOWN for ${FAULT[2]}s"
+    sleep $(( FAULT[3] - FAULT[1] ))
+    spool=$(docker exec "${FAULT[4]}" sh -c 'ls /var/lib/flogo-datapipeline/spool | wc -l')
+    cid=$(docker exec "${FAULT[4]}" crictl ps --name collector -q | head -1)
+    pid=$(docker exec "${FAULT[4]}" crictl inspect --output go-template --template '{{.info.pid}}' "$cid")
+    docker exec "${FAULT[4]}" kill -9 "$pid"
+    log "FAULT: kill -9 of the collector on ${FAULT[4]} (pid $pid) with $spool spool files"
+    sleep $(( FAULT[1] + FAULT[2] - FAULT[3] )); docker start "$MINIO" >/dev/null; log "FAULT: S3 back UP" ) &
   FAULTPID=$!
 fi
 

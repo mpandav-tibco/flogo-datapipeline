@@ -10,6 +10,7 @@
 | s7 | S3 outage while kubelet rotates + gzips unread logs (~3 rotations/pod) | ✅ PASS | 180,000 | 180,000 | **0** | **0** | 4,744 | 0 | 0 | 83s | 22m / 61m | 55 Mi |
 | s8 | Scale — 400 containers/node (1,200 total), ~3,200 events/s/node, rotation+gzip, pod churn | ✅ PASS | 3,600,000 | 3,600,000 | **0** | **0** | 0 | 0 | 0 | 4s | 139m / 311m | 127 Mi |
 | s9 | Scale + S3 outage (180 s) while 25% of pods are deleted — durable spool on | ✅ PASS | 3,600,000 | 3,600,000 | **0** | **0** | 0 | 0 | 0 | 171s | 148m / 339m | 152 Mi |
+| s10 | Scale + S3 outage (180 s) + collector kill -9 with 1,368 spool files on disk | ✅ PASS | 3,600,000 | 3,600,000 | **0** | **0** | 3,200 | 0 | 0 | 183s | 146m / 349m | 127 Mi |
 | c2 | CONTROL: collector crash on the pre-fix collector | ❌ FAIL | 240,000 | 91,353 | **148,647** | **4,039** | 3,164 | 0 | 0 | 77s | 12m / 47m | 75 Mi |
 | c4 | CONTROL: rotation stress on the pre-fix collector | ❌ FAIL | 900,000 | 48,844 | **851,156** | **0** | 0 | 0 | 0 | 5s | 8m / 121m | 54 Mi |
 | c7 | CONTROL: s7 without compressed-rotation support | ❌ FAIL | 180,000 | 152,231 | **27,769** | **27,769** | 0 | 0 | 0 | 44s | 12m / 45m | 57 Mi |
