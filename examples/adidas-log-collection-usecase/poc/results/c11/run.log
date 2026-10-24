@@ -1,0 +1,11 @@
+[18:31:33] c11: collector: image=flogo-datapipeline:poc-prev S3_KEY={namespace}/{YYYY}/{MM}/{DD}/{HH}/{node}-{mm}-{uuid}.ndjson SPOOL_DIR=<default>; writer: CONTAINERS=300 RATE=8 TOTAL=2000 ROTATE_BYTES=262144 CHURN=0.25 NAMESPACES=24 SIDECAR_EVERY=4 PAYLOAD_EVERY=50 PAYLOAD_BYTES=40000; fault: none
+[18:31:33] c11: writers started
+[18:35:52] c11: writers done after 259s: synthlog: node=k3d-adidas-poc-agent-0 containers=375 pods=300 churned=78 elapsed=257s synthlog: node=k3d-adidas-poc-server-0 containers=375 pods=300 churned=73 elapsed=257s synthlog: node=k3d-adidas-poc-agent-1 containers=375 pods=300 churned=84 elapsed=257s 
+[18:36:40] c11: c11: instances=1125 finished=0/1125 events=1787250 missing=0 gaps=225675 dup=0 s3=1787250 dlq=0 multiline_broken=450
+[18:38:13] c11: c11: instances=1125 finished=1125/1125 events=1800675 missing=449325 gaps=0 dup=0 s3=1800675 dlq=0 multiline_broken=675
+[18:39:45] c11: c11: instances=1125 finished=1125/1125 events=1800675 missing=449325 gaps=0 dup=0 s3=1800675 dlq=0 multiline_broken=675
+[18:41:15] c11: c11: instances=1125 finished=1125/1125 events=1800675 missing=449325 gaps=0 dup=0 s3=1800675 dlq=0 multiline_broken=675
+[18:42:45] c11: c11: instances=1125 finished=1125/1125 events=1800675 missing=449325 gaps=0 dup=0 s3=1800675 dlq=0 multiline_broken=675
+[18:44:14] c11: c11: instances=1125 finished=1125/1125 events=1800675 missing=449325 gaps=0 dup=0 s3=1800675 dlq=0 multiline_broken=675
+[18:44:14] c11: TIMEOUT waiting for complete delivery
+[18:44:59] c11: verified in 761s — FAILED instances=1125/1125 events=1800675 missing=449325 gaps=0 dup=0 multiline_broken=675 dlq=0 s3_objects=4224 p95_latency=4.731966s

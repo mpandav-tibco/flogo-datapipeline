@@ -1,7 +1,7 @@
 # POC Report — adidas BW6 log collection, verified on a 3-node Kubernetes cluster
 
-**Date:** 2026-10-24 · **Branch:** `poc/adidas-prod-review`
-**Result:** ✅ No log line lost in any of 11 production failure and scale scenarios — proven
+**Date:** 2026-10-24 · **Branch:** `poc/adidas-corner-cases`
+**Result:** ✅ No log line lost in any of 12 production failure and scale scenarios — proven
 event by event, not inferred from counters — up to **400 containers per node, 3.6 M events
 in 6.5 min, through a 3-minute S3 outage during which a quarter of the pods were deleted**.
 The same scenarios on the collector as it was before this POC lose up to **95%** of the logs.
@@ -48,9 +48,11 @@ Reproduce: `poc/cluster.sh up && poc/run-all.sh` (see `poc/`).
 | s8 | **Scale** — 400 containers per node (1,200 total, 24 namespaces), ~3,200 events/s per node, rotation at 128 KiB (~every 70 s, ~5 per pod) + gzip, stdout/stderr interleaved, 25% of pods deleted 5 s after finishing ⁴ | ✅ PASS | 3,600,000 | 3,600,000 | **0** | **0** | 0 | 0 | 4 s | 139m / 311m | 127 Mi |
 | s9 | **Scale + S3 outage (180 s)** — s8 with S3 down while the pods finish and a quarter of them are **deleted**; durable spool on | ✅ PASS | 3,600,000 | 3,600,000 | **0** | **0** | **0** | 0 | 171 s ² | 148m / 339m | 152 Mi |
 | s10 | **Scale + S3 outage (180 s) + collector `kill -9`** while its spool holds the outage backlog (1,368 files) | ✅ PASS | 3,600,000 | 3,600,000 | **0** | **0** | 3,200 ¹ | 0 | 183 s ² | 146m / 349m | 127 Mi |
+| s11 | **Mixed node** — 300 BW pods per node, 1 in 4 with an istio-proxy-style **sidecar** (lines never match the BW timestamp), every 50th event a **40 KB payload** (written as CRI partial chunks, like containerd) | ✅ PASS | 2,250,000 | 2,250,000 | **0** | **0** | 0 | 0 | 4 s | 130m / 220m | 113 Mi |
 | c2 | **Control:** s2 on the collector *before* this POC | ❌ FAIL | 240,000 | 91,353 | **148,647** | **4,039** | 3,164 | 0 | 77 s | 12m / 47m | 75 Mi |
 | c4 | **Control:** s4 on the collector *before* this POC | ❌ FAIL | 900,000 | 48,844 | **851,156** | 0 | 0 | 0 | 5 s | 8m / 121m | 54 Mi |
 | c7 | **Control:** s7 without reading compressed rotations | ❌ FAIL | 180,000 | 152,231 | **27,769** | **27,769** | 0 | 0 | 44 s | 12m / 45m | 57 Mi |
+| c11 | **Control:** s11 on the collector before the corner-case review ⁵ | ❌ FAIL | 2,250,000 | 1,800,675 | **449,325** | **449,325** | 0 | 675 | 5 s | 81m / 218m | 116 Mi |
 | c9 | **Control:** s9 with the spool disabled (`SPOOL_DIR: none`) | ❌ FAIL | 3,600,000 | 3,383,108 | **216,892** | 124 | 37,783 | 0 | 185 s | 77m / 495m | 338 Mi |
 
 CPU is in millicores (`50m` = 0.05 core), sampled per collector pod every 10 s.
@@ -65,6 +67,10 @@ instances); every instance's sequence is gap-free. ⁴ s8/s9/c9 use a synthetic 
 (CRI files, rename-rotation, gzip of older rotations, `containerLogMaxFiles=5`, pod
 directories removed on deletion), because 1,200 real pods do not fit on a laptop. The
 collector, its configuration and the verifier are unchanged.
+
+⁵ Not lost bytes: every sidecar line reached S3, but glued into 1,000-line records under
+the node-wide BW `startPattern` — 675 such records, each one OpenSearch document holding a
+thousand unrelated access-log lines (the verifier counts only one event per record).
 
 **s9 vs c9 — why the spool matters.** Without the spool, an S3 outage stops checkpoints;
 the collector retries from the last checkpoint, and by then the 301 pods deleted during the
@@ -121,6 +127,12 @@ Running the real use case under failure surfaced issues that unit tests and the 
 | 15 | `fromBeginning: false` also skipped the start of pods created **after** the collector started. | The first lines (often the startup errors) of every new pod could be lost. Now only files present at the very first start are skipped. |
 | 16 | Position registry kept every pod ever seen. | Slow growth of memory and position-file size with pod churn (thousands of pods per day). Now entries of removed pods are dropped. |
 | 17 | Collector could be evicted first under node pressure. | Pods are evicted under memory/disk pressure in priority order; a log collector should be the last to go. Now `priorityClassName: system-node-critical`. |
+| 18 | **Other containers' lines glued together.** The collector reads every container on the node, but the multiline `startPattern` is BW's. Sidecars (istio-proxy), nginx, JSON loggers never match it, so all their lines were stitched into 1,000-line records. | c11: 20% of the node's events unusable as records. Now a line continues a record only if that record began with a start line (or it matches `continuePattern`, for header-less Java traces): s11 0 glued. |
+| 19 | **Unbounded memory for large log lines.** A payload the runtime splits into 16 KiB partial chunks was reassembled without limit, and records were bounded only in count (1,024 queued + 1,000 per batch). | One app logging multi-MB payloads (common for BW "log the message") could OOM-kill the collector — which then replays the same lines and crash-loops: no collection on that node. Now records are cut at `maxLineBytes` (1 MiB, split, never dropped) and the queue/batch are bounded in bytes (16/8 MiB). |
+| 20 | Committed position could pass the first partial chunk of a still-buffered record (when another record of the same stream completed at the same moment). | A crash at that moment lost that record. Now tracked exactly. |
+| 21 | **Spool could cause node disk pressure.** | A long outage filling the 5 GiB spool on a nearly full node would trigger kubelet eviction of the BW apps themselves. Now the spool stops growing below `SPOOL_MIN_FREE_PERCENT` (20%) free, above kubelet's thresholds (10% nodefs, 15% imagefs). |
+| 22 | **S3 credentials on AWS (IRSA).** Blanking the key env names falls back to the defaults, and an unset credential env var was a hard error; the DaemonSet required the key secret. | Day-1 blocker on EKS with IRSA: no upload at all. Now unset credential env vars use the AWS default chain, and the secret refs are optional. |
+| 23 | **Corrupt state files** (position registry, checkpoint, spool metadata) after a node crash or filesystem error. | The run failed at every start: permanent collection outage on the node. Now they are moved aside (`*.corrupt-<ts>`) and collection resumes (re-read from the start: duplicates, no loss). |
 
 ## 6. Recommendations for adidas production
 
@@ -150,7 +162,16 @@ Running the real use case under failure surfaced issues that unit tests and the 
    tolerance = spool size ÷ node log rate, independent of kubelet's retention and of pod
    deletion (s9 vs c9). Alert on `flogo_objstore_spool_bytes` > 50% of the cap, and size
    the node's disk for the cap. The DLQ has its own spool (`SPOOL_DLQ_DIR`).
-7. **Shutdown budget:** keep `PIPELINE_SHUTDOWN_TIMEOUT` (25 s) below
+7. **Before the POC on adidas' cluster — confirm:** Kubernetes/runtime (containerd or CRI-O;
+   `/var/log/pods` must hold real files, not dockershim symlinks); Pod Security Admission
+   level of the `logging` namespace (hostPath + root need `privileged`; OpenShift: an SCC);
+   credentials (IRSA: ServiceAccount annotated with the role, see the DaemonSet comment; set
+   `S3_ENDPOINT` to the regional S3 URL and `S3_FORCE_PATH_STYLE: "false"`); node disk size
+   vs `SPOOL_MAX_BYTES`; other log formats on the nodes (sidecars are handled, see 18).
+8. **`FROM_BEGINNING: "true"`** (example default) backfills everything kubelet still keeps
+   on first install — no loss at cut-over from Fluentd, but expect a burst and duplicates of
+   what Fluentd already shipped (de-duplicate on `idempotency_key` or set `"false"`).
+9. **Shutdown budget:** keep `PIPELINE_SHUTDOWN_TIMEOUT` (25 s) below
    `terminationGracePeriodSeconds` (30 s), as in `k8s/40-collector-daemonset.yaml`.
 
 ## 7. Production-readiness review — every way a log line can be lost
@@ -182,6 +203,16 @@ and the evidence. "Proven" means a live scenario with event-by-event verificatio
 | 20 | Collector down for longer than kubelet's retention (crash loop, unschedulable) | ⚠️ Operational | Restart policy and priority class make this unlikely; alert on DaemonSet `numberUnavailable > 0` |
 | 21 | Node lost permanently (disk gone) before upload | ❌ Out of scope | Lines not yet uploaded (≤ one checkpoint interval, or the spool backlog during an outage) are lost — as with Fluentd or any node-local collector, because the source log files are on the same disk |
 | 22 | Duplicates | ℹ️ At-least-once | 0 in s8/s9; possible after a crash or a failed checkpoint (c9); `idempotency_key` makes them idempotent in OpenSearch |
+| 23 | Sidecars / non-BW containers on the same node | ✅ Proven | s11 vs c11: one record per line for containers that never log a BW start line |
+| 24 | Large payload log lines (> 16 KiB, CRI partial chunks; multi-MB) | ✅ Proven + unit-tested | s11: every 40 KB payload whole; > `maxLineBytes` split, never dropped; memory bounded in bytes |
+| 25 | Spool filling the node disk | ✅ Unit-tested | Stops at `SPOOL_MIN_FREE_PERCENT`; flushes then back-pressure (case 18) |
+| 26 | Corrupt registry / checkpoint / spool metadata | ✅ Unit-tested | Moved aside, collection continues |
+| 27 | AWS IRSA / instance profile credentials | ✅ Unit-tested | Default chain when no key env var is set |
+
+**Known limits (by design, no loss):** a stack trace that straddles a kubelet rotation is
+split in two records; the `idempotency_key` of lines in a file's first 256 bytes can differ
+after a restart (those few replays are not de-duplicated by `_id`); a line continues a record
+only within `flushIdleMs` (500 ms) of the previous line.
 
 **Alerting set for production:** DaemonSet unavailable > 0 for 5 min;
 `flogo_pipeline_runs_total{status="failed"}` increasing; `flogo_objstore_spool_bytes` >
