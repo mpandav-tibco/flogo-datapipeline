@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/mpandav-tibco/flogo-datapipeline/sink"
 )
 
 func waitRows(t *testing.T, root string, want int) {
@@ -67,7 +69,7 @@ func TestSpoolRecoversAfterRestart(t *testing.T) {
 	root, spool := t.TempDir(), t.TempDir()
 	storeDown.Store(true)
 	s, err := newObjstoreSink("testflaky", map[string]interface{}{
-		"key": "logs/part-{uuid}.ndjson", "format": "jsonlines", "root": root, "rollMaxSeconds": 3600, "spoolDir": spool,
+		"key": "logs/part-{uuid}.ndjson", "format": "jsonlines", "root": root, "rollMaxSeconds": 3600, "spoolDir": spool, "spoolCloseWaitSeconds": 1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -80,14 +82,13 @@ func TestSpoolRecoversAfterRestart(t *testing.T) {
 	}
 	// "Crash": an object being written but never sealed, and a new process.
 	_ = os.WriteFile(filepath.Join(spool, "obj-crashed"+partSuffix), []byte("{\"msg\":\"x\"}\n"), 0o644)
-	abs, _ := filepath.Abs(spool)
-	spoolsMu.Lock()
-	delete(spools, abs) // forget the old uploader (its workers keep failing harmlessly)
-	spoolsMu.Unlock()
+	_ = s.Close() // store still down: the sealed objects stay; the uploader stops
 	storeDown.Store(false)
-	if _, err := spoolFor(spool, "testflaky", map[string]interface{}{"root": root}, 0); err != nil {
+	u, err := spoolFor(spool, "testflaky", map[string]interface{}{"root": root}, 0)
+	if err != nil {
 		t.Fatal(err)
 	}
+	defer u.release()
 	waitRows(t, root, 3)
 	if _, err := os.Stat(filepath.Join(spool, "obj-crashed"+partSuffix)); !os.IsNotExist(err) {
 		t.Fatal("unsealed leftover not discarded")
@@ -106,6 +107,7 @@ func TestSpoolFullBlocksCheckpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer func() { storeDown.Store(true); _ = s.Close() }()
 	var ferr error
 	for i := 0; i < 5 && ferr == nil; i++ {
 		_ = s.WriteBatch(oneRow(i))
@@ -124,6 +126,7 @@ func TestSpoolSkipsVanishedObjects(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer u.release()
 	orphan := filepath.Join(spool, "obj-orphan"+metaSuffix)
 	if err := os.WriteFile(orphan, []byte(`{"key":"x"}`), 0o644); err != nil {
 		t.Fatal(err)
@@ -160,6 +163,7 @@ func TestSpoolDirNoneDisablesSpool(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer s.Close()
 	_ = s.WriteBatch(oneRow(1))
 	if err := s.Flush(); err == nil {
 		t.Fatal("Flush succeeded with the store down: spool was not disabled")
@@ -167,4 +171,49 @@ func TestSpoolDirNoneDisablesSpool(t *testing.T) {
 	if _, err := os.Stat("None"); !os.IsNotExist(err) {
 		t.Fatal(`a spool directory named "None" was created`)
 	}
+}
+
+// The last sink to close stops the uploader: no goroutine outlives its users
+// (a restarted run gets a fresh uploader that recovers what is left on disk).
+func TestSpoolStopsWithLastUser(t *testing.T) {
+	root, spool := t.TempDir(), t.TempDir()
+	cfg := map[string]interface{}{
+		"key": "{pod}/part-{uuid}.ndjson", "format": "jsonlines", "root": root, "rollMaxSeconds": 3600,
+		"spoolDir": spool, "spoolCloseWaitSeconds": 1,
+	}
+	a, err := newObjstoreSink("testflaky", cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := newObjstoreSink("testflaky", cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range []sink.Sink{a, b} {
+		x := oneRow(1)
+		x.Columns = append(x.Columns, x.Columns[0])
+		x.Columns[1].Name = "pod"
+		x.Rows[0] = append(x.Rows[0], "p")
+		if err := s.WriteBatch(x); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Flush(); err != nil { // children closed after flush; parent keeps its reference
+			t.Fatal(err)
+		}
+	}
+	abs, _ := filepath.Abs(spool)
+	running := func() bool { spoolsMu.Lock(); defer spoolsMu.Unlock(); _, ok := spools[abs]; return ok }
+	if err := a.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if !running() {
+		t.Fatal("uploader stopped while another sink still uses it")
+	}
+	if err := b.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if running() {
+		t.Fatal("uploader still running after its last user closed")
+	}
+	waitRows(t, root, 2)
 }

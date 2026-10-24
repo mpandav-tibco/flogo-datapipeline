@@ -30,7 +30,8 @@ import (
 // With a spool, a checkpoint flush instead SEALS the open objects in spoolDir
 // (fsynced data file + atomically written metadata) and succeeds: the rows are
 // durable on the node and the source position may advance. A background
-// uploader — one per spool directory, for the life of the process — ships
+// uploader — one per spool directory, shared by every sink using it and
+// stopped when the last of them closes (reference-counted) — ships
 // sealed objects (data, then manifest) with retries and deletes them once
 // uploaded. Objects left over by a previous process (crash, restart) are
 // uploaded on startup; unsealed leftovers belonged to un-checkpointed rows,
@@ -72,6 +73,11 @@ type spoolUploader struct {
 	uploaded int64
 	recorder metrics.Recorder
 	wake     chan struct{}
+
+	refs   int // sinks using this uploader (guarded by spoolsMu)
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
 }
 
 var (
@@ -79,8 +85,8 @@ var (
 	spools   = map[string]*spoolUploader{}
 )
 
-// spoolFor returns the process-wide uploader for dir, starting it (and
-// recovering leftovers) on first use.
+// spoolFor acquires the uploader for dir, starting it (and recovering
+// leftovers) on first use. Every successful call must be paired with release.
 func spoolFor(dir, provider string, cfg map[string]interface{}, maxBytes int64) (*spoolUploader, error) {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
@@ -89,6 +95,7 @@ func spoolFor(dir, provider string, cfg map[string]interface{}, maxBytes int64) 
 	spoolsMu.Lock()
 	defer spoolsMu.Unlock()
 	if u, ok := spools[abs]; ok {
+		u.refs++
 		return u, nil
 	}
 	if err := os.MkdirAll(abs, 0o755); err != nil {
@@ -100,11 +107,39 @@ func spoolFor(dir, provider string, cfg map[string]interface{}, maxBytes int64) 
 	if err := u.recover(); err != nil {
 		return nil, err
 	}
+	u.ctx, u.cancel = context.WithCancel(context.Background())
+	u.refs = 1
 	spools[abs] = u
 	for i := 0; i < spoolUploadWorkers; i++ {
+		u.wg.Add(1)
 		go u.run()
 	}
 	return u, nil
+}
+
+// acquire adds a user of an already started uploader.
+func (u *spoolUploader) acquire() *spoolUploader {
+	spoolsMu.Lock()
+	u.refs++
+	spoolsMu.Unlock()
+	return u
+}
+
+// release drops a user; the last one stops the workers and waits for them, so
+// a later spoolFor for the same directory starts from a consistent state
+// (sealed objects not yet uploaded stay on disk and are recovered then).
+func (u *spoolUploader) release() {
+	spoolsMu.Lock()
+	defer spoolsMu.Unlock()
+	u.refs--
+	if u.refs > 0 {
+		return
+	}
+	if spools[u.dir] == u {
+		delete(spools, u.dir)
+	}
+	u.cancel()
+	u.wg.Wait()
 }
 
 const spoolUploadWorkers = 4
@@ -263,12 +298,27 @@ func (u *spoolUploader) next() (string, bool) {
 }
 
 func (u *spoolUploader) run() {
+	defer u.wg.Done()
 	var store objstore.Store
+	defer func() {
+		if store != nil {
+			_ = store.Close()
+		}
+	}()
 	backoff := time.Second
-	for {
+	sleep := func(d time.Duration) bool {
+		select {
+		case <-u.ctx.Done():
+			return false
+		case <-time.After(d):
+			return true
+		}
+	}
+	for u.ctx.Err() == nil {
 		base, ok := u.next()
 		if !ok {
 			select {
+			case <-u.ctx.Done():
 			case <-u.wake:
 			case <-time.After(2 * time.Second):
 			}
@@ -278,7 +328,9 @@ func (u *spoolUploader) run() {
 			s, err := objstore.New(u.provider, u.cfg)
 			if err != nil {
 				u.failed(base, fmt.Errorf("open store: %w", err))
-				time.Sleep(backoff)
+				if !sleep(backoff) {
+					return
+				}
 				backoff = minDur(backoff*2, 30*time.Second)
 				continue
 			}
@@ -297,8 +349,16 @@ func (u *spoolUploader) run() {
 			continue
 		}
 		if err != nil {
+			if u.ctx.Err() != nil { // stopping: the object stays sealed on disk
+				u.mu.Lock()
+				delete(u.inflight, base)
+				u.mu.Unlock()
+				return
+			}
 			u.failed(base, err)
-			time.Sleep(backoff)
+			if !sleep(backoff) {
+				return
+			}
 			backoff = minDur(backoff*2, 30*time.Second)
 			continue
 		}
@@ -349,8 +409,7 @@ func (u *spoolUploader) upload(store objstore.Store, base string) (int64, error)
 	if err != nil {
 		return 0, err
 	}
-	ctx := context.Background()
-	pw, err := store.PutWriter(ctx, meta.Key)
+	pw, err := store.PutWriter(u.ctx, meta.Key)
 	if err != nil {
 		return 0, fmt.Errorf("put %q: %w", meta.Key, err)
 	}
@@ -362,7 +421,7 @@ func (u *spoolUploader) upload(store objstore.Store, base string) (int64, error)
 		return 0, fmt.Errorf("commit %q: %w", meta.Key, err)
 	}
 	if meta.Records > 0 {
-		if err := putManifest(store, meta.Key, meta.Records, meta.Bytes, meta.OpenedAt, meta.ClosedAt); err != nil {
+		if err := putManifest(u.ctx, store, meta.Key, meta.Records, meta.Bytes, meta.OpenedAt, meta.ClosedAt); err != nil {
 			return 0, err
 		}
 	}

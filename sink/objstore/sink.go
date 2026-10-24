@@ -484,10 +484,14 @@ func (p *partitionedObjstoreSink) child(resolvedKey string) (sink.Sink, error) {
 	}
 	if r, ok := c.(*rollingObjstoreSink); ok {
 		r.waitOnClose = false // the partitioned sink waits once, in Close
-		if r.spool != nil && p.rec != nil {
-			r.spool.setRecorder(p.rec)
+		if r.spool != nil && p.spool == nil {
+			// The parent holds its own reference for its whole life: children
+			// are closed after every flush and must not stop the uploader.
+			p.spool = r.spool.acquire()
+			if p.rec != nil {
+				p.spool.setRecorder(p.rec)
+			}
 		}
-		p.spool = r.spool
 	}
 	p.children[resolvedKey] = c
 	return c, nil
@@ -537,6 +541,7 @@ func (p *partitionedObjstoreSink) Flush() error {
 		// pods churning). The next row for that key opens a fresh child.
 		if r, ok := c.(*rollingObjstoreSink); ok && r.idle() {
 			delete(p.children, k)
+			_ = r.Close() // idle: nothing to write; releases its spool reference
 		}
 	}
 	return errors.Join(errs...)
@@ -563,8 +568,12 @@ func (p *partitionedObjstoreSink) Close() error {
 			errs = append(errs, err)
 		}
 	}
-	if p.spool != nil && len(errs) == 0 {
-		p.spool.waitEmpty(spoolCloseWait(p.cfg))
+	if p.spool != nil {
+		if len(errs) == 0 {
+			p.spool.waitEmpty(spoolCloseWait(p.cfg))
+		}
+		p.spool.release()
+		p.spool = nil
 	}
 	return errors.Join(errs...)
 }
@@ -595,6 +604,7 @@ type rollingObjstoreSink struct {
 	// waitOnClose makes Close wait (bounded) for the spool to drain.
 	spool       *spoolUploader
 	waitOnClose bool
+	released    bool // spool reference dropped (Close ran)
 
 	// pending holds rolled objects whose upload (or manifest) failed. Their
 	// temp files are kept and retried at the next Flush; Flush fails while any
@@ -814,6 +824,10 @@ func (r *rollingObjstoreSink) Close() error {
 		// the next process.
 		r.spool.waitEmpty(spoolCloseWait(r.cfg))
 	}
+	if r.spool != nil && !r.released {
+		r.released = true
+		defer r.spool.release()
+	}
 	if r.cur != nil { // opened but never written
 		r.cur.abort()
 		r.cur = nil
@@ -836,11 +850,11 @@ func (r *rollingObjstoreSink) writeManifest(objectKey string, records, bytes int
 		return err
 	}
 	defer store.Close()
-	return putManifest(store, objectKey, records, bytes, started, time.Now())
+	return putManifest(context.Background(), store, objectKey, records, bytes, started, time.Now())
 }
 
 // putManifest writes the audit sidecar <objectKey>.manifest.json.
-func putManifest(store objstore.Store, objectKey string, records, bytes int64, opened, closed time.Time) error {
+func putManifest(ctx context.Context, store objstore.Store, objectKey string, records, bytes int64, opened, closed time.Time) error {
 	manifest := map[string]interface{}{
 		"object":       objectKey,
 		"record_count": records,
@@ -852,7 +866,7 @@ func putManifest(store objstore.Store, objectKey string, records, bytes int64, o
 	if err != nil {
 		return err
 	}
-	w, err := store.PutWriter(context.Background(), objectKey+".manifest.json")
+	w, err := store.PutWriter(ctx, objectKey+".manifest.json")
 	if err != nil {
 		return fmt.Errorf("open manifest writer: %w", err)
 	}
