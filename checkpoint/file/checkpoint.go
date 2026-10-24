@@ -12,10 +12,14 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/mpandav-tibco/flogo-datapipeline/checkpoint"
 	"github.com/mpandav-tibco/flogo-datapipeline/internal/fileutil"
+	corelog "github.com/project-flogo/core/support/log"
 )
+
+var ckptLog = corelog.ChildLogger(corelog.RootLogger(), "checkpoint-file")
 
 func init() {
 	checkpoint.Register("file", newFileCheckpoint)
@@ -24,6 +28,9 @@ func init() {
 type fileCheckpoint struct {
 	dir string
 	mu  sync.Mutex
+	// resetCorrupt: an unreadable token is moved aside and treated as absent
+	// (option onCorrupt: "reset") instead of failing Load.
+	resetCorrupt bool
 }
 
 func newFileCheckpoint(cfg map[string]interface{}) (checkpoint.Checkpoint, error) {
@@ -34,7 +41,8 @@ func newFileCheckpoint(cfg map[string]interface{}) (checkpoint.Checkpoint, error
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, fmt.Errorf("file checkpoint: create dir %q: %w", dir, err)
 	}
-	return &fileCheckpoint{dir: dir}, nil
+	onCorrupt, _ := cfg["onCorrupt"].(string)
+	return &fileCheckpoint{dir: dir, resetCorrupt: onCorrupt == "reset"}, nil
 }
 
 func (f *fileCheckpoint) path(partitionID string) string {
@@ -87,6 +95,12 @@ func (f *fileCheckpoint) Load(partitionID string) (*checkpoint.Token, error) {
 	}
 	var t checkpoint.Token
 	if err := json.Unmarshal(data, &t); err != nil {
+		if f.resetCorrupt {
+			bad := fmt.Sprintf("%s.corrupt-%d", f.path(partitionID), time.Now().Unix())
+			_ = os.Rename(f.path(partitionID), bad)
+			ckptLog.Errorf("file checkpoint: %q is unreadable (%v); moved to %s, starting without it (onCorrupt: reset)", partitionID, err, bad)
+			return nil, nil
+		}
 		return nil, fmt.Errorf("file checkpoint: parse: %w", err)
 	}
 	return &t, nil

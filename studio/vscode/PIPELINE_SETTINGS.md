@@ -37,6 +37,7 @@ run config — mode=etl batchSize=5000 bufferBatches=4 maxMemoryMB=512 transform
 | `intervalRows` (default 10000) | Save progress after N rows. |
 | `intervalSeconds` (default 30) | **Also** save on this wall-clock interval — bounds re-processed work for slow, low-volume streams that never reach the row threshold. |
 | `deleteOnSuccess` | Remove the checkpoint on a clean finish (fresh load next run). |
+| `onCorrupt` | `fail` (default) stops the run when the stored checkpoint is unreadable; `reset` moves it aside and starts without it (file backend; for sources with their own resume state, e.g. podlog). |
 | `onSaveError` | `continue` (default) logs a failed checkpoint save and keeps processing; `fail` stops the run. |
 | `key` | Stable checkpoint key for single-instance streaming resume. Defaults to the per-run id; set a fixed value so a long-lived job finds its state across restarts. |
 

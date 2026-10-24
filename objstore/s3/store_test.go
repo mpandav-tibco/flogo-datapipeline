@@ -140,11 +140,26 @@ func TestNewS3StoreErrors(t *testing.T) {
 	if _, err := newS3Store(map[string]interface{}{}); err == nil {
 		t.Error("missing bucket expected an error")
 	}
+	// Only one of the pair set: a misconfiguration, reported.
+	t.Setenv("HALF_SET_AK_ENV_VAR", "AKIA")
 	if _, err := newS3Store(map[string]interface{}{
 		"bucket":             "b",
-		"accessKeyIdEnv":     "NO_SUCH_AK_ENV_VAR",
+		"accessKeyIdEnv":     "HALF_SET_AK_ENV_VAR",
 		"secretAccessKeyEnv": "NO_SUCH_SK_ENV_VAR",
 	}); err == nil {
-		t.Error("empty accessKeyIdEnv-referenced credential expected an error")
+		t.Error("a half-set credential pair expected an error")
+	}
+}
+
+// Neither referenced variable set (IRSA / instance profile on AWS: the key
+// secret is not mounted): fall back to the default chain instead of failing.
+func TestNewS3StoreUnsetCredentialEnvUsesDefaultChain(t *testing.T) {
+	if _, err := newS3Store(map[string]interface{}{
+		"bucket":             "b",
+		"region":             "eu-west-1",
+		"accessKeyIdEnv":     "NO_SUCH_AK_ENV_VAR",
+		"secretAccessKeyEnv": "NO_SUCH_SK_ENV_VAR",
+	}); err != nil {
+		t.Fatalf("unset credential env vars must fall back to the default chain: %v", err)
 	}
 }

@@ -49,6 +49,9 @@ spec:
       # Never evicted before workloads under node pressure: losing the
       # collector while pods keep logging is how logs get lost.
       priorityClassName: system-node-critical
+      # AWS: for IRSA, create a ServiceAccount annotated with
+      # eks.amazonaws.com/role-arn (s3:PutObject on the bucket) and set
+      # serviceAccountName here; leave the adidas-minio-creds secret out.
       containers:
         - name: collector
           image: flogo-datapipeline:arm64-local
@@ -78,11 +81,13 @@ spec:
                 secretKeyRef:
                   name: adidas-minio-creds
                   key: MINIO_ACCESS_KEY
+                  optional: true   # absent with IRSA / instance profile: default AWS chain
             - name: MINIO_SECRET_KEY
               valueFrom:
                 secretKeyRef:
                   name: adidas-minio-creds
                   key: MINIO_SECRET_KEY
+                  optional: true   # absent with IRSA / instance profile: default AWS chain
           ports:
             - name: metrics
               containerPort: 9095

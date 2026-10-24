@@ -60,35 +60,34 @@ type enrichedRecord struct {
 // also tracks where each stream's buffered, not yet emitted lines begin, so
 // the file position is never committed past a line still buffered.
 type streamStitchers struct {
-	startPattern matcher
-	maxLines     int
-	byStream     map[string]*stitcher
-	start        map[string]int64
-	order        []string
+	startPattern    matcher
+	continuePattern matcher
+	maxLines        int
+	maxBytes        int
+	byStream        map[string]*stitcher
+	start           map[string]int64
+	order           []string
 }
 
 func (t *tailer) newStitchers() *streamStitchers {
-	return &streamStitchers{startPattern: t.startPattern, maxLines: t.maxLines,
+	return &streamStitchers{startPattern: t.startPattern, continuePattern: t.continuePattern,
+		maxLines: t.maxLines, maxBytes: t.maxLineBytes,
 		byStream: map[string]*stitcher{}, start: map[string]int64{}}
 }
 
 func (ss *streamStitchers) push(line criLine, lineStart, lineEnd int64) (logRecord, bool) {
 	st, ok := ss.byStream[line.stream]
 	if !ok {
-		st = &stitcher{startPattern: ss.startPattern, maxLines: ss.maxLines}
+		st = &stitcher{startPattern: ss.startPattern, continuePattern: ss.continuePattern,
+			maxLines: ss.maxLines, maxBytes: ss.maxBytes}
 		ss.byStream[line.stream] = st
 		ss.order = append(ss.order, line.stream)
 	}
-	if _, buffering := ss.start[line.stream]; !buffering {
-		ss.start[line.stream] = lineStart
-	}
-	rec, done := st.push(line, lineEnd)
-	if done {
-		if st.buffering() {
-			ss.start[line.stream] = lineStart // the current line opened a new record
-		} else {
-			delete(ss.start, line.stream)
-		}
+	rec, done := st.pushAt(line, lineStart, lineEnd)
+	if start, ok := st.bufferedStart(); ok {
+		ss.start[line.stream] = start
+	} else {
+		delete(ss.start, line.stream)
 	}
 	return rec, done
 }
@@ -168,9 +167,11 @@ type tailer struct {
 	fromBeginning bool
 	pollMs        int
 	startPattern  matcher
-	includeNS     map[string]bool
-	excludeNS     map[string]bool
-	positions     *positionStore
+	// continuePattern: see stitcher.continuePattern.
+	continuePattern matcher
+	includeNS       map[string]bool
+	excludeNS       map[string]bool
+	positions       *positionStore
 	// maxLines caps physical lines stitched into one multiline record (0 =
 	// unlimited); propagated to each file's stitcher.
 	maxLines int
@@ -195,6 +196,9 @@ type tailer struct {
 
 	open map[string]*openLogFile
 	out  chan enrichedRecord
+	// budget bounds the message bytes queued on out (records are counted
+	// when emitted and released when ReadBatch takes them).
+	budget *byteBudget
 	// delivered is the furthest position handed downstream per path in this
 	// process. A handle reopened in the same process resumes from it rather
 	// than from the (older) checkpointed position, so nothing is re-read; the
@@ -693,6 +697,9 @@ func (t *tailer) emit(ctx context.Context, of *openLogFile, rec logRecord) bool 
 		commitOffset: of.st.safeOffset(rec.endOffset),
 		fp:           of.fp,
 	}
+	if !t.budget.acquire(ctx, len(er.message)) {
+		return false
+	}
 	select {
 	case t.out <- er:
 		if t.delivered == nil {
@@ -703,6 +710,7 @@ func (t *tailer) emit(ctx context.Context, of *openLogFile, rec logRecord) bool 
 		}
 		return true
 	case <-ctx.Done():
+		t.budget.release(len(er.message))
 		return false
 	}
 }

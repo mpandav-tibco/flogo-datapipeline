@@ -21,11 +21,16 @@
 //	                              watched tree is fully drained and idle (default false — unbounded stream)
 //	includeNamespaces  []string  If non-empty, only these namespaces are tailed
 //	excludeNamespaces  []string  Namespaces to skip (e.g. kube-system)
-//	maxLineBytes       int        Cap on one physical line; a longer unterminated line is
-//	                              emitted in pieces of this size (default 1048576)
-//	multiline          object    { startPattern, flushIdleMs, maxLines }
+//	maxLineBytes       int        Cap on one record (physical line, CRI partial reassembly,
+//	                              multiline record); longer ones are split, never dropped
+//	                              (default 1048576)
+//	multiline          object    { startPattern, continuePattern, flushIdleMs, maxLines }
 //	  startPattern     string    Regexp a new logical record starts with (e.g. a timestamp).
-//	                              When set, continuation lines are stitched into the prior record.
+//	                              Other lines continue a record that began with a start line;
+//	                              lines of a container that never logs a start line stay
+//	                              one record each.
+//	  continuePattern  string    Optional regexp of lines that continue the previous record
+//	                              even when it did not begin with a start line (stack traces).
 //	  flushIdleMs      int        Emit a pending stitched record after a file is idle this long (default 2000)
 //	  maxLines         int        Safety cap on stitched lines per record (default 500; 0 = unlimited)
 package podlog
@@ -103,6 +108,7 @@ type podlogConfig struct {
 	includeNS     []string
 	excludeNS     []string
 	startPattern  string
+	contPattern   string
 	flushIdleMs   int
 	maxLines      int
 	maxLineBytes  int
@@ -145,6 +151,14 @@ func newPodlogSource(cfg map[string]interface{}) (source.Source, error) {
 		}
 		startMatcher = re
 	}
+	var contMatcher matcher
+	if c.contPattern != "" {
+		re, err := regexp.Compile(c.contPattern)
+		if err != nil {
+			return nil, fmt.Errorf("podlog source: invalid multiline.continuePattern %q: %w", c.contPattern, err)
+		}
+		contMatcher = re
+	}
 
 	ps, err := newPositionStore(c.positionFile)
 	if err != nil {
@@ -153,20 +167,22 @@ func newPodlogSource(cfg map[string]interface{}) (source.Source, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t := &tailer{
-		rotationGrace: defaultRotationGrace,
-		root:          c.root,
-		node:          c.node,
-		fromBeginning: c.fromBeginning,
-		pollMs:        c.pollMs,
-		startPattern:  startMatcher,
-		maxLines:      c.maxLines,
-		maxLineBytes:  c.maxLineBytes,
-		includeNS:     toSet(c.includeNS),
-		excludeNS:     toSet(c.excludeNS),
-		positions:     ps,
-		flushIdle:     time.Duration(c.flushIdleMs) * time.Millisecond,
-		bounded:       c.bounded,
-		out:           make(chan enrichedRecord, 1024),
+		rotationGrace:   defaultRotationGrace,
+		root:            c.root,
+		node:            c.node,
+		fromBeginning:   c.fromBeginning,
+		pollMs:          c.pollMs,
+		startPattern:    startMatcher,
+		continuePattern: contMatcher,
+		budget:          newByteBudget(inflightBudgetBytes),
+		maxLines:        c.maxLines,
+		maxLineBytes:    c.maxLineBytes,
+		includeNS:       toSet(c.includeNS),
+		excludeNS:       toSet(c.excludeNS),
+		positions:       ps,
+		flushIdle:       time.Duration(c.flushIdleMs) * time.Millisecond,
+		bounded:         c.bounded,
+		out:             make(chan enrichedRecord, 1024),
 	}
 
 	s := &podlogSource{
@@ -218,7 +234,8 @@ func (s *podlogSource) ReadBatch(size int) (*record.RecordBatch, error) {
 	batch.Columns = s.schema
 
 	got := false
-	for len(batch.Rows) < size {
+	batchBytes := 0
+	for len(batch.Rows) < size && batchBytes < maxBatchBytes {
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
 			break
@@ -235,6 +252,8 @@ func (s *podlogSource) ReadBatch(size int) (*record.RecordBatch, error) {
 				}
 				return batch, nil
 			}
+			s.tailer.budget.release(len(er.message))
+			batchBytes += len(er.message)
 			batch.Rows = append(batch.Rows, s.rowFor(er))
 			s.trackPending(er)
 			s.recon.addLinesRead(s.cfg.node, er.meta.namespace, 1)
@@ -388,6 +407,7 @@ func parseConfig(cfg map[string]interface{}) podlogConfig {
 	}
 	if ml, ok := cfg["multiline"].(map[string]interface{}); ok {
 		c.startPattern = strFromCfg(ml, "startPattern")
+		c.contPattern = strFromCfg(ml, "continuePattern")
 		c.flushIdleMs = intFromCfg(ml, "flushIdleMs")
 		// Honor an explicit maxLines (including 0 = unlimited); default to 500 when
 		// the key is omitted so a runaway stack trace can't grow a record without

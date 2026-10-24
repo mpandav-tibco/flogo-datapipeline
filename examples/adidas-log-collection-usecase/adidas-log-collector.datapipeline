@@ -111,6 +111,11 @@
       "value": 5368709120
     },
     {
+      "name": "SPOOL_MIN_FREE_PERCENT",
+      "type": "integer",
+      "value": 20
+    },
+    {
       "name": "BATCH_SIZE",
       "type": "integer",
       "value": "1000"
@@ -195,6 +200,7 @@
           "excludeNamespaces": "$property[EXCLUDE_NAMESPACES]",
           "multiline": {
             "startPattern": "^\\d{4}-\\d{2}-\\d{2}[ T]\\d{2}:\\d{2}:\\d{2}",
+          "continuePattern": "^(\\s+at |\\s*Caused by:|\\s*Suppressed:|\\s+\\.\\.\\. \\d+ (more|common frames omitted))",
             "flushIdleMs": 500,
             "maxLines": 1000
           }
@@ -283,7 +289,8 @@
             "secretAccessKeyEnv": "$property[S3_SECRET_KEY_ENV]",
             "rollMaxSeconds": "$property[ROLL_MAX_SECONDS]",
             "spoolDir": "$property[SPOOL_DLQ_DIR]",
-            "spoolMaxBytes": "$property[SPOOL_MAX_BYTES]"
+            "spoolMaxBytes": "$property[SPOOL_MAX_BYTES]",
+            "spoolMinFreePercent": "$property[SPOOL_MIN_FREE_PERCENT]"
           }
         },
         "sink": {
@@ -299,7 +306,8 @@
           "rollMaxBytes": "$property[ROLL_MAX_BYTES]",
           "rollMaxSeconds": "$property[ROLL_MAX_SECONDS]",
           "spoolDir": "$property[SPOOL_DIR]",
-          "spoolMaxBytes": "$property[SPOOL_MAX_BYTES]"
+          "spoolMaxBytes": "$property[SPOOL_MAX_BYTES]",
+          "spoolMinFreePercent": "$property[SPOOL_MIN_FREE_PERCENT]"
         },
         "performance": {
           "batchSize": "$property[BATCH_SIZE]",
@@ -316,6 +324,7 @@
         "checkpoint": {
           "type": "file",
           "path": "/var/lib/flogo-datapipeline/ckpt",
+        "onCorrupt": "reset",
           "intervalSeconds": "$property[CHECKPOINT_SECONDS]"
         },
         "observability": {

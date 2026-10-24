@@ -2,6 +2,8 @@ package file
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/mpandav-tibco/flogo-datapipeline/checkpoint"
@@ -87,5 +89,22 @@ func TestFileCheckpoint_ViaRegistry(t *testing.T) {
 	}
 	if tok, _ := ck.Load("x"); tok == nil || tok.RowsProcessed != 7 {
 		t.Errorf("registry round-trip failed: %+v", tok)
+	}
+}
+
+func TestLoadCorruptTokenFailsOrResets(t *testing.T) {
+	dir := t.TempDir()
+	strict, _ := newFileCheckpoint(map[string]interface{}{"path": dir})
+	_ = os.WriteFile(filepath.Join(dir, "p.ckpt.json"), []byte(`{"rows`), 0o644)
+	if _, err := strict.Load("p"); err == nil {
+		t.Fatal("default: a corrupt token must fail Load")
+	}
+	lenient, _ := newFileCheckpoint(map[string]interface{}{"path": dir, "onCorrupt": "reset"})
+	tok, err := lenient.Load("p")
+	if err != nil || tok != nil {
+		t.Fatalf("onCorrupt=reset: got (%v, %v), want (nil, nil)", tok, err)
+	}
+	if m, _ := filepath.Glob(filepath.Join(dir, "p.ckpt.json.corrupt-*")); len(m) != 1 {
+		t.Fatalf("corrupt token not kept aside: %v", m)
 	}
 }

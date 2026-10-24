@@ -62,6 +62,10 @@ type spoolUploader struct {
 	provider string
 	cfg      map[string]interface{}
 	maxBytes int64
+	// minFreePct: stop growing the spool while the filesystem has less free
+	// space than this (percent), so the spool never drives the node into
+	// DiskPressure (kubelet would evict the applications whose logs we ship).
+	minFreePct int
 
 	mu       sync.Mutex
 	cond     *sync.Cond
@@ -101,7 +105,7 @@ func spoolFor(dir, provider string, cfg map[string]interface{}, maxBytes int64) 
 	if err := os.MkdirAll(abs, 0o755); err != nil {
 		return nil, fmt.Errorf("spool dir: %w", err)
 	}
-	u := &spoolUploader{dir: abs, provider: provider, cfg: cfg, maxBytes: maxBytes,
+	u := &spoolUploader{dir: abs, provider: provider, cfg: cfg, maxBytes: maxBytes, minFreePct: spoolMinFreePercent(cfg),
 		inflight: map[string]bool{}, wake: make(chan struct{}, 1), recorder: metrics.NoopRecorder{}}
 	u.cond = sync.NewCond(&u.mu)
 	if err := u.recover(); err != nil {
@@ -143,6 +147,8 @@ func (u *spoolUploader) release() {
 }
 
 const spoolUploadWorkers = 4
+
+var errCorruptMeta = errors.New("corrupt spool metadata")
 
 // recover discards unsealed leftovers and accounts the sealed ones.
 func (u *spoolUploader) recover() error {
@@ -223,13 +229,23 @@ func (u *spoolUploader) seal(part string, meta spoolMeta) error {
 	return nil
 }
 
-// full reports whether sealed objects awaiting upload exceed the cap.
+// full reports whether the spool may not grow: sealed objects awaiting upload
+// exceed the cap, or — while a backlog exists — the node's filesystem is
+// below spoolMinFreePercent free. (Without a backlog, sealing goes on: the
+// object is uploaded and removed right away.)
 func (u *spoolUploader) full() error {
 	u.mu.Lock()
-	defer u.mu.Unlock()
-	if u.maxBytes > 0 && u.pending >= u.maxBytes {
+	pending, objects, lastErr := u.pending, u.objects, u.lastErr
+	u.mu.Unlock()
+	if u.maxBytes > 0 && pending >= u.maxBytes {
 		return fmt.Errorf("spool %s full: %d bytes in %d objects await upload (spoolMaxBytes %d); last upload error: %v",
-			u.dir, u.pending, u.objects, u.maxBytes, u.lastErr)
+			u.dir, pending, objects, u.maxBytes, lastErr)
+	}
+	if u.minFreePct > 0 && pending > 0 {
+		if free, total, ok := diskFree(u.dir); ok && total > 0 && free*100 < uint64(u.minFreePct)*total {
+			return fmt.Errorf("spool %s: filesystem %.1f%% free, below spoolMinFreePercent %d, with %d bytes awaiting upload; not spooling more (protects the node from disk pressure); last upload error: %v",
+				u.dir, float64(free)*100/float64(total), u.minFreePct, pending, lastErr)
+		}
 	}
 	return nil
 }
@@ -337,6 +353,25 @@ func (u *spoolUploader) run() {
 			store = s
 		}
 		size, err := u.upload(store, base)
+		if errors.Is(err, errCorruptMeta) {
+			// Retrying cannot fix it: keep the object aside for manual
+			// recovery (the data is intact) and stop counting it as pending.
+			objLog.Errorf("spool %s: %v — moved aside as %s.corrupt-*", u.dir, err, filepath.Base(base))
+			ts := time.Now().Unix()
+			_ = os.Rename(base+metaSuffix, fmt.Sprintf("%s%s.corrupt-%d", base, metaSuffix, ts))
+			var size int64
+			if fi, serr := os.Stat(base + dataSuffix); serr == nil {
+				size = fi.Size()
+			}
+			_ = os.Rename(base+dataSuffix, fmt.Sprintf("%s%s.corrupt-%d", base, dataSuffix, ts))
+			u.mu.Lock()
+			delete(u.inflight, base)
+			u.pending -= size
+			u.objects--
+			u.mu.Unlock()
+			u.report()
+			continue
+		}
 		if errors.Is(err, fs.ErrNotExist) {
 			// Claimed from a stale directory listing after another worker had
 			// already uploaded and removed it: nothing to do. (A sealed object
@@ -397,8 +432,8 @@ func (u *spoolUploader) upload(store objstore.Store, base string) (int64, error)
 		return 0, err
 	}
 	var meta spoolMeta
-	if err := json.Unmarshal(mb, &meta); err != nil {
-		return 0, fmt.Errorf("spool metadata %s: %w", base, err)
+	if err := json.Unmarshal(mb, &meta); err != nil || meta.Key == "" {
+		return 0, fmt.Errorf("%w: %s: %v", errCorruptMeta, base, err)
 	}
 	f, err := os.Open(base + dataSuffix)
 	if err != nil {

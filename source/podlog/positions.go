@@ -2,9 +2,11 @@ package podlog
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/mpandav-tibco/flogo-datapipeline/internal/fileutil"
 )
@@ -55,7 +57,14 @@ func newPositionStore(path string) (*positionStore, error) {
 	ps.existed = true
 	if len(data) > 0 {
 		if err := json.Unmarshal(data, &ps.m); err != nil {
-			return nil, err
+			// An unreadable registry must not stop collection on the node
+			// (the run would fail and restart forever). Keep it for analysis
+			// and start over: with existed=true every file is read from its
+			// start — duplicates, never loss.
+			bad := fmt.Sprintf("%s.corrupt-%d", path, time.Now().Unix())
+			_ = os.Rename(path, bad)
+			plog.Errorf("podlog source: position registry %s is unreadable (%v); moved to %s, re-reading all log files from the start (duplicates possible)", path, err, bad)
+			ps.m = map[string]position{}
 		}
 	}
 	return ps, nil

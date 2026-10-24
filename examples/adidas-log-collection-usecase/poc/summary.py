@@ -23,7 +23,9 @@ TITLES = {
     "s8": "Scale — 400 containers/node (1,200 total), ~3,200 events/s/node, rotation+gzip, pod churn",
     "s9": "Scale + S3 outage (180 s) while 25% of pods are deleted — durable spool on",
     "s10": "Scale + S3 outage (180 s) + collector kill -9 with 1,368 spool files on disk",
+    "s11": "Mixed node — 300 BW pods/node, 1 in 4 with an istio-proxy-style sidecar, 40 KB payload logs (CRI partial chunks)",
     "c9": "CONTROL: s9 with the spool disabled",
+    "c11": "CONTROL: s11 on the collector before this review",
 }
 
 
@@ -53,7 +55,7 @@ def top(path):
 
 def main():
     rows = []
-    for s in ["s1", "s2", "s2r", "s3", "s4", "s5", "s6", "s7", "s8", "s9", "s10", "c2", "c4", "c7", "c9"]:
+    for s in ["s1", "s2", "s2r", "s3", "s4", "s5", "s6", "s7", "s8", "s9", "s10", "s11", "c2", "c4", "c7", "c9", "c11"]:
         d = os.path.join(RES, s)
         v = load(os.path.join(d, "verify.json"))
         if not v:
