@@ -11,6 +11,7 @@ package objstore
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -71,6 +72,21 @@ type RangeReader interface {
 	// GetRange returns a reader over [offset, offset+length) of the object.
 	// The caller must Close the returned reader. length is always > 0.
 	GetRange(ctx context.Context, key string, offset, length int64) (io.ReadCloser, error)
+}
+
+// ErrObjectChanged is returned (wrapped) by GetRangeIfMatch when the object no
+// longer matches the expected version, or cannot be range-read byte-exactly.
+var ErrObjectChanged = errors.New("object changed or not byte-addressable")
+
+// VersionedRangeReader is an optional Store capability: a ranged read pinned to
+// the object version identified by etag (as returned in Object.ETag by List).
+// It must fail with ErrObjectChanged — never silently return bytes of a
+// different version — when the object was overwritten, and when the stored
+// bytes are transformed on download (e.g. GCS decompressive transcoding of
+// Content-Encoding: gzip objects), since offsets would not line up.
+// Streaming readers use it to resume after a dropped connection.
+type VersionedRangeReader interface {
+	GetRangeIfMatch(ctx context.Context, key, etag string, offset, length int64) (io.ReadCloser, error)
 }
 
 // NewRangeReaderAt adapts a RangeReader into an io.ReaderAt over the object at

@@ -2,7 +2,7 @@
   "name": "davinci-to-mc300",
   "type": "flogo:app",
   "version": "1.0.0",
-  "description": "Generic file-format conversion: a multi-section instrument file (key/value header + measurement table) is parsed by the 'sectioned' source and rendered to a custom MC300/KLM-style text layout by the 'template' sink. Triggered on a timer for this demo; swap in a file/JMS trigger in production.",
+  "description": "Sectioned source (header KV + measurement table) → template sink (MC300/KLM layout).",
   "appModel": "1.1.1",
   "imports": [
     "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",

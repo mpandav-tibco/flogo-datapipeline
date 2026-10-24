@@ -356,6 +356,14 @@ func (s *jdbcSource) Skip(n int64) error {
 	return nil
 }
 
+// closeCursor closes and forgets the open result set, if any.
+func (s *jdbcSource) closeCursor() {
+	if s.rows != nil {
+		_ = s.rows.Close()
+		s.rows = nil
+	}
+}
+
 // ReadBatch fetches the next page of up to size rows.
 // The caller must call record.Put(batch) after consuming it.
 func (s *jdbcSource) ReadBatch(size int) (*record.RecordBatch, error) {
@@ -394,9 +402,25 @@ func (s *jdbcSource) ReadBatch(size int) (*record.RecordBatch, error) {
 		ptrs[i] = &vals[i]
 	}
 
+	// Rows are carved from slabs (len==cap each, so they never alias) rather
+	// than allocated one by one. Slabs grow in chunks so a small poll result
+	// doesn't pay for a full batch-size allocation.
+	width := len(s.schema)
+	var slab []interface{}
+	orderIdx := -1
+	if s.useKeyset {
+		for i, col := range s.schema {
+			if col.Name == s.orderKey {
+				orderIdx = i
+				break
+			}
+		}
+	}
+
 	for len(batch.Rows) < size {
 		if !s.rows.Next() {
 			if err := s.rows.Err(); err != nil {
+				s.closeCursor()
 				return batch, err
 			}
 			// Cursor exhausted.
@@ -428,10 +452,17 @@ func (s *jdbcSource) ReadBatch(size int) (*record.RecordBatch, error) {
 		}
 
 		if err := s.rows.Scan(ptrs...); err != nil {
+			// Release the server-side cursor (and its pooled connection) now
+			// rather than holding it until Close.
+			s.closeCursor()
 			return batch, fmt.Errorf("jdbc source: scan: %w", err)
 		}
 
-		row := make([]interface{}, len(s.schema))
+		if len(slab) < width {
+			slab = make([]interface{}, width*min(size-len(batch.Rows), 256))
+		}
+		row := slab[:width:width]
+		slab = slab[width:]
 		for i := range s.schema {
 			if i < len(vals) {
 				row[i] = coerceScanned(vals[i], s.schema[i])
@@ -441,13 +472,8 @@ func (s *jdbcSource) ReadBatch(size int) (*record.RecordBatch, error) {
 		s.rowsRead++
 
 		// Track the last orderKey value for the next keyset page.
-		if s.useKeyset {
-			for i, col := range s.schema {
-				if col.Name == s.orderKey {
-					s.lastKeyVal = row[i]
-					break
-				}
-			}
+		if orderIdx >= 0 {
+			s.lastKeyVal = row[orderIdx]
 		}
 	}
 

@@ -27,6 +27,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -221,6 +222,25 @@ func (s *s3Store) GetRange(ctx context.Context, key string, offset, length int64
 		Range:  aws.String(rng),
 	})
 	if err != nil {
+		return nil, fmt.Errorf("s3 store: get range %q %s: %w", key, rng, err)
+	}
+	return out.Body, nil
+}
+
+// GetRangeIfMatch implements objstore.VersionedRangeReader with If-Match.
+func (s *s3Store) GetRangeIfMatch(ctx context.Context, key, etag string, offset, length int64) (io.ReadCloser, error) {
+	rng := fmt.Sprintf("bytes=%d-%d", offset, offset+length-1)
+	out, err := s.client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket:  aws.String(s.bucket),
+		Key:     aws.String(key),
+		Range:   aws.String(rng),
+		IfMatch: aws.String(`"` + strings.Trim(etag, `"`) + `"`),
+	})
+	if err != nil {
+		var se interface{ HTTPStatusCode() int }
+		if errors.As(err, &se) && se.HTTPStatusCode() == http.StatusPreconditionFailed {
+			return nil, fmt.Errorf("s3 store: %q: %w", key, objstore.ErrObjectChanged)
+		}
 		return nil, fmt.Errorf("s3 store: get range %q %s: %w", key, rng, err)
 	}
 	return out.Body, nil

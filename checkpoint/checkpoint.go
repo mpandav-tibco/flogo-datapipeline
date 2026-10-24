@@ -68,6 +68,17 @@ type CursorProvider interface {
 	Cursor() json.RawMessage
 }
 
+// PositionedCursorProvider is an optional extension of CursorProvider for
+// sources whose processed position trails their read position (e.g. Kafka
+// read-ahead): CursorAt returns the cursor for the position after
+// processedRows run-local rows — the position the engine is about to
+// checkpoint and then Commit — without committing anything. Engines prefer it
+// over Cursor so a token saved before its Commit still resumes at the token's
+// own position, not the previous checkpoint's.
+type PositionedCursorProvider interface {
+	CursorAt(processedRows int64) json.RawMessage
+}
+
 // NewToken constructs a Token, optionally populating Payload from a
 // CursorProvider. Pass the source as the third argument when it implements
 // CursorProvider; pass nil to skip Payload population (results in linear

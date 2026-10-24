@@ -132,6 +132,35 @@ func TestRowMap_OutOfBoundsReturnsEmptyMap(t *testing.T) {
 	}
 }
 
+func TestRowMapInto_MatchesRowMapAndReusesMap(t *testing.T) {
+	b := makeTestBatch()
+	b.Rows = append(b.Rows, []interface{}{int64(4)}) // ragged row: name/amount absent
+	var m map[string]interface{}
+	for i := -1; i <= len(b.Rows); i++ {
+		m = b.RowMapInto(i, m)
+		want := b.RowMap(i)
+		if len(m) != len(want) {
+			t.Fatalf("row %d: len=%d, want %d (%v vs %v)", i, len(m), len(want), m, want)
+		}
+		for k, v := range want {
+			if got, ok := m[k]; !ok || got != v {
+				t.Fatalf("row %d: m[%q]=%v, want %v", i, k, got, v)
+			}
+		}
+	}
+}
+
+func TestPut_ReleasesRowReferences(t *testing.T) {
+	b := makeTestBatch()
+	backing := b.Rows[:cap(b.Rows)]
+	Put(b)
+	for i, r := range backing {
+		if r != nil {
+			t.Fatalf("pooled backing slot %d still references a row: %v", i, r)
+		}
+	}
+}
+
 // ─── Clone ────────────────────────────────────────────────────────────────────
 
 func TestClone_SharesColumns(t *testing.T) {

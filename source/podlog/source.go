@@ -21,6 +21,8 @@
 //	                              watched tree is fully drained and idle (default false — unbounded stream)
 //	includeNamespaces  []string  If non-empty, only these namespaces are tailed
 //	excludeNamespaces  []string  Namespaces to skip (e.g. kube-system)
+//	maxLineBytes       int        Cap on one physical line; a longer unterminated line is
+//	                              emitted in pieces of this size (default 1048576)
 //	multiline          object    { startPattern, flushIdleMs, maxLines }
 //	  startPattern     string    Regexp a new logical record starts with (e.g. a timestamp).
 //	                              When set, continuation lines are stitched into the prior record.
@@ -101,6 +103,7 @@ type podlogConfig struct {
 	startPattern  string
 	flushIdleMs   int
 	maxLines      int
+	maxLineBytes  int
 }
 
 // podlogColumns is the fixed schema every podlog record carries. Downstream a
@@ -128,6 +131,9 @@ func newPodlogSource(cfg map[string]interface{}) (source.Source, error) {
 	if c.flushIdleMs <= 0 {
 		c.flushIdleMs = 2000
 	}
+	if c.maxLineBytes <= 0 {
+		c.maxLineBytes = 1 << 20
+	}
 
 	var startMatcher matcher
 	if c.startPattern != "" {
@@ -151,6 +157,7 @@ func newPodlogSource(cfg map[string]interface{}) (source.Source, error) {
 		pollMs:        c.pollMs,
 		startPattern:  startMatcher,
 		maxLines:      c.maxLines,
+		maxLineBytes:  c.maxLineBytes,
 		includeNS:     toSet(c.includeNS),
 		excludeNS:     toSet(c.excludeNS),
 		positions:     ps,
@@ -343,6 +350,7 @@ func parseConfig(cfg map[string]interface{}) podlogConfig {
 		positionFile:  strFromCfg(cfg, "positionFile"),
 		fromBeginning: boolFromCfg(cfg, "fromBeginning"),
 		pollMs:        intFromCfg(cfg, "pollMs"),
+		maxLineBytes:  intFromCfg(cfg, "maxLineBytes"),
 		bounded:       boolFromCfg(cfg, "bounded"),
 		includeNS:     strSliceFromCfg(cfg, "includeNamespaces"),
 		excludeNS:     strSliceFromCfg(cfg, "excludeNamespaces"),

@@ -259,9 +259,18 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := e.Start(); err != nil {
-		fmt.Fprintf(os.Stderr, "flogo-datapipeline: start engine: %v\n", err)
-		os.Exit(1)
+	// Signals are handled from before the engine starts: a pipeline fired by
+	// an on-start trigger (e.g. timer) runs synchronously INSIDE e.Start(), so
+	// for a streaming pipeline Start never returns. Waiting on it would leave
+	// SIGTERM unhandled (abrupt exit, truncated sink output) and the API and
+	// ready banner never started.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT)
+	startErr := make(chan error, 1)
+	go func() { startErr <- e.Start() }()
+	startReturned := false
+	if !waitForStart(startErr, sigCh, &startReturned) {
+		shutdown(e, nil, startErr, startReturned)
 	}
 
 	// Start the REST API server when an address is configured.
@@ -291,12 +300,57 @@ func main() {
 	}
 
 	// Wait for a termination signal.
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT)
 	<-sigCh
+	shutdown(e, apiSrv, startErr, startReturned)
+}
 
-	// Graceful shutdown: stop the API server first (so in-flight HTTP requests
-	// can complete), then stop the engine.
+// waitForStart blocks until the engine has started: e.Start returned, or it is
+// executing a pipeline run (an on-start trigger runs it inside Start) with the
+// pipeline factory initialised. It returns false when a termination signal
+// arrives first; a Start error exits the process.
+func waitForStart(startErr <-chan error, sigCh <-chan os.Signal, startReturned *bool) bool {
+	tick := time.NewTicker(50 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		select {
+		case err := <-startErr:
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "flogo-datapipeline: start engine: %v\n", err)
+				os.Exit(1)
+			}
+			*startReturned = true
+			return true
+		case <-sigCh:
+			return false
+		case <-tick.C:
+			if pipeline.GlobalFactory() != nil && pipeline.InFlightRuns() > 0 {
+				return true
+			}
+		}
+	}
+}
+
+// shutdown cancels in-flight pipeline runs (waiting for them to close their
+// sinks) while stopping the API server, then stops the engine and exits.
+func shutdown(e engine.Engine, apiSrv *api.Server, startErr <-chan error, startReturned bool) {
+	// Cancel in-flight pipeline runs and let them unwind — flush and close
+	// their sinks, release sources — before the engine stops. Exiting without
+	// this cut streaming pipelines off mid-write (truncated sink output).
+	// Cancelled runs save no checkpoint, so a restart resumes from the last
+	// durable one. This runs concurrently with the API server shutdown: a
+	// synchronous /run request only returns once its run is cancelled, so
+	// stopping the server first would stall for its whole timeout.
+	shutdownTimeout := 30 * time.Second
+	if v, err := time.ParseDuration(os.Getenv("PIPELINE_SHUTDOWN_TIMEOUT")); err == nil && v > 0 {
+		shutdownTimeout = v
+	}
+	type runsResult struct{ inFlight, left int }
+	runsDone := make(chan runsResult, 1)
+	go func() {
+		inFlight, left := pipeline.ShutdownRuns(shutdownTimeout)
+		runsDone <- runsResult{inFlight, left}
+	}()
+
 	if apiSrv != nil {
 		shutCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
@@ -305,12 +359,28 @@ func main() {
 		}
 	}
 
+	if r := <-runsDone; r.inFlight > 0 {
+		if r.left > 0 {
+			mlog.Warnf("shutdown: %d of %d pipeline runs still running after %s; exiting anyway", r.left, r.inFlight, shutdownTimeout)
+		} else {
+			mlog.Infof("shutdown: %d in-flight pipeline run(s) cancelled and closed cleanly", r.inFlight)
+		}
+	}
+	// A run executing inside e.Start() unblocks it once cancelled; let Start
+	// finish before Stop so the two never race.
+	if !startReturned {
+		select {
+		case <-startErr:
+		case <-time.After(5 * time.Second):
+		}
+	}
+
 	// e.Stop() shuts down the registered connection managers. The project-flogo
 	// kafka contrib registers (in init) a placeholder shared-connection manager
 	// with a nil connection whose Stop() dereferences it
 	// (messaging-contrib/kafka/connection/connection.go:57), so core's App.Stop()
-	// panics on EVERY shutdown once the kafka trigger is imported. The pipeline has
-	// already finished by this point, so recover from that known third-party panic
+	// panics on EVERY shutdown once the kafka trigger is imported. Pipeline runs
+	// have been shut down above, so recover from that known third-party panic
 	// and exit cleanly instead of crashing the process (SIGSEGV).
 	stopErr := func() (err error) {
 		defer func() {

@@ -10,13 +10,13 @@
   "failed": 0,
   "dropped": 0,
   "routed": 0,
-  "duration_ms": 88984,
-  "rows_per_sec": 595613,
+  "duration_ms": 87930,
+  "rows_per_sec": 602752,
   "status": "completed",
   "err": "",
-  "peak_rss_mb": 148.5,
-  "cpu_seconds": 177.8,
-  "cpu_cores": 2.0
+  "peak_rss_mb": 96.2,
+  "cpu_seconds": 171.6,
+  "cpu_cores": 1.95
  },
  "el05_csv_null": {
   "cat": "EL",
@@ -29,13 +29,13 @@
   "failed": 0,
   "dropped": 0,
   "routed": 0,
-  "duration_ms": 33543,
-  "rows_per_sec": 1580061,
+  "duration_ms": 35116,
+  "rows_per_sec": 1509284,
   "status": "completed",
   "err": "",
-  "peak_rss_mb": 39.1,
-  "cpu_seconds": 48.6,
-  "cpu_cores": 1.45
+  "peak_rss_mb": 26.4,
+  "cpu_seconds": 44.4,
+  "cpu_cores": 1.26
  },
  "el09_jsonl_parquet": {
   "cat": "EL",
@@ -48,13 +48,13 @@
   "failed": 0,
   "dropped": 0,
   "routed": 0,
-  "duration_ms": 180737,
-  "rows_per_sec": 293244,
+  "duration_ms": 184703,
+  "rows_per_sec": 286947,
   "status": "completed",
   "err": "",
-  "peak_rss_mb": 146.1,
-  "cpu_seconds": 338.5,
-  "cpu_cores": 1.87
+  "peak_rss_mb": 80.0,
+  "cpu_seconds": 316.8,
+  "cpu_cores": 1.72
  },
  "etl01_csv_filter_parquet": {
   "cat": "ETL",
@@ -69,13 +69,13 @@
   "failed": 0,
   "dropped": 0,
   "routed": 0,
-  "duration_ms": 90523,
-  "rows_per_sec": 585487,
+  "duration_ms": 67190,
+  "rows_per_sec": 788808,
   "status": "completed",
   "err": "",
-  "peak_rss_mb": 157.0,
-  "cpu_seconds": 184.3,
-  "cpu_cores": 2.04
+  "peak_rss_mb": 104.5,
+  "cpu_seconds": 150.4,
+  "cpu_cores": 2.24
  },
  "etl02_csv_filtermap_parquet": {
   "cat": "ETL",
@@ -91,13 +91,13 @@
   "failed": 0,
   "dropped": 0,
   "routed": 0,
-  "duration_ms": 116095,
-  "rows_per_sec": 456523,
+  "duration_ms": 67558,
+  "rows_per_sec": 784511,
   "status": "completed",
   "err": "",
-  "peak_rss_mb": 144.3,
-  "cpu_seconds": 228.2,
-  "cpu_cores": 1.97
+  "peak_rss_mb": 115.5,
+  "cpu_seconds": 167.7,
+  "cpu_cores": 2.48
  },
  "etl08_csv_schemadrift_parquet": {
   "cat": "ETL",
@@ -112,13 +112,13 @@
   "failed": 0,
   "dropped": 0,
   "routed": 0,
-  "duration_ms": 87857,
-  "rows_per_sec": 603253,
+  "duration_ms": 87102,
+  "rows_per_sec": 608482,
   "status": "completed",
   "err": "",
-  "peak_rss_mb": 151.9,
-  "cpu_seconds": 177.6,
-  "cpu_cores": 2.02
+  "peak_rss_mb": 123.7,
+  "cpu_seconds": 179.9,
+  "cpu_cores": 2.07
  },
  "etl09_csv_dq_parquet": {
   "cat": "ETL",
@@ -133,13 +133,13 @@
   "failed": 0,
   "dropped": 0,
   "routed": 0,
-  "duration_ms": 176087,
-  "rows_per_sec": 300988,
+  "duration_ms": 97618,
+  "rows_per_sec": 542933,
   "status": "completed",
   "err": "",
-  "peak_rss_mb": 146.0,
-  "cpu_seconds": 297.5,
-  "cpu_cores": 1.69
+  "peak_rss_mb": 120.2,
+  "cpu_seconds": 312.0,
+  "cpu_cores": 3.2
  },
  "etl10_csv_hwm_parquet": {
   "cat": "ETL",
@@ -154,13 +154,13 @@
   "failed": 0,
   "dropped": 0,
   "routed": 0,
-  "duration_ms": 90650,
-  "rows_per_sec": 584666,
+  "duration_ms": 87654,
+  "rows_per_sec": 604650,
   "status": "completed",
   "err": "",
-  "peak_rss_mb": 151.8,
-  "cpu_seconds": 181.2,
-  "cpu_cores": 2.0
+  "peak_rss_mb": 117.4,
+  "cpu_seconds": 184.2,
+  "cpu_cores": 2.1
  },
  "el02_csv_postgres": {
   "cat": "EL",
@@ -173,13 +173,13 @@
   "failed": 0,
   "dropped": 0,
   "routed": 0,
-  "duration_ms": 866258,
-  "rows_per_sec": 61183,
+  "duration_ms": 149269,
+  "rows_per_sec": 355064,
   "status": "completed",
   "err": "",
-  "peak_rss_mb": 61.5,
-  "cpu_seconds": 263.0,
-  "cpu_cores": 0.3
+  "peak_rss_mb": 50.4,
+  "cpu_seconds": 119.8,
+  "cpu_cores": 0.8
  },
  "el03_csv_kafka": {
   "cat": "EL",
@@ -192,13 +192,13 @@
   "failed": 0,
   "dropped": 0,
   "routed": 0,
-  "duration_ms": 281844,
-  "rows_per_sec": 188047,
+  "duration_ms": 279590,
+  "rows_per_sec": 189563,
   "status": "completed",
   "err": "",
-  "peak_rss_mb": 65.7,
-  "cpu_seconds": 392.5,
-  "cpu_cores": 1.39
+  "peak_rss_mb": 62.6,
+  "cpu_seconds": 390.9,
+  "cpu_cores": 1.4
  },
  "el04_csv_s3": {
   "cat": "EL",
@@ -211,13 +211,13 @@
   "failed": 0,
   "dropped": 0,
   "routed": 0,
-  "duration_ms": 91960,
-  "rows_per_sec": 576338,
+  "duration_ms": 94102,
+  "rows_per_sec": 563219,
   "status": "completed",
   "err": "",
-  "peak_rss_mb": 203.6,
-  "cpu_seconds": 179.0,
-  "cpu_cores": 1.95
+  "peak_rss_mb": 134.1,
+  "cpu_seconds": 174.3,
+  "cpu_cores": 1.85
  },
  "ent01_dlq_isolation": {
   "cat": "ENT",
@@ -232,13 +232,13 @@
   "failed": 0,
   "dropped": 0,
   "routed": 0,
-  "duration_ms": 478939,
-  "rows_per_sec": 110661,
+  "duration_ms": 86815,
+  "rows_per_sec": 610494,
   "status": "completed",
   "err": "",
-  "peak_rss_mb": 150.4,
-  "cpu_seconds": 587.0,
-  "cpu_cores": 1.23
+  "peak_rss_mb": 168.5,
+  "cpu_seconds": 224.9,
+  "cpu_cores": 2.59
  },
  "etl11_csv_lookup_parquet": {
   "cat": "ETL",
@@ -254,13 +254,13 @@
   "failed": 0,
   "dropped": 0,
   "routed": 0,
-  "duration_ms": 182254,
-  "rows_per_sec": 290803,
+  "duration_ms": 91591,
+  "rows_per_sec": 578659,
   "status": "completed",
   "err": "",
-  "peak_rss_mb": 153.0,
-  "cpu_seconds": 475.3,
-  "cpu_cores": 2.61
+  "peak_rss_mb": 123.6,
+  "cpu_seconds": 227.7,
+  "cpu_cores": 2.49
  },
  "el06_parquet_postgres": {
   "cat": "EL",
@@ -273,13 +273,13 @@
   "failed": 0,
   "dropped": 0,
   "routed": 0,
-  "duration_ms": 805180,
-  "rows_per_sec": 65824,
+  "duration_ms": 124357,
+  "rows_per_sec": 426192,
   "status": "completed",
   "err": "",
-  "peak_rss_mb": 234.0,
-  "cpu_seconds": 250.4,
-  "cpu_cores": 0.31
+  "peak_rss_mb": 204.8,
+  "cpu_seconds": 112.7,
+  "cpu_cores": 0.91
  },
  "el11_postgres_parquet": {
   "cat": "EL",
@@ -292,13 +292,13 @@
   "failed": 0,
   "dropped": 0,
   "routed": 0,
-  "duration_ms": 108074,
-  "rows_per_sec": 490405,
+  "duration_ms": 123877,
+  "rows_per_sec": 427844,
   "status": "completed",
   "err": "",
-  "peak_rss_mb": 154.5,
-  "cpu_seconds": 222.4,
-  "cpu_cores": 2.06
+  "peak_rss_mb": 109.1,
+  "cpu_seconds": 259.2,
+  "cpu_cores": 2.09
  },
  "el14_kafka_parquet": {
   "cat": "EL",
@@ -311,13 +311,13 @@
   "failed": 0,
   "dropped": 0,
   "routed": 0,
-  "duration_ms": 217346,
-  "rows_per_sec": 243851,
+  "duration_ms": 213320,
+  "rows_per_sec": 248453,
   "status": "completed",
   "err": "",
-  "peak_rss_mb": 169.0,
-  "cpu_seconds": 505.4,
-  "cpu_cores": 2.33
+  "peak_rss_mb": 97.9,
+  "cpu_seconds": 480.9,
+  "cpu_cores": 2.25
  },
  "el15_kafka_postgres": {
   "cat": "EL",
@@ -330,13 +330,13 @@
   "failed": 0,
   "dropped": 0,
   "routed": 0,
-  "duration_ms": 828164,
-  "rows_per_sec": 63997,
+  "duration_ms": 234623,
+  "rows_per_sec": 225894,
   "status": "completed",
   "err": "",
-  "peak_rss_mb": 85.9,
-  "cpu_seconds": 570.6,
-  "cpu_cores": 0.69
+  "peak_rss_mb": 70.2,
+  "cpu_seconds": 461.5,
+  "cpu_cores": 1.97
  },
  "etl06_kafka_filter_parquet": {
   "cat": "ETL",
@@ -351,13 +351,13 @@
   "failed": 0,
   "dropped": 0,
   "routed": 0,
-  "duration_ms": 223506,
-  "rows_per_sec": 237130,
+  "duration_ms": 209473,
+  "rows_per_sec": 253016,
   "status": "completed",
   "err": "",
-  "peak_rss_mb": 152.9,
-  "cpu_seconds": 516.8,
-  "cpu_cores": 2.31
+  "peak_rss_mb": 113.5,
+  "cpu_seconds": 433.2,
+  "cpu_cores": 2.07
  },
  "el16_s3_parquet": {
   "cat": "EL",
@@ -370,13 +370,13 @@
   "failed": 0,
   "dropped": 0,
   "routed": 0,
-  "duration_ms": 117282,
-  "rows_per_sec": 451902,
+  "duration_ms": 127888,
+  "rows_per_sec": 414425,
   "status": "completed",
   "err": "",
-  "peak_rss_mb": 313.7,
-  "cpu_seconds": 192.4,
-  "cpu_cores": 1.64
+  "peak_rss_mb": 783.7,
+  "cpu_seconds": 217.3,
+  "cpu_cores": 1.7
  },
  "el07_parquet_kafka": {
   "cat": "EL",
@@ -389,13 +389,13 @@
   "failed": 0,
   "dropped": 0,
   "routed": 0,
-  "duration_ms": 246427,
-  "rows_per_sec": 215074,
+  "duration_ms": 262062,
+  "rows_per_sec": 202242,
   "status": "completed",
   "err": "",
-  "peak_rss_mb": 245.0,
-  "cpu_seconds": 369.5,
-  "cpu_cores": 1.5
+  "peak_rss_mb": 212.6,
+  "cpu_seconds": 371.4,
+  "cpu_cores": 1.42
  },
  "el08_parquet_s3": {
   "cat": "EL",
@@ -408,13 +408,13 @@
   "failed": 0,
   "dropped": 0,
   "routed": 0,
-  "duration_ms": 91457,
-  "rows_per_sec": 579507,
+  "duration_ms": 93596,
+  "rows_per_sec": 566264,
   "status": "completed",
   "err": "",
-  "peak_rss_mb": 346.9,
-  "cpu_seconds": 191.6,
-  "cpu_cores": 2.09
+  "peak_rss_mb": 283.1,
+  "cpu_seconds": 184.4,
+  "cpu_cores": 1.97
  },
  "el10_jsonl_postgres": {
   "cat": "EL",
@@ -427,13 +427,13 @@
   "failed": 0,
   "dropped": 0,
   "routed": 0,
-  "duration_ms": 844957,
-  "rows_per_sec": 62725,
+  "duration_ms": 194974,
+  "rows_per_sec": 271831,
   "status": "completed",
   "err": "",
-  "peak_rss_mb": 72.8,
-  "cpu_seconds": 388.1,
-  "cpu_cores": 0.46
+  "peak_rss_mb": 58.5,
+  "cpu_seconds": 270.2,
+  "cpu_cores": 1.39
  },
  "el12_postgres_kafka": {
   "cat": "EL",
@@ -446,13 +446,13 @@
   "failed": 0,
   "dropped": 0,
   "routed": 0,
-  "duration_ms": 293653,
-  "rows_per_sec": 180485,
+  "duration_ms": 299895,
+  "rows_per_sec": 176729,
   "status": "completed",
   "err": "",
-  "peak_rss_mb": 65.8,
-  "cpu_seconds": 450.6,
-  "cpu_cores": 1.53
+  "peak_rss_mb": 65.9,
+  "cpu_seconds": 494.3,
+  "cpu_cores": 1.65
  },
  "el13_postgres_s3": {
   "cat": "EL",
@@ -465,13 +465,13 @@
   "failed": 0,
   "dropped": 0,
   "routed": 0,
-  "duration_ms": 113533,
-  "rows_per_sec": 466825,
+  "duration_ms": 130304,
+  "rows_per_sec": 406741,
   "status": "completed",
   "err": "",
-  "peak_rss_mb": 203.9,
-  "cpu_seconds": 224.0,
-  "cpu_cores": 1.97
+  "peak_rss_mb": 144.5,
+  "cpu_seconds": 261.0,
+  "cpu_cores": 2.0
  },
  "el17_s3_postgres": {
   "cat": "EL",
@@ -484,13 +484,13 @@
   "failed": 0,
   "dropped": 0,
   "routed": 0,
-  "duration_ms": 853563,
-  "rows_per_sec": 62093,
+  "duration_ms": 149627,
+  "rows_per_sec": 354214,
   "status": "completed",
   "err": "",
-  "peak_rss_mb": 229.9,
-  "cpu_seconds": 0.0,
-  "cpu_cores": 0.0
+  "peak_rss_mb": 846.0,
+  "cpu_seconds": 139.7,
+  "cpu_cores": 0.93
  },
  "etl03_csv_clean_postgres": {
   "cat": "ETL",
@@ -506,13 +506,13 @@
   "failed": 0,
   "dropped": 0,
   "routed": 0,
-  "duration_ms": 1621737,
-  "rows_per_sec": 32681,
+  "duration_ms": 119076,
+  "rows_per_sec": 445094,
   "status": "completed",
   "err": "",
-  "peak_rss_mb": 60.7,
-  "cpu_seconds": 613.0,
-  "cpu_cores": 0.38
+  "peak_rss_mb": 144.0,
+  "cpu_seconds": 182.4,
+  "cpu_cores": 1.53
  },
  "etl04_csv_full_s3": {
   "cat": "ETL",
@@ -529,13 +529,13 @@
   "failed": 0,
   "dropped": 0,
   "routed": 0,
-  "duration_ms": 468391,
-  "rows_per_sec": 113153,
+  "duration_ms": 73957,
+  "rows_per_sec": 716633,
   "status": "completed",
   "err": "",
-  "peak_rss_mb": 180.7,
-  "cpu_seconds": 648.5,
-  "cpu_cores": 1.38
+  "peak_rss_mb": 138.8,
+  "cpu_seconds": 191.0,
+  "cpu_cores": 2.58
  },
  "etl05_postgres_map_kafka": {
   "cat": "ETL",
@@ -550,13 +550,13 @@
   "failed": 0,
   "dropped": 0,
   "routed": 0,
-  "duration_ms": 378849,
-  "rows_per_sec": 139897,
+  "duration_ms": 279968,
+  "rows_per_sec": 189307,
   "status": "completed",
   "err": "",
-  "peak_rss_mb": 64.0,
-  "cpu_seconds": 559.1,
-  "cpu_cores": 1.48
+  "peak_rss_mb": 93.7,
+  "cpu_seconds": 537.1,
+  "cpu_cores": 1.92
  },
  "etl07_parquet_full_postgres": {
   "cat": "ETL",
@@ -573,13 +573,13 @@
   "failed": 0,
   "dropped": 0,
   "routed": 0,
-  "duration_ms": 1708468,
-  "rows_per_sec": 31022,
+  "duration_ms": 124637,
+  "rows_per_sec": 425235,
   "status": "completed",
   "err": "",
-  "peak_rss_mb": 219.7,
-  "cpu_seconds": 709.5,
-  "cpu_cores": 0.42
+  "peak_rss_mb": 287.9,
+  "cpu_seconds": 150.0,
+  "cpu_cores": 1.2
  },
  "ent02_checkpoint_resume": {
   "cat": "ENT",
@@ -594,12 +594,12 @@
   "failed": 0,
   "dropped": 0,
   "routed": 0,
-  "duration_ms": 38910,
-  "rows_per_sec": 1362118,
+  "duration_ms": 35721,
+  "rows_per_sec": 1483721,
   "status": "completed",
   "err": "",
-  "peak_rss_mb": 35.4,
-  "cpu_seconds": 99.5,
-  "cpu_cores": 2.56
+  "peak_rss_mb": 26.4,
+  "cpu_seconds": 46.8,
+  "cpu_cores": 1.31
  }
 }

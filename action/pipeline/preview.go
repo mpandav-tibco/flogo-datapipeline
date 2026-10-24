@@ -122,6 +122,7 @@ func (a *DataPipelineAction) previewInternal(ctx context.Context, limit, stopAft
 		return res, fmt.Errorf("transforms build: %w", err)
 	}
 	defer txPipeline.Close()
+	txPipeline.BindContext(ctx)
 
 	batchSize := def.Performance.BatchSize
 	if batchSize <= 0 || batchSize > limit {

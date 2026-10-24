@@ -4,31 +4,32 @@ A pipeline is normally a single **linear** chain — `Source → [transforms] �
 (plus an optional DLQ branch). When you need more than one source, more than one
 sink, or **conditional routing** between stages, a `.datapipeline` can carry an
 explicit **graph** (a directed acyclic graph of nodes + edges). The engine runs
-that graph with a dedicated **streaming graph runner**
+that graph node-per-node on its streaming executor
 ([`action/pipeline/graphexec`](../action/pipeline/graphexec)) — one goroutine per
 node, one bounded channel per consumer — so the whole DAG streams concurrently
-with backpressure, exactly like the linear path.
+with backpressure. Linear pipelines run on the very same executor (as a
+source → fused transform chain → sink plan), so both share one set of
+checkpoint, DLQ, memory-budget, parallelism and scaling semantics.
 
-## When the graph runner activates
+## When a graph runs node-per-node
 
-Activation is **automatic and narrowly scoped**. The runner takes over only when
-the graph is **non-reducible** — i.e. it has structure the single-chain linear
+The graph is executed node-per-node only when it is **non-reducible** — i.e. it has structure the single-chain linear
 model cannot represent:
 
 - a **typed edge** (`expression`, `otherwise`, or `error`), or
 - any node with **fan-out or fan-in ≥ 2** (multiple sinks, multiple sources, or a
   tee).
 
-A graph that is just a linear chain written out as nodes+edges stays on the
-**linear** path (so its checkpoint / HWM / DLQ / parallel-worker behaviour is
-untouched). If a graph is non-reducible but references a node that cannot be
-resolved, the engine also falls back to linear rather than guess. All of this is
+A graph that is just a linear chain written out as nodes+edges runs as the fused
+linear plan (identical to omitting the graph). If a graph is non-reducible but
+references a node that cannot be resolved, the engine also falls back to the
+linear plan rather than guess. All of this is
 decided by `graphExecutable()` in
 [`action/pipeline/graph_run.go`](../action/pipeline/graph_run.go); when it fires
 you will see a log line like:
 
 ```
-executing via graph runner — non-reducible DAG (7 nodes, 6 edges)
+executing DAG — 7 nodes, 6 edges
 ```
 
 ## The `graph` field
@@ -79,12 +80,12 @@ edge) or an **object** with an explicit `type`:
 
 ## Every transform is supported
 
-The graph runner runs **all** transform types with the same guarantees as the
-linear engine (`unsupportedGraphTransforms` is empty):
+A DAG runs **all** transform types with the same guarantees as a linear
+pipeline (`unsupportedGraphTransforms` is empty):
 
 - **`hwm`** — the runner injects the prior watermark into the primary source and,
   after a clean run, harvests the observed maximum and persists it to the
-  watermark store (incremental load works identically to the linear path).
+  watermark store (incremental load works identically to a linear pipeline).
 - **`dq`** — the gate report is surfaced in the run's `Metadata["dqReport"]`.
 - **`join` / `union`** — these self-load their bounded secondary side, so they run
   as ordinary operators. (For *streaming, unbounded* multi-source, prefer native
@@ -93,11 +94,13 @@ linear engine (`unsupportedGraphTransforms` is empty):
 - **`window`** — still-open aggregates are flushed at end-of-input.
 
 The run's row counts (`processed` / `written`) use the same accounting as the
-linear path, and per-node counters are surfaced for the Studio run overlay.
-**Checkpoint/resume** works for stateless graphs (drain-barrier based); a *windowed*
-(stateful) graph currently runs **without** checkpointing — the barrier does not yet
-snapshot window state — and logs a warning. Rejected/failed rows ride the **`error`
-edges** above (the graph's DLQ equivalent), not the linear `dlq` sink wrapper.
+linear pipelines, and per-node counters are surfaced for the Studio run overlay.
+**Checkpoint/resume** is drain-barrier based and snapshots every stateful node
+(keyed by node id), so windowed graphs resume with their open windows. Barriers
+need a single source; a multi-source graph runs without mid-run checkpoints.
+Transform rejects ride the **`error` edges** above; sink write failures are
+isolated row-by-row into the configured `dlq` exactly as in a linear pipeline
+(previously a sink error aborted a graph run).
 
 ## Common shapes
 

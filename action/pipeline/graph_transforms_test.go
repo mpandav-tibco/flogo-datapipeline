@@ -22,7 +22,7 @@ func nullSinkNode(id string) GraphNodeDef {
 
 // TestGraphRun_DQReportHarvested proves the graph runner surfaces the DQ gate
 // report in Output.Metadata after the run — the harvest the linear engine does,
-// now wired into runGraph. dq previously forced a fall-back to the linear path.
+// now wired into the engine. dq previously forced a fall-back to the linear path.
 func TestGraphRun_DQReportHarvested(t *testing.T) {
 	src := writeTemp(t, "in.csv", ordersCSV)
 	outMain := filepath.Join(t.TempDir(), "main.jsonl")

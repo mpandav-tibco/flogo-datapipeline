@@ -41,6 +41,7 @@ Use a [parse](../transforms/parse.md) transform to structure `message` into type
 | `bounded` | bool | `false` | — | Test/drain mode: return EOF once the tree is drained and idle. |
 | `includeNamespaces` | `[]string` | all | — | If non-empty, only these namespaces are tailed. |
 | `excludeNamespaces` | `[]string` | none | — | Namespaces to skip (e.g. `["kube-system"]`). |
+| `maxLineBytes` | int | `1048576` | — | Cap on one physical line. A writer that never terminates a line has it emitted in pieces of this size instead of buffering without limit. |
 | `multiline` | object | — | — | Multiline reassembly (see below). |
 
 ### `multiline` sub-object

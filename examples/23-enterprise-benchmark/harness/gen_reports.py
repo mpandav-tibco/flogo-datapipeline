@@ -294,6 +294,9 @@ def summary(results, cases, elt, ent, meta, host, binsizes, graph=None):
         "[reports/enterprise.md](reports/enterprise.md) and [reports/graph.md](reports/graph.md)",
         "for the full tables.", "",
     ]
+    if os.path.exists(os.path.join(REPORTS, "engine-unification.md")):
+        lines += ["Before/after comparison for the unified execution engine (same-day A/B vs",
+                  "`master`): [reports/engine-unification.md](reports/engine-unification.md).", ""]
     # Footprint & TCO — the whole run is ONE process, not a cluster.
     inst = host.get("instances", 1)
     binmb = host.get("binary_size_mb")

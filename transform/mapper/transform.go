@@ -58,11 +58,52 @@ type mapperTransform struct {
 	// the first batch's actual values, so downstream sinks (Parquet, JDBC) get
 	// concrete types instead of a stringified TypeAny schema.
 	typesResolved bool
+
+	// slots names every input field the expressions reference; slotPos maps
+	// each slot to its column position for the most recent input layout.
+	slots     *slotTable
+	boundCols []record.Column
+	slotPos   []int
 }
 
 type fieldExpr struct {
 	outName string
-	eval    func(row map[string]interface{}) interface{}
+	eval    evalFn
+}
+
+// evalFn evaluates a compiled expression against one input row.
+type evalFn func(v *rowView) interface{}
+
+// rowView is a positional input row plus the slot→column binding, letting
+// field references read cells directly instead of through a per-row map.
+type rowView struct {
+	row []interface{}
+	pos []int
+}
+
+// field returns the value of the slot's column, or nil when the column is
+// absent from the batch or the row is short — the same result a map lookup
+// on RowMap would give.
+func (v *rowView) field(slot int) interface{} {
+	if p := v.pos[slot]; p >= 0 && p < len(v.row) {
+		return v.row[p]
+	}
+	return nil
+}
+
+// slotTable assigns a stable slot number to each distinct referenced field.
+type slotTable struct {
+	index map[string]int
+	names []string
+}
+
+func (t *slotTable) slot(name string) int {
+	if i, ok := t.index[name]; ok {
+		return i
+	}
+	t.index[name] = len(t.names)
+	t.names = append(t.names, name)
+	return len(t.names) - 1
 }
 
 func newMapperTransform(cfg map[string]interface{}) (transform.Transform, error) {
@@ -116,17 +157,18 @@ func newMapperTransform(cfg map[string]interface{}) (transform.Transform, error)
 
 	var exprs []fieldExpr
 	var outCols []record.Column
+	slots := &slotTable{index: map[string]int{}}
 	for _, outName := range keys {
 		exprRaw := fieldsMap[outName]
 		exprStr, _ := exprRaw.(string)
-		eval, err := compileExpr(exprStr)
+		eval, err := compileExpr(exprStr, slots)
 		if err != nil {
 			return nil, fmt.Errorf("map transform: field %q: %w", outName, err)
 		}
 		exprs = append(exprs, fieldExpr{outName: outName, eval: eval})
 		outCols = append(outCols, record.Column{Name: outName, Type: record.TypeAny})
 	}
-	return &mapperTransform{fieldExprs: exprs, outCols: outCols}, nil
+	return &mapperTransform{fieldExprs: exprs, outCols: outCols, slots: slots}, nil
 }
 
 func (m *mapperTransform) Name() string { return "map" }
@@ -144,11 +186,15 @@ func (m *mapperTransform) Apply(in *record.RecordBatch) (*record.RecordBatch, er
 	// code changes later (an append past cap always reallocates).
 	width := len(m.fieldExprs)
 	buf := make([]interface{}, in.Len()*width)
-	for i := range in.Rows {
-		row := in.RowMap(i)
+	if m.slotPos == nil || !record.SameColumnNames(m.boundCols, in.Columns) {
+		m.slotPos, m.boundCols = record.IndexOf(in.Columns, m.slots.names...), in.Columns
+	}
+	view := rowView{pos: m.slotPos}
+	for i, row := range in.Rows {
+		view.row = row
 		outRow := buf[i*width : (i+1)*width : (i+1)*width]
 		for j, fe := range m.fieldExprs {
-			outRow[j] = fe.eval(row)
+			outRow[j] = fe.eval(&view)
 		}
 		out.Rows = append(out.Rows, outRow)
 	}
@@ -207,12 +253,12 @@ func (m *mapperTransform) Close() error { return nil }
 // compileExpr compiles a field-value expression into an evaluator function.
 // A value with no leading "=" is a static string constant; otherwise everything
 // after the "=" is compiled as an expression (field ref, function call, literal).
-func compileExpr(expr string) (func(row map[string]interface{}) interface{}, error) {
+func compileExpr(expr string, slots *slotTable) (evalFn, error) {
 	if !strings.HasPrefix(expr, "=") {
 		// Static string constant.
-		return func(_ map[string]interface{}) interface{} { return expr }, nil
+		return func(*rowView) interface{} { return expr }, nil
 	}
-	return compileInner(strings.TrimPrefix(expr, "="))
+	return compileInner(strings.TrimPrefix(expr, "="), slots)
 }
 
 // compileInner compiles an expression (the part after a leading "="). It is also
@@ -221,7 +267,7 @@ func compileExpr(expr string) (func(row map[string]interface{}) interface{}, err
 // written with or without a leading "=" (both `upper($product)` and
 // `upper(=$product)` resolve $product to the row value), so we tolerate an
 // optional "=" prefix here.
-func compileInner(inner string) (func(row map[string]interface{}) interface{}, error) {
+func compileInner(inner string, slots *slotTable) (evalFn, error) {
 	inner = strings.TrimSpace(inner)
 	inner = strings.TrimPrefix(inner, "=")
 	inner = strings.TrimSpace(inner)
@@ -232,13 +278,18 @@ func compileInner(inner string) (func(row map[string]interface{}) interface{}, e
 	if strings.HasPrefix(inner, "$") {
 		fieldName := strings.TrimPrefix(strings.TrimPrefix(inner, "$"), ".")
 		if !strings.Contains(fieldName, ".") {
-			return func(row map[string]interface{}) interface{} {
-				return row[fieldName]
-			}, nil
+			slot := slots.slot(fieldName)
+			return func(v *rowView) interface{} { return v.field(slot) }, nil
 		}
 		segments := strings.Split(fieldName, ".")
-		return func(row map[string]interface{}) interface{} {
-			return resolvePath(row, segments)
+		head := slots.slot(segments[0])
+		rest := segments[1:]
+		return func(v *rowView) interface{} {
+			// A missing top-level column ends the path, as a map miss did.
+			if p := v.pos[head]; p < 0 || p >= len(v.row) {
+				return nil
+			}
+			return resolvePath(v.field(head), rest)
 		}, nil
 	}
 
@@ -251,7 +302,7 @@ func compileInner(inner string) (func(row map[string]interface{}) interface{}, e
 		if err != nil {
 			return nil, fmt.Errorf("bad function call %q: %w", inner, err)
 		}
-		argEvals := make([]func(map[string]interface{}) interface{}, len(args))
+		argEvals := make([]evalFn, len(args))
 		for i, arg := range args {
 			arg = strings.TrimSpace(arg)
 			// Function arguments are value expressions: a leading "=" is
@@ -264,10 +315,10 @@ func compileInner(inner string) (func(row map[string]interface{}) interface{}, e
 			if !strings.HasPrefix(arg, "=") {
 				toCompile = "=" + arg
 			}
-			eval, err := compileExpr(toCompile)
+			eval, err := compileExpr(toCompile, slots)
 			if err != nil {
 				lit := arg
-				eval = func(_ map[string]interface{}) interface{} { return lit }
+				eval = func(*rowView) interface{} { return lit }
 			}
 			argEvals[i] = eval
 		}
@@ -275,10 +326,10 @@ func compileInner(inner string) (func(row map[string]interface{}) interface{}, e
 		if !ok {
 			return nil, fmt.Errorf("unknown function: %q", funcName)
 		}
-		return func(row map[string]interface{}) interface{} {
+		return func(v *rowView) interface{} {
 			resolved := make([]interface{}, len(argEvals))
 			for i, ae := range argEvals {
-				resolved[i] = ae(row)
+				resolved[i] = ae(v)
 			}
 			return fn(resolved)
 		}, nil
@@ -286,23 +337,23 @@ func compileInner(inner string) (func(row map[string]interface{}) interface{}, e
 
 	// Numeric literal without quotes.
 	if f, err := strconv.ParseFloat(inner, 64); err == nil {
-		return func(_ map[string]interface{}) interface{} { return f }, nil
+		return func(*rowView) interface{} { return f }, nil
 	}
 
 	// Quoted string literal.
 	if strings.HasPrefix(inner, "'") && strings.HasSuffix(inner, "'") {
 		s := inner[1 : len(inner)-1]
-		return func(_ map[string]interface{}) interface{} { return s }, nil
+		return func(*rowView) interface{} { return s }, nil
 	}
 
 	return nil, fmt.Errorf("unrecognized expression: %q", inner)
 }
 
 // resolvePath traverses a dotted path (e.g. properties.amount) through nested
-// map[string]interface{} values and returns the leaf value, or nil if any
-// segment is missing or not a map.
-func resolvePath(row map[string]interface{}, segments []string) interface{} {
-	var cur interface{} = row
+// map[string]interface{} values starting at root and returns the leaf value, or
+// nil if any segment is missing or not a map.
+func resolvePath(root interface{}, segments []string) interface{} {
+	cur := root
 	for _, seg := range segments {
 		m, ok := cur.(map[string]interface{})
 		if !ok {

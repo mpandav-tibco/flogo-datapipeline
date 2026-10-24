@@ -355,3 +355,43 @@ func TestDQTransform_ConfigValidation(t *testing.T) {
 		t.Error("unknown expectation type should error at construction")
 	}
 }
+
+func TestDQTransform_ScoreColumnValuesAndIsolation(t *testing.T) {
+	tr, err := transform.New("dq", map[string]interface{}{
+		"expectations": []interface{}{
+			map[string]interface{}{"type": "expectColumnNotNull", "column": "amount"},
+			map[string]interface{}{"type": "expectColumnValuesInSet", "column": "cur", "values": []interface{}{"EUR"}},
+		},
+		"onFail":           "warn",
+		"qualityThreshold": 0.0,
+		"scoreColumn":      "_s",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := &record.RecordBatch{
+		Columns: []record.Column{{Name: "amount"}, {Name: "cur"}},
+		Rows:    [][]interface{}{{1.0, "EUR"}, {nil, "EUR"}, {nil, "USD"}, {2.0}},
+	}
+	out, err := tr.Apply(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Row 4 is ragged: cur reads as nil, which InSet treats as passing.
+	want := []float64{1, 0.5, 0, 1}
+	si := out.ColIndex("_s")
+	for i, w := range want {
+		if got := out.Rows[i][si]; got != w {
+			t.Errorf("row %d score=%v want %v", i, got, w)
+		}
+	}
+	// Extended rows share one backing buffer; writing a cell must never bleed
+	// into the adjacent row.
+	out.Rows[0] = append(out.Rows[0], "extra")
+	if out.Rows[1][0] != nil || out.Rows[1][si] != 0.5 {
+		t.Fatalf("row 1 corrupted by append to row 0: %v", out.Rows[1])
+	}
+	if len(in.Rows[0]) != 2 {
+		t.Fatalf("input row mutated: %v", in.Rows[0])
+	}
+}

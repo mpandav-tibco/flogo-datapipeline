@@ -21,7 +21,7 @@ var fakePartAllRows = []map[string]interface{}{
 }
 
 // fakePartSource is a minimal in-memory source.PartitionableSource used to
-// exercise runGraphScaled's sharded/distributed wiring without needing a real
+// exercise the engine's sharded/distributed wiring without needing a real
 // jdbc/objstore backend (only they implement partitioning today).
 type fakePartSource struct {
 	rows []map[string]interface{}
@@ -76,7 +76,7 @@ func init() {
 	})
 }
 
-// TestGraphRun_ScaledSharded proves runGraphScaled actually drives the graph
+// TestGraphRun_ScaledSharded proves the scaled engine actually drives the graph
 // runner across every partition a "sharded" instance owns (via the SAME
 // scaling.Coordinator machinery the linear engine's runScaled uses), rather
 // than silently running only the primary (un-partitioned) source once.

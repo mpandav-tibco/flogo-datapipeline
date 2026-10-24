@@ -2,6 +2,7 @@ package graphexec
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -614,4 +615,31 @@ func TestHasStateful(t *testing.T) {
 		t.Fatal("plan with a Flusher node reported HasStateful=false")
 	}
 	_ = plan2.Close()
+}
+
+// A cancelled run must not look like a completed one.
+func TestRunReportsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	p := compileLinearForCancel(t)
+	if _, err := p.Run(ctx, Options{}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run on a cancelled context returned %v; want context.Canceled", err)
+	}
+}
+
+func compileLinearForCancel(t *testing.T) *Plan {
+	t.Helper()
+	src := &memSource{cols: testCols, rows: [][]interface{}{{1, 50}, {2, 150}}}
+	g := &Graph{
+		Nodes: []Node{
+			{ID: "source", Kind: KindSource, Type: "mem", Cfg: map[string]interface{}{"op": src}},
+			{ID: "sink", Kind: KindSink, Type: "mem", Cfg: map[string]interface{}{"op": &memSink{}}},
+		},
+		Edges: []Edge{{From: "source:rows", To: "sink:in"}},
+	}
+	plan, err := Compile(g, testBuilders())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return plan
 }

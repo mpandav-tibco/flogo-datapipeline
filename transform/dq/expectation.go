@@ -309,7 +309,7 @@ func newExpectColumnValuesInSet(cfg map[string]interface{}) (Expectation, error)
 	}
 	allowed := make(map[string]struct{}, len(rawVals))
 	for _, v := range rawVals {
-		s := fmt.Sprintf("%v", v)
+		s := record.FormatValue(v)
 		if !caseSensitive {
 			s = strings.ToUpper(s)
 		}
@@ -331,7 +331,7 @@ func (e *expectColumnValuesInSet) Evaluate(batch *record.RecordBatch, _ *BatchPr
 		if colIdx >= len(row) || row[colIdx] == nil {
 			continue
 		}
-		s := fmt.Sprintf("%v", row[colIdx])
+		s := record.FormatValue(row[colIdx])
 		key := s
 		if !e.caseSensitive {
 			key = strings.ToUpper(s)
@@ -682,7 +682,7 @@ func newExpectColumnValuesInReferenceDataset(cfg map[string]interface{}) (Expect
 				if colIdx >= len(row) || row[colIdx] == nil {
 					continue
 				}
-				refValues[fmt.Sprintf("%v", row[colIdx])] = struct{}{}
+				refValues[record.FormatValue(row[colIdx])] = struct{}{}
 			}
 			loaded += int64(b.Len())
 		}
@@ -717,7 +717,7 @@ func (e *expectColumnValuesInReferenceDataset) Evaluate(batch *record.RecordBatc
 		if colIdx >= len(row) || row[colIdx] == nil {
 			continue
 		}
-		key := fmt.Sprintf("%v", row[colIdx])
+		key := record.FormatValue(row[colIdx])
 		if _, ok := e.refValues[key]; ok {
 			matched++
 		} else {

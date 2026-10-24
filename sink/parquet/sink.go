@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/mpandav-tibco/flogo-datapipeline/internal/cfgutil"
 	"github.com/mpandav-tibco/flogo-datapipeline/record"
 	"github.com/mpandav-tibco/flogo-datapipeline/sink"
 	parquetgo "github.com/parquet-go/parquet-go"
@@ -73,10 +74,8 @@ func newParquetSink(cfg map[string]interface{}) (sink.Sink, error) {
 		compressionName = "snappy"
 	}
 
-	rowGroupSize := 100000
-	if rgs, ok := cfg["rowGroupSize"].(int); ok && rgs > 0 {
-		rowGroupSize = rgs
-	}
+	// JSON-decoded definitions deliver numbers as float64; cfgutil accepts both.
+	rowGroupSize := cfgutil.PositiveInt(cfg, "rowGroupSize", 100000)
 
 	return &parquetSink{
 		path:         path,

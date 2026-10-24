@@ -186,7 +186,16 @@ type CheckpointDef struct {
 	IntervalSeconds int    `json:"intervalSeconds,omitempty"` // checkpoint every N seconds (default 30)
 	DeleteOnSuccess bool   `json:"deleteOnSuccess,omitempty"` // delete checkpoint on successful completion
 	Key             string `json:"key,omitempty"`             // stable checkpoint key for single-instance streaming resume (default: per-run id)
+	// OnSaveError selects what happens when a checkpoint cannot be persisted
+	// (backend error or state-snapshot failure): "continue" (default) logs and
+	// keeps processing — the previous checkpoint and uncommitted source offsets
+	// are retained, so nothing is lost but the replay window grows — while
+	// "fail" stops the run so an unhealthy checkpoint store is noticed.
+	OnSaveError string `json:"onSaveError,omitempty"`
 }
+
+// failOnCheckpointError reports whether checkpoint persistence failures abort the run.
+func (c CheckpointDef) failOnCheckpointError() bool { return c.OnSaveError == "fail" }
 
 // PerformanceDef tunes the pipeline execution parameters.
 type PerformanceDef struct {
@@ -639,6 +648,11 @@ func (d *Definition) validate() error {
 		if f.val < 0 {
 			return fmt.Errorf("pipeline definition: %s must be >= 0, got %d", f.name, f.val)
 		}
+	}
+	switch d.Checkpoint.OnSaveError {
+	case "", "continue", "fail":
+	default:
+		return fmt.Errorf("pipeline definition: checkpoint.onSaveError must be \"continue\" or \"fail\", got %q", d.Checkpoint.OnSaveError)
 	}
 	if d.Incremental.Mode == "hwm" {
 		if d.Incremental.Column == "" {

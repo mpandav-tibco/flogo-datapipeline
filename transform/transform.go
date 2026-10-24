@@ -6,6 +6,7 @@
 package transform
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -45,6 +46,15 @@ type SinkOwner interface {
 	OwnsExternalSink() bool
 }
 
+// ContextBinder is implemented by transforms that perform blocking I/O (e.g.
+// HTTP enrichment). The engine calls BindContext with the run's context before
+// the first Apply, so in-flight I/O is aborted promptly when the run is
+// cancelled instead of waiting out its own timeout. Apply itself stays
+// context-free to keep the Transform interface stable for all implementations.
+type ContextBinder interface {
+	BindContext(ctx context.Context)
+}
+
 // Pipeline chains multiple transforms in sequence.
 // The output of transform N is the input of transform N+1.
 type Pipeline struct {
@@ -67,11 +77,28 @@ func NewPipeline(stages []Transform) *Pipeline {
 // assertions (e.g. to find the hwm transform's HWMProvider interface).
 func (p *Pipeline) Stages() []Transform { return p.stages }
 
+// BindContext hands ctx to every stage implementing ContextBinder.
+func (p *Pipeline) BindContext(ctx context.Context) {
+	for _, t := range p.stages {
+		if cb, ok := t.(ContextBinder); ok {
+			cb.BindContext(ctx)
+		}
+	}
+}
+
 // Apply runs the batch through all stages in order.
 // Returns nil if any stage reduces the batch to zero rows.
 func (p *Pipeline) Apply(in *record.RecordBatch) (*record.RecordBatch, error) {
+	return p.ApplyFrom(0, in)
+}
+
+// ApplyFrom runs the batch through stages[start:] — e.g. the rows a stateful
+// stage flushes at end of input must still pass through the stages after it.
+// Ownership rules are those of Apply.
+func (p *Pipeline) ApplyFrom(start int, in *record.RecordBatch) (*record.RecordBatch, error) {
 	cur := in
-	for i, t := range p.stages {
+	for i := start; i < len(p.stages); i++ {
+		t := p.stages[i]
 		if cur == nil || cur.Len() == 0 {
 			if cur != nil && cur != in {
 				record.Put(cur)

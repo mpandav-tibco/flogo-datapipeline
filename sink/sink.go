@@ -103,3 +103,29 @@ func Types() []string {
 	}
 	return out
 }
+
+// UnflushedRowsError is returned by a buffering sink when a flush fails and
+// rows accepted by EARLIER WriteBatch calls (already reported as written) were
+// not persisted. Rows/Columns hand those rows back so the engine can isolate
+// and dead-letter them instead of losing them silently. The rows of the
+// current WriteBatch call are never included — the caller still owns them.
+type UnflushedRowsError struct {
+	Columns []record.Column
+	Rows    [][]interface{}
+	Err     error
+}
+
+func (e *UnflushedRowsError) Error() string {
+	return fmt.Sprintf("%v (%d previously accepted rows not persisted)", e.Err, len(e.Rows))
+}
+
+func (e *UnflushedRowsError) Unwrap() error { return e.Err }
+
+// AtomicWriter is implemented by sinks whose WriteBatch+Flush either persists
+// every row of the batch or none of them (e.g. a single database
+// transaction). The engine then isolates bad rows by bisection — retrying
+// halves of a failed batch — instead of one row at a time, which is only safe
+// when a failed attempt cannot have written part of the batch.
+type AtomicWriter interface {
+	AtomicWrites() bool
+}

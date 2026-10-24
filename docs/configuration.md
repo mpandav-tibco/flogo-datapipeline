@@ -50,6 +50,7 @@ preview or a real run against test infrastructure for end-to-end confidence.
 |---|---|
 | `PIPELINE_FILE` | default for `-f` |
 | `PIPELINE_API_ADDR` | default for `-api-addr` (e.g. `:8888`) |
+| `PIPELINE_SHUTDOWN_TIMEOUT` | how long SIGTERM/SIGINT waits for in-flight runs to cancel, flush and close their sinks before exiting (Go duration, default `30s`) |
 | `INSTANCE_INDEX` | this instance's index for sharded / distributed [scaling](scaling.md) |
 | `INSTANCE_COUNT` | total instance count |
 | `FLOGO_LOG_FORMAT` | `JSON` for structured (JSON Lines) logs; unset/anything else = human-readable console (see [Logging](#logging)) |

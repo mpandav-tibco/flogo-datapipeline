@@ -283,6 +283,22 @@
           "settings": {
             "repeating": true
           }
+        },
+        "ui": {
+          "positions": {
+            "t2.reject": {
+              "x": 864,
+              "y": 418
+            },
+            "sink": {
+              "x": 1288,
+              "y": 24
+            },
+            "dlq": {
+              "x": 1336,
+              "y": 237
+            }
+          }
         }
       }
     }

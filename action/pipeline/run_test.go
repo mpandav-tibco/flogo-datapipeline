@@ -312,8 +312,8 @@ func TestRunDirect_ContextCancelled(t *testing.T) {
 	if runErr == nil {
 		t.Fatalf("expected a cancellation error, got nil (status=%s)", out.Status)
 	}
-	if out.Status != "failed" {
-		t.Fatalf("status=%q, want failed on cancellation", out.Status)
+	if out.Status != "cancelled" {
+		t.Fatalf("status=%q, want cancelled on cancellation", out.Status)
 	}
 }
 
@@ -386,6 +386,53 @@ func TestRunDirect_DLQ_RowIsolation(t *testing.T) {
 	dlqRows := readJSONL(t, dlqPath)
 	if len(dlqRows) != 1 {
 		t.Fatalf("dlq rows=%d, want 1", len(dlqRows))
+	}
+}
+
+// recordingFailSink behaves like failingSink but records every row it accepts,
+// so the test can detect a row being delivered more than once.
+type recordingFailSink struct{ accepted []string }
+
+var lastRecordingSink *recordingFailSink
+
+func init() {
+	sink.Register("failrecord", func(map[string]interface{}) (sink.Sink, error) {
+		lastRecordingSink = &recordingFailSink{}
+		return lastRecordingSink, nil
+	})
+}
+
+func (s *recordingFailSink) WriteBatch(b *record.RecordBatch) error {
+	for i := 0; i < b.Len(); i++ {
+		if fmt.Sprintf("%v", b.Value(i, "name")) == "FAIL" {
+			return fmt.Errorf("simulated write failure")
+		}
+	}
+	for i := 0; i < b.Len(); i++ {
+		s.accepted = append(s.accepted, fmt.Sprintf("%v", b.Value(i, "name")))
+	}
+	return nil
+}
+func (s *recordingFailSink) Flush() error { return nil }
+func (s *recordingFailSink) Close() error { return nil }
+
+func TestRunDirect_DLQ_RowIsolation_NoDuplicateWrites(t *testing.T) {
+	csv := "id,name,amount\n1,Alice,100\n2,FAIL,200\n3,Carol,300\n"
+	src := writeTemp(t, "in.csv", csv)
+	def := &Definition{
+		Source: csvSource(src),
+		Sink:   SinkDef{Type: "failrecord", Options: map[string]interface{}{}},
+		DLQ:    DLQDef{Type: "jsonlines", Options: map[string]interface{}{"path": filepath.Join(t.TempDir(), "dlq.jsonl")}},
+	}
+	out, err := runInline(t, def)
+	if err != nil {
+		t.Fatalf("RunDirect: %v", err)
+	}
+	if out.RowsWritten != 2 || out.RowsFailed != 1 {
+		t.Fatalf("written=%d failed=%d, want 2/1", out.RowsWritten, out.RowsFailed)
+	}
+	if got := strings.Join(lastRecordingSink.accepted, ","); got != "Alice,Carol" {
+		t.Fatalf("sink received %q, want each good row exactly once (\"Alice,Carol\")", got)
 	}
 }
 

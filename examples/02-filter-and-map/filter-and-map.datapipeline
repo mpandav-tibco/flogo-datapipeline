@@ -40,7 +40,7 @@
         "mode": "etl",
         "source": {
           "type": "csv",
-          "path": "./data/sales.csv",
+          "path": "/Users/milindpandav/git/flogo-datapipeline/examples/02-filter-and-map/data/sales.csv",
           "delimiter": ",",
           "hasHeader": true,
           "columns": [
@@ -124,6 +124,20 @@
           "sink": {
             "x": 754,
             "y": 58
+          },
+          "positions": {
+            "t0": {
+              "x": 342,
+              "y": 67
+            },
+            "t1": {
+              "x": 669,
+              "y": 47
+            },
+            "sink": {
+              "x": 1220,
+              "y": 110
+            }
           }
         }
       }

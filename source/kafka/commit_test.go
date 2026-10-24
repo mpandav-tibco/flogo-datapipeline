@@ -102,3 +102,28 @@ func TestParseResumeCursor(t *testing.T) {
 		t.Error("expected error for non-numeric partition key")
 	}
 }
+
+// CursorAt must return the offsets of the position being checkpointed (what
+// Commit(rows) will commit), not the previous commit target, and must not
+// commit or prune anything itself.
+func TestCursorAtReturnsPendingCheckpointPosition(t *testing.T) {
+	ks := &kafkaSource{
+		cfg:          &kafkaSourceConfig{topic: "t"},
+		commitMode:   "checkpoint",
+		commitTarget: map[int32]int64{0: 10},
+		marks: []offMark{
+			{row: 20, offsets: map[int32]int64{0: 20}},
+			{row: 30, offsets: map[int32]int64{0: 30}},
+		},
+	}
+	var m map[string]int64
+	if err := json.Unmarshal(ks.CursorAt(20), &m); err != nil || m["0"] != 20 {
+		t.Fatalf("CursorAt(20) = %v (err %v), want {0:20}", m, err)
+	}
+	if err := json.Unmarshal(ks.CursorAt(5), &m); err != nil || m["0"] != 10 {
+		t.Fatalf("CursorAt(5) = %v, want the last commit target {0:10}", m)
+	}
+	if ks.commitTarget[0] != 10 || len(ks.marks) != 2 {
+		t.Fatalf("CursorAt mutated state: target=%v marks=%d", ks.commitTarget, len(ks.marks))
+	}
+}

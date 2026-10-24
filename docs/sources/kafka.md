@@ -24,6 +24,7 @@ Consumes a Kafka topic as a consumer group, in continuous **streaming** mode or 
 | `deserializer` | string | `json` | — | `json`, `avro`, `raw`, or `debezium`. |
 | `schemaRegistryURL` | string | — | — | Confluent Schema Registry (required for `avro`). |
 | `opColumnName` | string | `__op` | — | `debezium` only: metadata column carrying the change type (`c`/`u`/`d`/`r`). |
+| `onDeserializeError` | string | `skip` | — | `skip` logs, counts and skips a message that cannot be decoded (its offset is still committed, so it is not redelivered on restart); `fail` stops the pipeline with an error naming the partition and offset. |
 | `pollMs` | int | `500` | — | Poll window in milliseconds. |
 | `batchSize` | int | `1000` | — | Messages per batch (internal buffer = `batchSize × 2`). |
 | `saslMechanism` | string | — | — | `PLAIN`, `SCRAM-SHA-256`, `SCRAM-SHA-512`. |

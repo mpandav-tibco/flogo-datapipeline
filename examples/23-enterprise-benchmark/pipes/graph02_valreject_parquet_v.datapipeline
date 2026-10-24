@@ -1,183 +1,199 @@
 {
- "name": "graph02_valreject_parquet_v",
- "type": "flogo:app",
- "version": "1.0.0",
- "appModel": "1.1.1",
- "imports": [
-  "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
-  "github.com/mpandav-tibco/flogo-datapipeline/source/csv",
-  "github.com/mpandav-tibco/flogo-datapipeline/transform/filter",
-  "github.com/project-flogo/contrib/trigger/timer",
-  "github.com/mpandav-tibco/flogo-datapipeline/sink/parquet"
- ],
- "triggers": [
-  {
-   "id": "bench-timer",
-   "ref": "github.com/project-flogo/contrib/trigger/timer",
-   "settings": {
-    "repeating": true,
-    "startDelay": 0,
-    "interval": 86400000
-   },
-   "handlers": [
+  "name": "graph02_valreject_parquet_v",
+  "type": "flogo:app",
+  "version": "1.0.0",
+  "appModel": "1.1.1",
+  "imports": [
+    "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+    "github.com/mpandav-tibco/flogo-datapipeline/source/csv",
+    "github.com/mpandav-tibco/flogo-datapipeline/transform/filter",
+    "github.com/project-flogo/contrib/trigger/timer",
+    "github.com/mpandav-tibco/flogo-datapipeline/sink/parquet"
+  ],
+  "triggers": [
     {
-     "settings": {},
-     "action": {
-      "ref": "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+      "id": "bench-timer",
+      "ref": "github.com/project-flogo/contrib/trigger/timer",
       "settings": {
-       "pipelineRef": "res://pipeline:graph02_valreject_parquet_v"
-      }
-     }
+        "repeating": true,
+        "startDelay": 0,
+        "interval": 86400000
+      },
+      "handlers": [
+        {
+          "settings": {},
+          "action": {
+            "ref": "github.com/mpandav-tibco/flogo-datapipeline/action/pipeline",
+            "settings": {
+              "pipelineRef": "res://pipeline:graph02valrejectparquetv"
+            }
+          }
+        }
+      ]
     }
-   ]
-  }
- ],
- "resources": [
-  {
-   "id": "pipeline:graph02_valreject_parquet_v",
-   "data": {
-    "mode": "etl",
-    "performance": {
-     "batchSize": 5000,
-     "maxMemoryMB": 1024
-    },
-    "scaling": {
-     "mode": "single"
-    },
-    "checkpoint": {
-     "type": "none"
-    },
-    "source": {
-     "type": "csv",
-     "path": "./data/orders_2m.csv",
-     "delimiter": ",",
-     "hasHeader": true,
-     "columns": [
-      {
-       "name": "order_id",
-       "type": "string"
-      },
-      {
-       "name": "customer_id",
-       "type": "string"
-      },
-      {
-       "name": "region",
-       "type": "string"
-      },
-      {
-       "name": "product",
-       "type": "string"
-      },
-      {
-       "name": "category",
-       "type": "string"
-      },
-      {
-       "name": "quantity",
-       "type": "int"
-      },
-      {
-       "name": "unit_price",
-       "type": "float"
-      },
-      {
-       "name": "status",
-       "type": "string"
-      },
-      {
-       "name": "order_date",
-       "type": "string"
-      },
-      {
-       "name": "email",
-       "type": "string"
-      }
-     ]
-    },
-    "transforms": [
-     {
-      "type": "filter",
-      "expr": "status != 'CANCELLED'"
-     }
-    ],
-    "sink": {
-     "type": "parquet",
-     "path": "./out/graph02_valreject_parquet_v_valid.parquet",
-     "compression": "snappy",
-     "rowGroupSize": 100000
-    },
-    "graph": {
-     "nodes": [
-      {
-       "id": "source",
-       "kind": "source",
-       "type": "csv",
-       "ports": {
-        "out": [
-         "rows"
-        ]
-       }
-      },
-      {
-       "id": "t0",
-       "kind": "transform",
-       "type": "filter",
-       "ports": {
-        "in": [
-         "in"
+  ],
+  "resources": [
+    {
+      "id": "pipeline:graph02valrejectparquetv",
+      "data": {
+        "mode": "etl",
+        "performance": {
+          "batchSize": 5000,
+          "maxMemoryMB": 1024
+        },
+        "scaling": {
+          "mode": "single"
+        },
+        "checkpoint": {
+          "type": "none"
+        },
+        "source": {
+          "type": "csv",
+          "path": "./data/orders_2m.csv",
+          "delimiter": ",",
+          "hasHeader": true,
+          "columns": [
+            {
+              "name": "order_id",
+              "type": "string"
+            },
+            {
+              "name": "customer_id",
+              "type": "string"
+            },
+            {
+              "name": "region",
+              "type": "string"
+            },
+            {
+              "name": "product",
+              "type": "string"
+            },
+            {
+              "name": "category",
+              "type": "string"
+            },
+            {
+              "name": "quantity",
+              "type": "int"
+            },
+            {
+              "name": "unit_price",
+              "type": "float"
+            },
+            {
+              "name": "status",
+              "type": "string"
+            },
+            {
+              "name": "order_date",
+              "type": "string"
+            },
+            {
+              "name": "email",
+              "type": "string"
+            }
+          ]
+        },
+        "transforms": [
+          {
+            "type": "filter",
+            "expr": "status != 'CANCELLED'"
+          }
         ],
-        "out": [
-         "out"
-        ]
-       }
-      },
-      {
-       "id": "sink",
-       "kind": "sink",
-       "type": "parquet",
-       "ports": {
-        "in": [
-         "in"
-        ]
-       }
-      },
-      {
-       "id": "xsink-reject",
-       "kind": "sink",
-       "type": "parquet",
-       "ports": {
-        "in": [
-         "in"
-        ]
-       },
-       "config": {
-        "path": "./out/graph02_valreject_parquet_v_reject.parquet",
-        "compression": "snappy",
-        "rowGroupSize": 100000
-       }
+        "sink": {
+          "type": "parquet",
+          "path": "./out/graph02_valreject_parquet_v_valid.parquet",
+          "compression": "snappy",
+          "rowGroupSize": 100000
+        },
+        "graph": {
+          "nodes": [
+            {
+              "id": "source",
+              "kind": "source",
+              "type": "csv",
+              "ports": {
+                "out": [
+                  "rows"
+                ]
+              }
+            },
+            {
+              "id": "t0",
+              "kind": "transform",
+              "type": "filter",
+              "ports": {
+                "in": [
+                  "in"
+                ],
+                "out": [
+                  "out"
+                ]
+              }
+            },
+            {
+              "id": "sink",
+              "kind": "sink",
+              "type": "parquet",
+              "ports": {
+                "in": [
+                  "in"
+                ]
+              }
+            },
+            {
+              "id": "xsink-reject",
+              "kind": "sink",
+              "type": "parquet",
+              "ports": {
+                "in": [
+                  "in"
+                ]
+              },
+              "config": {
+                "path": "./out/graph02_valreject_parquet_v_reject.parquet",
+                "compression": "snappy",
+                "rowGroupSize": 100000
+              }
+            }
+          ],
+          "edges": [
+            [
+              "source:rows",
+              "t0:in"
+            ],
+            {
+              "from": "t0:out",
+              "to": "sink:in",
+              "type": "expression",
+              "value": "unit_price <= 95000 AND quantity <= 1000"
+            },
+            {
+              "from": "t0:out",
+              "to": "xsink-reject:in",
+              "type": "otherwise"
+            }
+          ]
+        },
+        "name": "graph02_valreject_parquet_v",
+        "ui": {
+          "positions": {
+            "xsink-reject": {
+              "x": 861,
+              "y": 234
+            },
+            "sink": {
+              "x": 879,
+              "y": 28
+            },
+            "t0": {
+              "x": 325,
+              "y": 58
+            }
+          }
+        }
       }
-     ],
-     "edges": [
-      [
-       "source:rows",
-       "t0:in"
-      ],
-      {
-       "from": "t0:out",
-       "to": "sink:in",
-       "type": "expression",
-       "value": "unit_price <= 95000 AND quantity <= 1000"
-      },
-      {
-       "from": "t0:out",
-       "to": "xsink-reject:in",
-       "type": "otherwise"
-      }
-     ]
-    },
-    "name": "graph02_valreject_parquet_v"
-   }
-  }
- ]
+    }
+  ]
 }

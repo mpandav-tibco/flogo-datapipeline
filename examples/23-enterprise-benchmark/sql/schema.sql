@@ -23,6 +23,11 @@ CREATE TABLE IF NOT EXISTS orders_raw (
     email       text
 );
 
+-- The jdbc-source cases page with keyset pagination on order_id
+-- (WHERE order_id > $last ORDER BY order_id LIMIT n); without this index every
+-- page is a full scan + sort of the 53M-row table.
+CREATE INDEX IF NOT EXISTS orders_raw_order_id_idx ON orders_raw (order_id);
+
 CREATE TABLE IF NOT EXISTS orders_sink (
     order_id    text,
     customer_id text,

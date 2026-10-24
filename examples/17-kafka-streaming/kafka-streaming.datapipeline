@@ -84,6 +84,12 @@
         },
         "checkpoint": {
           "type": "none"
+        },
+        "dlq": {
+          "type": "null",
+          "options": {},
+          "maxRowsPerBatch": 0,
+          "onFull": "block"
         }
       }
     }

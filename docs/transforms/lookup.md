@@ -15,6 +15,10 @@ de-duplication so repeated keys hit the cache, not the network. Implemented in
 | `outputFields` | `[]string` | `[]` | — | JSON response fields to append as columns. |
 | `concurrency` | int | `10` | — | Worker-pool size for concurrent calls. |
 | `cacheSize` | int | `1000` | — | LRU cache capacity (keyed by the lookup value). |
+| `cacheTtlMs` | int | `0` | — | Expiry for cached *found* answers; `0` keeps them for the life of the run. Set it for long-running/streaming pipelines whose reference data changes. |
+| `cacheNotFound` | bool | `true` | — | Also cache 404 (not-found) answers, so a missing key costs one HTTP call instead of one per row. |
+| `notFoundTtlMs` | int | `60000` | — | Expiry for cached not-found answers: a key that appears upstream while the pipeline runs is enriched again within this window. `0` = never expire. |
+| `maxResponseBytes` | int | `1048576` | — | Maximum response body size; larger responses are treated as an error. |
 | `timeoutMs` | int | `5000` | — | Per-request timeout. |
 | `onError` | string | `null` | — | `null` (fill nils, keep row), `skip` (drop row), or `fail` (abort). |
 

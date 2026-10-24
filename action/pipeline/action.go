@@ -4,13 +4,11 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
-	"io"
 	"math"
 	"runtime/debug"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/project-flogo/core/action"
@@ -126,6 +124,11 @@ func newRunLog(pipelineRef, runID string) corelog.Logger {
 // implementation instead of being duplicated and drifting.
 func (a *DataPipelineAction) finalizeStatus(runLog corelog.Logger, out *Output, runErr error) {
 	switch {
+	case runErr != nil && errors.Is(runErr, context.Canceled):
+		// Stopped on request (shutdown / API cancel): not a failure. No
+		// checkpoint was taken, so a restart resumes from the last durable one.
+		out.Status = "cancelled"
+		out.Error = runErr.Error()
 	case runErr != nil:
 		out.Status = "failed"
 		out.Error = runErr.Error()
@@ -226,6 +229,9 @@ func (a *DataPipelineAction) RunDirect(ctx context.Context, in *Input) (*Output,
 		runID = newRunID()
 	}
 
+	ctx, runDone := activeRuns.start(ctx)
+	defer runDone()
+
 	runLog := newRunLog(a.ref, runID)
 	runLog.Infof("pipeline run started — source=%s sink=%s", a.def.Source.Type, a.def.Sink.Type)
 	a.auditRunStart(runID)
@@ -236,7 +242,7 @@ func (a *DataPipelineAction) RunDirect(ctx context.Context, in *Input) (*Output,
 	out.DurationMs = time.Since(start).Milliseconds()
 
 	a.finalizeStatus(runLog, out, runErr)
-	if runErr != nil {
+	if runErr != nil && out.Status != "cancelled" {
 		runLog.Errorf("pipeline run failed after %dms: %v", out.DurationMs, runErr)
 	}
 	runLog.Infof("pipeline run %s — processed=%d written=%d failed=%d dropped=%d deleted=%d duration=%dms",
@@ -266,7 +272,9 @@ func (a *DataPipelineAction) Run(
 		runID = newRunID()
 	}
 
+	ctx, runDone := activeRuns.start(ctx)
 	go func() {
+		defer runDone()
 		runLog := newRunLog(a.ref, runID)
 		runLog.Infof("pipeline run started — source=%s sink=%s", a.def.Source.Type, a.def.Sink.Type)
 		a.auditRunStart(runID)
@@ -278,7 +286,7 @@ func (a *DataPipelineAction) Run(
 		out.DurationMs = totalDur.Milliseconds()
 
 		a.finalizeStatus(runLog, out, runErr)
-		if runErr != nil {
+		if runErr != nil && out.Status != "cancelled" {
 			runLog.Errorf("pipeline run failed after %dms: %v", out.DurationMs, runErr)
 		}
 		runLog.Infof("pipeline run %s — processed=%d written=%d failed=%d dropped=%d deleted=%d duration=%dms",
@@ -430,12 +438,15 @@ func (a *DataPipelineAction) lineageStart(runID string) {
 // lineageFinish emits a COMPLETE (or FAIL) event with the output row count.
 func (a *DataPipelineAction) lineageFinish(runID string, out *Output) {
 	evType := lineage.Complete
-	if out.Status == "failed" {
+	switch out.Status {
+	case "failed":
 		evType = lineage.Fail
+	case "cancelled":
+		evType = lineage.Abort
 	}
 	// -1 tells the emitter to omit the CDC-stats facet entirely: only a
 	// delete-capable sink (signalled by out.Metadata["cdcStats"], set in
-	// executePipelineImpl right after the sink reports its stats) populates
+	// execute right after the sink reports its stats) populates
 	// this, so a plain insert/upsert-only pipeline's lineage output isn't
 	// cluttered with an always-zero "rowsDeleted" field.
 	rowsDeleted := int64(-1)
@@ -474,767 +485,7 @@ func (a *DataPipelineAction) executePipeline(ctx context.Context, in *Input, run
 			runLog.Errorf("recovered from panic in pipeline run: %v\n%s", r, debug.Stack())
 		}
 	}()
-	return a.executePipelineImpl(ctx, in, runLog, runID)
-}
-
-func (a *DataPipelineAction) executePipelineImpl(ctx context.Context, in *Input, runLog corelog.Logger, runID string) (*Output, error) {
-	def := a.def
-	out := &Output{}
-
-	// Honor a context that is already cancelled before any work begins. Without
-	// this the read-ahead goroutine sees the cancelled context, produces nothing,
-	// and the drain loop returns nil — reporting a misleading "completed" run with
-	// zero rows. A caller that aborts pre-flight must get a deterministic failure
-	// so it never mistakes a cancelled run for a successful load.
-	if err := ctx.Err(); err != nil {
-		return out, err
-	}
-
-	// Graph runner: when the pipeline carries a NON-REDUCIBLE DAG — conditional
-	// edges or true fan-out/fan-in that the linear source→transforms→sink chain
-	// cannot express — execute it with the streaming graph runner. A pure linear
-	// chain, even one promoted to an explicit graph block, is NOT diverted here:
-	// it stays on the linear path below and keeps checkpoint, HWM, DQ and
-	// parallel-worker behaviour untouched (graphExecutable returns false for it).
-	if graphExecutable(def) {
-		runLog.Infof("executing via graph runner — non-reducible DAG (%d nodes, %d edges)",
-			len(def.Graph.Nodes), len(def.Graph.Edges))
-		return a.runGraph(ctx, in, runLog, runID)
-	}
-
-	// Echo the effective run configuration so operators can confirm from the run
-	// log which settings were honored (many settings have no other visible
-	// side-effect). Kept to a single line to avoid log noise.
-	runLog.Infof("run config — mode=%s batchSize=%d bufferBatches=%d maxMemoryMB=%d transformWorkers=%d scaling=%s checkpoint=%s(rows=%d,secs=%d) incremental=%s metrics=%s",
-		orDefault(def.Mode, "etl"), def.Performance.BatchSize, def.Performance.SourceBufferBatches,
-		def.Performance.MaxMemoryMB, orDefaultInt(def.Performance.TransformWorkers, 1),
-		orDefault(def.Scaling.Mode, "single"), orDefault(def.Checkpoint.Type, "none"),
-		def.Checkpoint.IntervalRows, def.Checkpoint.IntervalSeconds,
-		orDefault(def.Incremental.Mode, "none"), orDefault(def.Observability.Metrics, "none"))
-
-	// --- checkpoint ---
-	ckpt, err := openCheckpoint(def)
-	if err != nil {
-		return out, fmt.Errorf("checkpoint open: %w", err)
-	}
-	defer ckpt.Close()
-
-	// --- watermark store ---
-	// openWatermarkStore always returns a non-nil store (NoopStore when disabled).
-	wmStore, err := openWatermarkStore(def)
-	if err != nil {
-		return out, fmt.Errorf("watermark store open: %w", err)
-	}
-	defer wmStore.Close()
-
-	// Load the prior mark and, when present, inject it into the source config
-	// so that the jdbc (or other HWM-aware) source can append the WHERE predicate.
-	var priorMark *watermark.Mark
-	if def.Incremental.Mode == "hwm" {
-		priorMark, err = wmStore.Load(a.ref)
-		if err != nil {
-			return out, fmt.Errorf("watermark load: %w", err)
-		}
-		// If there is no stored mark but an initialValue is configured, synthesise
-		// a mark so the source predicates from the configured start point.
-		if priorMark == nil && def.Incremental.InitialValue != "" {
-			priorMark = &watermark.Mark{
-				Column:    def.Incremental.Column,
-				Value:     def.Incremental.InitialValue,
-				ValueType: def.Incremental.ValueType,
-				SavedAt:   time.Now().UTC(),
-			}
-		}
-		if priorMark != nil {
-			runLog.Infof("incremental load — %s > %s (type: %s)",
-				priorMark.Column, priorMark.Value, priorMark.ValueType)
-		} else {
-			runLog.Infof("incremental load — no prior mark, performing full-table load")
-		}
-	}
-
-	// --- source ---
-	srcCfg := a.buildSourceConfig(in)
-	// Inject the high-water-mark into the source config so HWM-aware sources
-	// (e.g. the jdbc source) can append a parameterised WHERE predicate.
-	// Keys are intentionally prefixed with "hwm" to avoid colliding with any
-	// source-specific config key.
-	if priorMark != nil {
-		srcCfg["hwmColumn"] = priorMark.Column
-		srcCfg["hwmValue"] = priorMark.Value
-		srcCfg["hwmValueType"] = priorMark.ValueType
-	}
-	// Checkpoint-mode Kafka resume: seek the source to the exact processed
-	// offsets recorded in the checkpoint token (captured atomically with the
-	// window-state snapshot) so the source position and the restored window
-	// state resume from the SAME token — independent of whether the last external
-	// offset commit succeeded. This closes the crash-between-token-and-commit
-	// double-count window. Single mode only: sharded/distributed disallow
-	// windowed Kafka (co-partition guard) and resume per-partition inside drain.
-	if def.Source.Type == "kafka" && (def.Scaling.Mode == "" || def.Scaling.Mode == "single") {
-		rk := runID
-		if def.Checkpoint.Key != "" {
-			rk = def.Checkpoint.Key
-		}
-		if tok, tErr := ckpt.Load(rk); tErr == nil && tok != nil && len(tok.Payload) > 0 {
-			srcCfg["resumeCursor"] = tok.Payload
-		}
-	}
-	src, err := source.New(def.Source.Type, srcCfg)
-	if err != nil {
-		return out, fmt.Errorf("source open: %w", err)
-	}
-	defer src.Close()
-	// Inject the active metrics Recorder into the source when it opts in via the
-	// RecorderAware interface, so component-specific metrics (e.g. a tailing
-	// source's reconciliation counters) emit through the configured backend
-	// (prometheus/otel/none) instead of a hard-wired one — discovered by type
-	// assertion, exactly like checkpoint.CursorProvider.
-	if ra, ok := src.(metrics.RecorderAware); ok {
-		ra.SetRecorder(a.recorder)
-	}
-
-	// --- transforms ---
-	// Build the user-declared transform configs.
-	transformCfgs := make([]map[string]interface{}, 0, len(def.Transforms)+1)
-
-	// Execution mode gates the in-flight transform stage:
-	//   etl  → transforms run in-flight (default).
-	//   el   → raw extract-load; the transform pipeline is bypassed entirely.
-	//   elt  → load raw now, transform in-target later; in-flight transforms are
-	//          also bypassed (they are expected to run in the destination system).
-	mode := def.Mode
-	if mode == "" {
-		mode = "etl"
-	}
-	inFlightTransforms := mode == "etl"
-	if !inFlightTransforms && (len(def.Transforms) > 0 || def.SchemaDrift.Policy != "") {
-		if mode == "elt" {
-			runLog.Infof("mode=elt — %d declared transform(s) are NOT run in-flight; they are expected to execute in the target system", len(def.Transforms))
-		} else {
-			runLog.Warnf("mode=el — raw extract-load; %d declared transform(s) will be ignored", len(def.Transforms))
-		}
-	}
-
-	// Auto-prepend the schemadrift transform when a drift policy is configured.
-	// The schemadrift package must be imported (blank import) alongside this
-	// package in the main program; if it is not imported the Build call below
-	// will return an "unknown type" error with a clear message.
-	if inFlightTransforms && def.SchemaDrift.Policy != "" {
-		driftCfg := map[string]interface{}{
-			"type":    "schemadrift",
-			"policy":  def.SchemaDrift.Policy,
-			"onDrift": def.SchemaDrift.OnDrift,
-		}
-		transformCfgs = append(transformCfgs, driftCfg)
-	}
-
-	if inFlightTransforms {
-		for _, td := range def.Transforms {
-			transformCfgs = append(transformCfgs, td.Extra)
-		}
-	}
-
-	// Auto-append a dq transform stage built from the contract's expectations,
-	// after any user-declared transforms (validating what's about to reach the
-	// sink) — UNLESS the pipeline already has an explicit dq stage, so a
-	// pipeline with its own (possibly different) dq gate is never
-	// double-gated. See ContractDef.Expectations.
-	if inFlightTransforms && def.Contract != nil && len(def.Contract.Expectations) > 0 {
-		hasExplicitDQ := false
-		for _, td := range def.Transforms {
-			if td.Type == "dq" {
-				hasExplicitDQ = true
-				break
-			}
-		}
-		if !hasExplicitDQ {
-			contractDQCfg := map[string]interface{}{
-				"type":             "dq",
-				"expectations":     def.Contract.Expectations,
-				"qualityThreshold": def.Contract.QualityThreshold,
-				"onFail":           def.Contract.OnViolation,
-			}
-			if def.Contract.ErrorSinkType != "" {
-				contractDQCfg["errorSinkType"] = def.Contract.ErrorSinkType
-				contractDQCfg["errorSinkConfig"] = def.Contract.ErrorSinkConfig
-			}
-			transformCfgs = append(transformCfgs, contractDQCfg)
-		} else {
-			runLog.Infof("contract.expectations declared but the pipeline already has an explicit dq transform — not auto-appending a second gate")
-		}
-	}
-
-	txPipeline, err := transform.Build(transformCfgs)
-	if err != nil {
-		return out, fmt.Errorf("transforms build: %w", err)
-	}
-	defer txPipeline.Close()
-
-	// Locate the hwm transform (if present) so the engine can read MaxSeen()
-	// after each checkpoint interval. A nil hwmProvider means no hwm transform
-	// was declared; watermark persistence is skipped silently.
-	hwmProvider := findHWMTransform(txPipeline)
-
-	// Locate the dq transform (if present) so the engine can include the last
-	// DQ gate report in Output.Metadata after the pipeline completes.
-	// A nil dqProvider means no dq transform was declared; metadata is skipped.
-	dqProvider := findDQGateProvider(txPipeline)
-
-	// Locate the window transform (if present). The engine flushes its remaining
-	// open windows after the source EOF, and excludes windowed pipelines from the
-	// parallel transform path (windowed aggregation is stateful and order-sensitive).
-	winOp := findWindowedOperator(txPipeline)
-
-	// --- sink ---
-	snk, err := sink.New(def.Sink.Type, def.Sink.Options)
-	if err != nil {
-		return out, fmt.Errorf("sink open: %w", err)
-	}
-	// Guard against double-close: the happy path closes the sink explicitly (to
-	// surface upload/commit errors that only occur at Close); this deferred close
-	// then only runs on an early error return.
-	sinkClosed := false
-	defer func() {
-		if !sinkClosed {
-			_ = snk.Close()
-		}
-	}()
-
-	// --- DLQ sink (lazy: inner connection opened only on first bad row) ---
-	// dlq is nil when no DLQ is configured; rowLevelWrite handles nil safely.
-	dlq, err := openDLQ(runLog, def, a.ref, runID)
-	if err != nil {
-		return out, fmt.Errorf("dlq open: %w", err)
-	}
-	if dlq != nil {
-		defer dlq.Close()
-	}
-
-	// --- read → transform → write loop ---
-	batchSize := def.Performance.BatchSize
-	ckptIntervalRows := int64(def.Checkpoint.IntervalRows)
-	ckptIntervalSecs := def.Checkpoint.IntervalSeconds
-
-	// maxMemoryMB backpressure budget for the read-ahead buffer. The reader
-	// goroutine reads ahead up to sourceBufferBatches batches, but never lets the
-	// total in-flight (un-consumed) bytes exceed this limit — protecting memory
-	// when a downstream stage (transform/sink) is slower than the source.
-	maxInFlightBytes := int64(def.Performance.MaxMemoryMB) * 1024 * 1024
-	bufDepth := def.Performance.SourceBufferBatches
-	if bufDepth < 1 {
-		bufDepth = 1
-	}
-
-	// transformWorkers > 1 requests multi-core transform parallelism. It is only
-	// safe when transforms are STATELESS and there is no ordered-cursor state to
-	// protect, i.e. no HWM/DQ/schemadrift accumulator and no checkpointing. When
-	// eligible we run an ordered-parallel path: N worker goroutines each own a
-	// private transform pipeline, and a single collector reassembles results in
-	// the original batch order before writing — so the sink write and all
-	// counters stay single-threaded (no data race) while transforms use N cores.
-	// When the constraints don't hold we keep transform single-threaded; reads
-	// are still overlapped with transform+write by the read-ahead goroutine.
-	//
-	// Note this exclusion list deliberately does NOT test for a delete-capable/
-	// CDC-target sink (e.g. jdbc's opColumn mode, sink.StatsReporter). That's
-	// safe by construction, not by omission: only transform.Apply runs on the
-	// worker goroutines above — the sink write itself (rowLevelWrite, called
-	// from process() below) always runs on the single collector goroutine that
-	// drains resCh in order, so a sink's internal counters (e.g. jdbcSink's
-	// rowsDeleted) never see concurrent access regardless of transformWorkers.
-	// See TestEnterprise_CDC_DeleteCapableSink_ParallelTransformWorkers
-	// (integration package), which runs under -race to prove it.
-	txWorkers := def.Performance.TransformWorkers
-	if txWorkers < 1 {
-		txWorkers = 1
-	}
-	parallelEligible := txWorkers > 1 &&
-		hwmProvider == nil && dqProvider == nil && winOp == nil &&
-		def.SchemaDrift.Policy == "" &&
-		!pipelineHasSinkOwner(txPipeline) &&
-		(def.Checkpoint.Type == "" || def.Checkpoint.Type == "none")
-	if txWorkers > 1 {
-		if parallelEligible {
-			runLog.Infof("transformWorkers=%d — parallel transform across %d workers with ordered output", txWorkers, txWorkers)
-		} else {
-			runLog.Infof("transformWorkers=%d — ordered processing required (checkpoint/HWM/DQ/drift); transform runs single-threaded, reads overlapped via read-ahead", txWorkers)
-		}
-	}
-
-	// drain processes a single already-open source to exhaustion, updating the
-	// shared Output. It is invoked once for single mode and once per assigned
-	// partition for sharded/distributed modes (ckptKey namespaces the checkpoint
-	// so partitions resume independently). A reader goroutine decouples reads
-	// from transform+write so the two overlap; transform+write stay sequential to
-	// preserve transform state (hwm/dq accumulators) and checkpoint-cursor order.
-	drain := func(pSrc source.Source, ckptKey string) error {
-		// Resume from checkpoint (per-source key).
-		token, lErr := ckpt.Load(ckptKey)
-		if lErr != nil {
-			return fmt.Errorf("checkpoint load: %w", lErr)
-		}
-		if token != nil && token.RowsProcessed > 0 {
-			runLog.Infof("resuming %q — skipping %d already-processed rows", ckptKey, token.RowsProcessed)
-			if skipErr := pSrc.Skip(token.RowsProcessed); skipErr != nil {
-				return fmt.Errorf("source skip: %w", skipErr)
-			}
-			out.RowsProcessed += token.RowsProcessed
-		}
-		// Restore window operator state captured at the same offset as the token so
-		// open windows and their aggregations resume in sync with the source cursor.
-		if token != nil && len(token.WindowState) > 0 && winOp != nil {
-			if rErr := winOp.Restore(token.WindowState); rErr != nil {
-				runLog.Warnf("window state restore failed (starting fresh): %v", rErr)
-			} else {
-				runLog.Infof("resuming %q — restored window state (%d bytes)", ckptKey, len(token.WindowState))
-			}
-		}
-
-		// resumeBaseline is out.RowsProcessed after any resume skip; subtracting it
-		// yields this run's processed-row count, which aligns with a Committer
-		// source's run-local returned-row marks for read-ahead-safe offset commits.
-		resumeBaseline := out.RowsProcessed
-		var rowsSinceCkpt int64
-		lastCkpt := time.Now()
-
-		// Read-ahead: a dedicated goroutine reads batches into readCh while the
-		// main goroutine transforms+writes. A byte semaphore enforces maxMemoryMB.
-		type readItem struct {
-			batch   *record.RecordBatch
-			readDur time.Duration
-			err     error
-		}
-		readCh := make(chan readItem, bufDepth)
-		var inFlight int64 // bytes currently buffered (atomic)
-		readCtx, cancelRead := context.WithCancel(ctx)
-		defer cancelRead()
-
-		go func() {
-			defer close(readCh)
-			for {
-				if readCtx.Err() != nil {
-					return
-				}
-				// Backpressure: block while the buffer already holds ~maxMemoryMB.
-				for maxInFlightBytes > 0 && atomic.LoadInt64(&inFlight) >= maxInFlightBytes {
-					if readCtx.Err() != nil {
-						return
-					}
-					time.Sleep(2 * time.Millisecond)
-				}
-				t0 := time.Now()
-				b, rErr := pSrc.ReadBatch(batchSize)
-				rd := time.Since(t0)
-				if b != nil && b.Len() > 0 {
-					atomic.AddInt64(&inFlight, batchBytes(b))
-				}
-				select {
-				case readCh <- readItem{batch: b, readDur: rd, err: rErr}:
-				case <-readCtx.Done():
-					return
-				}
-				if rErr != nil {
-					return // EOF or hard error — stop reading.
-				}
-			}
-		}()
-
-		for item := range readCh {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			batch, readErr, readDur := item.batch, item.err, item.readDur
-			if readErr != nil && readErr != io.EOF {
-				return fmt.Errorf("source read: %w", readErr)
-			}
-
-			if batch != nil && batch.Len() > 0 {
-				bBytes := batchBytes(batch)
-				batchLen := int64(batch.Len())
-				out.RowsProcessed += batchLen
-				rowsSinceCkpt += batchLen
-
-				a.recorder.BatchRead(a.ref, def.Source.Type, int(batchLen), readDur)
-				a.checkStall(runLog, "read", readDur)
-
-				// --- transform ---
-				t1 := time.Now()
-				transformed, txErr := txPipeline.Apply(batch)
-				txDur := time.Since(t1)
-				if transformed != batch {
-					record.Put(batch)
-				}
-				// Batch fully consumed from the buffer — release its bytes.
-				atomic.AddInt64(&inFlight, -bBytes)
-
-				if txErr != nil {
-					runLog.Warnf("transform error on batch of %d rows (routing to failed): %v", batchLen, txErr)
-					a.recorder.BatchFailed(a.ref, int(batchLen))
-					out.RowsFailed += batchLen
-				} else if transformed == nil {
-					a.recorder.BatchTransformed(a.ref, int(batchLen), 0, txDur)
-					a.checkStall(runLog, "transform", txDur)
-					out.RowsDropped += batchLen
-				} else if transformed.Len() > 0 {
-					txOut := int(transformed.Len())
-					a.recorder.BatchTransformed(a.ref, int(batchLen), txOut, txDur)
-					a.checkStall(runLog, "transform", txDur)
-
-					// --- write (with per-row DLQ fallback) ---
-					t2 := time.Now()
-					written, writeErr := a.rowLevelWrite(runLog, snk, dlq, transformed, runID, out)
-					writeDur := time.Since(t2)
-					record.Put(transformed)
-					if writeErr != nil {
-						return writeErr
-					}
-					out.RowsWritten += int64(written)
-					a.recorder.BatchWritten(a.ref, def.Sink.Type, written, writeDur)
-					a.checkStall(runLog, "write", writeDur)
-				} else {
-					a.recorder.BatchTransformed(a.ref, int(batchLen), 0, txDur)
-					a.checkStall(runLog, "transform", txDur)
-					record.Put(transformed)
-				}
-
-				// Checkpoint at configured row interval or time interval.
-				rowTrigger := ckptIntervalRows > 0 && rowsSinceCkpt >= ckptIntervalRows
-				timeTrigger := ckptIntervalSecs > 0 && time.Since(lastCkpt) >= time.Duration(ckptIntervalSecs)*time.Second
-				if rowTrigger || timeTrigger {
-					if err := snk.Flush(); err != nil {
-						return fmt.Errorf("sink flush (checkpoint): %w", err)
-					}
-					saveCheckpoint(runLog, ckpt, ckptKey, def.Source.Type, out.RowsProcessed, pSrc, winOp, out.RowsProcessed-resumeBaseline)
-					a.recorder.CheckpointSaved(a.ref)
-					saveWatermark(runLog, wmStore, hwmProvider, def, a.ref)
-					a.emitWindowMetrics(winOp)
-					// Surface the checkpoint so operators can see progress being
-					// persisted and which trigger fired (row count vs. time).
-					reason := "rows"
-					if timeTrigger && !rowTrigger {
-						reason = "time"
-					}
-					runLog.Infof("checkpoint saved — %d rows processed (trigger=%s)", out.RowsProcessed, reason)
-					rowsSinceCkpt = 0
-					lastCkpt = time.Now()
-				}
-			}
-		}
-		return nil
-	}
-
-	// --- execution: single-instance vs horizontally scaled ---
-	scMode := def.Scaling.Mode
-	if scMode == "" {
-		scMode = "single"
-	}
-	// drainParallel is the ordered-parallel transform path (see parallelEligible).
-	// A reader feeds sequence-numbered batches to a pool of workers, each with a
-	// private transform pipeline; a collector reassembles results in read order
-	// so the sink write + counter updates stay single-threaded. It carries no
-	// checkpoint/watermark logic because parallelEligible already excludes those.
-	drainParallel := func(pSrc source.Source) error {
-		type result struct {
-			seq         int64
-			src         *record.RecordBatch
-			transformed *record.RecordBatch
-			batchLen    int64
-			txErr       error
-			txDur       time.Duration
-			readDur     time.Duration
-		}
-		type job struct {
-			seq     int64
-			batch   *record.RecordBatch
-			readDur time.Duration
-		}
-
-		// One private transform pipeline per worker so concurrent Apply calls
-		// never share mutable transform state.
-		pipes := make([]*transform.Pipeline, txWorkers)
-		for i := range pipes {
-			p, bErr := transform.Build(transformCfgs)
-			if bErr != nil {
-				for j := 0; j < i; j++ {
-					_ = pipes[j].Close()
-				}
-				return fmt.Errorf("transforms build (worker %d): %w", i, bErr)
-			}
-			pipes[i] = p
-		}
-		defer func() {
-			for _, p := range pipes {
-				_ = p.Close()
-			}
-		}()
-
-		jobCh := make(chan job, txWorkers)
-		resCh := make(chan result, txWorkers*2)
-		wctx, cancel := context.WithCancel(ctx)
-		defer cancel()
-
-		var inFlight int64
-		go func() {
-			defer close(jobCh)
-			var seq int64
-			for {
-				if wctx.Err() != nil {
-					return
-				}
-				for maxInFlightBytes > 0 && atomic.LoadInt64(&inFlight) >= maxInFlightBytes {
-					if wctx.Err() != nil {
-						return
-					}
-					time.Sleep(2 * time.Millisecond)
-				}
-				t0 := time.Now()
-				b, rErr := pSrc.ReadBatch(batchSize)
-				rd := time.Since(t0)
-				if b != nil && b.Len() > 0 {
-					atomic.AddInt64(&inFlight, batchBytes(b))
-					select {
-					case jobCh <- job{seq: seq, batch: b, readDur: rd}:
-						seq++
-					case <-wctx.Done():
-						return
-					}
-				}
-				if rErr != nil {
-					return
-				}
-			}
-		}()
-
-		var wg sync.WaitGroup
-		for i := 0; i < txWorkers; i++ {
-			wg.Add(1)
-			go func(p *transform.Pipeline) {
-				defer wg.Done()
-				for j := range jobCh {
-					t1 := time.Now()
-					tOut, err := p.Apply(j.batch)
-					resCh <- result{
-						seq: j.seq, src: j.batch, transformed: tOut,
-						batchLen: int64(j.batch.Len()), txErr: err,
-						txDur: time.Since(t1), readDur: j.readDur,
-					}
-				}
-			}(pipes[i])
-		}
-		go func() { wg.Wait(); close(resCh) }()
-
-		pending := make(map[int64]result)
-		var next int64
-		var writeErr error
-		process := func(r result) {
-			bBytes := batchBytes(r.src)
-			out.RowsProcessed += r.batchLen
-			a.recorder.BatchRead(a.ref, def.Source.Type, int(r.batchLen), r.readDur)
-			a.checkStall(runLog, "read", r.readDur)
-			if r.transformed != r.src {
-				record.Put(r.src)
-			}
-			atomic.AddInt64(&inFlight, -bBytes)
-			switch {
-			case r.txErr != nil:
-				runLog.Warnf("transform error on batch of %d rows (routing to failed): %v", r.batchLen, r.txErr)
-				a.recorder.BatchFailed(a.ref, int(r.batchLen))
-				out.RowsFailed += r.batchLen
-			case r.transformed == nil:
-				a.recorder.BatchTransformed(a.ref, int(r.batchLen), 0, r.txDur)
-				a.checkStall(runLog, "transform", r.txDur)
-				out.RowsDropped += r.batchLen
-			case r.transformed.Len() == 0:
-				a.recorder.BatchTransformed(a.ref, int(r.batchLen), 0, r.txDur)
-				a.checkStall(runLog, "transform", r.txDur)
-				record.Put(r.transformed)
-			default:
-				txOut := int(r.transformed.Len())
-				a.recorder.BatchTransformed(a.ref, int(r.batchLen), txOut, r.txDur)
-				a.checkStall(runLog, "transform", r.txDur)
-				t2 := time.Now()
-				written, wErr := a.rowLevelWrite(runLog, snk, dlq, r.transformed, runID, out)
-				writeDur := time.Since(t2)
-				record.Put(r.transformed)
-				if wErr != nil {
-					writeErr = wErr
-					cancel()
-					return
-				}
-				out.RowsWritten += int64(written)
-				a.recorder.BatchWritten(a.ref, def.Sink.Type, written, writeDur)
-				a.checkStall(runLog, "write", writeDur)
-			}
-		}
-		for r := range resCh {
-			if writeErr != nil {
-				continue // keep draining results after an error so goroutines exit
-			}
-			pending[r.seq] = r
-			for {
-				nr, ok := pending[next]
-				if !ok {
-					break
-				}
-				delete(pending, next)
-				process(nr)
-				next++
-			}
-		}
-		return writeErr
-	}
-
-	// resumeKey is the checkpoint key for single-instance runs. Streaming
-	// pipelines set checkpoint.key to a stable value so window state and source
-	// position resume across restarts; batch runs default to the per-run id.
-	resumeKey := runID
-	if def.Checkpoint.Key != "" {
-		resumeKey = def.Checkpoint.Key
-	}
-
-	// stageStats for the Studio graph run overlay are collected only from the
-	// single-path txPipeline; the parallel/scaled paths build their own per-worker
-	// pipelines, so per-stage counts are omitted there (the overlay falls back to
-	// the aggregate source/sink/dlq badges).
-	singlePipeline := false
-	switch {
-	case scMode == "sharded" || scMode == "distributed":
-		if err := a.runScaled(ctx, runLog, def, scMode, src, srcCfg, runID, drain); err != nil {
-			return out, err
-		}
-	case parallelEligible:
-		if err := drainParallel(src); err != nil {
-			return out, err
-		}
-	default:
-		singlePipeline = true
-		if err := drain(src, resumeKey); err != nil {
-			return out, err
-		}
-	}
-
-	// Emit any windows still open once the source is exhausted (bounded-source EOF).
-	// The window transform fires closed windows incrementally during Apply; Flush
-	// drains whatever remains and writes it through the normal sink path.
-	if winOp != nil {
-		flushed, ferr := winOp.Flush()
-		if ferr != nil {
-			return out, fmt.Errorf("window flush: %w", ferr)
-		}
-		if flushed != nil && flushed.Len() > 0 {
-			written, werr := a.rowLevelWrite(runLog, snk, dlq, flushed, runID, out)
-			if werr != nil {
-				return out, werr
-			}
-			out.RowsWritten += int64(written)
-		}
-		if flushed != nil {
-			record.Put(flushed)
-		}
-		st := winOp.Stats()
-		runLog.Infof("window stats — emitted=%d openAtEnd=%d lateDropped=%d evicted=%d spillFailures=%d watermark=%dms",
-			st.WindowsEmitted, st.OpenWindows, st.LateDropped, st.StateEvicted, st.SpillFailures, st.WatermarkMillis)
-		if st.SpillFailures > 0 {
-			runLog.Warnf("window state: %d keys dropped because spill-to-disk failed — results may be incomplete (check disk space/permissions)", st.SpillFailures)
-		}
-		if out.Metadata == nil {
-			out.Metadata = make(map[string]interface{})
-		}
-		out.Metadata["windowStats"] = map[string]interface{}{
-			"windowsEmitted":  st.WindowsEmitted,
-			"lateDropped":     st.LateDropped,
-			"stateEvicted":    st.StateEvicted,
-			"openWindows":     st.OpenWindows,
-			"spillFailures":   st.SpillFailures,
-			"watermarkMillis": st.WatermarkMillis,
-		}
-		a.emitWindowMetrics(winOp)
-	}
-
-	// Final flush.
-	if err := snk.Flush(); err != nil {
-		return out, fmt.Errorf("sink final flush: %w", err)
-	}
-
-	// Contract reconciliation (optional, before the sink closes — it reuses
-	// the sink's own open connection). See ContractDef.Reconciliation.
-	// Must run AFTER Flush() (buffered writes aren't durable/visible to a
-	// fresh COUNT(*) query until flushed) and BEFORE Close() (which drops the
-	// connection ReconciliationCount needs).
-	a.runReconciliation(runLog, def, src, snk, out)
-
-	// Explicitly close the sink and surface any error. This is critical for sinks
-	// whose durable write happens at Close (e.g. the object-store sink uploads the
-	// buffered object on Close) — relying only on the deferred Close would discard
-	// that error and mis-report a failed upload as a successful run. Closing here
-	// makes the deferred snk.Close() a harmless no-op (idempotent close).
-	if err := snk.Close(); err != nil {
-		return out, fmt.Errorf("sink close: %w", err)
-	}
-	sinkClosed = true
-
-	// Delete-capable/CDC-target sinks (e.g. jdbc's opColumn mode) optionally
-	// report a rows-deleted count distinct from RowsWritten, so lineage/audit
-	// output for a CDC run shows "N rows deleted" instead of folding deletes
-	// into an undifferentiated write total. Sinks without a delete concept
-	// simply don't implement StatsReporter, so out.RowsDeleted stays 0 and no
-	// lineage facet is emitted for it (out.Metadata["cdcStats"] is the signal
-	// lineageFinish uses to decide whether the sink is delete-capable at all,
-	// distinct from "delete-capable but zero deletes this run").
-	if reporter, ok := snk.(sink.StatsReporter); ok {
-		if st := reporter.SinkStats(); st.RowsDeleted >= 0 {
-			out.RowsDeleted = st.RowsDeleted
-			if out.Metadata == nil {
-				out.Metadata = make(map[string]interface{})
-			}
-			out.Metadata["cdcStats"] = map[string]interface{}{"rowsDeleted": st.RowsDeleted}
-		}
-	}
-
-	if def.Checkpoint.DeleteOnSuccess {
-		// A failed delete leaves a stale checkpoint behind, which is harmless in
-		// isolation (a fresh run of a completed pipeline simply doesn't need it,
-		// and any FUTURE run overwrites it before ever reading it) but worth
-		// surfacing rather than silently swallowing, matching saveCheckpoint's
-		// own "warn and continue" pattern below.
-		if err := ckpt.Delete(resumeKey); err != nil {
-			runLog.Warnf("checkpoint delete failed (continuing; a stale checkpoint may remain): %v", err)
-		}
-	} else {
-		saveCheckpoint(runLog, ckpt, resumeKey, def.Source.Type, out.RowsProcessed, src, winOp, math.MaxInt64)
-		a.recorder.CheckpointSaved(a.ref)
-	}
-
-	// Always persist the final high-water mark on successful completion,
-	// regardless of deleteOnSuccess — the watermark must survive a checkpoint
-	// reset so subsequent runs still load incrementally.
-	saveWatermark(runLog, wmStore, hwmProvider, def, a.ref)
-
-	// Collect DQ gate report into Output.Metadata so downstream flows can
-	// inspect quality scores without parsing logs. The report is included
-	// regardless of PassedGate — callers can inspect PassedGate themselves.
-	if dqProvider != nil {
-		if report := dqProvider.LastRunReport(); report != nil {
-			if out.Metadata == nil {
-				out.Metadata = make(map[string]interface{})
-			}
-			report.PipelineRef = a.ref
-			out.Metadata["dqReport"] = report
-		}
-	}
-
-	// Per-stage row counters for the Studio graph run overlay (single-path runs).
-	if singlePipeline {
-		if stats := txPipeline.StageStats(); len(stats) > 0 {
-			if out.Metadata == nil {
-				out.Metadata = make(map[string]interface{})
-			}
-			out.Metadata["stageStats"] = stats
-		}
-	}
-
-	return out, nil
+	return a.execute(ctx, in, runLog, runID)
 }
 
 // buildSourceConfig merges definition config with runtime overrides.
@@ -1328,34 +579,21 @@ func (a *DataPipelineAction) emitWindowMetrics(winOp wintransform.WindowedOperat
 	a.recorder.Gauge("flogo_pipeline_window_spill_failures_total", "Cumulative keys dropped because spill-to-disk failed (should stay 0).", labels, float64(st.SpillFailures))
 }
 
-func saveCheckpoint(runLog corelog.Logger, ckpt checkpoint.Checkpoint, runID, format string, rowsProcessed int64, src source.Source, winOp wintransform.WindowedOperator, committerRows int64) {
-	var cp checkpoint.CursorProvider
-	if p, ok := src.(checkpoint.CursorProvider); ok {
-		cp = p
+// hasUncommitted reports whether src has consumed input it has not yet
+// acknowledged (see source.UncommittedReporter).
+func hasUncommitted(src source.Source) bool {
+	r, ok := src.(source.UncommittedReporter)
+	return ok && r.HasUncommitted()
+}
+
+// checkpointFailed applies checkpoint.onSaveError to a failed checkpoint: it
+// returns the error to abort the run under "fail", otherwise logs it.
+func checkpointFailed(runLog corelog.Logger, def *Definition, what string, err error) error {
+	if def.Checkpoint.failOnCheckpointError() {
+		return fmt.Errorf("%s failed (checkpoint.onSaveError=fail): %w", what, err)
 	}
-	t := checkpoint.NewToken(format, rowsProcessed, cp)
-	// Attach a window-state snapshot (if this pipeline has a window transform) so
-	// it is persisted atomically with the source cursor and replayed on resume.
-	if winOp != nil {
-		if snap, err := winOp.Snapshot(); err != nil {
-			runLog.Warnf("window snapshot failed (checkpoint without window state): %v", err)
-		} else {
-			t.WindowState = snap
-		}
-	}
-	if err := ckpt.Save(runID, t); err != nil {
-		runLog.Warnf("checkpoint save failed (continuing): %v", err)
-		return
-	}
-	// Advance the source's external acknowledgement (e.g. Kafka offsets) only
-	// after the token is durable, so a crash re-delivers everything after this
-	// checkpoint. committerRows is the pipeline's processed-row boundary, so the
-	// commit never runs ahead of processed (read-ahead-safe) — no lost records.
-	if c, ok := src.(source.Committer); ok {
-		if err := c.Commit(committerRows); err != nil {
-			runLog.Warnf("source commit failed (continuing): %v", err)
-		}
-	}
+	runLog.Warnf("%s failed (continuing; previous checkpoint retained): %v", what, err)
+	return nil
 }
 
 func newRunID() string {
@@ -1381,22 +619,6 @@ func orDefaultInt(v, def int) int {
 		return def
 	}
 	return v
-}
-
-// batchBytes estimates the in-memory size of a batch for the maxMemoryMB
-// backpressure budget. It is a cheap heuristic — a fixed per-cell estimate — not
-// an exact sizeof; the goal is proportional accounting to bound the read-ahead
-// buffer, not precise memory measurement.
-func batchBytes(b *record.RecordBatch) int64 {
-	if b == nil || len(b.Rows) == 0 {
-		return 0
-	}
-	const bytesPerCell = 32 // rough average across numeric/string cells
-	cols := int64(len(b.Columns))
-	if cols == 0 && len(b.Rows) > 0 {
-		cols = int64(len(b.Rows[0]))
-	}
-	return int64(len(b.Rows)) * cols * bytesPerCell
 }
 
 // openWatermarkStore creates the watermark.Store configured in def.Incremental.
@@ -1571,15 +793,21 @@ func (p *plainDLQAdapter) InjectContext(_, _ string) {}
 // Happy path (no error from snk.WriteBatch): returns (nRows, nil) — zero extra
 // allocations, identical behaviour to the old single WriteBatch call.
 //
-// On batch-level error: falls back to writing each row individually in its own
-// single-row batch.  Rows that succeed are accumulated into a "good" batch and
-// written to snk at the end.  Rows that fail individually are accumulated into
-// a "bad" batch and — when a DLQ sink is configured — forwarded to dlq via
-// WriteBatchErrors so the error envelope carries the per-row message.
+// On batch-level error: falls back to writing each row individually (see
+// isolateRows). A row whose single-row write succeeds is already delivered to
+// snk and is counted as written — it is NOT written again, which would
+// duplicate it in non-idempotent sinks. Rows that fail individually are
+// forwarded to the DLQ (when configured) with their per-row error message.
+//
+// Buffering sinks (e.g. jdbc) can fail a flush that also contained rows
+// accepted by EARLIER calls; they hand those back as sink.UnflushedRowsError.
+// Those rows were already counted as written, so they are isolated too and
+// each one that fails moves from out.RowsWritten to out.RowsFailed instead of
+// being lost silently.
 //
 // rowLevelWrite always returns nil from the error position unless an
 // unrecoverable infrastructure failure occurs (e.g. the DLQ sink itself
-// returns an error).  Individual row failures are recorded in out.RowsFailed
+// returns an error). Individual row failures are recorded in out.RowsFailed
 // and the run continues; the caller's out.RowsFailed > 0 check will set the
 // run status to "partial".
 //
@@ -1594,81 +822,129 @@ func (a *DataPipelineAction) rowLevelWrite(
 	out *Output,
 ) (written int, err error) {
 	// --- happy path ---
-	if batchErr := snk.WriteBatch(batch); batchErr == nil {
+	batchErr := snk.WriteBatch(batch)
+	if batchErr == nil {
 		return batch.Len(), nil
-	} else {
-		runLog.Warnf("batch write failed (%d rows), falling back to per-row isolation: %v",
-			batch.Len(), batchErr)
 	}
+	runLog.Warnf("batch write failed (%d rows), falling back to per-row isolation: %v",
+		batch.Len(), batchErr)
 
 	// --- per-row isolation fallback ---
-	// Build reusable single-row batches to avoid heap allocations in the loop.
-	rowBatch := record.Get()
-	rowBatch.Columns = batch.Columns
-	rowBatch.Rows = make([][]interface{}, 1)
+	written, failed, err := a.isolateRows(runLog, snk, dlq, batch.Columns, batch.Rows)
+	out.RowsFailed += int64(failed)
+	if err != nil {
+		return written, err
+	}
+	var carry *sink.UnflushedRowsError
+	if errors.As(batchErr, &carry) {
+		if err := a.recoverUnflushed(runLog, snk, dlq, carry, out); err != nil {
+			return written, err
+		}
+	}
+	return written, nil
+}
 
-	goodBatch := record.Get()
-	goodBatch.Columns = batch.Columns
+// recoverUnflushed re-writes rows a buffering sink failed to persist after
+// earlier calls had accepted them (and they were counted as written): each
+// row is retried in isolation; failures are dead-lettered and moved from
+// RowsWritten to RowsFailed.
+func (a *DataPipelineAction) recoverUnflushed(runLog corelog.Logger, snk sink.Sink, dlq dlqWriteSink, carry *sink.UnflushedRowsError, out *Output) error {
+	runLog.Warnf("sink flush failed with %d previously accepted rows; isolating them: %v", len(carry.Rows), carry.Err)
+	_, failed, err := a.isolateRows(runLog, snk, dlq, carry.Columns, carry.Rows)
+	out.RowsWritten -= int64(failed)
+	out.RowsFailed += int64(failed)
+	return err
+}
+
+// flushSink flushes the sink, recovering (isolating + dead-lettering) any
+// previously accepted rows a buffering sink reports as unpersisted instead of
+// failing the run on one bad row. Other flush errors are returned.
+func (a *DataPipelineAction) flushSink(runLog corelog.Logger, snk sink.Sink, dlq dlqWriteSink, out *Output) error {
+	err := snk.Flush()
+	var carry *sink.UnflushedRowsError
+	if err == nil || !errors.As(err, &carry) {
+		return err
+	}
+	return a.recoverUnflushed(runLog, snk, dlq, carry, out)
+}
+
+// isolateRows writes rows so that each one is persisted or rejected on its
+// own — every attempt is WriteBatch then Flush, so a buffering sink cannot
+// merely buffer a row — and dead-letters the ones that fail. Sinks with
+// all-or-nothing writes (sink.AtomicWriter) are isolated by bisection: a
+// failed chunk is split in halves until the bad rows are single, so a batch
+// with a few bad rows costs O(bad·log n) writes instead of n. Other sinks are
+// written one row at a time, since a failed multi-row attempt might already
+// have delivered part of the chunk.
+func (a *DataPipelineAction) isolateRows(runLog corelog.Logger, snk sink.Sink, dlq dlqWriteSink, cols []record.Column, rows [][]interface{}) (written, failed int, err error) {
+	// Reusable scratch batch (its Rows slice aliases rows, so never pooled with them).
+	chunk := record.Get()
+	chunk.Columns = cols
+	write := func(part [][]interface{}) error {
+		chunk.Rows = part
+		werr := snk.WriteBatch(chunk)
+		if werr == nil {
+			werr = snk.Flush()
+		}
+		return werr
+	}
 
 	var badRows [][]interface{}
 	var badErrs []string
-
-	for i, row := range batch.Rows {
-		rowBatch.Rows[0] = row
-
-		if rowErr := snk.WriteBatch(rowBatch); rowErr == nil {
-			goodBatch.Rows = append(goodBatch.Rows, row)
-		} else {
-			runLog.Debugf("row %d failed write (routing to DLQ): %v", i, rowErr)
-			badRows = append(badRows, row)
-			badErrs = append(badErrs, rowErr.Error())
-			out.RowsFailed++
+	reject := func(row []interface{}, rowErr error) {
+		runLog.Debugf("row failed write (routing to DLQ): %v", rowErr)
+		badRows = append(badRows, row)
+		badErrs = append(badErrs, rowErr.Error())
+		failed++
+	}
+	var bisect func(part [][]interface{})
+	bisect = func(part [][]interface{}) {
+		werr := write(part)
+		switch {
+		case werr == nil:
+			written += len(part)
+		case len(part) == 1:
+			reject(part[0], werr)
+		default:
+			mid := len(part) / 2
+			bisect(part[:mid:mid])
+			bisect(part[mid:])
 		}
 	}
 
-	// Release the single-row scratch batch — its Rows slice must not be
-	// pooled because it was reused across iterations and may alias batch.Rows.
-	rowBatch.Columns = nil
-	rowBatch.Rows = nil
-	record.Put(rowBatch)
-
-	// Write the accumulated good rows to the primary sink.
-	if len(goodBatch.Rows) > 0 {
-		if flushErr := snk.WriteBatch(goodBatch); flushErr != nil {
-			// Even the good-rows consolidated write failed; treat them all as failed
-			// rather than masking the error, and route to DLQ with the consolidated msg.
-			runLog.Warnf("consolidated good-rows write failed (%d rows): %v",
-				len(goodBatch.Rows), flushErr)
-			for _, r := range goodBatch.Rows {
-				badRows = append(badRows, r)
-				badErrs = append(badErrs, flushErr.Error())
-				out.RowsFailed++
+	if aw, ok := snk.(sink.AtomicWriter); ok && aw.AtomicWrites() && len(rows) > 1 {
+		mid := len(rows) / 2 // the whole set just failed; start from its halves
+		bisect(rows[:mid:mid])
+		bisect(rows[mid:])
+	} else {
+		for i := range rows {
+			if werr := write(rows[i : i+1 : i+1]); werr == nil {
+				written++
+			} else {
+				reject(rows[i], werr)
 			}
-			written = 0
-		} else {
-			written = len(goodBatch.Rows)
 		}
 	}
-	record.Put(goodBatch)
 
-	// Route bad rows to DLQ.
+	chunk.Columns = nil
+	chunk.Rows = nil
+	record.Put(chunk)
+
 	if len(badRows) > 0 && dlq != nil {
 		badBatch := record.Get()
-		badBatch.Columns = batch.Columns
+		badBatch.Columns = cols
 		badBatch.Rows = badRows
-
 		if dlqErr := dlq.WriteBatchErrors(badBatch, badErrs); dlqErr != nil {
 			// DLQ write failure is an unrecoverable infrastructure problem —
 			// surface it so the caller can abort the pipeline rather than silently
 			// losing the error evidence.
 			record.Put(badBatch)
-			return written, fmt.Errorf("dlq write: %w", dlqErr)
+			return written, failed, fmt.Errorf("dlq write: %w", dlqErr)
 		}
 		record.Put(badBatch)
 		runLog.Infof("routed %d failed rows to DLQ", len(badRows))
 	} else if len(badRows) > 0 {
 		runLog.Warnf("%d rows failed write and no DLQ is configured — rows are lost", len(badRows))
 	}
-
-	return written, nil
+	return written, failed, nil
 }

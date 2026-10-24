@@ -23,6 +23,8 @@
 //	  "timeoutMs": 30000,
 //	  "maxRetries": 3,
 //	  "retryBackoffMs": 500,
+//	  "maxBackoffMs": 30000,
+//	  "concurrency": 1,
 //	  "successStatusCodes": [200, 201, 202, 204]
 //	}
 //
@@ -54,6 +56,10 @@
 //     (no per-row "{field}" substitution, since there is no single row).
 //     Use this only for endpoints that accept a bulk array body.
 //
+// "concurrency" (perRow only, default 1) sends up to that many row requests
+// in parallel. Rows of one batch may then reach the API out of order; keep 1
+// when the API requires ordered writes.
+//
 // # successStatusCodes
 //
 // Defaults to any 2xx status. Set explicitly if the API's success code isn't
@@ -61,7 +67,9 @@
 //
 // # Retry / idempotency caveat
 //
-// Retries (429/5xx, up to maxRetries, linear backoff) and the pipeline
+// Retries (429/5xx and transport errors, up to maxRetries) wait for the
+// server's Retry-After when given, otherwise an exponential backoff from
+// retryBackoffMs with jitter, capped at maxBackoffMs. Retries and the pipeline
 // engine's own per-row isolation-on-failure fallback (see
 // action/pipeline's rowLevelWrite) both mean a row's HTTP call MAY be issued
 // more than once. Unlike a JDBC upsert, most REST APIs are NOT naturally
@@ -79,15 +87,19 @@ package rest
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/mpandav-tibco/flogo-datapipeline/internal/httpretry"
 	"github.com/mpandav-tibco/flogo-datapipeline/record"
 	"github.com/mpandav-tibco/flogo-datapipeline/sink"
 )
@@ -106,10 +118,22 @@ type restSink struct {
 
 	maxRetries     int
 	retryBackoffMs int
+	maxBackoff     time.Duration
 	successCodes   map[int]bool // empty = accept any 2xx
 
-	closed bool
+	// concurrency bounds parallel perRow requests (1 = sequential).
+	concurrency int
+	// urlFields lists the "{column}" macros present in baseURL, parsed once so
+	// per-row expansion only touches columns the URL actually references.
+	urlFields []string
+
+	// ctx is cancelled by Close so in-flight retry waits stop promptly.
+	ctx    context.Context
+	cancel context.CancelFunc
+	closed atomic.Bool // set by Close, which may run concurrently with WriteBatch
 }
+
+var urlMacro = regexp.MustCompile(`\{([^{}]+)\}`)
 
 func newRestSink(cfg map[string]interface{}) (sink.Sink, error) {
 	rawURL, _ := cfg["url"].(string)
@@ -164,16 +188,37 @@ func newRestSink(cfg map[string]interface{}) (sink.Sink, error) {
 	timeoutMs := intFromCfg(cfg, "timeoutMs", 30000)
 	maxRetries := intFromCfg(cfg, "maxRetries", 3)
 	retryBackoffMs := intFromCfg(cfg, "retryBackoffMs", 500)
+	maxBackoffMs := intFromCfg(cfg, "maxBackoffMs", 30000)
+	concurrency := intFromCfg(cfg, "concurrency", 1)
+	if concurrency < 1 {
+		concurrency = 1
+	}
 
+	var urlFields []string
+	for _, m := range urlMacro.FindAllStringSubmatch(rawURL, -1) {
+		urlFields = append(urlFields, m[1])
+	}
+
+	// A dedicated transport keeps enough idle connections for the configured
+	// concurrency (the default transport keeps only 2 per host).
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.MaxIdleConnsPerHost = max(concurrency, 2)
+
+	ctx, cancel := context.WithCancel(context.Background())
 	return &restSink{
-		client:         &http.Client{Timeout: time.Duration(timeoutMs) * time.Millisecond},
+		client:         &http.Client{Timeout: time.Duration(timeoutMs) * time.Millisecond, Transport: transport},
 		baseURL:        rawURL,
 		method:         method,
 		headers:        headers,
 		mode:           mode,
 		maxRetries:     maxRetries,
 		retryBackoffMs: retryBackoffMs,
+		maxBackoff:     time.Duration(maxBackoffMs) * time.Millisecond,
 		successCodes:   successCodes,
+		concurrency:    concurrency,
+		urlFields:      urlFields,
+		ctx:            ctx,
+		cancel:         cancel,
 	}, nil
 }
 
@@ -200,23 +245,75 @@ func (s *restSink) WriteBatch(batch *record.RecordBatch) error {
 		}
 		return s.doWithRetry(s.baseURL, body)
 	}
+	if s.concurrency > 1 && batch.Len() > 1 {
+		return s.writeRowsConcurrently(batch)
+	}
+	var row map[string]interface{}
 	for i := range batch.Rows {
-		row := batch.RowMap(i)
-		body, err := json.Marshal(row)
-		if err != nil {
-			return fmt.Errorf("rest sink: marshal row %d: %w", i, err)
-		}
-		if err := s.doWithRetry(s.expandURL(row), body); err != nil {
-			return fmt.Errorf("rest sink: row %d: %w", i, err)
+		row = batch.RowMapInto(i, row)
+		if err := s.sendRow(i, row); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
+func (s *restSink) sendRow(i int, row map[string]interface{}) error {
+	body, err := json.Marshal(row)
+	if err != nil {
+		return fmt.Errorf("rest sink: marshal row %d: %w", i, err)
+	}
+	if err := s.doWithRetry(s.expandURL(row), body); err != nil {
+		return fmt.Errorf("rest sink: row %d: %w", i, err)
+	}
+	return nil
+}
+
+// writeRowsConcurrently sends rows with up to s.concurrency requests in
+// flight. After the first failure no new rows are started; the error of the
+// lowest failing row index is returned once in-flight requests finish, which
+// matches the sequential contract the engine's per-row fallback relies on.
+func (s *restSink) writeRowsConcurrently(batch *record.RecordBatch) error {
+	var (
+		wg       sync.WaitGroup
+		mu       sync.Mutex
+		firstIdx = -1
+		firstErr error
+	)
+	sem := make(chan struct{}, s.concurrency)
+	for i := range batch.Rows {
+		mu.Lock()
+		failed := firstErr != nil
+		mu.Unlock()
+		if failed {
+			break
+		}
+		row := batch.RowMap(i) // each worker owns its row map
+		sem <- struct{}{}
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			if err := s.sendRow(i, row); err != nil {
+				mu.Lock()
+				if firstErr == nil || i < firstIdx {
+					firstIdx, firstErr = i, err
+				}
+				mu.Unlock()
+			}
+		}(i)
+	}
+	wg.Wait()
+	return firstErr
+}
+
 func (s *restSink) Flush() error { return nil } // each WriteBatch call is already synchronous
 
 func (s *restSink) Close() error {
-	s.closed = true
+	s.closed.Store(true)
+	if s.cancel != nil {
+		s.cancel()
+	}
 	return nil
 }
 
@@ -228,12 +325,12 @@ func (s *restSink) Close() error {
 // of masking a config typo.
 func (s *restSink) expandURL(row map[string]interface{}) string {
 	out := s.baseURL
-	for col, val := range row {
-		placeholder := "{" + col + "}"
-		if !strings.Contains(out, placeholder) {
+	for _, col := range s.urlFields {
+		val, ok := row[col]
+		if !ok {
 			continue
 		}
-		out = strings.ReplaceAll(out, placeholder, url.PathEscape(fmt.Sprintf("%v", val)))
+		out = strings.ReplaceAll(out, "{"+col+"}", url.PathEscape(record.FormatValue(val)))
 	}
 	return out
 }
@@ -249,17 +346,27 @@ func rowsToJSONArray(batch *record.RecordBatch) ([]byte, error) {
 }
 
 // doWithRetry issues the HTTP request, retrying on 429/5xx and transport
-// errors with a linear backoff (attempt * retryBackoffMs), up to maxRetries
-// additional attempts. Any other non-success status fails immediately with
+// errors up to maxRetries additional attempts. Each wait honours the server's
+// Retry-After header when present, otherwise uses jittered exponential
+// backoff from retryBackoffMs (capped at maxBackoffMs); Close interrupts it.
+// Any other non-success status fails immediately with (a bounded prefix of)
 // the response body included for debuggability.
 func (s *restSink) doWithRetry(reqURL string, body []byte) error {
+	ctx := s.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	var lastErr error
+	var lastResp *http.Response // headers only (for Retry-After); body already closed
 	for attempt := 0; attempt <= s.maxRetries; attempt++ {
 		if attempt > 0 {
-			time.Sleep(time.Duration(attempt*s.retryBackoffMs) * time.Millisecond)
+			wait := httpretry.Delay(attempt, lastResp, time.Duration(s.retryBackoffMs)*time.Millisecond, s.maxBackoff)
+			if !httpretry.Sleep(ctx, wait) {
+				return fmt.Errorf("rest sink: closed while retrying: %w", lastErr)
+			}
 		}
 
-		req, err := http.NewRequest(s.method, reqURL, bytes.NewReader(body))
+		req, err := http.NewRequestWithContext(ctx, s.method, reqURL, bytes.NewReader(body))
 		if err != nil {
 			return fmt.Errorf("rest sink: build request: %w", err)
 		}
@@ -268,12 +375,15 @@ func (s *restSink) doWithRetry(reqURL string, body []byte) error {
 		}
 
 		resp, err := s.client.Do(req)
+		lastResp = nil
 		if err != nil {
 			lastErr = fmt.Errorf("rest sink: request %s: %w", reqURL, err)
 			continue
 		}
-		respBody, readErr := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		lastResp = resp
+		// Only a prefix is ever reported, so never buffer an unbounded body.
+		respBody, _, readErr := httpretry.ReadLimited(resp.Body, 4096)
+		httpretry.Drain(resp)
 		if readErr != nil {
 			lastErr = fmt.Errorf("rest sink: read response body: %w", readErr)
 			continue

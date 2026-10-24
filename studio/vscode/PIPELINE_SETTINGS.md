@@ -37,6 +37,7 @@ run config — mode=etl batchSize=5000 bufferBatches=4 maxMemoryMB=512 transform
 | `intervalRows` (default 10000) | Save progress after N rows. |
 | `intervalSeconds` (default 30) | **Also** save on this wall-clock interval — bounds re-processed work for slow, low-volume streams that never reach the row threshold. |
 | `deleteOnSuccess` | Remove the checkpoint on a clean finish (fresh load next run). |
+| `onSaveError` | `continue` (default) logs a failed checkpoint save and keeps processing; `fail` stops the run. |
 | `key` | Stable checkpoint key for single-instance streaming resume. Defaults to the per-run id; set a fixed value so a long-lived job finds its state across restarts. |
 
 **Validated (UI):** checkpoint file written as
@@ -66,7 +67,7 @@ processed drops to only the new rows.
 | `sourceBufferBatches` (4) | **Wired** | Depth of the read-ahead buffer. A dedicated reader goroutine reads ahead so the source overlaps with transform+write (source never blocks the pipeline). |
 | `maxMemoryMB` (512) | **Wired** | Backpressure: the reader blocks when buffered in-flight bytes exceed this budget, bounding memory. |
 | `transformWorkers` (1) | **Wired** | When >1 **and** the pipeline has no HWM/DQ/schema-drift transform **and** checkpointing is off, transforms run across N worker goroutines (each with a private transform pipeline) and an order-preserving collector reassembles results in read order — so the sink write and all counters stay single-threaded while transforms use N cores. When those safety constraints don't hold, processing stays ordered/single-threaded and a notice is logged. |
-| `sinkBufferBatches` (4) | Reserved | Accepted; sink writes stay ordered for checkpoint correctness. |
+| `sinkBufferBatches` (4) | **Wired** | Transformed batches that may queue for the sink writer, so the next batch transforms while the previous one is written. Writes stay ordered and are drained before every checkpoint. |
 | `rowGroupParallelism` (4) | Source-internal | Consumed by the Parquet source for concurrent row-group reads, not the engine loop. |
 
 **Validated (UI):** `batchSize`, `bufferBatches`, `maxMemoryMB`, `transformWorkers`

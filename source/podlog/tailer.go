@@ -51,8 +51,9 @@ type openLogFile struct {
 	fp     string
 	meta   podMeta
 	st     *stitcher
-	// partial holds bytes read past the last newline (an incomplete final line).
-	// Its length is NOT added to offset until the line is completed, so a crash
+	// partial accumulates bytes read past the last newline (an incomplete final
+	// line), across as many drains as it takes for the newline to arrive. Its
+	// length is NOT added to offset until the line is completed, so a crash
 	// never checkpoints a half-written line.
 	partial []byte
 	// lastData is when this file last produced a complete line; used to flush a
@@ -75,6 +76,10 @@ type tailer struct {
 	// maxLines caps physical lines stitched into one multiline record (0 =
 	// unlimited); propagated to each file's stitcher.
 	maxLines int
+	// maxLineBytes bounds partial: an unterminated line reaching this size is
+	// emitted as-is so a writer that never ends a line cannot grow memory
+	// without limit (0 = unbounded).
+	maxLineBytes int
 	// flushIdle is how long a file may be idle before a pending stitched
 	// (multiline) record is emitted so trailing records are not held forever.
 	flushIdle time.Duration
@@ -105,7 +110,7 @@ func (t *tailer) run(ctx context.Context) {
 			t.closeAll()
 			return
 		}
-		t.scan()
+		t.scan(ctx)
 		read := false
 		for _, of := range t.open {
 			n, err := t.drain(ctx, of)
@@ -162,7 +167,7 @@ func (t *tailer) runBounded(ctx context.Context) {
 			t.closeAll()
 			return
 		}
-		t.scan()
+		t.scan(ctx)
 		read := false
 		for _, of := range t.open {
 			n, err := t.drain(ctx, of)
@@ -185,7 +190,7 @@ func (t *tailer) runBounded(ctx context.Context) {
 
 // scan reconciles the set of open files with what is on disk: it opens new log
 // files (respecting namespace filters), and closes handles whose path vanished.
-func (t *tailer) scan() {
+func (t *tailer) scan(ctx context.Context) {
 	seen := map[string]bool{}
 	// <root>/<ns>_<pod>_<uid>/<container>/*.log
 	matches, _ := filepath.Glob(filepath.Join(t.root, "*", "*", "*.log"))
@@ -208,7 +213,7 @@ func (t *tailer) scan() {
 	// Close handles whose file was deleted.
 	for key, of := range t.open {
 		if !seen[key] {
-			t.flushAndClose(of)
+			t.flushAndClose(ctx, of)
 			delete(t.open, key)
 		}
 	}
@@ -298,24 +303,33 @@ func (t *tailer) drain(ctx context.Context, of *openLogFile) (int, error) {
 	for {
 		line, err := of.reader.ReadBytes('\n')
 		if len(line) > 0 && line[len(line)-1] != '\n' {
-			// Incomplete trailing line — stash it and stop without advancing.
-			of.partial = append(of.partial[:0], line...)
+			// Incomplete trailing line — accumulate it (it may span several
+			// drains) and stop without advancing the offset.
+			of.partial = append(of.partial, line...)
+			if t.maxLineBytes <= 0 || len(of.partial) < t.maxLineBytes {
+				return emitted, nil
+			}
+			// Oversized unterminated line: emit what we have as one line.
+			line = nil
+		} else if err == io.EOF {
 			return emitted, nil
-		}
-		if err == io.EOF {
-			return emitted, nil
-		}
-		if err != nil {
+		} else if err != nil {
 			return emitted, err
 		}
 		full := line
 		if len(of.partial) > 0 {
 			full = append(of.partial, line...)
+		}
+		// Advance by every byte of the logical line, including the partial
+		// chunks consumed by earlier drains.
+		of.offset += int64(len(full))
+		text := strings.TrimRight(string(full), "\r\n")
+		if cap(of.partial) > 64<<10 {
+			of.partial = nil // don't pin a large one-off buffer
+		} else {
 			of.partial = of.partial[:0]
 		}
-		of.offset += int64(len(line)) // advance only by newly consumed bytes
 
-		text := strings.TrimRight(string(full), "\r\n")
 		cri := parseCRILine(text)
 		of.lastData = time.Now()
 		rec, ok := of.st.push(cri, of.offset)
@@ -368,16 +382,13 @@ func (t *tailer) openFileAt(path string, meta podMeta, start int64) *openLogFile
 	}
 }
 
-func (t *tailer) flushAndClose(of *openLogFile) {
+// flushAndClose emits a deleted file's pending stitched record, then closes
+// it. The emit blocks until the consumer accepts it (or ctx is cancelled):
+// dropping it when the output buffer is momentarily full would silently lose
+// the file's last record.
+func (t *tailer) flushAndClose(ctx context.Context, of *openLogFile) {
 	if rec, ok := of.st.flush(); ok {
-		// Best-effort emit of a trailing record; ignore ctx here.
-		select {
-		case t.out <- enrichedRecord{
-			meta: of.meta, stream: rec.stream, timestamp: rec.timestamp,
-			message: rec.message, fileKey: of.key, endOffset: rec.endOffset, fp: of.fp,
-		}:
-		default:
-		}
+		t.emit(ctx, of, rec)
 	}
 	of.f.Close()
 }

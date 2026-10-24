@@ -27,11 +27,16 @@
 //     (see Options.CheckpointRows / OnCheckpoint / ResumeFrom). Stateful graphs
 //     (a Flusher node) opt out via Plan.HasStateful until state snapshots land.
 //
-// The executor is gated behind an explicit graph: the linear path remains the
-// default and is untouched.
+// It is the pipeline's only executor: a linear definition compiles to a
+// three-node plan (source → fused transform chain → sink), an explicit
+// non-reducible graph to one node per graph node.
 package graphexec
 
-import "github.com/mpandav-tibco/flogo-datapipeline/record"
+import (
+	"time"
+
+	"github.com/mpandav-tibco/flogo-datapipeline/record"
+)
 
 // NodeKind is the role a node plays in the graph.
 type NodeKind string
@@ -59,6 +64,16 @@ type Node struct {
 	// does not add it to the Plan's close list (mirrors how the linear engine's
 	// scaling path closes a partition source itself — see runScaled).
 	PreBuilt SourceOp
+	// Operator, on a KindTransform or KindSink node, is a ready-made operator
+	// (a TransformOp or SinkOp) used instead of calling the builder. Unlike
+	// PreBuilt, the plan owns it and closes it with the plan.
+	Operator interface{}
+	// Replicas, on a KindTransform node, are additional independent instances
+	// of the node's operator. The node then applies batches across all
+	// instances in parallel and re-sequences the results, so downstream order
+	// is unchanged (performance.transformWorkers). Only for stateless,
+	// order-insensitive operators without error edges; the plan closes them.
+	Replicas []TransformOp
 }
 
 // EdgeType classifies an edge the way Flogo Flow classifies links between
@@ -199,8 +214,13 @@ type SinkOp interface {
 	Close() error
 }
 
-// Pred is a compiled boolean row predicate used for conditional edges.
+// Pred is a compiled boolean row predicate used for conditional edges. The row
+// map is reused across rows, so a Pred must not retain it after returning.
 type Pred func(row map[string]interface{}) bool
+
+// PredBinder resolves a condition against one column layout, returning a
+// predicate over positional rows in that layout.
+type PredBinder func(cols []record.Column) func(row []interface{}) bool
 
 // Builders supplies the concrete constructors the compiler needs. Injecting
 // them keeps this package free of the source/sink/transform/filter imports and
@@ -211,6 +231,10 @@ type Builders struct {
 	Sink      func(typ string, cfg map[string]interface{}) (SinkOp, error)
 	// Predicate compiles an edge condition into a reusable row predicate.
 	Predicate func(expr string) (Pred, error)
+	// BindPredicate optionally compiles an edge condition into a schema-bindable
+	// form. When supplied it is used instead of Predicate on the hot path, so
+	// condition routing evaluates positional rows without building row maps.
+	BindPredicate func(expr string) (PredBinder, error)
 }
 
 // Options tunes the run. Zero values fall back to sensible defaults.
@@ -237,6 +261,24 @@ type Options struct {
 	// instance owns. The caller must call Plan.Close() itself once, after the
 	// LAST Run call.
 	KeepOpen bool
+
+	// DeferFlush skips the end-of-input Flush of stateful transform nodes
+	// (Flusher), for a caller running one plan over several partitions that
+	// flushes once after the last one.
+	DeferFlush bool
+	// SinkBufferDepth, when > 0, is the input channel depth of sink nodes
+	// (performance.sinkBufferBatches); other nodes use BufferDepth.
+	SinkBufferDepth int
+	// CheckpointInterval, when > 0, also emits a checkpoint barrier once this
+	// much time has passed since the last one — including on idle polls, when
+	// rows are pending or HasUncommitted reports unacknowledged source
+	// progress (checkpoint.intervalSeconds). Requires OnCheckpoint.
+	CheckpointInterval time.Duration
+	HasUncommitted     func() bool
+	// Budget, when set with SizeOf, bounds bytes read but not yet consumed
+	// (performance.maxMemoryMB).
+	Budget *MemoryBudget
+	SizeOf func(*record.RecordBatch) int64
 }
 
 func (o Options) batchSize() int {
