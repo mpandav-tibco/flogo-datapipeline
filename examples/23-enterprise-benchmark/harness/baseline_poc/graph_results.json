@@ -1,0 +1,442 @@
+{
+ "graph01_route_region_parquet_v": {
+  "processed": 2000000,
+  "written": 1498699,
+  "failed": 0,
+  "dropped": 0,
+  "routed": 0,
+  "duration_ms": 2970,
+  "rows_per_sec": 673401,
+  "status": "completed",
+  "peak_rss_mb": 196.6,
+  "cpu_seconds": 9.5,
+  "cpu_cores": 3.19,
+  "graph": {
+   "nodes": 7,
+   "edges": 6,
+   "read": 2000000,
+   "written": 1498699
+  },
+  "graph_engaged": true,
+  "pattern": "regional fan-out router (5-way)",
+  "linear_passes": 5,
+  "branches": [
+   {
+    "branch": "west",
+    "type": "parquet",
+    "bytes": 9249523
+   },
+   {
+    "branch": "north",
+    "type": "parquet",
+    "bytes": 9210376
+   },
+   {
+    "branch": "central",
+    "type": "parquet",
+    "bytes": 9288368
+   },
+   {
+    "branch": "east",
+    "type": "parquet",
+    "bytes": 9262153
+   },
+   {
+    "branch": "south",
+    "type": "parquet",
+    "bytes": 9267328
+   }
+  ]
+ },
+ "graph02_valreject_parquet_v": {
+  "processed": 2000000,
+  "written": 1498699,
+  "failed": 0,
+  "dropped": 0,
+  "routed": 0,
+  "duration_ms": 2849,
+  "rows_per_sec": 702001,
+  "status": "completed",
+  "peak_rss_mb": 121.0,
+  "cpu_seconds": 9.6,
+  "cpu_cores": 3.38,
+  "graph": {
+   "nodes": 4,
+   "edges": 3,
+   "read": 2000000,
+   "written": 1498699
+  },
+  "graph_engaged": true,
+  "pattern": "valid / reject split (DLQ)",
+  "linear_passes": 2,
+  "branches": [
+   {
+    "branch": "valid",
+    "type": "parquet",
+    "bytes": 47451300
+   },
+   {
+    "branch": "dlq",
+    "type": "null",
+    "bytes": 0
+   }
+  ]
+ },
+ "graph03_tee_audit_parquet_v": {
+  "processed": 2000000,
+  "written": 2883934,
+  "failed": 0,
+  "dropped": 0,
+  "routed": 0,
+  "duration_ms": 3084,
+  "rows_per_sec": 648508,
+  "status": "completed",
+  "peak_rss_mb": 152.2,
+  "cpu_seconds": 13.6,
+  "cpu_cores": 4.41,
+  "graph": {
+   "nodes": 4,
+   "edges": 3,
+   "read": 2000000,
+   "written": 2883934
+  },
+  "graph_engaged": true,
+  "pattern": "tee + high-value audit",
+  "linear_passes": 2,
+  "branches": [
+   {
+    "branch": "all",
+    "type": "parquet",
+    "bytes": 48645767
+   },
+   {
+    "branch": "audit",
+    "type": "parquet",
+    "bytes": 44930444
+   }
+  ]
+ },
+ "graph01_route_region_parquet": {
+  "processed": 53000000,
+  "written": 39750329,
+  "failed": 0,
+  "dropped": 0,
+  "routed": 0,
+  "duration_ms": 78589,
+  "rows_per_sec": 674395,
+  "status": "completed",
+  "peak_rss_mb": 216.1,
+  "cpu_seconds": 249.0,
+  "cpu_cores": 3.17,
+  "graph": {
+   "nodes": 7,
+   "edges": 6,
+   "read": 53000000,
+   "written": 39750329
+  },
+  "graph_engaged": true,
+  "pattern": "regional fan-out router (5-way)",
+  "linear_passes": 5,
+  "branches": [
+   {
+    "branch": "west",
+    "type": "parquet",
+    "bytes": 247236528
+   },
+   {
+    "branch": "north",
+    "type": "parquet",
+    "bytes": 247641091
+   },
+   {
+    "branch": "central",
+    "type": "parquet",
+    "bytes": 248365016
+   },
+   {
+    "branch": "east",
+    "type": "parquet",
+    "bytes": 247109925
+   },
+   {
+    "branch": "south",
+    "type": "parquet",
+    "bytes": 247514032
+   }
+  ]
+ },
+ "graph02_valreject_parquet": {
+  "processed": 53000000,
+  "written": 39750329,
+  "failed": 0,
+  "dropped": 0,
+  "routed": 0,
+  "duration_ms": 72858,
+  "rows_per_sec": 727442,
+  "status": "completed",
+  "peak_rss_mb": 158.0,
+  "cpu_seconds": 238.1,
+  "cpu_cores": 3.27,
+  "graph": {
+   "nodes": 4,
+   "edges": 3,
+   "read": 53000000,
+   "written": 39750329
+  },
+  "graph_engaged": true,
+  "pattern": "valid / reject split (DLQ)",
+  "linear_passes": 2,
+  "branches": [
+   {
+    "branch": "valid",
+    "type": "parquet",
+    "bytes": 1232246468
+   },
+   {
+    "branch": "reject",
+    "type": "parquet",
+    "bytes": 63136782
+   }
+  ]
+ },
+ "graph03_tee_audit_parquet": {
+  "processed": 53000000,
+  "written": 43617427,
+  "failed": 0,
+  "dropped": 0,
+  "routed": 0,
+  "duration_ms": 76672,
+  "rows_per_sec": 691256,
+  "status": "completed",
+  "peak_rss_mb": 179.2,
+  "cpu_seconds": 248.7,
+  "cpu_cores": 3.24,
+  "graph": {
+   "nodes": 4,
+   "edges": 3,
+   "read": 53000000,
+   "written": 43617427
+  },
+  "graph_engaged": true,
+  "pattern": "tee + high-value audit",
+  "linear_passes": 2,
+  "branches": [
+   {
+    "branch": "all",
+    "type": "parquet",
+    "bytes": 1297368087
+   },
+   {
+    "branch": "audit",
+    "type": "parquet",
+    "bytes": 124713369
+   }
+  ]
+ },
+ "graph04_route_region_s3_v": {
+  "processed": 2000000,
+  "written": 1498699,
+  "failed": 0,
+  "dropped": 0,
+  "routed": 0,
+  "duration_ms": 3230,
+  "rows_per_sec": 619195,
+  "status": "completed",
+  "peak_rss_mb": 244.4,
+  "cpu_seconds": 9.6,
+  "cpu_cores": 2.96,
+  "graph": {
+   "nodes": 7,
+   "edges": 6,
+   "read": 2000000,
+   "written": 1498699
+  },
+  "graph_engaged": true,
+  "pattern": "regional fan-out router (5-way) -> S3",
+  "linear_passes": 5,
+  "branches": [
+   {
+    "branch": "west",
+    "type": "s3",
+    "bytes": "?"
+   },
+   {
+    "branch": "north",
+    "type": "s3",
+    "bytes": "?"
+   },
+   {
+    "branch": "central",
+    "type": "s3",
+    "bytes": "?"
+   },
+   {
+    "branch": "east",
+    "type": "s3",
+    "bytes": "?"
+   },
+   {
+    "branch": "south",
+    "type": "s3",
+    "bytes": "?"
+   }
+  ]
+ },
+ "graph04_route_region_s3": {
+  "processed": 53000000,
+  "written": 39750329,
+  "failed": 0,
+  "dropped": 0,
+  "routed": 0,
+  "duration_ms": 81298,
+  "rows_per_sec": 651923,
+  "status": "completed",
+  "peak_rss_mb": 276.1,
+  "cpu_seconds": 250.5,
+  "cpu_cores": 3.08,
+  "graph": {
+   "nodes": 7,
+   "edges": 6,
+   "read": 53000000,
+   "written": 39750329
+  },
+  "graph_engaged": true,
+  "pattern": "regional fan-out router (5-way) -> S3",
+  "linear_passes": 5,
+  "branches": [
+   {
+    "branch": "west",
+    "type": "s3",
+    "bytes": 247236528
+   },
+   {
+    "branch": "north",
+    "type": "s3",
+    "bytes": 247641091
+   },
+   {
+    "branch": "central",
+    "type": "s3",
+    "bytes": 248365016
+   },
+   {
+    "branch": "east",
+    "type": "s3",
+    "bytes": 247109925
+   },
+   {
+    "branch": "south",
+    "type": "s3",
+    "bytes": 247514032
+   }
+  ]
+ },
+ "graph05_multi_consolidate_v": {
+  "processed": 6000000,
+  "written": 4496097,
+  "failed": 0,
+  "dropped": 0,
+  "routed": 0,
+  "duration_ms": 8569,
+  "rows_per_sec": 700198,
+  "status": "completed",
+  "peak_rss_mb": 274.2,
+  "cpu_seconds": 41.6,
+  "cpu_cores": 4.86,
+  "graph": {
+   "nodes": 12,
+   "edges": 11,
+   "read": 6000000,
+   "written": 4496097
+  },
+  "graph_engaged": true,
+  "pattern": "multi-source consolidation (3 feeds -> filter/map/validate -> 6 sinks)",
+  "linear_passes": 6,
+  "branches": [
+   {
+    "branch": "west",
+    "type": "parquet",
+    "bytes": 15081363
+   },
+   {
+    "branch": "north",
+    "type": "parquet",
+    "bytes": 15105252
+   },
+   {
+    "branch": "central",
+    "type": "parquet",
+    "bytes": 15151355
+   },
+   {
+    "branch": "east",
+    "type": "parquet",
+    "bytes": 15073698
+   },
+   {
+    "branch": "south",
+    "type": "parquet",
+    "bytes": 15152845
+   },
+   {
+    "branch": "reject",
+    "type": "parquet",
+    "bytes": 4148921
+   }
+  ]
+ },
+ "graph05_multi_consolidate": {
+  "processed": 159000000,
+  "written": 119250987,
+  "failed": 0,
+  "dropped": 0,
+  "routed": 0,
+  "duration_ms": 294439,
+  "rows_per_sec": 540010,
+  "status": "completed",
+  "peak_rss_mb": 485.8,
+  "cpu_seconds": 1333.4,
+  "cpu_cores": 4.53,
+  "graph": {
+   "nodes": 12,
+   "edges": 11,
+   "read": 159000000,
+   "written": 119250987
+  },
+  "graph_engaged": true,
+  "pattern": "multi-source consolidation (3 feeds -> filter/map/validate -> 6 sinks)",
+  "linear_passes": 6,
+  "branches": [
+   {
+    "branch": "west",
+    "type": "parquet",
+    "bytes": 701920588
+   },
+   {
+    "branch": "north",
+    "type": "parquet",
+    "bytes": 703104413
+   },
+   {
+    "branch": "central",
+    "type": "parquet",
+    "bytes": 705070388
+   },
+   {
+    "branch": "east",
+    "type": "parquet",
+    "bytes": 701562387
+   },
+   {
+    "branch": "south",
+    "type": "parquet",
+    "bytes": 702684673
+   },
+   {
+    "branch": "reject",
+    "type": "parquet",
+    "bytes": 189580129
+   }
+  ]
+ }
+}

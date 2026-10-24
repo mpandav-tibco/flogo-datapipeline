@@ -26,6 +26,10 @@ for c in "${CASES[@]}"; do
   ( cd "$EX" && ./bin/dp-build -f "pipes/$c.datapipeline" -o "bin/lean/dp-$c" )
 done
 
+# The all-in-one size is measured on a stripped build, like the lean binaries
+# (dp-build links with -s -w), so the two are comparable.
+CGO_ENABLED=1 "$GO" build -trimpath -ldflags "-s -w" -o "$EX/bin/dp-aio-stripped" ./cmd/flogo-datapipeline
+
 echo
 printf "%-24s %7s   %s\n" "binary" "size" "links only"
 printf "%-24s %7s   %s\n" "------------------------" "-------" "----------------------------"
@@ -35,10 +39,10 @@ printf "%-24s %6sM   %s\n" "dp-el02_csv_postgres" "$(sz "$OUT/dp-el02_csv_postgr
 printf "%-24s %6sM   %s\n" "dp-el04_csv_s3"       "$(sz "$OUT/dp-el04_csv_s3")"       "csv + s3 + parquet"
 printf "%-24s %6sM   %s\n" "dp-el14_kafka_parquet" "$(sz "$OUT/dp-el14_kafka_parquet")" "kafka + parquet"
 printf "%-24s %6sM   %s\n" "dp-etl04_csv_full_s3" "$(sz "$OUT/dp-etl04_csv_full_s3")" "csv + 3 transforms + s3"
-[ -x "$EX/bin/dp" ] && printf "%-24s %6sM   %s\n" "dp (all-in-one)" "$(sz "$EX/bin/dp")" "EVERY source, sink, driver"
+printf "%-24s %6sM   %s\n" "dp (all-in-one)" "$(sz "$EX/bin/dp-aio-stripped")" "EVERY source, sink, driver"
 
 # Machine-readable sizes for the report generator (reports/tco.md).
-python3 - "$OUT" "$EX/bin/dp" "$EX/harness/binsizes.json" "${CASES[@]}" <<'PY'
+python3 - "$OUT" "$EX/bin/dp-aio-stripped" "$EX/harness/binsizes.json" "${CASES[@]}" <<'PY'
 import json, os, sys
 out, mono, dest = sys.argv[1], sys.argv[2], sys.argv[3]
 cases = sys.argv[4:]

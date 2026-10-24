@@ -2,28 +2,28 @@
  "elt01_curate": {
   "desc": "Filter + normalise + derive net_amount in-database",
   "status": "completed",
-  "duration_ms": 43702,
+  "duration_ms": 51477,
   "rows": 38677277,
   "table": "orders_curated",
   "scanned": 53000000,
-  "rows_per_sec": 1212759
+  "rows_per_sec": 1029586
  },
  "elt02_rollup": {
   "desc": "GROUP BY region x category revenue aggregate",
   "status": "completed",
-  "duration_ms": 16759,
+  "duration_ms": 8858,
   "rows": 25,
   "table": "orders_rollup",
   "scanned": 53000000,
-  "rows_per_sec": 3162480
+  "rows_per_sec": 5983292
  },
  "elt03_dedup": {
   "desc": "Window de-duplication (latest row per order_id)",
   "status": "completed",
-  "duration_ms": 116444,
+  "duration_ms": 81304,
   "rows": 53000000,
   "table": "orders_dedup",
   "scanned": 53000000,
-  "rows_per_sec": 455154
+  "rows_per_sec": 651874
  }
 }

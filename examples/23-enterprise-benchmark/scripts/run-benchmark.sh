@@ -33,12 +33,14 @@ MOCK_PID=$!
 trap 'kill "$MOCK_PID" 2>/dev/null || true' EXIT
 sleep 1
 
-echo "==> [7/8] run matrix + ELT + reliability"
+echo "==> [7/8] run matrix + ELT + reliability + graph"
 caffeinate -i python3 harness/run_matrix.py 2>&1 | tee out/matrix.log
 caffeinate -i python3 harness/run_elt.py 2>&1 | tee out/elt.log
 caffeinate -i python3 harness/run_enterprise.py 2>&1 | tee out/enterprise.log
+caffeinate -i python3 harness/run_graph.py 2>&1 | tee out/graph.log
 
 echo "==> [8/8] generate reports"
+python3 harness/gen_comparison.py
 python3 harness/gen_reports.py
 
 echo
